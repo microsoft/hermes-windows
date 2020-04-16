@@ -55,8 +55,10 @@ endif()
 # This must be consistent with the release_version in
 # android/build.gradle and npm/package.json
 project(Hermes
-        VERSION 0.4.0
+        VERSION 0.5.0
         LANGUAGES C CXX)
+# Optional suffix like "-rc3"
+set(VERSION_SUFFIX "")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
 
@@ -65,9 +67,16 @@ set(LLVH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/llvh)
 include(Hermes)
 include(Lit)
 
-set(HERMES_RELEASE_VERSION ${PROJECT_VERSION})
+set(HERMES_RELEASE_VERSION ${PROJECT_VERSION}${VERSION_SUFFIX})
 
 # Project options.
+
+set(HERMES_IS_ANDROID OFF CACHE BOOL
+  "Building for Android")
+
+set(HERMES_IS_MOBILE_BUILD ${HERMES_IS_ANDROID} CACHE BOOL
+  "Building for a mobile device")
+
 set(HERMESVM_GCKIND NONCONTIG_GENERATIONAL
   CACHE STRING
   "HermesVM GC type: either NONCONTIG_GENERATIONAL or MALLOC")
@@ -117,7 +126,11 @@ set(HERMES_SLOW_DEBUG ON CACHE BOOL
 set(HERMES_STATIC_LINK OFF CACHE BOOL
   "Link Hermes statically. May only work on GNU/Linux.")
 
-set(HERMES_ENABLE_DEBUGGER OFF CACHE BOOL
+set(HERMES_ENABLE_DEBUGGER_DEFAULT OFF)
+if (NOT HERMES_IS_MOBILE_BUILD)
+    set(HERMES_ENABLE_DEBUGGER_DEFAULT ON)
+endif()
+set(HERMES_ENABLE_DEBUGGER ${HERMES_ENABLE_DEBUGGER_DEFAULT} CACHE BOOL
   "Build with debugger support")
 
 set(HERMES_ENABLE_IR_INSTRUMENTATION OFF CACHE BOOL
@@ -143,12 +156,6 @@ set(HERMESVM_JIT_DISASSEMBLER OFF CACHE BOOL
 
 set(HERMES_USE_FLOWPARSER OFF CACHE BOOL
   "Use libflowparser for parsing es6")
-
-set(HERMES_IS_MOBILE_BUILD OFF CACHE BOOL
-  "Building for a mobile device")
-
-set(HERMES_IS_ANDROID OFF CACHE BOOL
-  "Building for Android")
 
 set(HERMES_ENABLE_WERROR OFF CACHE BOOL
   "Whether the build should have -Werror enabled")
@@ -596,11 +603,11 @@ add_custom_target(make_bundle_dir DEPENDS ${HERMES_GITHUB_BUNDLE_DIR})
 add_custom_command(
   OUTPUT ${HERMES_GITHUB_DIR}/${HERMES_CLI_GITHUB_FILE}
   WORKING_DIRECTORY ${HERMES_GITHUB_BUNDLE_DIR}
-  DEPENDS hermes hermes-repl make_bundle_dir
+  DEPENDS hermes hermesc hdb hbcdump hermes-repl make_bundle_dir
   VERBATIM
   COMMAND
     # We need bin/hermes or Release/bin/hermes.exe in a predictable location
-    ${CMAKE_COMMAND} -E copy $<TARGET_FILE:hermes> $<TARGET_FILE:hermes-repl> ${HERMES_GITHUB_EXTRAS} .
+    ${CMAKE_COMMAND} -E copy $<TARGET_FILE:hermes> $<TARGET_FILE:hermes-repl> $<TARGET_FILE:hermesc> $<TARGET_FILE:hdb> $<TARGET_FILE:hbcdump> ${HERMES_GITHUB_EXTRAS} .
   COMMAND
     ${CMAKE_COMMAND} -E tar zcf ${HERMES_GITHUB_DIR}/${HERMES_CLI_GITHUB_FILE} .
 )

@@ -123,7 +123,7 @@ enum class GCEventKind {
   F(constexpr, ReleaseUnused, ShouldReleaseUnused, kReleaseUnusedOld)     \
                                                                           \
   /* Name for this heap in logs. */                                       \
-  F(HERMES_NON_CONSTEXPR, std::string, Name, "HermesRuntime")             \
+  F(HERMES_NON_CONSTEXPR, std::string, Name, "")                          \
                                                                           \
   /* Configuration for the Heap Tripwire. */                              \
   F(HERMES_NON_CONSTEXPR, GCTripwireConfig, TripwireConfig)               \
@@ -137,6 +137,9 @@ enum class GCEventKind {
                                                                           \
   /* Whether to use mprotect on GC metadata between GCs. */               \
   F(constexpr, bool, ProtectMetadata, false)                              \
+                                                                          \
+  /* Whether to track allocation traces starting in the Runtime ctor. */  \
+  F(constexpr, bool, AllocationLocationTrackerFromStart, false)           \
                                                                           \
   /* Pointer to the memory profiler (Memory Event Tracker). */            \
   F(HERMES_NON_CONSTEXPR,                                                 \

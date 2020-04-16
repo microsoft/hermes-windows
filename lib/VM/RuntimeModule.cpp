@@ -7,6 +7,7 @@
 
 #include "hermes/VM/RuntimeModule.h"
 
+#include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
 #include "hermes/Support/PerfSection.h"
 #include "hermes/VM/CodeBlock.h"
 #include "hermes/VM/Domain.h"
@@ -56,7 +57,7 @@ SymbolID RuntimeModule::createSymbolFromStringIDMayAllocate(
     return mapStringMayAllocate(str, stringID, hash);
   } else {
     // ASCII.
-    const char *s = strStorage.begin() + entry.getOffset();
+    const char *s = (const char *)strStorage.begin() + entry.getOffset();
     ASCIIRef str{s, entry.getLength()};
     uint32_t hash = mhash ? *mhash : hashString(str);
     return mapStringMayAllocate(str, stringID, hash);
@@ -64,6 +65,9 @@ SymbolID RuntimeModule::createSymbolFromStringIDMayAllocate(
 }
 
 RuntimeModule::~RuntimeModule() {
+  if (bcProvider_ && !bcProvider_->getRawBuffer().empty())
+    runtime_->getCrashManager().unregisterMemory(bcProvider_.get());
+  runtime_->getCrashManager().unregisterMemory(this);
   runtime_->removeRuntimeModule(this);
 
   // We may reference other CodeBlocks through lazy compilation, but we only
@@ -92,11 +96,17 @@ CallResult<RuntimeModule *> RuntimeModule::create(
     RuntimeModuleFlags flags,
     llvm::StringRef sourceURL) {
   auto *result = new RuntimeModule(runtime, domain, flags, sourceURL, scriptID);
+  runtime->getCrashManager().registerMemory(result, sizeof(*result));
   if (bytecode) {
     if (result->initializeMayAllocate(std::move(bytecode)) ==
         ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
+    // If the BC provider is backed by a buffer, register the BC provider struct
+    // (but not the buffer contents, since that might be too large).
+    if (result->bcProvider_ && !result->bcProvider_->getRawBuffer().empty())
+      runtime->getCrashManager().registerMemory(
+          result->bcProvider_.get(), sizeof(hbc::BCProviderFromBuffer));
   }
   return result;
 }
@@ -317,7 +327,7 @@ std::string RuntimeModule::getStringFromStringID(StringID stringID) {
     return out;
   } else {
     // ASCII.
-    const char *s = strStorage.begin() + entry.getOffset();
+    const char *s = (const char *)strStorage.begin() + entry.getOffset();
     return std::string{s, entry.getLength()};
   }
 }

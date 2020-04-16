@@ -72,6 +72,9 @@ struct CompileResult {
   /* implicit */ CompileResult(CompileStatus status) : status(status) {}
 };
 
+/// Return the type of operation we're about to perform.
+OutputFormatKind outputFormatFromCommandLineOptions();
+
 /// Drive the Hermes compiler according to the command line options.
 /// \return an exit status.
 CompileResult compileFromCommandLineOptions();
@@ -95,5 +98,6 @@ extern llvm::cl::opt<bool> EnableEval;
 extern llvm::cl::opt<bool> VerifyIR;
 extern llvm::cl::opt<bool> EmitAsyncBreakCheck;
 extern llvm::cl::opt<bool> AllowFunctionToString;
+extern llvm::cl::list<std::string> InputFilenames;
 } // namespace cl
 #endif

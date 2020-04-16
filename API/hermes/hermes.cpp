@@ -491,6 +491,16 @@ class HermesRuntimeImpl final : public HermesRuntime,
   }
 
   // Overridden from jsi::Instrumentation
+  void startTrackingHeapObjectStackTraces() override {
+    runtime_.enableAllocationLocationTracker();
+  }
+
+  // Overridden from jsi::Instrumentation
+  void stopTrackingHeapObjectStackTraces() override {
+    runtime_.disableAllocationLocationTracker();
+  }
+
+  // Overridden from jsi::Instrumentation
   void createSnapshotToFile(const std::string &path) override {
     std::error_code code;
     llvm::raw_fd_ostream os(path, code, llvm::sys::fs::FileAccess::FA_Write);
@@ -932,7 +942,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
   template <typename T>
   struct ManagedValues {
 #ifdef ASSERT_ON_DANGLING_VM_REFS
-    // If we have active HermesValuePointers whhen deconstructing, these will
+    // If we have active HermesValuePointers when deconstructing, these will
     // now be dangling. We deliberately allocate and immediately leak heap
     // memory to hold the internal list. This keeps alive memory holding the
     // ref-count of the now dangling references, allowing them to detect the
@@ -1069,6 +1079,10 @@ void HermesRuntime::dumpSampledTraceToFile(const std::string &fileName) {
         return ((int64_t)entry.moduleId << 32) + entry.funcVirtualOffset;
       });
   return res;
+}
+
+/*static*/ bool HermesRuntime::isCodeCoverageProfilerEnabled() {
+  return ::hermes::vm::CodeCoverageProfiler::getInstance()->isEnabled();
 }
 
 /*static*/ void HermesRuntime::enableCodeCoverageProfiler() {
@@ -1268,7 +1282,8 @@ HermesRuntimeImpl::prepareJavaScript(
 #endif
   }
   if (!bcErr.first) {
-    throw jsi::JSINativeException(std::move(bcErr.second));
+    throw jsi::JSINativeException(
+        "Compiling JS failed: \n" + std::move(bcErr.second));
   }
   return std::make_shared<const HermesPreparedJavaScript>(
       std::move(bcErr.first), runtimeFlags, std::move(sourceURL));
@@ -1307,7 +1322,12 @@ jsi::Object HermesRuntimeImpl::global() {
 }
 
 std::string HermesRuntimeImpl::description() {
-  return runtime_.getHeap().getName();
+  std::string gcName = runtime_.getHeap().getName();
+  if (gcName.empty()) {
+    return "HermesRuntime";
+  } else {
+    return "HermesRuntime[" + gcName + "]";
+  }
 }
 
 bool HermesRuntimeImpl::isInspectable() {
