@@ -33,7 +33,6 @@ def parse_args():
         "--warnings-as-errors", dest="warnings_as_errors", action="store_true"
     )
     parser.add_argument("--static-link", dest="static_link", action="store_true")
-    parser.add_argument("--release", dest="release", action="store_true")
     args = parser.parse_args()
     args.hermes_build_dir = os.path.realpath(args.hermes_build_dir)
     if args.icu_root:
@@ -122,14 +121,6 @@ def main():
         env=os.environ,
         cwd=args.hermes_build_dir,
     )
-
-    msbuild = which("MSBuild.exe")
-    run_command(
-        [msbuild, "ALL_BUILD.vcxproj", "/p:Configuration=Release" if args.release else "/p:Configuration=Debug"],
-        env=os.environ,
-        cwd=args.hermes_build_dir
-    )
-
 
 
 if __name__ == "__main__":
