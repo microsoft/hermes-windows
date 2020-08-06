@@ -15,13 +15,29 @@ jobs:
     displayName: Build the Hermes binary for supported architectures and flavors
     strategy:
       matrix:
-        PlatformX64:
+        DebugX64:
+          BuildConfiguration: debug
           BuildPlatform: x64
-        PlatformX86:
+        DebugX86:
+          BuildConfiguration: debug
           BuildPlatform: x86
-        PlatformARM:
+        DebugARM:
+          BuildConfiguration: debug
           BuildPlatform: arm
-        PlatformARM64:
+        DebugARM64:
+          BuildConfiguration: debug
+          BuildPlatform: arm64
+        ReleaseX64:
+          BuildConfiguration: release
+          BuildPlatform: x64
+        ReleaseX86:
+          BuildConfiguration: release
+          BuildPlatform: x86
+        ReleaseARM:
+          BuildConfiguration: release
+          BuildPlatform: arm
+        ReleaseARM64:
+          BuildConfiguration: release
           BuildPlatform: arm64
 
     steps:
@@ -34,6 +50,7 @@ jobs:
             -SourcesPath:$(Build.SourcesDirectory)
             -OutputPath:$(Build.ArtifactStagingDirectory)
             -Platform:$(BuildPlatform)
+            -Configuration:$(BuildConfiguration)
 
       - task: PublishBuildArtifacts@1
         displayName: "Publish artifacts"
