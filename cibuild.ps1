@@ -121,7 +121,7 @@ function Run-Build($SourcesPath, $OutputPath, $Platform, $Configuration, $Archit
         Invoke-Expression $genCall
         ninja
     } else {
-        cmd /c "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $Architecture) && $genCall && ninja"
+        cmd /c "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $Architecture) && $genCall 2>&1 && ninja"
     }
 
     # Now copy the needed build outputs
