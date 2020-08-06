@@ -50,6 +50,10 @@
 
 #include <sstream>
 
+#ifdef UNICDE
+#undef UNICODE // added by default for MSVC, this conflicts with usage in the file
+#endif
+
 #define DEBUG_TYPE "hermes"
 
 using llvm::ArrayRef;

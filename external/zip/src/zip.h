@@ -25,9 +25,9 @@ extern "C" {
 // 64-bit Windows is the only mainstream platform
 // where sizeof(long) != sizeof(void*)
 #ifdef _WIN64
-typedef long long  ssize_t;  /* byte count or error */
+typedef signed __int64 ssize_t;
 #else
-typedef long  ssize_t;  /* byte count or error */
+typedef signed int ssize_t;
 #endif
 #endif
 
