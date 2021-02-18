@@ -117,7 +117,7 @@ jobs:
 
   - job: HermesPublishNuget
     dependsOn:
-      - HermesBuild
+      - HermesBuildForPublish
     displayName: Publish Nuget
     steps:
       - checkout: none
