@@ -95,29 +95,38 @@ function Invoke-Environment($Command, $arg) {
 
 function Run-Build($SourcesPath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
     $Triplet = "$AppPlatform-$Platform-$Configuration"
-
-    Write-Host "Building $Triplet..."
-
-    $CompilerPath =Join-Path $SourcesPath "build\hermesc"
+    $compilerPath =Join-Path $SourcesPath "build\hermesc"
     if ($CompilerBuild.IsPresent) {
-        $buildPath = $CompilerPath
+        Write-Host "Building hermes compiler for cross compilation ..."
+        $buildPath = $compilerPath
     } else {
+        Write-Host "Building $Triplet..."
         $buildPath = Join-Path $SourcesPath "build\$Triplet"
     }
     
+    # Flag useful for developement/debugging
     $skipBuild = $False
+    $reuseCompilerBuilds = $True;
 
     if(!$skipBuild) {
-        if ((Test-Path -Path $buildPath)) {
-            Remove-Item $buildPath -Recurse -ErrorAction Ignore
+        if ($CompilerBuild.IsPresent) {
+            if(!$reuseCompilerBuilds) {
+                if (Test-Path -Path $compilerPath) {
+                    Remove-Item $compilerPath -Recurse -ErrorAction Ignore
+                }
+            }
+            New-Item -ItemType "directory" -Path $compilerPath -ErrorAction Ignore | Out-Null
+            Push-Location $compilerPath
+        } else {
+
+            if ((Test-Path -Path $buildPath)) {
+                Remove-Item $buildPath -Recurse -ErrorAction Ignore
+            }
+
+            New-Item -ItemType "directory" -Path $buildPath | Out-Null
+            Push-Location $buildPath
         }
 
-        New-Item -ItemType "directory" -Path $buildPath | Out-Null
-    }
-
-    Push-Location $buildPath
-
-    if(!$skipBuild) {
         $genArgs = @('-G')
         $genArgs += 'Ninja'
 
@@ -126,20 +135,11 @@ function Run-Build($SourcesPath, $OutputPath, $Platform, $Configuration, $AppPla
         $genArgs += '-DHERMES_ENABLE_DEBUGGER=On'
         $genArgs += '-HERMESVM_PLATFORM_LOGGING=On'
        
-        if ($CompilerBuild.IsPresent) {
-            if (Test-Path -Path $CompilerPath) {
-                Remove-Item $CompilerPath -Recurse -ErrorAction Ignore
-            }
-
-            New-Item -ItemType "directory" -Path $CompilerPath | Out-Null
-            Push-Location $CompilerPath
-        }
-
         if ($AppPlatform -eq "uwp") {
             $genArgs += '-DCMAKE_CXX_STANDARD=17'
             $genArgs += '-DCMAKE_SYSTEM_NAME=WindowsStore'
             $genArgs += '-DCMAKE_SYSTEM_VERSION="10.0.15063"'
-            $genArgs += "-DIMPORT_HERMESC=$CompilerPath\ImportHermesc.cmake"
+            $genArgs += "-DIMPORT_HERMESC=$compilerPath\ImportHermesc.cmake"
         }
         
         $genCall = ('cmake {0}' -f ($genArgs -Join ' ')) + " $SourcesPath";
@@ -177,12 +177,7 @@ function Run-Build($SourcesPath, $OutputPath, $Platform, $Configuration, $AppPla
         } else {
             cmd /c "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && $genCall 2>&1 && ${ninjaCmd}"
         }
-
-        if ($CompilerBuild.IsPresent) {
-            Pop-Location
-        }
     }
-    
 
     # Now copy the needed build outputs        
     if ($DllBuild.IsPresent) {
