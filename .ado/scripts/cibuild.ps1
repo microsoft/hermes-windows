@@ -237,7 +237,6 @@ $RN_DIR="$WorkSpacePath\react-native-clone\react-native\\".Replace("\", "/")
 
 if(!$NoSetup) {
 
-if (!(Test-Path -Path $WorkSpacePath)) {
     $FOLLY_DYNAMIC="$FOLLY_DIR/folly/dynamic.cpp"
     if (!(Test-Path -Path $FOLLY_DYNAMIC)) {
         echo "Preparing Folly"
