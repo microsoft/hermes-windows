@@ -238,6 +238,14 @@ $RN_DIR="$WorkSpacePath\react-native-clone\react-native\\".Replace("\", "/")
 
 if(!$NoSetup) {
 
+    $BOOST_ASIO="$BOOST_DIR/lib/native/include/boost/asio.hpp"
+    if (!(Test-Path -Path $BOOST_ASIO)) {
+        echo "Preparing boost"
+        Invoke-Expression "$PSScriptRoot\prepare_boost.ps1"
+    } else {
+        echo "Boost is already prepared."
+    }
+
     $FOLLY_DYNAMIC="$FOLLY_DIR/folly/dynamic.cpp"
     if (!(Test-Path -Path $FOLLY_DYNAMIC)) {
         echo "Preparing Folly"
@@ -254,13 +262,6 @@ if(!$NoSetup) {
         echo "React-native is already prepared."
     }
 
-    $BOOST_ASIO="$BOOST_DIR/lib/native/include/boost/asio.hpp"
-    if (!(Test-Path -Path $BOOST_ASIO)) {
-        echo "Preparing boost"
-        Invoke-Expression "$PSScriptRoot\prepare_boost.ps1"
-    } else {
-        echo "Boost is already prepared."
-    }
 }
 
 
