@@ -228,16 +228,40 @@ echo $WorkSpacePath
 
 pushd $WorkSpacePath
 
-if(!$NoSetup) {
-    Invoke-Expression "$PSScriptRoot\prepare_folly.ps1"
-    Invoke-Expression "$PSScriptRoot\prepare_reactnative.ps1"
-    Invoke-Expression "$PSScriptRoot\prepare_boost.ps1"
-}
 
 # TODO:: Imrpove the setup of these from the paramaters of the setup.
 $FOLLY_DIR="$WorkSpacePath\folly_src\folly-2020.01.13.00\".Replace("\", "/")
 $BOOST_DIR="$WorkSpacePath\boost.1.72.0.0\".Replace("\", "/")
 $RN_DIR="$WorkSpacePath\react-native-clone\react-native\\".Replace("\", "/")
+
+
+if(!$NoSetup) {
+
+if (!(Test-Path -Path $WorkSpacePath)) {
+    $FOLLY_DYNAMIC="$FOLLY_DIR/folly/dynamic.cpp"
+    if (!(Test-Path -Path $FOLLY_DYNAMIC)) {
+        echo "Preparing Folly"
+        Invoke-Expression "$PSScriptRoot\prepare_folly.ps1"
+    } else {
+        echo "Folly is already prepared."
+    }
+
+    $RN_BUILD_GRADLE="$RN_DIR/build.gradle"
+    if (!(Test-Path -Path $RN_BUILD_GRADLE)) {
+        echo "Preparing react-native"
+        Invoke-Expression "$PSScriptRoot\prepare_reactnative.ps1"
+    } else {
+        echo "React-native is already prepared."
+    }
+
+    $BOOST_ASIO="$BOOST_DIR/lib/native/include/boost/asio.hpp"
+    if (!(Test-Path -Path $BOOST_ASIO)) {
+        echo "Preparing boost"
+        Invoke-Expression "$PSScriptRoot\prepare_boost.ps1"
+    } else {
+        echo "Boost is already prepared."
+    }
+}
 
 
 # E:\github\hermes-windows\hermes-windows\workspace\folly_src\folly-2020.01.13.00\folly/portability/Builtins.h
