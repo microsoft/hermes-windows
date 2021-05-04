@@ -12,7 +12,7 @@ pool:
 jobs:
   - job: HermesBuildAll
     timeoutInMinutes: 50
-    displayName: Build the Hermes binary for supported architectures and flavors
+    displayName: (PR) Build the Hermes binary for supported architectures and flavors
     strategy:
       matrix:
         DebugX64:
@@ -75,9 +75,18 @@ jobs:
 
   - job: HermesBuildForPublish
     timeoutInMinutes: 50
-    displayName: Build the Hermes binary for supported architectures and flavors
+    displayName: (Publish) Build the Hermes binary for supported architectures and flavors
     strategy:
       matrix:
+        ReleaseX64:
+          BuildConfiguration: debug
+          BuildPlatform: x64
+        ReleaseX86:
+          BuildConfiguration: debug
+          BuildPlatform: x86
+        ReleaseARM64:
+          BuildConfiguration: debug
+          BuildPlatform: arm64
         ReleaseX64:
           BuildConfiguration: release
           BuildPlatform: x64

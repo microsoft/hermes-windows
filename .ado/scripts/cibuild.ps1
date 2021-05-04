@@ -140,6 +140,10 @@ function Run-Build($SourcesPath, $OutputPath, $Platform, $Configuration, $AppPla
         $genArgs += "-DREACT_NATIVE_SOURCE=$RNDIR"
         $genArgs += "-DFOLLY_SOURCE=$FOLLYDIR"
         $genArgs += "-DBOOST_SOURCE=$BOOSTDIR"
+
+        # 32-bit (ARM, x86) debug builds are failing with Hades GC !
+        # This is a temporary fix to unblock RN65.
+        $genArgs += "-DHERMESVM_GCKIND=NONCONTIG_GENERATIONAL"
       
         if ($AppPlatform -eq "uwp") {
             $genArgs += '-DCMAKE_CXX_STANDARD=17'
