@@ -78,15 +78,6 @@ jobs:
     displayName: Build the Hermes binary for supported architectures and flavors
     strategy:
       matrix:
-        DebugX64:
-          BuildConfiguration: debug
-          BuildPlatform: x64
-        DebugX86:
-          BuildConfiguration: debug
-          BuildPlatform: x86
-        DebugARM64:
-          BuildConfiguration: debug
-          BuildPlatform: arm64
         ReleaseX64:
           BuildConfiguration: release
           BuildPlatform: x64
@@ -99,7 +90,7 @@ jobs:
 
     steps:
       - task: PowerShell@2
-        displayName: Build Hermes Compiler
+        displayName: Build Hermes Compiler for publish
         inputs:
           targetType: filePath
           filePath: $(Build.SourcesDirectory)\.ado\scripts\cibuild.ps1
@@ -112,7 +103,7 @@ jobs:
             -CompilerBuild
 
       - task: PowerShell@2
-        displayName: Run the build script
+        displayName: Run the build script for publish
         inputs:
           targetType: filePath
           filePath: $(Build.SourcesDirectory)\.ado\scripts\cibuild.ps1
@@ -125,7 +116,7 @@ jobs:
             -DllBuild
 
       - task: PowerShell@2
-        displayName: Build Hermes Win32 CLI executable
+        displayName: Build Hermes Win32 CLI executable for publish
         inputs:
           targetType: filePath
           filePath: $(Build.SourcesDirectory)\.ado\scripts\cibuild.ps1
