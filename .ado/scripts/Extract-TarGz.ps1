@@ -132,7 +132,7 @@ function Ensure-7Zip {
             if ($PSCmdlet.ShouldProcess("PowerShell feed",'Install 7Zip module')) {
                 Write-Progress  -Activity "Installing the 7Zip4PowerShell module" "Using public feed" -PercentComplete 50
                 $progressPreference = 'silentlyContinue'
-                Install-Package -Scope CurrentUser -Force 7Zip4PowerShell > $null
+                Install-Package -Scope CurrentUser -ProviderName PowerShellGet -Force 7Zip4PowerShell > $null
                 $progressPreference = 'Continue'
                 Write-Progress  -Activity "Installing the 7Zip4PowerShell module" "Using public feed" -Completed
             }
