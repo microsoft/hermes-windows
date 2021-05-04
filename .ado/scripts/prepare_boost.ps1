@@ -1,7 +1,7 @@
 [cmdletbinding(SupportsShouldProcess=$True)]
 param(
     [Parameter(Mandatory=$False)]
-    [string]$BOOST_VERSION="1_63_0",
+    [string]$BOOST_VERSION="1.72.0",
 
     [Parameter(Mandatory=$False)]
     [string]$DOWNLOADDIR="downloads",

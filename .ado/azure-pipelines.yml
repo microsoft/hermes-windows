@@ -45,7 +45,7 @@ jobs:
         displayName: Build Hermes Compiler
         inputs:
           targetType: filePath
-          filePath: $(Build.SourcesDirectory)\cibuild.ps1
+          filePath: $(Build.SourcesDirectory)\.ado\scripts\cibuild.ps1
           arguments:
             -SourcesPath:$(Build.SourcesDirectory)
             -OutputPath:$(Build.ArtifactStagingDirectory)
@@ -58,7 +58,7 @@ jobs:
         displayName: Run the build script
         inputs:
           targetType: filePath
-          filePath: $(Build.SourcesDirectory)\cibuild.ps1
+          filePath: $(Build.SourcesDirectory)\.ado\scripts\cibuild.ps1
           arguments:
             -SourcesPath:$(Build.SourcesDirectory)
             -OutputPath:$(Build.ArtifactStagingDirectory)
@@ -101,7 +101,7 @@ jobs:
         displayName: Build Hermes Compiler
         inputs:
           targetType: filePath
-          filePath: $(Build.SourcesDirectory)\cibuild.ps1
+          filePath: $(Build.SourcesDirectory)\.ado\scripts\cibuild.ps1
           arguments:
             -SourcesPath:$(Build.SourcesDirectory)
             -OutputPath:$(Build.ArtifactStagingDirectory)
@@ -114,7 +114,7 @@ jobs:
         displayName: Run the build script
         inputs:
           targetType: filePath
-          filePath: $(Build.SourcesDirectory)\cibuild.ps1
+          filePath: $(Build.SourcesDirectory)\.ado\scripts\cibuild.ps1
           arguments:
             -SourcesPath:$(Build.SourcesDirectory)
             -OutputPath:$(Build.ArtifactStagingDirectory)
@@ -127,7 +127,7 @@ jobs:
         displayName: Build Hermes Win32 CLI executable
         inputs:
           targetType: filePath
-          filePath: $(Build.SourcesDirectory)\cibuild.ps1
+          filePath: $(Build.SourcesDirectory)\.ado\scripts\cibuild.ps1
           arguments:
             -SourcesPath:$(Build.SourcesDirectory)
             -OutputPath:$(Build.ArtifactStagingDirectory)
