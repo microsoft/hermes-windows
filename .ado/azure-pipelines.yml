@@ -65,6 +65,7 @@ jobs:
             -Platform:$(BuildPlatform)
             -Configuration:$(BuildConfiguration)
             -AppPlatform:uwp
+            -DllBuild
 
       - task: PublishBuildArtifacts@1
         displayName: "Publish artifacts"

@@ -21,7 +21,7 @@ function Find-Path($exename) {
         return $v.Path
     }
     else {
-        throEnw "Could not find $exename"
+        throw "Could not find $exename"
     }
 }
 
@@ -172,6 +172,7 @@ function Run-Build($SourcesPath, $OutputPath, $Platform, $Configuration, $AppPla
 
         # else build everything
 
+        echo $ninjaCmd
 
         # See https://developercommunity.visualstudio.com/content/problem/257260/vcvarsallbat-reports-the-input-line-is-too-long-if.html
         $Bug257260 = $false
