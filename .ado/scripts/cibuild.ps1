@@ -2,7 +2,7 @@ param(
     [string]$SourcesPath = "$PSScriptRoot\..",
     [string]$WorkSpacePath = "$SourcesPath\workspace",
     [string]$OutputPath = "$WorkSpacePath\out",
-    [bool]$NoSetup = $True,
+    [bool]$NoSetup = $False,
     [ValidateSet("x64", "x86", "arm", "arm64")]
     [String[]]$Platform = @("x64"),
     [ValidateSet("debug", "release")]
