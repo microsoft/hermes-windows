@@ -22,11 +22,13 @@ extern "C" {
 #if !defined(_POSIX_C_SOURCE) && defined(_MSC_VER)
 // 64-bit Windows is the only mainstream platform
 // where sizeof(long) != sizeof(void*)
-#ifdef _WIN64
-typedef long long ssize_t; /* byte count or error */
+
+// TODO::HERMES_WINDOWS - Ensuring the definition matches the definitions in LLVM
+#if defined(_WIN64)
+typedef signed __int64 ssize_t;
 #else
-typedef long ssize_t; /* byte count or error */
-#endif
+typedef signed int ssize_t;
+#endif /* _WIN64 */
 #endif
 
 #ifndef MAX_PATH
