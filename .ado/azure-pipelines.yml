@@ -11,7 +11,7 @@ pool:
 
 jobs:
   - job: HermesBuildAll
-    timeoutInMinutes: 50
+    timeoutInMinutes: 90
     displayName: (PR) Build the Hermes binary for supported architectures and flavors
     strategy:
       matrix:
@@ -74,7 +74,7 @@ jobs:
           pathtoPublish: $(Build.ArtifactStagingDirectory)
 
   - job: HermesBuildForPublish
-    timeoutInMinutes: 50
+    timeoutInMinutes: 90
     displayName: (Publish) Build the Hermes binary for supported architectures and flavors
     strategy:
       matrix:
