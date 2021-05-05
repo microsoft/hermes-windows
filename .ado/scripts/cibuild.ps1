@@ -277,6 +277,23 @@ $FOLLY_BUILTINS_H="$FOLLY_DIR/folly/portability/Builtins.h"
 echo $FOLLY_BUILTINS_H
 (Get-Content -path $FOLLY_BUILTINS_H) -replace("#if !defined\(_MSC_VER\) \|\| \(_MSC_VER < 1923\)", "#if !defined(_MSC_VER) || _MSC_VER < 1923 || _MSC_VER >= 1928") | Set-Content -Path $FOLLY_BUILTINS_H
 
+
+# E:\github\hermes-windows\hermes-windows\workspace\react-native-clone\react-native\ReactCommon\jsinspector\InspectorInterfaces.h
+# extern IInspector &getInspectorInstance();
+# extern __declspec(dllexport) IInspector &getInspectorInstance();
+$RN_INSPECTORINTERFACES_H="$RN_DIR/ReactCommon/jsinspector/InspectorInterfaces.h"
+# $RN_INSPECTORINTERFACES_H="E:\github\hermes-windows\hermes-windows\workspace\react-native-clone\react-native\ReactCommon\jsinspector\InspectorInterfaces.h"
+echo $RN_INSPECTORINTERFACES_H
+(Get-Content -path $RN_INSPECTORINTERFACES_H) -replace("extern IInspector &getInspectorInstance", "extern __declspec(dllexport) IInspector &getInspectorInstance") | Set-Content -Path $RN_INSPECTORINTERFACES_H
+
+# E:\github\hermes-windows\hermes-windows\workspace\react-native-clone\react-native\ReactCommon\hermes\inspector\chrome\Registration.h
+# extern void enableDebugging(
+# extern __declspec(dllexport) void enableDebugging(
+$RN_INSPECTOR_REGISTRATION_H="$RN_DIR/ReactCommon/hermes/inspector/chrome/Registration.h"
+echo $RN_INSPECTOR_REGISTRATION_H
+(Get-Content -path $RN_INSPECTOR_REGISTRATION_H) -replace("extern void enableDebugging", "extern __declspec(dllexport) void enableDebugging") | Set-Content -Path $RN_INSPECTOR_REGISTRATION_H
+
+
 echo $FOLLY_DIR
 echo $BOOST_DIR
 echo $RN_DIR

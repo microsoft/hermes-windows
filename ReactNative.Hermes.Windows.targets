@@ -11,9 +11,9 @@
     <Link>
       <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Debug'">%(AdditionalLibraryDirectories);$(MSBuildThisFileDirectory)..\..\lib\$(HermesAppPlatform)\debug\$(HermesPlatform)</AdditionalLibraryDirectories>
       <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Release'">%(AdditionalLibraryDirectories);$(MSBuildThisFileDirectory)..\..\lib\$(HermesAppPlatform)\release\$(HermesPlatform)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>%(AdditionalDependencies);hermes.lib</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies);hermes.lib;hermesinspector.lib</AdditionalDependencies>
       <AdditionalDependencies Condition="'$(HermesAppPlatform)' == 'uwp'">%(AdditionalDependencies);dloadhelper.lib</AdditionalDependencies>
-      <DelayLoadDLLs>%(DelayLoadDLLs);hermes.dll</DelayLoadDLLs>
+      <DelayLoadDLLs>%(DelayLoadDLLs);hermes.dll;hermesinspector.dll</DelayLoadDLLs>
     </Link>
     <ClCompile>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)include</AdditionalIncludeDirectories>
