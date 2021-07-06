@@ -1,5 +1,5 @@
 param(
-    [string]$SourcesPath = "$PSScriptRoot\..",
+    [string]$SourcesPath = "$PSScriptRoot\..\..",
     [string]$WorkSpacePath = "$SourcesPath\workspace",
     [string]$OutputPath = "$WorkSpacePath\out",
     
@@ -16,11 +16,12 @@ param(
     [String[]]$Configuration = @("debug"),
     
     [ValidateSet("win32", "uwp")]
-    [String[]]$AppPlatform = ("win32", "uwp"),
+    [String]$AppPlatform = "uwp",
     
     [switch]$RunTests,
     [switch]$Incremental,
-    [switch]$UseVS
+    [switch]$UseVS,
+    [switch]$TagSource
 )
 
 function Find-Path($exename) {
@@ -221,14 +222,14 @@ function Invoke-Test-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath,
     Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, @('check-hermes')) $incrementalBuild $Platform $Configuration $AppPlatform
 }
 
-function Invoke-Build($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform, $RNDIR, $FOLLYDIR, $BOOSTDIR) {
+function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform, $RNDIR, $FOLLYDIR, $BOOSTDIR) {
 
     Write-Host "Invoke-Build called with SourcesPath: " $SourcesPath", WorkSpacePath: " $WorkSpacePath  ", OutputPath: " $OutputPath ", Platform: " $Platform ", Configuration: " $Configuration ", AppPlatform: " $AppPlatform ", RNDIR: " $RNDIR ", FOLLYDIR: " $FOLLYDIR ", BOOSTDIR: " $BOOSTDIR
     $Triplet = "$AppPlatform-$Platform-$Configuration"
     $compilerAndToolsBuildPath = Join-Path $WorkSpacePath "build\tools"
     $compilerPath = Join-Path $compilerAndToolsBuildPath "bin\hermesc.exe"
     
-    # Build compiler if it doesn't exist (To be precise, we need it only for when building for uwp i.e. cross compilation !). 
+    # Build compiler if it doesn't exist (TODO::To be precise, we need it only when building for uwp i.e. cross compilation !). 
     if (!(Test-Path -Path $compilerPath)) {
         Invoke-Compiler-Build $SourcesPath $compilerAndToolsBuildPath $toolsPlatform $toolsConfiguration "win32" $RNDIR $FOLLYDIR $BOOSTDIR $True
     }
@@ -252,17 +253,19 @@ function Invoke-Build($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Con
         Invoke-Test-Build($SourcesPath, $buildPath, $Platform, $Configuration, $AppPlatform);
     }
     
-    $finalOutputPath = "$OutputPath\lib\$AppPlatform\$Configuration\$Platform";
+    $finalOutputPath = "$OutputPath\lib\native\$Configuration\$Platform";
     if (!(Test-Path -Path $finalOutputPath)) {
         New-Item -ItemType "directory" -Path $finalOutputPath | Out-Null
     }
 
     Copy-Item "$buildPath\API\hermes\hermes.dll" -Destination $finalOutputPath -force | Out-Null
     Copy-Item "$buildPath\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
+    Copy-Item "$buildPath\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
 
     if (!($Configuration -eq "release")) {
         Copy-Item "$buildPath\API\inspector\hermesinspector.dll" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\inspector\hermesinspector.lib" -Destination $finalOutputPath -force | Out-Null
+        Copy-Item "$buildPath\API\inspector\hermesinspector.pdb" -Destination $finalOutputPath -force | Out-Null
     }
 
     if ($Configuration -eq "release") {
@@ -274,19 +277,144 @@ function Invoke-Build($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Con
 
         Copy-Item "$buildPathWithDebugger\API\hermes\hermes.dll" -Destination $finalOutputPathWithDebugger -force | Out-Null
         Copy-Item "$buildPathWithDebugger\API\hermes\hermes.lib" -Destination $finalOutputPathWithDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebugger\API\hermes\hermes.pdb" -Destination $finalOutputPathWithDebugger -force | Out-Null
 
         Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.dll" -Destination $finalOutputPathWithDebugger -force | Out-Null
         Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.lib" -Destination $finalOutputPathWithDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.pdb" -Destination $finalOutputPathWithDebugger -force | Out-Null
     }
 
-    $toolsPath = "$OutputPath\tools\$toolsConfiguration\$toolsPlatform"
+    New-Item -ItemType "directory" -Path "$OutputPath\lib\uap\" | Out-Null
+    New-Item -Path "$OutputPath\lib\uap\" -Name "_._" -ItemType File
+
+    $toolsPath = "$OutputPath\tools\native\$toolsConfiguration\$toolsPlatform"
     if (!(Test-Path -Path $toolsPath)) {
         New-Item -ItemType "directory" -Path $toolsPath | Out-Null
     }
-
     Copy-Item "$compilerAndToolsBuildPath\bin\hermes.exe" -Destination $toolsPath
 
+    $flagsPath = "$OutputPath\build\native\flags\$Triplet"
+    if (!(Test-Path -Path $flagsPath)) {
+        New-Item -ItemType "directory" -Path $flagsPath | Out-Null
+    }
+    Copy-Item "$buildPath\build.ninja" -Destination $flagsPath -force | Out-Null
+
     Pop-Location
+}
+
+function Copy-Headers($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform, $RNDIR, $FOLLYDIR, $BOOSTDIR) {
+    if (!(Test-Path -Path "$OutputPath\build\native\include\hermes")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermes" | Out-Null
+    }
+
+    if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector" | Out-Null
+    }
+
+    if (!(Test-Path -Path "$OutputPath\build\native\include\jsi")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\jsi" | Out-Null
+    }
+
+    Write-Output "$RNDIR\ReactCommon\hermes\**\*.h"
+
+    Copy-Item "$SourcesPath\API\jsi\jsi\*" -Destination "$OutputPath\build\native\include\jsi" -force -Recurse
+    Copy-Item "$SourcesPath\API\hermes\hermes.h" -Destination "$OutputPath\build\native\include\hermes" -force
+    Copy-Item "$SourcesPath\API\hermes\DebuggerAPI.h" -Destination "$OutputPath\build\native\include\hermes" -force
+    Copy-Item "$SourcesPath\public\hermes\*" -Destination "$OutputPath\build\native\include\hermes" -force -Recurse
+    Copy-Item "$RNDIR\ReactCommon\jsinspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force -Recurse
+    Copy-Item "$RNDIR\ReactCommon\hermes\**\*.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force -Recurse
+
+    if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector\jsinspector")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\jsinspector" | Out-Null
+    }
+    Copy-Item "$RNDIR\ReactCommon\jsinspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector\jsinspector" -force -Recurse
+
+
+    if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector" | Out-Null
+    }
+    Copy-Item "$RNDIR\ReactCommon\hermes\inspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector\hermes\inspector" -force -Recurse
+
+    if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector\chrome")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector\chrome" | Out-Null
+    }
+    Copy-Item "$RNDIR\ReactCommon\hermes\inspector\chrome\*.h" -Destination "$OutputPath\build\native\include\hermesinspector\hermes\inspector\chrome" -force -Recurse
+
+}
+
+function Copy-Sources($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
+    if (!(Test-Path -Path "$OutputPath\src\API\")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\src\API\" | Out-Null
+    }
+
+    if (!(Test-Path -Path "$OutputPath\src\external\")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\src\external\" | Out-Null
+    }
+
+    if (!(Test-Path -Path "$OutputPath\src\external\llvh")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\src\external\llvh" | Out-Null
+    }
+
+    if (!(Test-Path -Path "$OutputPath\src\include\")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\src\include\" | Out-Null
+    }
+
+    if (!(Test-Path -Path "$OutputPath\src\lib\")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\src\lib\" | Out-Null
+    }
+
+    if (!(Test-Path -Path "$OutputPath\src\public\")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\src\public\" | Out-Null
+    }
+
+    Copy-Item "$SourcesPath\API\*" -Destination "$OutputPath\src\API\" -force -Recurse
+    Copy-Item "$SourcesPath\external\llvh\*" -Destination "$OutputPath\src\external\llvh\" -force -Recurse # TODO :: Scope it.
+    Copy-Item "$SourcesPath\include\*" -Destination "$OutputPath\src\include\" -force -Recurse
+    Copy-Item "$SourcesPath\lib\*" -Destination "$OutputPath\src\lib\" -force -Recurse
+    Copy-Item "$SourcesPath\public\*" -Destination "$OutputPath\src\public\" -force -Recurse
+}
+
+function Prepare-NugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
+    $nugetPath = Join-Path $OutputPath "nuget"
+    if (!(Test-Path -Path $nugetPath)) {
+        New-Item -ItemType "directory" -Path $nugetPath | Out-Null
+    }
+
+    # copy misc files for NuGet packaging.
+    if (!(Test-Path -Path "$OutputPath\license")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\license" | Out-Null
+    }
+
+    Copy-Item "$SourcesPath\LICENSE" -Destination "$OutputPath\license\" -force 
+    Copy-Item "$SourcesPath\.ado\ReactNative.Hermes.Windows.targets" -Destination "$OutputPath\build\native\" -force
+
+    if (!(Test-Path -Path "$OutputPath\build\uap\")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\build\uap\" | Out-Null
+    }
+    Copy-Item "$SourcesPath\.ado\ReactNative.Hermes.Windows.UAP.targets" -Destination "$OutputPath\build\uap\ReactNative.Hermes.Windows.targets" -force
+
+    # process version information
+
+    $gitRevision = ((git rev-parse --short HEAD) | Out-String).Trim()
+
+    $npmPackage = (Get-Content (Join-Path $SourcesPath "npm\package.json") | Out-String | ConvertFrom-Json).version
+
+    (Get-Content "$SourcesPath\.ado\ReactNative.Hermes.Windows.nuspec") -replace ('VERSION_DETAILS', "Hermes version: $npmPackage; Git revision: $gitRevision") | Set-Content "$OutputPath\ReactNative.Hermes.Windows.nuspec"
+    (Get-Content "$SourcesPath\.ado\ReactNative.Hermes.Windows.Fat.nuspec") -replace ('VERSION_DETAILS', "Hermes version: $npmPackage; Git revision: $gitRevision") | Set-Content "$OutputPath\ReactNative.Hermes.Windows.Fat.nuspec"
+
+    $npmPackage | Set-Content "$OutputPath\version"
+}
+
+function Tag-SourceRepo($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
+    $npmPackage = (Get-Content (Join-Path $SourcesPath "npm\package.json") | Out-String | ConvertFrom-Json).version
+
+    $tagName = "v$npmPackage"
+    $tagMessage = "Hermes build for react native for windows versioned $npmPackage"
+
+    git config --global user.email "anandrag@microsoft.com"
+    git config --global user.name "anandrag"
+
+    git tag -a $tagName -m "$tagMessage"
 }
 
 $StartTime = (Get-Date)
@@ -299,7 +427,6 @@ $CMAKE_PATH = Find-Path "git.exe"
 if (!(Test-Path -Path $WorkSpacePath)) {
     New-Item -ItemType "directory" -Path $WorkSpacePath | Out-Null
 }
-
 Push-Location $WorkSpacePath
 
 $BOOST_DIR = Invoke-Expression "$PSScriptRoot\prepare_boost.ps1".Replace("\", "/")
@@ -315,73 +442,25 @@ Write-Output "BOOST_DIR: $BOOST_DIR"
 Write-Output "RN_DIR: $RN_DIR"
 
 # first copy the headers into the output
-if (!(Test-Path -Path "$OutputPath\build\native\include\hermes")) {
-    New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermes" | Out-Null
-}
+Copy-Headers -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform -RNDIR $RN_DIR -FOLLYDIR $FOLLY_DIR -BOOSTDIR $BOOST_DIR
 
-if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector")) {
-    New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector" | Out-Null
-}
+# Copy sources
+# Copy-Sources -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
 
-if (!(Test-Path -Path "$OutputPath\build\native\include\jsi")) {
-    New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\jsi" | Out-Null
-}
-
-Write-Output "$RN_DIR\ReactCommon\hermes\**\*.h"
-
-Copy-Item "$SourcesPath\API\jsi\jsi\*" -Destination "$OutputPath\build\native\include\jsi" -force -Recurse
-Copy-Item "$SourcesPath\API\hermes\hermes.h" -Destination "$OutputPath\build\native\include\hermes" -force
-Copy-Item "$SourcesPath\API\hermes\DebuggerAPI.h" -Destination "$OutputPath\build\native\include\hermes" -force
-Copy-Item "$SourcesPath\public\hermes\*" -Destination "$OutputPath\build\native\include\hermes" -force -Recurse
-Copy-Item "$RN_DIR\ReactCommon\jsinspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force -Recurse
-Copy-Item "$RN_DIR\ReactCommon\hermes\**\*.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force -Recurse
-
-if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector\jsinspector")) {
-    New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\jsinspector" | Out-Null
-}
-Copy-Item "$RN_DIR\ReactCommon\jsinspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector\jsinspector" -force -Recurse
-
-
-if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector")) {
-    New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector" | Out-Null
-}
-Copy-Item "$RN_DIR\ReactCommon\hermes\inspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector\hermes\inspector" -force -Recurse
-
-if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector\chrome")) {
-    New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector\chrome" | Out-Null
-}
-Copy-Item "$RN_DIR\ReactCommon\hermes\inspector\chrome\*.h" -Destination "$OutputPath\build\native\include\hermesinspector\hermes\inspector\chrome" -force -Recurse
-
-# run the actual builds
-
+# run the actual builds and copy artefacts
 foreach ($Plat in $Platform) {
     foreach ($Config in $Configuration) {
-        foreach ($AppPlat in $AppPlatform) {
-            Invoke-Build -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlat -RNDIR $RN_DIR -FOLLYDIR $FOLLY_DIR -BOOSTDIR $BOOST_DIR
-        }
+        Invoke-BuildAndCopy -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform -RNDIR $RN_DIR -FOLLYDIR $FOLLY_DIR -BOOSTDIR $BOOST_DIR
     }
 }
 
-# copy misc files for NuGet to pick up
-if (!(Test-Path -Path "$OutputPath\license")) {
-    New-Item -ItemType "directory" -Path "$OutputPath\license" | Out-Null
+Prepare-NugetPackage -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
+
+if($TagSource.IsPresent) {
+    Tag-SourceRepo  -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
 }
 
-Copy-Item "$SourcesPath\LICENSE" -Destination "$OutputPath\license\" -force 
-Copy-Item "$SourcesPath\.ado\ReactNative.Hermes.Windows.targets" -Destination "$OutputPath\build\native\" -force
-
-# process version information
-
-$gitRevision = ((git rev-parse --short HEAD) | Out-String).Trim()
-
-$npmPackage = (Get-Content (Join-Path $SourcesPath "npm\package.json") | Out-String | ConvertFrom-Json).version
-
-(Get-Content "$SourcesPath\.ado\ReactNative.Hermes.Windows.nuspec") -replace ('VERSION_DETAILS', "Hermes version: $npmPackage; Git revision: $gitRevision") | Set-Content "$OutputPath\ReactNative.Hermes.Windows.nuspec"
-
-$npmPackage | Set-Content "$OutputPath\version"
-
 $elapsedTime = $(get-date) - $StartTime
-
 $totalTime = "{0:HH:mm:ss}" -f ([datetime]$elapsedTime.Ticks)
 
 Pop-Location

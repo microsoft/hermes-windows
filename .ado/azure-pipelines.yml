@@ -137,6 +137,16 @@ jobs:
           buildProperties: CommitId=$(Build.SourceVersion);nugetroot=$(System.DefaultWorkingDirectory)\HermesArtifacts;RepoUri=$(Build.Repository.Uri)
           versioningScheme: byEnvVar
           versionEnvVar: Version
+        
+      - task: NuGetCommand@2
+        displayName: 'NuGet Pack'
+        inputs:
+          command: pack
+          packagesToPack: $(System.DefaultWorkingDirectory)\HermesArtifacts\ReactNative.Hermes.Windows.Fat.nuspec
+          packDestination: $(System.DefaultWorkingDirectory)\NugetRootFinal
+          buildProperties: CommitId=$(Build.SourceVersion);nugetroot=$(System.DefaultWorkingDirectory)\HermesArtifacts;RepoUri=$(Build.Repository.Uri)
+          versioningScheme: byEnvVar
+          versionEnvVar: Version
 
       - task: PublishBuildArtifacts@1
         displayName: "Publish final nuget artifacts"

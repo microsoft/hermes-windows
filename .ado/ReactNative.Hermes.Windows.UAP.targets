@@ -1,0 +1,18 @@
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <HermesPlatform Condition="'$(HermesPlatform)' == ''">$(Platform)</HermesPlatform>
+    <!-- Fix platform name (win32 should be x86) -->
+    <HermesPlatform Condition="'$(HermesPlatform)' == 'Win32'">x86</HermesPlatform>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Debug' And '$(HermesNoDLLCopy)' == ''">
+    <ReferenceCopyLocalPaths Include="$(MSBuildThisFileDirectory)..\..\lib\native\debug\$(HermesPlatform)\hermes.dll" />
+    <ReferenceCopyLocalPaths Include="$(MSBuildThisFileDirectory)..\..\lib\native\debug\$(HermesPlatform)\hermesinspector.dll" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Release' And '$(EnableHermesInspectorInReleaseFlavor)' == 'false' And '$(HermesNoDLLCopy)' == ''">
+    <ReferenceCopyLocalPaths Include="$(MSBuildThisFileDirectory)..\..\lib\native\release\$(HermesPlatform)\hermes.dll" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Release' And '$(EnableHermesInspectorInReleaseFlavor)' == 'true' And '$(HermesNoDLLCopy)' == ''">
+    <ReferenceCopyLocalPaths Include="$(MSBuildThisFileDirectory)..\..\lib\native\release\$(HermesPlatform)\withdebugger\hermes.dll" />
+    <ReferenceCopyLocalPaths Include="$(MSBuildThisFileDirectory)..\..\lib\native\release\$(HermesPlatform)\withdebugger\hermesinspector.dll" />
+  </ItemGroup>
+</Project>
