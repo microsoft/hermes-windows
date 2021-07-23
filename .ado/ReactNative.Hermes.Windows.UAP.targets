@@ -3,6 +3,10 @@
     <HermesPlatform Condition="'$(HermesPlatform)' == ''">$(Platform)</HermesPlatform>
     <!-- Fix platform name (win32 should be x86) -->
     <HermesPlatform Condition="'$(HermesPlatform)' == 'Win32'">x86</HermesPlatform>
+    <NugetRoot>$(MSBuildThisFileDirectory)..\..\</NugetRoot>
+    <!-- <NugetRootOverride>E:\github\hermes-windows2\workspace\out\</NugetRootOverride> -->
+    <PackageRoot>$(NugetRoot)</PackageRoot>
+    <PackageRoot Condition="'$(NugetRootOverride)' != ''">$(NugetRootOverride)</PackageRoot>
   </PropertyGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Debug' And '$(HermesNoDLLCopy)' == ''">
     <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediter\hermes.dll" />

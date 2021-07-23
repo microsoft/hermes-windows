@@ -44,7 +44,8 @@ class JSINSPECTOR_EXPORT IRemoteConnection2 : public IDestructible {
 extern __declspec(
     dllexport) std::unique_ptr<IInspectorPages> __cdecl getInspectorPages();
 
-extern __declspec(dllexport) std::unique_ptr<ILocalConnection>
+extern __declspec(dllexport)
+    std::unique_ptr<ILocalConnection> __cdecl
   connectInspectorPage(int pageId, std::unique_ptr<IRemoteConnection2> remote);
 
 } // namespace react
