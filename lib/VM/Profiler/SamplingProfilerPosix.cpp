@@ -9,7 +9,9 @@
 
 #ifdef HERMESVM_SAMPLING_PROFILER_POSIX
 
+#ifndef _MSC_VER
 #include "hermes/Support/ThreadLocal.h"
+#endif
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/HostModel.h"
 #include "hermes/VM/Profiler/ChromeTraceSerializerPosix.h"
@@ -19,8 +21,10 @@
 #include "llvh/Support/Compiler.h"
 
 #include <fcntl.h>
+#ifndef _MSC_VER
 #include <pthread.h>
 #include <unistd.h>
+#endif
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -37,13 +41,19 @@ const char *const kSamplingDoneSemaphoreName = "/samplingDoneSem";
 std::atomic<SamplingProfiler::GlobalProfiler *>
     SamplingProfiler::GlobalProfiler::instance_{nullptr};
 
+#ifndef _MSC_VER
 std::atomic<bool> SamplingProfiler::GlobalProfiler::handlerSyncFlag_{false};
+#endif
 
 void SamplingProfiler::GlobalProfiler::registerRuntime(
     SamplingProfiler *profiler) {
   std::lock_guard<std::mutex> lockGuard(profilerLock_);
   profilers_.insert(profiler);
+#ifndef _MSC_VER
   threadLocalProfiler_.set(profiler);
+#else
+  threadLocalProfiler_ = profiler;
+#endif
 }
 
 void SamplingProfiler::GlobalProfiler::unregisterRuntime(
@@ -55,7 +65,11 @@ void SamplingProfiler::GlobalProfiler::unregisterRuntime(
   assert(succeed && "How can runtime not registered yet?");
   (void)succeed;
 
+#ifndef _MSC_VER
   threadLocalProfiler_.set(nullptr);
+#else
+  threadLocalProfiler_ = nullptr;
+#endif
 }
 
 void SamplingProfiler::registerDomain(Domain *domain) {
@@ -72,6 +86,7 @@ void SamplingProfiler::markRoots(RootAcceptor &acceptor) {
   }
 }
 
+#ifndef _MSC_VER
 int SamplingProfiler::GlobalProfiler::invokeSignalAction(void (*handler)(int)) {
   struct sigaction actions;
   memset(&actions, 0, sizeof(actions));
@@ -105,19 +120,26 @@ bool SamplingProfiler::GlobalProfiler::unregisterSignalHandler() {
   isSigHandlerRegistered_ = false;
   return true;
 }
+#endif
 
 void SamplingProfiler::GlobalProfiler::profilingSignalHandler(int signo) {
   // Ensure that writes made on the timer thread before setting this flag are
   // correctly acquired.
+#ifndef _MSC_VER
   while (!handlerSyncFlag_.load(std::memory_order_acquire)) {
   }
+#endif
 
   // Avoid spoiling errno in a signal handler by storing the old version and
   // re-assigning it.
   auto oldErrno = errno;
   // Fetch runtime used by this sampling thread.
   auto profilerInstance = instance_.load();
+#ifndef _MSC_VER
   auto *localProfiler = profilerInstance->threadLocalProfiler_.get();
+#else
+  auto *localProfiler = profilerInstance->threadLocalProfiler_;
+#endif
   auto *curThreadRuntime = localProfiler->runtime_;
   if (curThreadRuntime == nullptr) {
     // Runtime may have unregistered itself before signal.
@@ -144,6 +166,7 @@ void SamplingProfiler::GlobalProfiler::profilingSignalHandler(int signo) {
       profilerInstance->sampledStackDepth_ = 0;
     }
   }
+#ifndef _MSC_VER
   // Ensure that writes made in the handler are visible to the timer thread.
   handlerSyncFlag_.store(false);
 
@@ -152,11 +175,16 @@ void SamplingProfiler::GlobalProfiler::profilingSignalHandler(int signo) {
     abort(); // Something is wrong.
   }
   errno = oldErrno;
+#endif
 }
 
 bool SamplingProfiler::GlobalProfiler::sampleStack() {
   for (SamplingProfiler *localProfiler : profilers_) {
+#ifndef _MSC_VER
     auto targetThreadId = localProfiler->currentThread_;
+#else
+    auto targetThreadHandle = localProfiler->currentThreadHandle_;
+#endif
     std::lock_guard<std::mutex> lk(localProfiler->runtimeDataLock_);
     // Ensure there are no allocations in the signal handler by keeping ample
     // reserved space.
@@ -165,13 +193,28 @@ bool SamplingProfiler::GlobalProfiler::sampleStack() {
     size_t domainCapacityBefore = localProfiler->domains_.capacity();
     (void)domainCapacityBefore;
 
+#ifndef _MSC_VER
     // Guarantee that the runtime thread will not proceed until it has acquired
     // the updates to domains_.
     handlerSyncFlag_.store(true, std::memory_order_release);
 
     // Signal target runtime thread to sample stack.
     pthread_kill(targetThreadId, SIGPROF);
+#else
+    DWORD prevSuspendCount = SuspendThread(targetThreadHandle);
+    if (prevSuspendCount == -1) {
+      return true;
+    }
+    assert(prevSuspendCount == 0);
 
+    CONTEXT context;
+    GetThreadContext(targetThreadHandle, &context);
+    profilingSignalHandler(0);
+    prevSuspendCount = ResumeThread(targetThreadHandle);
+    assert(prevSuspendCount == 1);
+#endif
+
+#ifndef _MSC_VER
     // Threading: samplingDoneSem_ will synchronise this thread with the signal
     // handler, so that we only have one active signal at a time.
     if (!samplingDoneSem_.wait()) {
@@ -182,6 +225,7 @@ bool SamplingProfiler::GlobalProfiler::sampleStack() {
     // structures in the signal handler.
     while (handlerSyncFlag_.load(std::memory_order_acquire)) {
     }
+#endif
 
     assert(
         localProfiler->domains_.capacity() == domainCapacityBefore &&
@@ -276,7 +320,11 @@ uint32_t SamplingProfiler::walkRuntimeStack(
       }
     }
   }
+#ifndef _MSC_VER
   sampleStorage.tid = oscompat::thread_id();
+#else
+  sampleStorage.tid = threadId_;
+#endif
   sampleStorage.timeStamp = std::chrono::steady_clock::now();
   return count;
 }
@@ -379,9 +427,21 @@ bool SamplingProfiler::GlobalProfiler::enabled() {
 }
 #endif
 
-SamplingProfiler::SamplingProfiler(Runtime *runtime)
-    : currentThread_{pthread_self()}, runtime_{runtime} {
-  threadNames_[oscompat::thread_id()] = oscompat::thread_name();
+SamplingProfiler::SamplingProfiler(Runtime *runtime) : 
+#ifndef _MSC_VER
+    currentThread_{pthread_self()}, 
+#endif
+    runtime_{runtime} {
+
+#ifdef _MSC_VER
+    currentThreadHandle_ = OpenThread(
+      THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION,
+      false,
+      GetCurrentThreadId());
+
+  threadId_ = oscompat::thread_id();
+#endif
+    threadNames_[oscompat::thread_id()] = oscompat::thread_name();
   GlobalProfiler::get()->registerRuntime(this);
 }
 
@@ -446,7 +506,13 @@ void SamplingProfiler::dumpChromeTraceGlobal(llvh::raw_ostream &OS) {
 
 void SamplingProfiler::dumpChromeTrace(llvh::raw_ostream &OS) {
   std::lock_guard<std::mutex> lk(runtimeDataLock_);
-  auto pid = getpid();
+
+#ifndef _MSC_VER
+auto pid = getpid();
+#else
+  auto pid = GetCurrentProcessId();
+#endif
+
   ChromeTraceSerializer serializer(
       ChromeTraceFormat::create(pid, threadNames_, sampledStacks_));
   serializer.serialize(OS);
@@ -462,12 +528,14 @@ bool SamplingProfiler::GlobalProfiler::enable() {
   if (enabled_) {
     return true;
   }
+#ifndef _MSC_VER
   if (!samplingDoneSem_.open(kSamplingDoneSemaphoreName)) {
     return false;
   }
   if (!registerSignalHandlers()) {
     return false;
   }
+#endif
   enabled_ = true;
   // Start timer thread.
   timerThread_ = std::thread(&GlobalProfiler::timerLoop, this);
@@ -485,6 +553,7 @@ bool SamplingProfiler::GlobalProfiler::disable() {
       // Already disabled.
       return true;
     }
+#ifndef _MSC_VER
     if (!samplingDoneSem_.close()) {
       return false;
     }
@@ -492,6 +561,7 @@ bool SamplingProfiler::GlobalProfiler::disable() {
     if (!unregisterSignalHandler()) {
       return false;
     }
+#endif
     // Telling timer thread to exit.
     enabled_ = false;
   }

@@ -1,5 +1,5 @@
 {
-  "version": "0.8.1-ms.0",
+  "version": "0.8.1-ms.4",
   "scripts": {
     "unpack-builds": "node unpack-builds.js",
     "unpack-builds-dev": "node unpack-builds.js --dev",

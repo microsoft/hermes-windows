@@ -8,14 +8,21 @@
 #ifndef HERMES_VM_PROFILER_SAMPLINGPROFILERPOSIX_H
 #define HERMES_VM_PROFILER_SAMPLINGPROFILERPOSIX_H
 
+#ifdef _MSC_VER
+#define NOMINMAX
+#include "windows.h"
+#endif
+
+#ifndef _MSC_VER
 #include "hermes/Support/Semaphore.h"
 #include "hermes/Support/ThreadLocal.h"
+#endif
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/Runtime.h"
 
 #include "llvh/ADT/DenseMap.h"
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_MSC_VER)
 // Prevent "The deprecated ucontext routines require _XOPEN_SOURCE to be
 // defined" error on mac.
 #include <ucontext.h>
@@ -135,15 +142,21 @@ class SamplingProfiler {
 
     /// Per-thread profiler instance for loom/local profiling.
     /// Limitations: No recursive runtimes in one thread.
+#ifndef _MSC_VER
     ThreadLocal<SamplingProfiler> threadLocalProfiler_;
+#else
+    SamplingProfiler* threadLocalProfiler_;
+#endif
 
     /// Whether profiler is enabled or not. Protected by profilerLock_.
     bool enabled_{false};
     /// Whether signal handler is registered or not. Protected by profilerLock_.
     bool isSigHandlerRegistered_{false};
 
+#ifndef _MSC_VER
     /// Semaphore to indicate all signal handlers have finished the sampling.
     Semaphore samplingDoneSem_;
+#endif
 
     /// Threading: load/store of sampledStackDepth_ and sampleStorage_
     /// are protected by samplingDoneSem_.
@@ -164,6 +177,7 @@ class SamplingProfiler {
     /// member variable.
     std::condition_variable enabledCondVar_;
 
+#ifndef _MSC_VER
     /// invoke sigaction() posix API to register \p handler.
     /// \return what sigaction() returns: 0 to indicate success.
     static int invokeSignalAction(void (*handler)(int));
@@ -174,6 +188,7 @@ class SamplingProfiler {
 
     /// Unregister sampling signal handler.
     bool unregisterSignalHandler();
+#endif
 
     /// Signal handler to walk the stack frames.
     static void profilingSignalHandler(int signo);
@@ -206,6 +221,10 @@ class SamplingProfiler {
     GlobalProfiler();
   };
 
+#ifdef _MSC_VER
+  ThreadId threadId_;
+#endif
+
   /// Protect data specific to a runtime, such as the sampled stacks and
   /// domains.
   std::mutex runtimeDataLock_;
@@ -229,7 +248,11 @@ class SamplingProfiler {
   /// set from the constructor of SamplingProfiler, so we need to construct a
   /// new SamplingProfiler every time the runtime is moved to a different
   /// thread.
+#ifndef _MSC_VER
   pthread_t currentThread_;
+#else
+  HANDLE currentThreadHandle_;
+#endif
 
   /// Unique GC event extra info strings container.
   std::unordered_set<std::string> gcEventExtraInfoSet_;

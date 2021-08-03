@@ -273,13 +273,13 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
 
     if ($Configuration -eq "release") {
         # We are now including debugger by default .. 
-        Copy-Item "$buildPathWithDebugger\API\hermes\hermes.dll" -Destination $finalOutputPath -force | Out-Null
-        Copy-Item "$buildPathWithDebugger\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
-        Copy-Item "$buildPathWithDebugger\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
+        Copy-Item "$buildPath\API\hermes\hermes.dll" -Destination $finalOutputPath -force | Out-Null
+        Copy-Item "$buildPath\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
+        Copy-Item "$buildPath\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
 
-        Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.dll" -Destination $finalOutputPath -force | Out-Null
-        Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.lib" -Destination $finalOutputPath -force | Out-Null
-        Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.pdb" -Destination $finalOutputPath -force | Out-Null
+        Copy-Item "$buildPath\API\inspector\hermesinspector.dll" -Destination $finalOutputPath -force | Out-Null
+        Copy-Item "$buildPath\API\inspector\hermesinspector.lib" -Destination $finalOutputPath -force | Out-Null
+        Copy-Item "$buildPath\API\inspector\hermesinspector.pdb" -Destination $finalOutputPath -force | Out-Null
     
         $finalOutputPathWithCheckedIter = Join-Path $finalOutputPath "checkediter"
         if (!(Test-Path -Path $finalOutputPathWithCheckedIter)) {
@@ -342,6 +342,7 @@ function Copy-Headers($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Con
     Copy-Item "$SourcesPath\include\hermes\BCGen\HBC\BytecodeVersion.h" -Destination "$OutputPath\build\native\include\hermes" -force
     Copy-Item "$SourcesPath\API\jsi\jsi\*" -Destination "$OutputPath\build\native\include\jsi" -force -Recurse
     Copy-Item "$SourcesPath\API\hermes\hermes.h" -Destination "$OutputPath\build\native\include\hermes" -force
+    Copy-Item "$SourcesPath\API\hermes\hermes_dbg.h" -Destination "$OutputPath\build\native\include\hermes" -force
     Copy-Item "$SourcesPath\API\hermes\DebuggerAPI.h" -Destination "$OutputPath\build\native\include\hermes" -force
     Copy-Item "$SourcesPath\public\hermes\*" -Destination "$OutputPath\build\native\include\hermes" -force -Recurse
     Copy-Item "$RNDIR\ReactCommon\jsinspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force -Recurse
