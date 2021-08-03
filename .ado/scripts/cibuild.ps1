@@ -276,18 +276,31 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
         Copy-Item "$buildPath\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
 
-        $finalOutputPathWithCheckedIter = Join-Path $finalOutputPath "checkediterdebugger"
+        $finalOutputPathWithCheckedIterDebugger = Join-Path $finalOutputPath "checkediterdebugger"
         if (!(Test-Path -Path $finalOutputPathWithCheckedIter)) {
             New-Item -ItemType "directory" -Path $finalOutputPathWithCheckedIter | Out-Null
         }
 
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.dll" -Destination $finalOutputPathWithCheckedIter -force | Out-Null
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.lib" -Destination $finalOutputPathWithCheckedIter -force | Out-Null
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.pdb" -Destination $finalOutputPathWithCheckedIter -force | Out-Null
+        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.dll" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.lib" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.pdb" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
 
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.dll" -Destination $finalOutputPathWithCheckedIter -force | Out-Null
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.lib" -Destination $finalOutputPathWithCheckedIter -force | Out-Null
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.pdb" -Destination $finalOutputPathWithCheckedIter -force | Out-Null
+        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.dll" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.lib" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.pdb" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
+
+        $finalOutputPathWithDebugger = Join-Path $finalOutputPath "debugger"
+        if (!(Test-Path -Path $finalOutputPathWithDebugger)) {
+            New-Item -ItemType "directory" -Path $finalOutputPathWithDebugger | Out-Null
+        }
+
+        Copy-Item "$buildPathWithDebugger\API\hermes\hermes.dll" -Destination $finalOutputPathWithDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebugger\API\hermes\hermes.lib" -Destination $finalOutputPathWithDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebugger\API\hermes\hermes.pdb" -Destination $finalOutputPathWithDebugger -force | Out-Null
+
+        Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.dll" -Destination $finalOutputPathWithDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.lib" -Destination $finalOutputPathWithDebugger -force | Out-Null
+        Copy-Item "$buildPathWithDebugger\API\inspector\hermesinspector.pdb" -Destination $finalOutputPathWithDebugger -force | Out-Null
     } else {
         Copy-Item "$buildPath\API\hermes\hermes.dll" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
@@ -406,7 +419,7 @@ function Prepare-NugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $Platfo
     }
 
     Copy-Item "$SourcesPath\LICENSE" -Destination "$OutputPath\license\" -force 
-    Copy-Item "$SourcesPath\.ado\ReactNative.Hermes.Windows.targets" -Destination "$OutputPath\build\native\" -force
+    Copy-Item "$SourcesPath\.ado\ReactNative.Hermes.Windows.targets" -Destination "$OutputPath\build\native\ReactNative.Hermes.Windows.targets" -force
 
     if (!(Test-Path -Path "$OutputPath\build\uap\")) {
         New-Item -ItemType "directory" -Path "$OutputPath\build\uap\" | Out-Null
