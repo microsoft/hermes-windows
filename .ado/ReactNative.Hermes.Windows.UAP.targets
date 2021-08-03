@@ -9,11 +9,11 @@
     <PackageRoot Condition="'$(NugetRootOverride)' != ''">$(NugetRootOverride)</PackageRoot>
   </PropertyGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Debug' And '$(HermesNoDLLCopy)' == ''">
-    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediter\hermes.dll" />
-    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediter\hermesinspector.dll" />
+    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediterdebugger\hermes.dll" />
+    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediterdebugger\hermesinspector.dll" />
   </ItemGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Release' And '$(HermesNoDLLCopy)' == ''">
     <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\hermes.dll" />
-    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\hermesinspector.dll" />
+    <!-- <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\hermesinspector.dll" /> -->
   </ItemGroup>
 </Project>

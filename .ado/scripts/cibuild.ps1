@@ -241,7 +241,7 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
     
     $buildPath = Join-Path $WorkSpacePath "build\$Triplet"
     $buildPathWithDebugger = Join-Path $buildPath "withdebugger"
-    $buildPathWithDebuggerAndCheckedIter = Join-Path $buildPath "withCheckedIter"
+    $buildPathWithDebuggerAndCheckedIter = Join-Path $buildPath "withCheckedIterDebugger"
     
     if ($Configuration -eq "release") {
         $CheckedStlIterators = $False
@@ -272,16 +272,11 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
     }
 
     if ($Configuration -eq "release") {
-        # We are now including debugger by default .. 
         Copy-Item "$buildPath\API\hermes\hermes.dll" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
 
-        Copy-Item "$buildPath\API\inspector\hermesinspector.dll" -Destination $finalOutputPath -force | Out-Null
-        Copy-Item "$buildPath\API\inspector\hermesinspector.lib" -Destination $finalOutputPath -force | Out-Null
-        Copy-Item "$buildPath\API\inspector\hermesinspector.pdb" -Destination $finalOutputPath -force | Out-Null
-    
-        $finalOutputPathWithCheckedIter = Join-Path $finalOutputPath "checkediter"
+        $finalOutputPathWithCheckedIter = Join-Path $finalOutputPath "checkediterdebugger"
         if (!(Test-Path -Path $finalOutputPathWithCheckedIter)) {
             New-Item -ItemType "directory" -Path $finalOutputPathWithCheckedIter | Out-Null
         }

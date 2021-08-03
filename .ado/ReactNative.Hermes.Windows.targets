@@ -10,7 +10,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <Link>
-      <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Debug'">%(AdditionalLibraryDirectories);$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediter</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Debug'">%(AdditionalLibraryDirectories);$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediterdebugger</AdditionalLibraryDirectories>
       <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Release'">%(AdditionalLibraryDirectories);$(PackageRoot)lib\native\release\$(HermesPlatform)</AdditionalLibraryDirectories>
       <AdditionalDependencies>%(AdditionalDependencies);hermesinspector.lib;hermes.lib;</AdditionalDependencies>
       <AdditionalDependencies>%(AdditionalDependencies);dloadhelper.lib</AdditionalDependencies>
@@ -23,8 +23,8 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Debug' And '$(HermesNoDLLCopy)' == ''">
-    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediter\hermes.dll" />
-    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediter\hermesinspector.dll" />
+    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediterdebugger\hermes.dll" />
+    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediterdebugger\hermesinspector.dll" />
   </ItemGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Release' And '$(HermesNoDLLCopy)' == ''">
     <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\hermes.dll" />
