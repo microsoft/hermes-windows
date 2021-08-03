@@ -277,8 +277,8 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
         Copy-Item "$buildPath\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
 
         $finalOutputPathWithCheckedIterDebugger = Join-Path $finalOutputPath "checkediterdebugger"
-        if (!(Test-Path -Path $finalOutputPathWithCheckedIter)) {
-            New-Item -ItemType "directory" -Path $finalOutputPathWithCheckedIter | Out-Null
+        if (!(Test-Path -Path $finalOutputPathWithCheckedIterDebugger)) {
+            New-Item -ItemType "directory" -Path $finalOutputPathWithCheckedIterDebugger | Out-Null
         }
 
         Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.dll" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
