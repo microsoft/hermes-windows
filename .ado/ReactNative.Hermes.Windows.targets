@@ -17,7 +17,8 @@
       <AdditionalDependencies>%(AdditionalDependencies);hermes.lib;</AdditionalDependencies>
       <AdditionalDependencies Condition="'$(Configuration)' == 'Debug' Or '$(EnableHermesInspectorInReleaseFlavor)' == 'true'">%(AdditionalDependencies);hermesinspector.lib;</AdditionalDependencies>
       <AdditionalDependencies>%(AdditionalDependencies);dloadhelper.lib</AdditionalDependencies>
-      <DelayLoadDLLs>%(DelayLoadDLLs);hermes.dll;hermesinspector.dll</DelayLoadDLLs>
+      <DelayLoadDLLs>%(DelayLoadDLLs);hermes.dll;</DelayLoadDLLs>
+      <DelayLoadDLLs Condition="'$(Configuration)' == 'Debug' Or '$(EnableHermesInspectorInReleaseFlavor)' == 'true'">%(DelayLoadDLLs);hermesinspector.dll</DelayLoadDLLs>
     </Link>
     <ClCompile>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(PackageRoot)\build\native\include</AdditionalIncludeDirectories>

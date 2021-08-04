@@ -97,13 +97,13 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
       size_t len);
 
   /// Enable sampling profiler.
-  static void enableSamplingProfiler();
+  static void __cdecl enableSamplingProfiler();
 
   /// Disable the sampling profiler
-  static void disableSamplingProfiler();
+  static void __cdecl disableSamplingProfiler();
 
   /// Dump sampled stack trace to the given file name.
-  static void dumpSampledTraceToFile(const std::string &fileName);
+  static void __cdecl dumpSampledTraceToFile(const std::string &fileName);
 
   /// Dump sampled stack trace to the given stream.
   static void dumpSampledTraceToStream(llvh::raw_ostream &stream);
