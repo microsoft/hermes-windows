@@ -46,6 +46,17 @@ elseif (MINGW) # FIXME: Also cygwin?
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,16777216")
 endif ()
 
+if(MSVC)
+  # FastDebug Flavor
+  # 1. Optmize for speed.
+  # 2. Enable full Inlining
+  # 3. Link against debug flavored VCRT
+  # Note: /O2 and RTC1 are incompatible
+  # TODO: /Ox is more debug friendly ?
+  string(APPEND CMAKE_CXX_FLAGS_FASTDEBUG "/MDd /O2 /Ob2")
+  string(APPEND CMAKE_C_FLAGS_FASTDEBUG "/MDd /O2 /Ob2")
+endif()
+
 if (WIN32)
   set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
   if (CYGWIN)

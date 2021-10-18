@@ -24,7 +24,8 @@ param(
     [switch]$RunTests,
     [switch]$Incremental,
     [switch]$UseVS,
-    [switch]$TagSource
+    [switch]$TagSource,
+    [switch]$ConfigureOnly
 )
 
 function Find-Path($exename) {
@@ -93,7 +94,7 @@ return $args_
 function Get-CMakeConfiguration($config) {
     $val = switch ($config)
     {
-        "debug" {"Debug"}
+        "debug" {"FastDebug"}
         "release" {"Release"}
         default {"Debug"}
     }
@@ -159,6 +160,10 @@ function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $increme
         Invoke-Environment $VCVARS_PATH (Get-VCVarsParam $Platform $AppPlatform)
         Invoke-Expression $genCall
         
+        if($ConfigureOnly.IsPresent){
+            exit 0;
+        }
+
         if($UseVS.IsPresent) {
             exit  1;
         } else {
@@ -166,9 +171,17 @@ function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $increme
         }
 
     } else {
-        $Cmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && $genCall 2>&1 && ${ninjaCmd}"
-        Write-Output "Command: $Cmd" | Out-Null
-        cmd /c $Cmd
+        $GenCmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && $genCall 2>&1"
+        Write-Output "Command: $GenCmd" | Out-Null
+        cmd /c $GenCmd
+
+        if($ConfigureOnly.IsPresent){
+            exit 0;
+        }
+
+        $NinjaCmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && ${ninjaCmd} 2>&1"
+        Write-Output "Command: $NinjaCmd" | Out-Null
+        cmd /c $NinjaCmd
     }
 
     Pop-Location

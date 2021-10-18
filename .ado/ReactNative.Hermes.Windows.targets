@@ -10,15 +10,15 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <Link>
-      <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Debug'">%(AdditionalLibraryDirectories);$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediterdebugger</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Debug'">%(AdditionalLibraryDirectories);$(PackageRoot)lib\native\debug\$(HermesPlatform)</AdditionalLibraryDirectories>
       <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Release' And '$(EnableHermesInspectorInReleaseFlavor)' != 'true' ">%(AdditionalLibraryDirectories);$(PackageRoot)lib\native\release\$(HermesPlatform)</AdditionalLibraryDirectories>
       <AdditionalLibraryDirectories Condition="'$(Configuration)' == 'Release' And '$(EnableHermesInspectorInReleaseFlavor)' == 'true'">%(AdditionalLibraryDirectories);$(PackageRoot)lib\native\release\$(HermesPlatform)\debugger</AdditionalLibraryDirectories>
       
-      <AdditionalDependencies>%(AdditionalDependencies);hermes.lib;</AdditionalDependencies>
-      <AdditionalDependencies Condition="'$(Configuration)' == 'Debug' Or '$(EnableHermesInspectorInReleaseFlavor)' == 'true'">%(AdditionalDependencies);hermesinspector.lib;</AdditionalDependencies>
-      <AdditionalDependencies>%(AdditionalDependencies);dloadhelper.lib</AdditionalDependencies>
-      <DelayLoadDLLs>%(DelayLoadDLLs);hermes.dll;</DelayLoadDLLs>
-      <DelayLoadDLLs Condition="'$(Configuration)' == 'Debug' Or '$(EnableHermesInspectorInReleaseFlavor)' == 'true'">%(DelayLoadDLLs);hermesinspector.dll</DelayLoadDLLs>
+      <AdditionalDependencies Condition="'$(HermesNoLink)' == ''">%(AdditionalDependencies);hermes.lib;</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(HermesNoLink)' == '' And ('$(Configuration)' == 'Debug' Or '$(EnableHermesInspectorInReleaseFlavor)' == 'true')">%(AdditionalDependencies);hermesinspector.lib;</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(HermesNoLink)' == ''">%(AdditionalDependencies);dloadhelper.lib</AdditionalDependencies>
+      <DelayLoadDLLs Condition="'$(HermesNoLink)' == ''">%(DelayLoadDLLs);hermes.dll;</DelayLoadDLLs>
+      <DelayLoadDLLs Condition="'$(HermesNoLink)' == '' And ('$(Configuration)' == 'Debug' Or '$(EnableHermesInspectorInReleaseFlavor)' == 'true')">%(DelayLoadDLLs);hermesinspector.dll</DelayLoadDLLs>
     </Link>
     <ClCompile>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(PackageRoot)\build\native\include</AdditionalIncludeDirectories>
@@ -27,8 +27,8 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Debug' And '$(HermesNoDLLCopy)' == ''">
-    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediterdebugger\hermes.dll" />
-    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\checkediterdebugger\hermesinspector.dll" />
+    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\debug\$(HermesPlatform)\hermes.dll" />
+    <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\debug\$(HermesPlatform)\hermesinspector.dll" />
   </ItemGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Release' And '$(EnableHermesInspectorInReleaseFlavor)' != 'true' And '$(HermesNoDLLCopy)' == ''">
     <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\release\$(HermesPlatform)\hermes.dll" />
