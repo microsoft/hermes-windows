@@ -143,7 +143,7 @@ function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $increme
     Push-Location $buildPath
 
     $genCall = ('cmake {0}' -f ($genArgs -Join ' ')) + " $SourcesPath";
-    Write-Host $genCall | Out-Null
+    Write-Host $genCall
     $ninjaCmd = "ninja"
 
     foreach ( $target in $targets )
@@ -151,7 +151,7 @@ function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $increme
         $ninjaCmd = $ninjaCmd + " " + $target
     }
 
-    Write-Output $ninjaCmd | Out-Null
+    Write-Host $ninjaCmd
 
     # See https://developercommunity.visualstudio.com/content/problem/257260/vcvarsallbat-reports-the-input-line-is-too-long-if.html
     $Bug257260 = $false
@@ -172,7 +172,7 @@ function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $increme
 
     } else {
         $GenCmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && $genCall 2>&1"
-        Write-Output "Command: $GenCmd" | Out-Null
+        Write-Host "Command: $GenCmd"
         cmd /c $GenCmd
 
         if($ConfigureOnly.IsPresent){
@@ -180,7 +180,7 @@ function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $increme
         }
 
         $NinjaCmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && ${ninjaCmd} 2>&1"
-        Write-Output "Command: $NinjaCmd" | Out-Null
+        Write-Host "Command: $NinjaCmd"
         cmd /c $NinjaCmd
     }
 

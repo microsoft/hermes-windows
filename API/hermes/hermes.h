@@ -256,6 +256,12 @@ HERMES_EXPORT std::unique_ptr<jsi::ThreadSafeRuntime>
 makeThreadSafeHermesRuntime(
     const ::hermes::vm::RuntimeConfig &runtimeConfig =
         ::hermes::vm::RuntimeConfig());
+
+#if defined(_WIN32)
+HERMES_EXPORT std::unique_ptr<HermesRuntime> __cdecl makeHermesRuntimeWithWER();
+HERMES_EXPORT void __cdecl hermesCrashHandler(HermesRuntime &runtime, int fd);
+#endif
+
 } // namespace hermes
 } // namespace facebook
 
