@@ -19,10 +19,13 @@ if($Force.IsPresent) {
     }
 }
 
-Invoke-Expression 'git config --local user.name "HermesDev"'
-Invoke-Expression 'git config --local user.email "hermesdev@microsoft.com"'
-Invoke-Expression 'git config --local core.autocrlf false'
-Invoke-Expression 'git config --local core.filemode false'
+$currentGitUser=Invoke-Expression 'git config user.email'
+if ([string]::IsNullOrWhiteSpace($currentGitUser)) {
+    Invoke-Expression 'git config --local user.name "HermesDev"'
+    Invoke-Expression 'git config --local user.email "hermesdev@microsoft.com"'
+    Invoke-Expression 'git config --local core.autocrlf false'
+    Invoke-Expression 'git config --local core.filemode false'
+}
 
 # We have an existing checkout if git head exists.
 $RN_REPO_HEAD="$RN_DIR\.git\HEAD"
