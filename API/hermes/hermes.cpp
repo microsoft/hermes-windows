@@ -1072,7 +1072,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
     std::list<T> values;
   };
 
-  inline std::shared_ptr<vm::CrashManager> getCrashManager() {
+  inline std::shared_ptr<vm::CrashManager> getCrashManager() noexcept {
     return crashMgr_;
   }
 
@@ -2414,6 +2414,7 @@ class CrashManagerImpl : public vm::CrashManager {
     sstream << "TID" << std::this_thread::get_id() << Utf8ToUtf16(key);
 
     auto strKey = sstream.str();
+    // WER expects valid XML element names, Hermes embeds ':' characters that need to be replaced
     std::replace(strKey.begin(), strKey.end(), L':', L'_');
 
     auto strValue = Utf8ToUtf16(val);
@@ -2425,13 +2426,14 @@ class CrashManagerImpl : public vm::CrashManager {
     sstream << "TID" << std::this_thread::get_id() << Utf8ToUtf16(key);
 
     auto strKey = sstream.str();
+    // WER expects valid XML element names, Hermes embeds ':' characters that need to be replaced
     std::replace(strKey.begin(), strKey.end(), L':', L'_');
 
     WerUnregisterCustomMetadata(strKey.c_str());
   }
 
   CallbackKey registerCallback(CallbackFunc cb) override {
-    CallbackKey key = static_cast<CallbackKey>(_callbacks.size());
+    CallbackKey key = static_cast<CallbackKey>((intptr_t)std::addressof(cb));
     _callbacks.insert({key, std::move(cb)});
     return key;
   }
@@ -2452,26 +2454,24 @@ class CrashManagerImpl : public vm::CrashManager {
 
 private:
   std::wstring Utf8ToUtf16(const char *s) {
-    size_t strLength = strlen(s);
-		size_t requiredSize = 0;
+    size_t strLength = strnlen_s(s, 64); // 64 is maximum key length for WerRegisterCustomMetadata
+    size_t requiredSize = 0;
 
-		if (strLength != 0)
-		{
-			mbstowcs_s(&requiredSize, nullptr, 0, s, strLength);
+    if (strLength != 0) {
+      mbstowcs_s(&requiredSize, nullptr, 0, s, strLength);
 
-			if (requiredSize != 0)
-			{
+      if (requiredSize != 0) {
         std::wstring buffer;
         buffer.resize(requiredSize + sizeof(wchar_t));
 
-				if (mbstowcs_s(&requiredSize, &buffer[0], requiredSize, s, strLength) == 0)
-				{
-					return buffer;
-				}
-			}
-		}
+        if (mbstowcs_s(&requiredSize, &buffer[0], requiredSize, s, strLength) ==
+            0) {
+          return buffer;
+        }
+      }
+    }
 
-		return std::wstring();
+    return std::wstring();
   }
 
   HeapInformation _lastHeapInformation;
