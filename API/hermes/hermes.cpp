@@ -2368,16 +2368,34 @@ jsi::Value debugger::Debugger::jsiValueFromHermesValue(vm::HermesValue hv) {
 class CrashManagerImpl : public vm::CrashManager {
  public:
   void registerMemory(void *mem, size_t length) override {
-    DWORD dwLength = static_cast<DWORD>(length);
-    if (dwLength > WER_MAX_MEM_BLOCK_SIZE) {
-      // TODO: Hermes thinks we should save the whole block, but WER allows 64K max; do we have enough for dump analysis or should we split it?
-      dwLength = WER_MAX_MEM_BLOCK_SIZE;
+    if (length > WER_MAX_MEM_BLOCK_SIZE) { // Hermes thinks we should save the whole block, but WER allows 64K max
+      _largeMemBlocks[(intptr_t)mem] = length;
+
+      auto pieceCount = length / WER_MAX_MEM_BLOCK_SIZE;
+      for (auto i = 0; i < pieceCount; i++) {
+        WerRegisterMemoryBlock((char*)mem + i*WER_MAX_MEM_BLOCK_SIZE, WER_MAX_MEM_BLOCK_SIZE);
+      }
+
+      WerRegisterMemoryBlock((char*)mem + pieceCount*WER_MAX_MEM_BLOCK_SIZE, length - pieceCount*WER_MAX_MEM_BLOCK_SIZE);
+    } else {
+      WerRegisterMemoryBlock(mem, static_cast<DWORD>(length));
     }
-    WerRegisterMemoryBlock(mem, dwLength);
   }
 
   void unregisterMemory(void *mem) override {
-    WerUnregisterMemoryBlock(mem);
+    if (_largeMemBlocks.find((intptr_t)mem) != _largeMemBlocks.end()) {
+      // This memory was larger than what WER supports so we split it up into chunks of size WER_MAX_MEM_BLOCK_SIZE
+      auto pieceCount = _largeMemBlocks[(intptr_t)mem] / WER_MAX_MEM_BLOCK_SIZE;
+      for (auto i = 0; i < pieceCount; i++) {
+        WerUnregisterMemoryBlock((char*)mem + i*WER_MAX_MEM_BLOCK_SIZE);
+      }
+
+      WerUnregisterMemoryBlock((char*)mem + pieceCount*WER_MAX_MEM_BLOCK_SIZE);
+
+      _largeMemBlocks.erase((intptr_t)mem);
+    } else {
+      WerUnregisterMemoryBlock(mem);
+    }
   }
 
   void setCustomData(const char *key, const char *val) override {
@@ -2458,6 +2476,7 @@ private:
 
   HeapInformation _lastHeapInformation;
   std::map<CallbackKey, CallbackFunc> _callbacks;
+  std::map<intptr_t, size_t> _largeMemBlocks;
 };
 
 std::unique_ptr<HermesRuntime> makeHermesRuntimeWithWER() {
