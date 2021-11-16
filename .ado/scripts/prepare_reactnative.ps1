@@ -19,11 +19,10 @@ if($Force.IsPresent) {
     }
 }
 
-Invoke-Expression 'git config --global user.name "Anandraj"'
-Invoke-Expression 'git config --global user.email "anandrag@microsoft.com"'
-Invoke-Expression 'git config --global core.autocrlf false'
-Invoke-Expression 'git config --global core.filemode false'
-Invoke-Expression 'git config --global branch.autosetuprebase always'
+Invoke-Expression 'git config --local user.name "HermesDev"'
+Invoke-Expression 'git config --local user.email "hermesdev@microsoft.com"'
+Invoke-Expression 'git config --local core.autocrlf false'
+Invoke-Expression 'git config --local core.filemode false'
 
 # We have an existing checkout if git head exists.
 $RN_REPO_HEAD="$RN_DIR\.git\HEAD"

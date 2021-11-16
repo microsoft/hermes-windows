@@ -24,7 +24,6 @@ param(
     [switch]$RunTests,
     [switch]$Incremental,
     [switch]$UseVS,
-    [switch]$TagSource,
     [switch]$ConfigureOnly
 )
 
@@ -469,17 +468,6 @@ function Prepare-NugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $Platfo
     $npmPackage | Set-Content "$OutputPath\version"
 }
 
-function Tag-SourceRepo($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
-    $npmPackage = (Get-Content (Join-Path $SourcesPath "npm\package.json") | Out-String | ConvertFrom-Json).version
-
-    $tagName = "v$npmPackage"
-    $tagMessage = "Hermes build for react native for windows versioned $npmPackage"
-
-    git config --global user.email "anandrag@microsoft.com"
-    git config --global user.name "anandrag"
-
-    git tag -a $tagName -m "$tagMessage"
-}
 
 $StartTime = (Get-Date)
 
@@ -519,10 +507,6 @@ foreach ($Plat in $Platform) {
 }
 
 Prepare-NugetPackage -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
-
-if($TagSource.IsPresent) {
-    Tag-SourceRepo  -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
-}
 
 $elapsedTime = $(get-date) - $StartTime
 $totalTime = "{0:HH:mm:ss}" -f ([datetime]$elapsedTime.Ticks)
