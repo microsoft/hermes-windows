@@ -1,5 +1,5 @@
 diff --git a/lib/Support/Windows/Path.inc b/lib/Support/Windows/Path.inc
-index 2e8eaa52..eb163c45 100644
+index 2b30bd24..0f9a84c1 100644
 --- a/lib/Support/Windows/Path.inc
 +++ b/lib/Support/Windows/Path.inc
 @@ -416,7 +416,7 @@ static std::error_code rename_internal(HANDLE FromHandle, const Twine &To,

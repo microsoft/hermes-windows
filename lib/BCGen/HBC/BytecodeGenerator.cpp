@@ -7,19 +7,12 @@
 
 #include "hermes/BCGen/HBC/BytecodeGenerator.h"
 
-#include "hermes/BCGen/HBC/ConsecutiveStringStorage.h"
 #include "hermes/FrontEndDefs/Builtins.h"
-#include "hermes/Support/OSCompat.h"
-#include "hermes/Support/UTF8.h"
 
 #include "llvh/ADT/SmallString.h"
 #include "llvh/Support/Format.h"
-#include "llvh/Support/raw_ostream.h"
 
-#include <locale>
 #include <unordered_map>
-
-using hermes::oscompat::to_string;
 
 namespace hermes {
 namespace hbc {
@@ -154,12 +147,7 @@ unsigned BytecodeFunctionGenerator::getFunctionID(Function *F) {
 void BytecodeFunctionGenerator::shrinkJump(offset_t loc) {
   // We are shrinking a long jump into a short jump.
   // The size of operand reduces from 4 bytes to 1 byte, a delta of 3.
-  const static int ShrinkOffset = 3;
-  std::rotate(
-      opcodes_.begin() + loc,
-      opcodes_.begin() + loc + ShrinkOffset,
-      opcodes_.end());
-  opcodes_.resize(opcodes_.size() - ShrinkOffset);
+  opcodes_.erase(opcodes_.begin() + loc, opcodes_.begin() + loc + 3);
 
   // Change this instruction from long jump to short jump.
   longToShortJump(loc - 1);

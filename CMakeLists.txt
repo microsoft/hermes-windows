@@ -71,7 +71,7 @@ endif()
 # - npm/package.json
 # - hermes-engine.podspec
 project(Hermes
-        VERSION 0.9.0
+        VERSION 0.10.0
         LANGUAGES C CXX)
 # Optional suffix like "-rc3"
 set(VERSION_SUFFIX "")
@@ -101,7 +101,7 @@ set(HERMES_IS_MOBILE_BUILD ${HERMES_IS_ANDROID} CACHE BOOL
 
 set(HERMESVM_GCKIND HADES
   CACHE STRING
-  "HermesVM GC type: either NONCONTIG_GENERATIONAL, MALLOC, or HADES")
+  "HermesVM GC type: either MALLOC or HADES")
 
 # Hermes VM opcode stats profiling
 set(HERMESVM_PROFILER_OPCODE OFF CACHE BOOL
@@ -118,9 +118,6 @@ set(HERMESVM_PROFILER_JSFUNCTION OFF CACHE BOOL
 # Hermes VM native call profiling
 set(HERMESVM_PROFILER_NATIVECALL OFF CACHE BOOL
   "Enable native call profiling in hermes VM")
-
-set(HERMESVM_SERIALIZE OFF CACHE BOOL
-  "Enable heap serialization and deserialization")
 
 CHECK_CXX_SOURCE_COMPILES(
         "int main() { void *p = &&label; goto *p; label: return 0; }"
@@ -148,6 +145,9 @@ set(HERMESVM_HEAP_SEGMENT_SIZE_KB 4096
 
 set(HERMESVM_ALLOW_CONCURRENT_GC ON CACHE BOOL
         "Enable concurrency in the GC for 64-bit builds.")
+
+set(HERMESVM_ALLOW_INLINE_ASM ON CACHE BOOL
+        "Allow the use of inline assembly in VM code.")
 
 set(HERMESVM_API_TRACE_ANDROID_REPLAY OFF CACHE BOOL
   "Simulate Android config on Linux in API tracing.")
@@ -335,9 +335,6 @@ if(HERMESVM_PROFILER_NATIVECALL)
     add_definitions(-DHERMESVM_PROFILER_NATIVECALL)
     set(HERMES_PROFILER_MODE_IN_LIT_TEST "EXTERN")
 endif()
-if(HERMESVM_SERIALIZE)
-  add_definitions(-DHERMESVM_SERIALIZE)
-endif()
 if(HERMESVM_INDIRECT_THREADING)
     add_definitions(-DHERMESVM_INDIRECT_THREADING)
 endif()
@@ -350,6 +347,9 @@ endif()
 add_definitions(-DHERMESVM_HEAP_SEGMENT_SIZE_KB=${HERMESVM_HEAP_SEGMENT_SIZE_KB})
 if(HERMESVM_ALLOW_CONCURRENT_GC)
     add_definitions(-DHERMESVM_ALLOW_CONCURRENT_GC)
+endif()
+if(HERMESVM_ALLOW_INLINE_ASM)
+    add_definitions(-DHERMESVM_ALLOW_INLINE_ASM)
 endif()
 if(HERMESVM_API_TRACE_ANDROID_REPLAY)
     add_definitions(-DHERMESVM_API_TRACE_ANDROID_REPLAY)
@@ -401,11 +401,7 @@ if (NOT (ANDROID_LINUX_PERF_PATH STREQUAL ""))
 endif()
 
 if (HERMES_ENABLE_INTL)
-  if (HERMES_IS_ANDROID)
-    add_definitions(-DHERMES_PLATFORM_INTL=HERMES_PLATFORM_INTL_ANDROID)
-  else()
-    add_definitions(-DHERMES_PLATFORM_INTL=HERMES_PLATFORM_INTL_DUMMY)
-  endif()
+  add_definitions(-DHERMES_ENABLE_INTL)
 endif()
 
 if (HERMES_ENABLE_WERROR)
@@ -460,16 +456,8 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Attempt to use system ICU first, if none specified.
-# Don't need ICU on Apple systems.
-if (APPLE)
-  set(ICU_FOUND 1)
-  set(ICU_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/icu_decls)
-  set(ICU_LIBRARIES
-    icucore
-  )
-  include_directories(${ICU_INCLUDE_DIRS})
-elseif(EMSCRIPTEN)
-  # Just ignore ICU on Emiscripten. For now.
+# Don't need ICU on Apple, Emscripten, and Android.
+if (APPLE OR EMSCRIPTEN OR HERMES_IS_ANDROID)
   set(ICU_FOUND 1)
 endif()
 
@@ -518,7 +506,7 @@ if (NOT ICU_FOUND AND HERMES_ENABLE_WIN10_ICU_FALLBACK AND
 endif()
 
 # If we have no ICU, then error out.
-if (NOT HERMES_IS_ANDROID AND NOT ICU_FOUND)
+if (NOT ICU_FOUND)
   message(FATAL_ERROR "Unable to find ICU.")
 endif()
 
@@ -547,8 +535,10 @@ endfunction()
 
 if (APPLE)
   find_library(CORE_FOUNDATION CoreFoundation)
+  find_library(FOUNDATION Foundation)
 else()
   set(CORE_FOUNDATION "")
+  set(FOUNDATION "")
 endif()
 
 if (HERMES_USE_FLOWPARSER)
@@ -617,7 +607,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_subdirectory(external/llvh)
 add_subdirectory(utils/hermes-lit)
-add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(public)
 add_subdirectory(external)
@@ -678,6 +667,7 @@ if(HERMES_ENABLE_TEST_SUITE)
     test_exec_root=${HERMES_BINARY_DIR}/test
     unittests_dir=${HERMES_BINARY_DIR}/unittests
     debugger_enabled=${HERMES_ENABLE_DEBUGGER}
+    intl_enabled=${HERMES_ENABLE_INTL}
     use_flowparser=${HERMES_USE_FLOWPARSER}
     hbc_deltaprep=${HERMES_TOOLS_OUTPUT_DIR}/hbc-deltaprep
     dependency_extractor=${HERMES_TOOLS_OUTPUT_DIR}/dependency-extractor
@@ -692,7 +682,6 @@ if(HERMES_ENABLE_TEST_SUITE)
     exception_on_oom_enabled=${HERMESVM_EXCEPTION_ON_OOM}
     node_hermes_enabled_flag=${HERMES_BUILD_NODE_HERMES}
     node-hermes=${HERMES_TOOLS_OUTPUT_DIR}/node-hermes
-    serialize_enabled=${HERMESVM_SERIALIZE}
     profiler=${HERMES_PROFILER_MODE_IN_LIT_TEST}
     gc=${HERMESVM_GCKIND}
     ubsan=${HERMES_ENABLE_UNDEFINED_BEHAVIOR_SANITIZER}

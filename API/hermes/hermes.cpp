@@ -264,6 +264,17 @@ struct HermesStringImpl : public IHermesString {
   ~HermesStringImpl() {}
 };
 
+// Recording timing stats for every JS<->C++ transition has some overhead, so
+// applications where such transitions are extremely frequent may want to define
+// the HERMESJSI_DISABLE_STATS_TIMER symbol to save this overhead.
+#ifdef HERMESJSI_DISABLE_STATS_TIMER
+#define STATS_TIMER(rt, desc, field)
+#else
+#define STATS_TIMER(rt, desc, field)              \
+  auto &_stats = (rt).runtime_.getRuntimeStats(); \
+  const vm::instrumentation::RAIITimer _timer{desc, _stats, _stats.field};
+#endif
+
 class HermesRuntimeImpl final : public HermesRuntime,
                                 private InstallHermesFatalErrorHandler,
                                 private jsi::Instrumentation {
@@ -866,9 +877,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
         : rt_(rt), ho_(ho) {}
 
     vm::CallResult<vm::HermesValue> get(vm::SymbolID id) override {
-      auto &stats = rt_.runtime_.getRuntimeStats();
-      const vm::instrumentation::RAIITimer timer{
-          "HostObject.get", stats, stats.hostFunction};
+      STATS_TIMER(rt_, "HostObject.get", hostFunction);
       jsi::PropNameID sym =
           rt_.add<jsi::PropNameID>(vm::HermesValue::encodeSymbolValue(id));
       jsi::Value ret;
@@ -902,9 +911,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
     }
 
     vm::CallResult<bool> set(vm::SymbolID id, vm::HermesValue value) override {
-      auto &stats = rt_.runtime_.getRuntimeStats();
-      const vm::instrumentation::RAIITimer timer{
-          "HostObject.set", stats, stats.hostFunction};
+      STATS_TIMER(rt_, "HostObject.set", hostFunction);
       jsi::PropNameID sym =
           rt_.add<jsi::PropNameID>(vm::HermesValue::encodeSymbolValue(id));
       try {
@@ -936,9 +943,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
     }
 
     vm::CallResult<vm::Handle<vm::JSArray>> getHostPropertyNames() override {
-      auto &stats = rt_.runtime_.getRuntimeStats();
-      const vm::instrumentation::RAIITimer timer{
-          "HostObject.getHostPropertyNames", stats, stats.hostFunction};
+      STATS_TIMER(rt_, "HostObject.getHostPropertyNames", hostFunction);
       try {
         auto names = ho_->getPropertyNames(rt_);
 
@@ -988,9 +993,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
       HFContext *hfc = reinterpret_cast<HFContext *>(context);
       HermesRuntimeImpl &rt = hfc->hermesRuntimeImpl;
       assert(runtime == &rt.runtime_);
-      auto &stats = rt.runtime_.getRuntimeStats();
-      const vm::instrumentation::RAIITimer timer{
-          "Host Function", stats, stats.hostFunction};
+      STATS_TIMER(rt, "Host Function", hostFunction);
 
       llvh::SmallVector<jsi::Value, 8> apiArgs;
       for (vm::HermesValue hv : hvArgs) {
@@ -1513,9 +1516,7 @@ jsi::Value HermesRuntimeImpl::evaluatePreparedJavaScript(
     assert(
         dynamic_cast<const HermesPreparedJavaScript *>(js.get()) &&
         "js must be an instance of HermesPreparedJavaScript");
-    auto &stats = runtime_.getRuntimeStats();
-    const vm::instrumentation::RAIITimer timer{
-        "Evaluate JS", stats, stats.evaluateJS};
+    STATS_TIMER(*this, "Evaluate JS", evaluateJS);
     const auto *hermesPrep =
         static_cast<const HermesPreparedJavaScript *>(js.get());
     vm::GCScope gcScope(&runtime_);
@@ -2045,9 +2046,7 @@ jsi::Value HermesRuntimeImpl::call(
           "HermesRuntimeImpl::call: Unable to call function: stack overflow");
     }
 
-    auto &stats = runtime_.getRuntimeStats();
-    const vm::instrumentation::RAIITimer timer{
-        "Incoming Function", stats, stats.incomingFunction};
+    STATS_TIMER(*this, "Incoming Function", incomingFunction);
     vm::ScopedNativeCallFrame newFrame{
         &runtime_,
         static_cast<uint32_t>(count),
@@ -2086,11 +2085,8 @@ jsi::Value HermesRuntimeImpl::callAsConstructor(
           "HermesRuntimeImpl::call: Unable to call function: stack overflow");
     }
 
-    auto &stats = runtime_.getRuntimeStats();
-    const vm::instrumentation::RAIITimer timer{
-        "Incoming Function: Call As Constructor",
-        stats,
-        stats.incomingFunction};
+    STATS_TIMER(
+        *this, "Incoming Function: Call As Constructor", incomingFunction);
 
     // We follow es5 13.2.2 [[Construct]] here. Below F == func.
     // 13.2.2.5:

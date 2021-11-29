@@ -335,6 +335,33 @@ struct ReturnType<NodeList> {
 
 namespace {
 
+enum class ParserDialect : uint8_t {
+  /// Good old JS.
+  JavaScript,
+  /// Parse all Flow type syntax.
+  Flow,
+  /// Parse all unambiguous Flow type syntax. Syntax that can be intepreted as
+  /// either Flow types or standard JavaScript is parsed as if it were standard
+  /// JavaScript.
+  ///
+  /// For example, `foo<T>(x)` is parsed as if it were standard JavaScript
+  /// containing two comparisons, even though it could otherwise be interpreted
+  /// as a call expression with Flow type arguments.
+  FlowUnambiguous,
+  /// Parse TypeScript.
+  TypeScript,
+};
+
+/// Flags controlling the behavior of the parser.
+struct ParserFlags {
+  /// Start parsing in strict mode.
+  bool strictMode = false;
+  /// Enable JSX parsing.
+  bool enableJSX = false;
+  /// Dialect control.
+  ParserDialect dialect = ParserDialect::JavaScript;
+};
+
 enum class DiagKind : uint32_t {
   Error,
   Warning,
@@ -357,14 +384,35 @@ DiagKind toDiagKind(llvh::SourceMgr::DiagKind k) {
   }
 }
 
+struct DataRef {
+  const void *data;
+  size_t length;
+};
+
+template <typename T>
+inline DataRef toDataRef(const T &ref) {
+  return {ref.data(), ref.size()};
+}
+
+/// A coordinate in the input file identified by a 1-based line number and a
+/// 0-based byte offset within that line.
 struct Coord {
   /// 1-based.
-  int line = -1;
-  /// 1-based.
-  int column = -1;
+  unsigned line = 0;
+  /// 0-based offset from start of line.
+  unsigned offset = 0;
 
   Coord() = default;
-  Coord(int lineNo, int columnNo) : line(lineNo), column(columnNo) {}
+  Coord(int lineNo, int offset) : line(lineNo), offset(offset) {}
+};
+
+/// Result from looking for a line in the input buffer. Contains the 1-based
+/// line number and a reference to the line itself in the buffer.
+struct LineCoord {
+  /// 1-based line number.
+  unsigned lineNo = 0;
+  /// Reference to the line itself, including the EOL, if present.
+  DataRef lineRef;
 };
 
 /// A temporary struct describing an error message, returned to Rust.
@@ -394,16 +442,6 @@ enum class MagicCommentKind : uint32_t {
   SourceUrl = 0,
   SourceMappingUrl = 1,
 };
-
-struct DataRef {
-  const void *data;
-  size_t length;
-};
-
-template <typename T>
-inline DataRef toDataRef(const T &ref) {
-  return {ref.data(), ref.size()};
-}
 
 /// This object contains the entire parser state.
 struct ParserContext {
@@ -462,8 +500,28 @@ struct ParserContext {
 } // namespace
 
 /// source is the zero terminated input. source[len-1] must be \0.
-extern "C" ParserContext *hermes_parser_parse(const char *source, size_t len) {
+extern "C" ParserContext *
+hermes_parser_parse(ParserFlags flags, const char *source, size_t len) {
   std::unique_ptr<ParserContext> parserCtx(new ParserContext());
+
+  parserCtx->context_.setStrictMode(flags.strictMode);
+  parserCtx->context_.setParseJSX(flags.enableJSX);
+
+  parserCtx->context_.setParseTS(false);
+  parserCtx->context_.setParseFlow(hermes::ParseFlowSetting::NONE);
+  switch (flags.dialect) {
+    case ParserDialect::JavaScript:
+      break;
+    case ParserDialect::Flow:
+      parserCtx->context_.setParseFlow(hermes::ParseFlowSetting::ALL);
+      break;
+    case ParserDialect::FlowUnambiguous:
+      parserCtx->context_.setParseFlow(hermes::ParseFlowSetting::UNAMBIGUOUS);
+      break;
+    case ParserDialect::TypeScript:
+      parserCtx->context_.setParseTS(true);
+      break;
+  }
 
   if (len == 0 || source[len - 1] != 0) {
     parserCtx->addError("Input is not zero terminated");
@@ -510,19 +568,46 @@ hermes_parser_find_location(ParserContext *parserCtx, SMLoc loc, Coord *res) {
   SourceErrorManager::SourceCoords coords;
   if (!parserCtx->context_.getSourceErrorManager().findBufferLineAndLoc(
           loc, coords)) {
-    res->line = res->column = -1;
+    res->line = res->offset = 0;
     return false;
   }
 
   res->line = coords.line;
-  res->column = coords.col;
+  res->offset = coords.col - 1;
   return true;
+}
+
+/// Return the line surrounding the specified location \p loc. This method
+/// allows the caller to calculate the location column taking UTF-8 into
+/// consideration and to perform its own location caching.
+extern "C" bool hermes_parser_find_line(
+    const ParserContext *parserCtx,
+    SMLoc loc,
+    LineCoord *res) {
+  auto coord =
+      parserCtx->context_.getSourceErrorManager().findBufferAndLine(loc);
+  if (!coord)
+    return false;
+
+  res->lineNo = coord->lineNo;
+  res->lineRef = toDataRef(coord->lineRef);
+  return true;
+}
+
+/// Return a reference to the specified (1-based) line.
+/// If the line is greater than the last line in the buffer, an empty
+/// reference is returned.
+extern "C" DataRef hermes_parser_get_line_ref(
+    const ParserContext *parserCtx,
+    unsigned line) {
+  return toDataRef(parserCtx->context_.getSourceErrorManager().getLineRef(
+      parserCtx->getBufferId(), line));
 }
 
 /// Note that we guarantee that the result is valid UTF-8 because we only
 /// return it if there were no parse errors.
 extern "C" DataRef hermes_parser_get_magic_comment(
-    ParserContext *parserCtx,
+    const ParserContext *parserCtx,
     MagicCommentKind kind) {
   // Make sure that we have successfully parsed the input. (The magic comments
   // could be set even if we didn't, but in that case are not guaranteed to be
