@@ -81,7 +81,7 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   if("{CMAKE_BUILD_TYPE}" MATCHES "Debug")
     set(link_flags "${link_flags} /DEBUG")
   else()
-    set(link_flags "${link_flags} /DEBUG /OPT:REF /OPT:ICF")
+    set(link_flags "${link_flags} /DEBUG /DEBUGTYPE:CV,FIXUP /OPT:REF /OPT:ICF /CETCOMPAT")
   endif()
 
 endif()

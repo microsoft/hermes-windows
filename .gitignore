@@ -18,6 +18,7 @@ buck-out
 
 # Win
 workspace
+build.log
 
 # CocoaPods testing
 build
