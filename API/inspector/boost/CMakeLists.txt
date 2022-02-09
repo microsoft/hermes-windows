@@ -40,8 +40,6 @@ foreach(component ${boostComponents})
     FetchContent_Populate(boost_${component})
   endif()
 
-  string(TOUPPER ${component} ucomponent)
-
   list(APPEND boostIncludes ${boost_${component}_SOURCE_DIR}/include)
 endforeach()
 
