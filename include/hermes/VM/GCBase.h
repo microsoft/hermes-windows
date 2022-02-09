@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -157,6 +157,7 @@ class WeakRefSlot {
   void reset(HermesValue v) {
     static_assert(Unmarked == 0, "unmarked state should not need tagging");
     state_ = Unmarked;
+    assert(v.isPointer() && "Only pointers are currently supported");
     value_ = v;
     assert(state() == Unmarked && "initial state should be unmarked");
   }
@@ -473,15 +474,20 @@ class GCBase {
     uint64_t totalAllocatedBytes{0};
     /// Number of currently allocated bytes within the JS heap. Some may be
     /// in unreachable objects (unless a full collection just occurred).
-    gcheapsize_t allocatedBytes{0};
+    uint64_t allocatedBytes{0};
     /// Current capacity of the JS heap, in bytes.
-    gcheapsize_t heapSize{0};
+    uint64_t heapSize{0};
     /// Estimate of amount of current malloc space used by the runtime and any
     /// auxiliary allocations owned by heap objects. (Calculated by querying
     /// each finalizable object to report its malloc usage.)
     unsigned mallocSizeEstimate{0};
     /// The total amount of Virtual Address space (VA) that the GC is using.
     uint64_t va{0};
+    /// Number of bytes retained by objects as external memory on the C++ heap.
+    /// This is typically associated with allocations that are modified
+    /// infrequently, and can therefore be stored in a counter in the GC, making
+    /// them cheaper to query. This is a subset of mallocSizeEstimate.
+    uint64_t externalBytes{0};
     /// Cumulative number of mark stack overflows in full collections
     /// (zero if non-generational GC).
     unsigned numMarkStackOverflows{0};
@@ -1122,10 +1128,9 @@ class GCBase {
   /// will be gone.
   virtual void disableSamplingHeapProfiler(llvh::raw_ostream &os);
 
-  /// Default implementations for the external memory credit/debit APIs: do
-  /// nothing.
-  virtual void creditExternalMemory(GCCell *alloc, uint32_t size) {}
-  virtual void debitExternalMemory(GCCell *alloc, uint32_t size) {}
+  /// Inform the GC about external memory retained by objects.
+  virtual void creditExternalMemory(GCCell *alloc, uint32_t size) = 0;
+  virtual void debitExternalMemory(GCCell *alloc, uint32_t size) = 0;
 
 #ifdef HERMESVM_GC_RUNTIME
   /// Default implementations for read and write barriers: do nothing.
@@ -1478,8 +1483,10 @@ class GCBase {
   void sizeDiagnosticCensus(size_t allocatedBytes);
 
   /// Do any additional GC-specific logging that is useful before dying with
-  /// out-of-memory.
-  virtual void oomDetail(std::error_code reason);
+  /// out-of-memory. Takes a char buffer to avoid dynamic allocations.
+  virtual void oomDetail(
+      llvh::MutableArrayRef<char> detailBuffer,
+      std::error_code reason);
 
 #ifndef NDEBUG
   // Returns true iff \p finalizables is non-empty, and \p cell is the

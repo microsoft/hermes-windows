@@ -2,7 +2,7 @@
 We want to make contributing to this project simple and convenient.
 
 ## Code of Conduct
-Facebook has adopted a Code of Conduct that they expect project participants to
+Facebook has adopted a Code of Conduct that we expect project participants to
 adhere to. Please [read the full text](https://code.fb.com/codeofconduct/) so
 that you can understand what actions will and will not be tolerated.
 
@@ -44,7 +44,7 @@ When contributing a new file back to facebook/hermes, change this header to:
 
 ```
 /**
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.

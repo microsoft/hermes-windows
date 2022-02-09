@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -10,9 +10,10 @@
 
 'use strict';
 
-import type {Program} from 'hermes-estree';
-import type {TransformContext} from './TransformContext';
+import type {ESNode, Program} from 'hermes-estree';
 import type {Visitor} from '../traverse/traverse';
+import type {TransformContext} from './TransformContext';
+import type {RemoveCommentMutation} from './mutations/RemoveComment';
 
 import {parseForESLint} from 'hermes-eslint';
 import {updateAllParentPointers} from '../detachedNode';
@@ -20,7 +21,12 @@ import {traverseWithContext} from '../traverse/traverse';
 import {MutationContext} from './MutationContext';
 import {getTransformContext} from './TransformContext';
 import {attachComments} from './comments/comments';
+import {performAddLeadingCommentsMutation} from './mutations/AddLeadingComments';
+import {performAddTrailingCommentsMutation} from './mutations/AddTrailingComments';
+import {performCloneCommentsToMutation} from './mutations/CloneCommentsTo';
 import {performInsertStatementMutation} from './mutations/InsertStatement';
+import {performRemoveCommentMutations} from './mutations/RemoveComment';
+import {performRemoveNodeMutation} from './mutations/RemoveNode';
 import {performRemoveStatementMutation} from './mutations/RemoveStatement';
 import {performReplaceNodeMutation} from './mutations/ReplaceNode';
 import {performReplaceStatementWithManyMutation} from './mutations/ReplaceStatementWithMany';
@@ -31,6 +37,7 @@ export function getTransformedAST(
 ): {
   ast: Program,
   astWasMutated: boolean,
+  mutatedCode: string,
 } {
   const {ast, scopeManager} = parseForESLint(code, {
     sourceType: 'module',
@@ -41,13 +48,16 @@ export function getTransformedAST(
   attachComments(ast.comments, ast, code);
 
   // traverse the AST and colllect the mutations
-  const transformContext = getTransformContext();
+  const transformContext = getTransformContext(code);
   traverseWithContext(ast, scopeManager, () => transformContext, visitors);
 
   // apply the mutations to the AST
-  const mutationContext = new MutationContext();
+  const mutationContext = new MutationContext(code);
+
+  const removeCommentMutations: Array<RemoveCommentMutation> = [];
+
   for (const mutation of transformContext.mutations) {
-    const mutationRoot = (() => {
+    const mutationRoot = ((): ESNode | null => {
       switch (mutation.type) {
         case 'insertStatement': {
           return performInsertStatementMutation(mutationContext, mutation);
@@ -64,8 +74,30 @@ export function getTransformedAST(
           );
         }
 
+        case 'removeNode': {
+          return performRemoveNodeMutation(mutationContext, mutation);
+        }
+
         case 'removeStatement': {
           return performRemoveStatementMutation(mutationContext, mutation);
+        }
+
+        case 'removeComment': {
+          // these are handled later
+          removeCommentMutations.push(mutation);
+          return null;
+        }
+
+        case 'addLeadingComments': {
+          return performAddLeadingCommentsMutation(mutationContext, mutation);
+        }
+
+        case 'addTrailingComments': {
+          return performAddTrailingCommentsMutation(mutationContext, mutation);
+        }
+
+        case 'cloneCommentsTo': {
+          return performCloneCommentsToMutation(mutationContext, mutation);
         }
       }
     })();
@@ -83,11 +115,19 @@ export function getTransformedAST(
     //    real AST nodes and potentially break the traverse step.
     //
     // Being strict here just helps us ensure we keep everything in sync
-    updateAllParentPointers(mutationRoot);
+    if (mutationRoot) {
+      updateAllParentPointers(mutationRoot);
+    }
   }
+
+  // remove the comments
+  // this is done at the end because it requires a complete traversal of the AST
+  // so that we can find relevant node's attachment array
+  performRemoveCommentMutations(ast, removeCommentMutations);
 
   return {
     ast,
-    astWasMutated: transformContext.mutations.length > 0,
+    astWasMutated: transformContext.astWasMutated,
+    mutatedCode: mutationContext.code,
   };
 }

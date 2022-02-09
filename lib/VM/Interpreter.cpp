@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -479,7 +479,7 @@ ExecutionStatus Interpreter::putByIdTransient_RJS(
     }
 
     CallResult<PseudoHandle<>> setRes =
-        accessor->setter.get(runtime)->executeCall1(
+        accessor->setter.getNonNull(runtime)->executeCall1(
             runtime->makeHandle(accessor->setter), runtime, base, *value);
     if (setRes == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
@@ -2117,9 +2117,7 @@ tailCall:
         CAPTURE_IP(
             res = Environment::create(
                 runtime,
-                tmpHandle->getPointer() ? Handle<Environment>::vmcast(tmpHandle)
-                                        : Handle<Environment>::vmcast_or_null(
-                                              &runtime->nullPointer_),
+                Handle<Environment>::vmcast_or_null(tmpHandle),
                 curCodeBlock->getEnvironmentSize()));
         if (res == ExecutionStatus::EXCEPTION) {
           goto exception;
@@ -2295,7 +2293,7 @@ tailCall:
 #endif
         CompressedPointer clazzPtr{obj->getClassGCPtr()};
 #ifndef NDEBUG
-        if (vmcast<HiddenClass>(clazzPtr.get(runtime))->isDictionary())
+        if (vmcast<HiddenClass>(clazzPtr.getNonNull(runtime))->isDictionary())
           ++NumGetByIdDict;
 #else
         (void)NumGetByIdDict;
