@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -149,35 +149,9 @@ TEST_F(HandleTest, MarkTest) {
 /// Make sure that related Handle-s can be assigned.
 TEST_F(HandleTest, ScopedPointerConstructorTest) {
   auto function = runtime->makeHandle<JSFunction>(
-      JSFunction::create(runtime, domain, Handle<JSObject>(runtime, nullptr)));
+      JSFunction::create(runtime, domain, runtime->makeNullHandle<JSObject>()));
   Handle<JSObject> obj = function;
   ASSERT_EQ(function.get(), obj.get());
-}
-
-/// Make sure that we can create handles one scope up in the scope chain.
-TEST_F(HandleTest, CreateInParentScope) {
-  GCScope theParent{runtime};
-  auto h1 = runtime->makeHandle(HermesValue::encodeBoolValue(true));
-  (void)h1;
-#ifndef NDEBUG
-  ASSERT_EQ(1, theParent.getHandleCountDbg());
-#endif
-
-  auto func = [this, &theParent]() -> Handle<> {
-    GCScope theChild{runtime};
-    EXPECT_EQ(&theParent, runtime->getTopGCScopesParent());
-    auto h2 = runtime->makeHandle(HermesValue::encodeBoolValue(true));
-    (void)h2;
-    auto h3 =
-        runtime->makeHandleInParentScope(HermesValue::encodeBoolValue(true));
-    return h3;
-  };
-
-  auto h3 = func();
-  (void)h3;
-#ifndef NDEBUG
-  ASSERT_EQ(2, theParent.getHandleCountDbg());
-#endif
 }
 
 #ifdef HERMES_SLOW_DEBUG

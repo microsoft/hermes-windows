@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -127,6 +127,10 @@ class SmallHermesValueAdaptor : protected HermesValue {
   }
   static SmallHermesValueAdaptor encodeObjectValue(GCCell *ptr, PointerBase *) {
     return SmallHermesValueAdaptor{HermesValue::encodeObjectValue(ptr)};
+  }
+  static SmallHermesValueAdaptor encodeObjectValue(CompressedPointer cp) {
+    GCCell *cellPtr = reinterpret_cast<GCCell *>(cp.getRaw());
+    return SmallHermesValueAdaptor{HermesValue::encodeObjectValue(cellPtr)};
   }
   static SmallHermesValueAdaptor encodeStringValue(
       StringPrimitive *ptr,
@@ -274,7 +278,7 @@ class HermesValue32 {
 
   static HermesValue32
   encodePointerImpl(GCCell *ptr, Tag tag, PointerBase *pb) {
-    return encodePointerImpl(CompressedPointer(pb, ptr), tag);
+    return encodePointerImpl(CompressedPointer::encode(ptr, pb), tag);
   }
 
   static HermesValue32 encodePointerImpl(CompressedPointer ptr, Tag tag) {
@@ -407,6 +411,9 @@ class HermesValue32 {
   inline static HermesValue32 encodeNumberValue(double d, Runtime *runtime);
 
   inline static HermesValue32 encodeObjectValue(GCCell *ptr, PointerBase *pb);
+  static HermesValue32 encodeObjectValue(CompressedPointer cp) {
+    return encodePointerImpl(cp, Tag::Object);
+  }
 
   static HermesValue32 encodeStringValue(
       StringPrimitive *ptr,

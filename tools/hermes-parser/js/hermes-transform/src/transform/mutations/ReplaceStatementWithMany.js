@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -15,7 +15,7 @@ import type {DetachedNode} from '../../detachedNode';
 import {replaceInArray} from './utils/arrayUtils';
 import {getStatementParent} from './utils/getStatementParent';
 import {isValidModuleDeclarationParent} from './utils/isValidModuleDeclarationParent';
-import {attachCommentsToNewNode} from '../comments/comments';
+import {moveCommentsToNewNode} from '../comments/comments';
 import {InvalidReplacementError} from '../Errors';
 import * as t from '../../generated/node-types';
 
@@ -68,7 +68,7 @@ export function performReplaceStatementWithManyMutation(
 
   if (mutation.keepComments) {
     // attach comments to the very first replacement node
-    attachCommentsToNewNode(mutation.target, mutation.nodesToReplaceWith[0]);
+    moveCommentsToNewNode(mutation.target, mutation.nodesToReplaceWith[0]);
   }
 
   if (replacementParent.type === 'array') {

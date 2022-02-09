@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -748,9 +748,9 @@ typedArrayPrototypeCopyWithin(void *, Runtime *runtime, NativeArgs args) {
   // performing a [[Get]] of "length".
   double len = O->getLength();
 
-  // 5. Let relativeTarget be ToInteger(target).
+  // 5. Let relativeTarget be ToIntegerOrInfinity(target).
   // 6. ReturnIfAbrupt(relativeTarget).
-  auto relativeTargetRes = toInteger(runtime, args.getArgHandle(0));
+  auto relativeTargetRes = toIntegerOrInfinity(runtime, args.getArgHandle(0));
   if (LLVM_UNLIKELY(relativeTargetRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -758,12 +758,11 @@ typedArrayPrototypeCopyWithin(void *, Runtime *runtime, NativeArgs args) {
 
   // 7. If relativeTarget < 0, let to be max((len + relativeTarget),0); else let
   // to be min(relativeTarget, len).
-  double to = relativeTarget < 0 ? std::max((len + relativeTarget), (double)0)
-                                 : std::min(relativeTarget, len);
+  double to = convertNegativeBoundsRelativeToLength(relativeTarget, len);
 
-  // 8. Let relativeStart be ToInteger(start).
+  // 8. Let relativeStart be ToIntegerOrInfinity(start).
   // 9. ReturnIfAbrupt(relativeStart).
-  auto relativeStartRes = toInteger(runtime, args.getArgHandle(1));
+  auto relativeStartRes = toIntegerOrInfinity(runtime, args.getArgHandle(1));
   if (LLVM_UNLIKELY(relativeStartRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -771,17 +770,16 @@ typedArrayPrototypeCopyWithin(void *, Runtime *runtime, NativeArgs args) {
 
   // 10. If relativeStart < 0, let from be max((len + relativeStart),0); else
   // let from be min(relativeStart, len).
-  double from = relativeStart < 0 ? std::max((len + relativeStart), (double)0)
-                                  : std::min(relativeStart, len);
+  double from = convertNegativeBoundsRelativeToLength(relativeStart, len);
 
   // 11. If end is undefined, let relativeEnd be len; else let relativeEnd be
-  // ToInteger(end).
+  // ToIntegerOrInfinity(end).
   // 12. ReturnIfAbrupt(relativeEnd).
   double relativeEnd;
   if (args.getArg(2).isUndefined()) {
     relativeEnd = len;
   } else {
-    auto relativeEndRes = toInteger(runtime, args.getArgHandle(2));
+    auto relativeEndRes = toIntegerOrInfinity(runtime, args.getArgHandle(2));
     if (LLVM_UNLIKELY(relativeEndRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -790,8 +788,7 @@ typedArrayPrototypeCopyWithin(void *, Runtime *runtime, NativeArgs args) {
 
   // 13. If relativeEnd < 0, let final be max((len + relativeEnd),0); else let
   // final be min(relativeEnd, len).
-  double fin = relativeEnd < 0 ? std::max((len + relativeEnd), (double)0)
-                               : std::min(relativeEnd, len);
+  double fin = convertNegativeBoundsRelativeToLength(relativeEnd, len);
 
   // 14. Let count be min(final-from, len-to).
   double count = std::min(fin - from, len - to);
@@ -896,14 +893,14 @@ typedArrayPrototypeFill(void *, Runtime *runtime, NativeArgs args) {
     return ExecutionStatus::EXCEPTION;
   }
   auto value = runtime->makeHandle(res.getValue());
-  res = toInteger(runtime, args.getArgHandle(1));
+  res = toIntegerOrInfinity(runtime, args.getArgHandle(1));
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   const double relativeStart = res->getNumber();
   auto end = args.getArgHandle(2);
   if (!end->isUndefined()) {
-    res = toInteger(runtime, end);
+    res = toIntegerOrInfinity(runtime, end);
     if (res == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -958,8 +955,8 @@ typedArrayPrototypeFill(void *, Runtime *runtime, NativeArgs args) {
   return self.getHermesValue();
 }
 
-CallResult<HermesValue>
-typedArrayPrototypeFind(void *ctx, Runtime *runtime, NativeArgs args) {
+static CallResult<HermesValue>
+typedFindHelper(void *ctx, bool reverse, Runtime *runtime, NativeArgs args) {
   bool index = static_cast<bool>(ctx);
   if (JSTypedArrayBase::validateTypedArray(runtime, args.getThisHandle()) ==
       ExecutionStatus::EXCEPTION) {
@@ -974,7 +971,8 @@ typedArrayPrototypeFind(void *ctx, Runtime *runtime, NativeArgs args) {
   auto thisArg = args.getArgHandle(1);
   GCScope gcScope(runtime);
   auto marker = gcScope.createMarker();
-  for (JSTypedArrayBase::size_type i = 0; i < len; ++i) {
+  for (JSTypedArrayBase::size_type counter = 0; counter < len; counter++) {
+    auto i = reverse ? (len - counter - 1) : counter;
     auto val = JSObject::getOwnIndexed(*self, runtime, i);
     auto idx = HermesValue::encodeNumberValue(i);
     auto callRes = Callable::executeCall3(
@@ -990,6 +988,16 @@ typedArrayPrototypeFind(void *ctx, Runtime *runtime, NativeArgs args) {
   }
   return index ? HermesValue::encodeNumberValue(-1)
                : HermesValue::encodeUndefinedValue();
+}
+
+CallResult<HermesValue>
+typedArrayPrototypeFind(void *ctx, Runtime *runtime, NativeArgs args) {
+  return typedFindHelper(ctx, false, runtime, args);
+}
+
+CallResult<HermesValue>
+typedArrayPrototypeFindLast(void *ctx, Runtime *runtime, NativeArgs args) {
+  return typedFindHelper(ctx, true, runtime, args);
 }
 
 CallResult<HermesValue>
@@ -1063,7 +1071,7 @@ typedArrayPrototypeIndexOf(void *ctx, Runtime *runtime, NativeArgs args) {
       fromIndex = len - 1;
     }
   } else {
-    auto res = toInteger(runtime, args.getArgHandle(1));
+    auto res = toIntegerOrInfinity(runtime, args.getArgHandle(1));
     if (res == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -1402,7 +1410,7 @@ typedArrayPrototypeSet(void *, Runtime *runtime, NativeArgs args) {
   auto offset = runtime->makeHandle(
       args.getArgCount() >= 2 ? args.getArg(1)
                               : HermesValue::encodeNumberValue(0));
-  auto res = toInteger(runtime, offset);
+  auto res = toIntegerOrInfinity(runtime, offset);
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1434,7 +1442,7 @@ typedArrayPrototypeSlice(void *, Runtime *runtime, NativeArgs args) {
   }
   auto self = args.vmcastThis<JSTypedArrayBase>();
   double len = self->getLength();
-  auto res = toInteger(runtime, args.getArgHandle(0));
+  auto res = toIntegerOrInfinity(runtime, args.getArgHandle(0));
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1443,7 +1451,7 @@ typedArrayPrototypeSlice(void *, Runtime *runtime, NativeArgs args) {
   if (args.getArg(1).isUndefined()) {
     relativeEnd = len;
   } else {
-    res = toInteger(runtime, args.getArgHandle(1));
+    res = toIntegerOrInfinity(runtime, args.getArgHandle(1));
     if (res == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -1477,14 +1485,14 @@ typedArrayPrototypeSubarray(void *, Runtime *runtime, NativeArgs args) {
   }
   auto self = args.vmcastThis<JSTypedArrayBase>();
   double srcLength = self->getLength();
-  auto res = toInteger(runtime, args.getArgHandle(0));
+  auto res = toIntegerOrInfinity(runtime, args.getArgHandle(0));
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   double relativeBegin = res->getNumber();
   double relativeEnd = srcLength;
   if (!args.getArg(1).isUndefined()) {
-    res = toInteger(runtime, args.getArgHandle(1));
+    res = toIntegerOrInfinity(runtime, args.getArgHandle(1));
     if (res == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -1738,6 +1746,20 @@ Handle<JSObject> createTypedArrayBaseConstructor(Runtime *runtime) {
       Predefined::getSymbolID(Predefined::findIndex),
       (void *)true,
       typedArrayPrototypeFind,
+      1);
+  defineMethod(
+      runtime,
+      proto,
+      Predefined::getSymbolID(Predefined::findLast),
+      (void *)false,
+      typedArrayPrototypeFindLast,
+      1);
+  defineMethod(
+      runtime,
+      proto,
+      Predefined::getSymbolID(Predefined::findLastIndex),
+      (void *)true,
+      typedArrayPrototypeFindLast,
       1);
   defineMethod(
       runtime,

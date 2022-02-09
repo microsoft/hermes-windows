@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -8,11 +8,6 @@
 #include "hermes.h"
 
 #include "llvh/Support/Compiler.h"
-
-#if defined(HERMES_FACEBOOK_BUILD) && !defined(HERMES_FBCODE_BUILD)
-// TODO (T84179835): Disable this once it is no longer useful for debugging.
-#define HERMESJSI_ON_STACK
-#endif
 
 #include "hermes/BCGen/HBC/BytecodeDataProvider.h"
 #include "hermes/BCGen/HBC/BytecodeFileFormat.h"
@@ -59,11 +54,6 @@
 
 #if defined(_WIN32)
 #include <werapi.h>
-#endif
-
-#ifdef HERMESJSI_ON_STACK
-#include <future>
-#include <thread>
 #endif
 
 #include <jsi/instrumentation.h>
@@ -195,64 +185,18 @@ class InstallHermesFatalErrorHandler {
   }
 };
 
-#ifdef HERMESJSI_ON_STACK
-// Minidumps include stack memory, not heap memory.  If we want to be
-// able to inspect the Runtime object in a minidump, we can do that by
-// arranging for it to be allocated on a stack.  No existing stack is
-// a good candidate, so we achieve this by creating a thread just to
-// hold the Runtime.
-
-class StackRuntime {
- public:
-  StackRuntime(const vm::RuntimeConfig &runtimeConfig)
-      : thread_(runtimeMemoryThread, this) {
-    startup_.get_future().wait();
-    runtime_->emplace(runtimeConfig.rebuild()
-                          .withRegisterStack(nullptr)
-                          .withMaxNumRegisters(kMaxNumRegisters)
-                          .build());
-  }
-
-  ~StackRuntime() {
-    // We can't shut down the Runtime on the captive thread, because
-    // it might need to make JNI calls to clean up HostObjects.  So we
-    // delete it from here, which is going to be on a thread
-    // registered with the JVM.
-    runtime_->reset();
-    shutdown_.set_value();
-    thread_.join();
-    runtime_ = nullptr;
-  }
-
-  ::hermes::vm::Runtime &getRuntime() {
-    return **runtime_;
-  }
-
- private:
-  static void runtimeMemoryThread(StackRuntime *stack) {
-    ::hermes::oscompat::set_thread_name("hermes-runtime-memorythread");
-
-    llvh::Optional<::hermes::vm::StackRuntime> rt;
-
-    stack->runtime_ = &rt;
-    stack->startup_.set_value();
-    stack->shutdown_.get_future().wait();
-    assert(!rt.hasValue() && "Runtime was not torn down before thread");
-  }
-
-  // The order here matters.
-  // * Set up the promises
-  // * Initialize various pointers to null
-  // * Start the thread which uses them
-  // * Initialize provider_ and runtime_ from that thread
-  std::promise<void> startup_;
-  std::promise<void> shutdown_;
-  llvh::Optional<::hermes::vm::StackRuntime> *runtime_{nullptr};
-  std::thread thread_;
-};
-#endif
-
 } // namespace
+
+// Recording timing stats for every JS<->C++ transition has some overhead, so
+// applications where such transitions are extremely frequent may want to define
+// the HERMESJSI_DISABLE_STATS_TIMER symbol to save this overhead.
+#ifdef HERMESJSI_DISABLE_STATS_TIMER
+#define STATS_TIMER(rt, desc, field)
+#else
+#define STATS_TIMER(rt, desc, field)              \
+  auto &_stats = (rt).runtime_.getRuntimeStats(); \
+  const vm::instrumentation::RAIITimer _timer{desc, _stats, _stats.field};
+#endif
 
 struct HermesStringImpl : public IHermesString {
   virtual const char *c_str() override {
@@ -283,7 +227,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
 
   std::unique_ptr<IHermesString> __utf8(
       const facebook::jsi::PropNameID &propNameId) override {
-    return std::make_unique<HermesStringImpl>(utf8(propNameId));;
+    return std::make_unique<HermesStringImpl>(utf8(propNameId));
   }
 
   std::unique_ptr<IHermesString> __utf8(
@@ -296,20 +240,13 @@ class HermesRuntimeImpl final : public HermesRuntime,
   }
 
   HermesRuntimeImpl(const vm::RuntimeConfig &runtimeConfig)
-      :
-#ifdef HERMESJSI_ON_STACK
-        stackRuntime_(runtimeConfig),
-        runtime_(stackRuntime_.getRuntime()),
-#else
-        rt_(::hermes::vm::Runtime::create(
+      : rt_(::hermes::vm::Runtime::create(
             runtimeConfig.rebuild()
                 .withRegisterStack(nullptr)
                 .withMaxNumRegisters(kMaxNumRegisters)
                 .build())),
         runtime_(*rt_),
-#endif
-        vmExperimentFlags_(runtimeConfig.getVMExperimentFlags()),
-        crashMgr_(runtimeConfig.getCrashMgr()) {
+        vmExperimentFlags_(runtimeConfig.getVMExperimentFlags()) {
     compileFlags_.optimize = false;
 #ifdef HERMES_ENABLE_DEBUGGER
     compileFlags_.debug = true;
@@ -333,11 +270,6 @@ class HermesRuntimeImpl final : public HermesRuntime,
     compileFlags_.enableGenerator = runtimeConfig.getEnableGenerator();
     compileFlags_.emitAsyncBreakCheck = defaultEmitAsyncBreakCheck_ =
         runtimeConfig.getAsyncBreakCheckInEval();
-
-#ifndef HERMESJSI_ON_STACK
-    // Register the memory for the runtime if it isn't stored on the stack.
-    crashMgr_->registerMemory(&runtime_, sizeof(vm::Runtime));
-#endif
     runtime_.addCustomRootsFunction(
         [this](vm::GC *, vm::RootAcceptor &acceptor) {
           for (auto it = hermesValues_->begin(); it != hermesValues_->end();) {
@@ -402,10 +334,6 @@ class HermesRuntimeImpl final : public HermesRuntime,
     // Deallocate the debugger so it frees any HermesPointerValues it may hold.
     // This must be done before we check hermesValues_ below.
     debugger_.reset();
-#endif
-#ifndef HERMESJSI_ON_STACK
-    // Unregister the memory for the runtime if it isn't stored on the stack.
-    crashMgr_->unregisterMemory(&runtime_);
 #endif
   }
 
@@ -530,6 +458,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
     BRIDGE_INFO(double, info, allocatedBytes);
     BRIDGE_INFO(double, info, heapSize);
     BRIDGE_INFO(double, info, va);
+    BRIDGE_INFO(double, info, externalBytes);
     BRIDGE_INFO(int, info, numMarkStackOverflows);
     if (includeExpensive) {
       BRIDGE_INFO(double, info, mallocSizeEstimate);
@@ -1075,10 +1004,6 @@ class HermesRuntimeImpl final : public HermesRuntime,
     std::list<T> values;
   };
 
-  inline std::shared_ptr<vm::CrashManager> getCrashManager() noexcept {
-    return crashMgr_;
-  }
-
   std::string getCallStackNoAlloc() {
     return rt_->getCallStackNoAlloc();
   }
@@ -1095,18 +1020,13 @@ class HermesRuntimeImpl final : public HermesRuntime,
  public:
   ManagedValues<HermesPointerValue> hermesValues_;
   ManagedValues<WeakRefPointerValue> weakHermesValues_;
-#ifdef HERMESJSI_ON_STACK
-  StackRuntime stackRuntime_;
-#else
   std::shared_ptr<::hermes::vm::Runtime> rt_;
-#endif
   ::hermes::vm::Runtime &runtime_;
 #ifdef HERMES_ENABLE_DEBUGGER
   friend class debugger::Debugger;
   std::unique_ptr<debugger::Debugger> debugger_;
 #endif
   ::hermes::vm::experiments::VMExperimentFlags vmExperimentFlags_{0};
-  std::shared_ptr<vm::CrashManager> crashMgr_;
 
   /// Compilation flags used by prepareJavaScript().
   ::hermes::hbc::CompileFlags compileFlags_{};
@@ -2055,7 +1975,7 @@ jsi::Value HermesRuntimeImpl::call(
         hvFromValue(jsThis)};
     if (LLVM_UNLIKELY(newFrame.overflowed())) {
       checkStatus(runtime_.raiseStackOverflow(
-          ::hermes::vm::StackRuntime::StackOverflowKind::NativeStack));
+          ::hermes::vm::Runtime::StackOverflowKind::NativeStack));
     }
 
     for (uint32_t i = 0; i != count; ++i) {
@@ -2121,7 +2041,7 @@ jsi::Value HermesRuntimeImpl::callAsConstructor(
         objHandle.getHermesValue()};
     if (newFrame.overflowed()) {
       checkStatus(runtime_.raiseStackOverflow(
-          ::hermes::vm::StackRuntime::StackOverflowKind::NativeStack));
+          ::hermes::vm::Runtime::StackOverflowKind::NativeStack));
     }
     for (uint32_t i = 0; i != count; ++i) {
       newFrame->getArgRef(i) = hvFromValue(args[i]);
@@ -2482,11 +2402,9 @@ std::unique_ptr<HermesRuntime> makeHermesRuntimeWithWER() {
 
 void hermesCrashHandler(HermesRuntime &runtime, int fd) {
   // Run all callbacks registered to the crash manager
-  auto crashManager = impl(&runtime)->getCrashManager();
-  if (crashManager) {
-    if (auto *crashManagerImpl = dynamic_cast<CrashManagerImpl*>(crashManager.get())) {
-      crashManagerImpl->crashHandler(fd);
-    }
+  auto& crashManager = impl(&runtime)->runtime_.getCrashManager();
+  if (auto *crashManagerImpl = dynamic_cast<CrashManagerImpl*>(&crashManager)) {
+    crashManagerImpl->crashHandler(fd);
   }
 
   // Also serialize the current callstack

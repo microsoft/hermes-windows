@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -101,22 +101,20 @@ for (const specialSelector of specialSelectors) {
 const fileContents = `\
 import type {
 ${imports.join(',\n')}
-} from './types';
+} from '../types';
 
 ${Array.from(typeAliases.values()).join('\n')}
 
-export type ESQueryNodeSelectors = {
+export type ESQueryNodeSelectorsWithoutFallback = {
 ${enterSelectors.join(',\n')},
 ${exitSelectors.join(',\n')},
-
-  // TODO - make this looser so that you can manually type complex selectors
-  [selector: string]: (node: ESNode) => void,
 };
 `;
 
 formatAndWriteDistArtifact({
   code: fileContents,
   package: 'hermes-estree',
+  subdirSegments: ['generated'],
   filename: 'HermesESTreeSelectorTypes.js.flow',
   flow: 'strict',
 });

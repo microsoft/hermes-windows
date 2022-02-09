@@ -1,12 +1,11 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::ast::{self, GCLock, Node, NodePtr, VariableDeclarationKind, Visitor};
-use crate::node_isa;
+use crate::ast::{self, node_isa, GCLock, Node, NodePtr, Path, VariableDeclarationKind, Visitor};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -110,7 +109,7 @@ impl<'gc> DeclCollector<'gc> {
 }
 
 impl<'gc> Visitor<'gc> for DeclCollector<'gc> {
-    fn call(&mut self, ctx: &'gc GCLock, node: &'gc Node<'gc>, _parent: Option<&'gc Node<'gc>>) {
+    fn call(&mut self, ctx: &'gc GCLock, node: &'gc Node<'gc>, _parent: Option<Path<'gc>>) {
         match node {
             Node::VariableDeclaration(ast::VariableDeclaration {
                 kind: VariableDeclarationKind::Var,

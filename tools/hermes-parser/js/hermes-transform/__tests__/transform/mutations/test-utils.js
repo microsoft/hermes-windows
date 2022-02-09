@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -16,6 +16,7 @@ import type {
 } from 'hermes-estree';
 
 import {parseForESLint} from 'hermes-eslint';
+import {attachComments} from '../../../src/transform/comments/comments';
 import {traverse} from '../../../src/traverse/traverse';
 
 export type StatementTypes = Statement['type'] | ModuleDeclaration['type'];
@@ -83,6 +84,8 @@ export function parseAndGetAstAndNode<T: ESNode = ESNode>(
   const {ast, scopeManager} = parseForESLint(code, {
     sourceType: 'module',
   });
+
+  attachComments(ast.comments, ast, code);
 
   let target: T | null = null;
   traverse(ast, scopeManager, () => ({

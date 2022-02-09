@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -201,11 +201,6 @@ class HandleBase {
   }
 
  public:
-  /// Allocate a new handle in the specified GCScope.
-  explicit HandleBase(
-      GCScope *inScope,
-      HermesValue value = HermesValue::encodeUndefinedValue());
-
   /// Allocate a new handle in the current GCScope
   explicit HandleBase(
       HandleRootOwner *runtime,
@@ -316,13 +311,9 @@ class Handle : public HandleBase {
   using value_type = typename HermesValueTraits<T>::value_type;
 
   /// Allocate a new handle in the current GCScope
-  explicit Handle(
-      HandleRootOwner *runtime,
-      value_type value = HermesValueTraits<T>::defaultValue())
+  explicit Handle(HandleRootOwner *runtime, value_type value)
       : HandleBase(runtime, HermesValueTraits<T>::encode(value)){};
-  explicit Handle(
-      GCScope *inScope,
-      value_type value = HermesValueTraits<T>::defaultValue())
+  explicit Handle(GCScope *inScope, value_type value)
       : HandleBase(inScope, HermesValueTraits<T>::encode(value)){};
 
   /// Create a Handle aliasing a non-movable HermesValue without

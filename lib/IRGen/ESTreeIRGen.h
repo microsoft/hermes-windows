@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
@@ -563,11 +563,17 @@ class ESTreeIRGen {
 
   Value *genNewExpr(ESTree::NewExpressionNode *N);
   Value *genAssignmentExpr(ESTree::AssignmentExpressionNode *AE);
+  Value *genLogicalAssignmentExpr(
+      ESTree::AssignmentExpressionNode *AE,
+      BinaryOperatorInst::OpKind AssignmentKind,
+      LReference lref,
+      Identifier nameHint);
   Value *genConditionalExpr(ESTree::ConditionalExpressionNode *C);
   Value *genSequenceExpr(ESTree::SequenceExpressionNode *Sq);
   Value *genYieldExpr(ESTree::YieldExpressionNode *Y);
   Value *genYieldStarExpr(ESTree::YieldExpressionNode *Y);
   Value *genAwaitExpr(ESTree::AwaitExpressionNode *A);
+  Value *genBinaryExpression(ESTree::BinaryExpressionNode *bin);
   Value *genUnaryExpression(ESTree::UnaryExpressionNode *U);
   Value *genUpdateExpr(ESTree::UpdateExpressionNode *updateExpr);
   Value *genLogicalExpression(ESTree::LogicalExpressionNode *logical);
