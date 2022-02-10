@@ -60,7 +60,7 @@ jobs:
             -Platform:$(BuildPlatform)
             -Configuration:$(BuildConfiguration)
             -AppPlatform:uwp
-      
+
       - task: PublishBuildArtifacts@1
         displayName: "Publish artifacts"
         inputs:
@@ -109,6 +109,14 @@ jobs:
             -Platform:$(BuildPlatform)
             -Configuration:$(BuildConfiguration)
             -AppPlatform:uwp
+
+      - script: mkdir $(Build.ArtifactStagingDirectory)\_manifest\$(BuildPlatform)\$(BuildFlavor)
+
+      - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+        displayName: 📒 Generate Manifest
+        inputs:
+          BuildDropPath: $(Build.ArtifactStagingDirectory)
+          ManifestDirPath: $(Build.ArtifactStagingDirectory)/_manifest/$(BuildPlatform)/$(BuildFlavor)
 
       - task: PublishBuildArtifacts@1
         displayName: "Publish artifacts"
@@ -168,6 +176,11 @@ jobs:
           buildProperties: CommitId=$(Build.SourceVersion);nugetroot=$(System.DefaultWorkingDirectory)\HermesArtifacts;RepoUri=$(Build.Repository.Uri)
           versioningScheme: byEnvVar
           versionEnvVar: Version
+
+      - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+        displayName: 📒 Generate Manifest NuGet
+        inputs:
+          BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
 
       - task: PublishBuildArtifacts@1
         displayName: "Publish final nuget artifacts"
