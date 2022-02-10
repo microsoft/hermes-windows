@@ -85,8 +85,8 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   else()
     set(link_flags "${link_flags} /DEBUG /DEBUGTYPE:CV,FIXUP /OPT:REF /OPT:ICF")
 
-    if("${MSVC_C_ARCHITECTURE_ID}" MATCHES "^(X64|X86|ARM64)$")
-      # CETCOMPAT is not supported by legacy ARM
+    if("${MSVC_C_ARCHITECTURE_ID}" MATCHES "^(X64|X86)$")
+      # CETCOMPAT is not supported by ARM or ARM64
       set(link_flags "${link_flags} /CETCOMPAT")
     endif()
   endif()
