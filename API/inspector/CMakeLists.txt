@@ -5,6 +5,15 @@
 
 # We are building 'hermesinspector.dll' using code from react-native, folly, boost etc.
 
+add_subdirectory(boost)
+add_subdirectory(folly)
+add_subdirectory(react-native)
+
+include(CMakePrintHelpers)
+cmake_print_variables(BOOST_INCLUDES)
+cmake_print_variables(FOLLY_SOURCE)
+cmake_print_variables(REACT_NATIVE_SOURCE)
+
 set(inspector_sources
   ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/Inspector.cpp
   ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/Inspector.cpp
@@ -85,9 +94,9 @@ add_definitions(-DNOMINMAX)
 add_definitions(-DFOLLY_EXPORT=)
 add_definitions(-D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
 
-include_directories(${REACT_NATIVE_SOURCE}/ReactCommon)
+include_directories(${BOOST_INCLUDES})
 include_directories(${FOLLY_SOURCE})
-include_directories(${BOOST_SOURCE}/lib/native/include)
+include_directories(${REACT_NATIVE_SOURCE}/ReactCommon)
 include_directories(stubs)
 
 file(GLOB inspector_headers ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
@@ -106,7 +115,7 @@ target_link_libraries(hermesinspector
 hermes_link_icu(hermesinspector)
 
 # Export the required header directory
-target_include_directories(hermesinspector PUBLIC ..)
+target_include_directories(hermesinspector PUBLIC .. ${FOLLY_SOURCE})
 
 # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
 set(compile_flags " /await ")
