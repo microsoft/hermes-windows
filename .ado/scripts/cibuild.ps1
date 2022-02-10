@@ -61,7 +61,6 @@ function Find-VS-Path() {
         if (Test-Path $vcVarsPath) {
             return $vcVarsPath
         } else {
-            throw "Could not find vcvarsall.bat at expected Visual Studio installation path"
             throw "Could not find vcvarsall.bat at expected Visual Studio installation path: $vcVarsPath"
         }
     } else {
@@ -83,7 +82,7 @@ function Get-VCVarsParam($plat = "x64", $arch = "win32") {
         $args_ = "$args_ uwp"
     }
 
-    if($SDKVersion) {
+    if ($SDKVersion) {
         $args_ = "$args_ $SDKVersion"
     }
 
@@ -112,7 +111,8 @@ function Invoke-Environment($Command, $arg) {
 }
 
 function get-CommonArgs($Platform, $Configuration, $AppPlatform, [ref]$genArgs) {
-    if($UseVS.IsPresent) {
+    if ($UseVS.IsPresent) {
+        # TODO: use VS version chosen before
         $genArgs.Value += '-G "Visual Studio 16 2019"'
         $cmakePlatform = $Platform;
         if ($cmakePlatform -eq 'x86') {
@@ -140,65 +140,60 @@ function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $increme
     
     New-Item -ItemType "directory" -Path $buildPath -ErrorAction Ignore | Out-Null
     Push-Location $buildPath
+    try {
+        $genCall = ('cmake {0}' -f ($genArgs -Join ' ')) + " $SourcesPath";
+        Write-Host $genCall
+        $ninjaCmd = "ninja"
 
-    $genCall = ('cmake {0}' -f ($genArgs -Join ' ')) + " $SourcesPath";
-    Write-Host $genCall
-    $ninjaCmd = "ninja"
-
-    foreach ( $target in $targets )
-    {
-        $ninjaCmd = $ninjaCmd + " " + $target
-    }
-
-    Write-Host $ninjaCmd
-
-    # See https://developercommunity.visualstudio.com/content/problem/257260/vcvarsallbat-reports-the-input-line-is-too-long-if.html
-    $Bug257260 = $false
-
-    if ($Bug257260) {
-        Invoke-Environment $VCVARS_PATH (Get-VCVarsParam $Platform $AppPlatform)
-        Invoke-Expression $genCall
-        
-        if($ConfigureOnly.IsPresent){
-            exit 0;
+        foreach ( $target in $targets )
+        {
+            $ninjaCmd = $ninjaCmd + " " + $target
         }
 
-        if($UseVS.IsPresent) {
-            exit  1;
+        Write-Host $ninjaCmd
+
+        # See https://developercommunity.visualstudio.com/content/problem/257260/vcvarsallbat-reports-the-input-line-is-too-long-if.html
+        $Bug257260 = $false
+
+        if ($Bug257260) {
+            Invoke-Environment $VCVARS_PATH (Get-VCVarsParam $Platform $AppPlatform)
+            Invoke-Expression $genCall
+            
+            if ($ConfigureOnly.IsPresent){
+                exit 0;
+            }
+
+            if ($UseVS.IsPresent) {
+                exit  1;
+            } else {
+                ninja $ninjaCmd
+            }
+
         } else {
-            ninja $ninjaCmd
+            $GenCmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && $genCall 2>&1"
+            Write-Host "Command: $GenCmd"
+            cmd /c $GenCmd
+
+            if ($ConfigureOnly.IsPresent){
+                exit 0;
+            }
+
+            $NinjaCmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && ${ninjaCmd} 2>&1"
+            Write-Host "Command: $NinjaCmd"
+            cmd /c $NinjaCmd
         }
-
-    } else {
-        $GenCmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && $genCall 2>&1"
-        Write-Host "Command: $GenCmd"
-        cmd /c $GenCmd
-
-        if($ConfigureOnly.IsPresent){
-            exit 0;
-        }
-
-        $NinjaCmd = "`"$VCVARS_PATH`" $(Get-VCVarsParam $Platform $AppPlatform) && ${ninjaCmd} 2>&1"
-        Write-Host "Command: $NinjaCmd"
-        cmd /c $NinjaCmd
+    } finally {
+        Pop-Location
     }
-
-    Pop-Location
 }
 
-function Invoke-Compiler-Build($SourcesPath, $buildPath, $Platform, $Configuration, $AppPlatform, $RNDIR, $FOLLYDIR, $BOOSTDIR, $incrementalBuild) {
+function Invoke-Compiler-Build($SourcesPath, $buildPath, $Platform, $Configuration, $AppPlatform, $incrementalBuild) {
     $genArgs = @();
     get-CommonArgs $Platform $Configuration $AppPlatform ([ref]$genArgs)
-
-    $genArgs += "-DREACT_NATIVE_SOURCE=$RNDIR"
-    $genArgs += "-DFOLLY_SOURCE=$FOLLYDIR"
-    $genArgs += "-DBOOST_SOURCE=$BOOSTDIR"
-
-    Invoke-BuildImpl $SourcesPath $buildPath $genArgs @('hermes','hermesc') $$incrementalBuild $Platform $Configuration $AppPlatform
-    Pop-Location
+    Invoke-BuildImpl $SourcesPath $buildPath $genArgs @('hermes','hermesc') $incrementalBuild $Platform $Configuration $AppPlatform
 }
 
-function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, $Platform, $Configuration, $AppPlatform, $RNDIR, $FOLLYDIR, $BOOSTDIR, $incrementalBuild, $WithHermesDebugger, $CheckedStlIterators) {
+function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, $Platform, $Configuration, $AppPlatform, $incrementalBuild, $WithHermesDebugger, $CheckedStlIterators) {
     $genArgs = @();
     get-CommonArgs $Platform $Configuration $AppPlatform ([ref]$genArgs)
 
@@ -206,10 +201,6 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
 
     if($WithHermesDebugger) {
         $genArgs += '-DHERMES_ENABLE_DEBUGGER=ON'
-
-        $genArgs += "-DREACT_NATIVE_SOURCE=$RNDIR"
-        $genArgs += "-DFOLLY_SOURCE=$FOLLYDIR"
-        $genArgs += "-DBOOST_SOURCE=$BOOSTDIR"
 
         $targets += 'hermesinspector'
     } else {
@@ -254,19 +245,19 @@ function Invoke-Test-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath,
         $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
     }
 
-    Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, @('check-hermes')) $incrementalBuild $Platform $Configuration $AppPlatform
+    Invoke-BuildImpl $SourcesPath, $buildPath, $genArgs, @('check-hermes') $incrementalBuild $Platform $Configuration $AppPlatform
 }
 
-function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform, $RNDIR, $FOLLYDIR, $BOOSTDIR) {
+function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
 
-    Write-Host "Invoke-Build called with SourcesPath: " $SourcesPath", WorkSpacePath: " $WorkSpacePath  ", OutputPath: " $OutputPath ", Platform: " $Platform ", Configuration: " $Configuration ", AppPlatform: " $AppPlatform ", RNDIR: " $RNDIR ", FOLLYDIR: " $FOLLYDIR ", BOOSTDIR: " $BOOSTDIR
+    Write-Host "Invoke-Build called with SourcesPath: " $SourcesPath", WorkSpacePath: " $WorkSpacePath  ", OutputPath: " $OutputPath ", Platform: " $Platform ", Configuration: " $Configuration ", AppPlatform: " $AppPlatform
     $Triplet = "$AppPlatform-$Platform-$Configuration"
     $compilerAndToolsBuildPath = Join-Path $WorkSpacePath "build\tools"
     $compilerPath = Join-Path $compilerAndToolsBuildPath "bin\hermesc.exe"
     
     # Build compiler if it doesn't exist (TODO::To be precise, we need it only when building for uwp i.e. cross compilation !). 
     if (!(Test-Path -Path $compilerPath)) {
-        Invoke-Compiler-Build $SourcesPath $compilerAndToolsBuildPath $toolsPlatform $toolsConfiguration "win32" $RNDIR $FOLLYDIR $BOOSTDIR $True
+        Invoke-Compiler-Build $SourcesPath $compilerAndToolsBuildPath $toolsPlatform $toolsConfiguration "win32" $True
     }
     
     $buildPath = Join-Path $WorkSpacePath "build\$Triplet"
@@ -276,24 +267,23 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
     if ($Configuration -eq "release") {
         $CheckedStlIterators = $False
         $WithHermesDebugger = $False
-        Invoke-Dll-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $RNDIR $FOLLYDIR $BOOSTDIR $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
+        Invoke-Dll-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
 
         $CheckedStlIterators = $False
         $WithHermesDebugger = $True
-        Invoke-Dll-Build $SourcesPath $buildPathWithDebugger $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $RNDIR $FOLLYDIR $BOOSTDIR $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
+        Invoke-Dll-Build $SourcesPath $buildPathWithDebugger $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
 
         $CheckedStlIterators = $True
         $WithHermesDebugger = $True
-        Invoke-Dll-Build $SourcesPath $buildPathWithDebuggerAndCheckedIter $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $RNDIR $FOLLYDIR $BOOSTDIR $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
+        Invoke-Dll-Build $SourcesPath $buildPathWithDebuggerAndCheckedIter $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
 
     } else {
         $WithHermesDebugger = $True
-        Invoke-Dll-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $RNDIR $FOLLYDIR $BOOSTDIR $Incremental.IsPresent $WithHermesDebugger
+        Invoke-Dll-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger
     }
-    
 
     if ($RunTests.IsPresent) {
-        Invoke-Test-Build($SourcesPath, $buildPath, $Platform, $Configuration, $AppPlatform);
+        Invoke-Test-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent
     }
     
     $finalOutputPath = "$OutputPath\lib\native\$Configuration\$Platform";
@@ -301,7 +291,12 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
         New-Item -ItemType "directory" -Path $finalOutputPath | Out-Null
     }
 
+    $RNDIR = Join-Path $buildPath "_deps\reactnative-src"
+
     if ($Configuration -eq "release") {
+
+        $RNDIR = Join-Path $buildPathWithDebugger "_deps\reactnative-src"
+
         Copy-Item "$buildPath\API\hermes\hermes.dll" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
@@ -339,7 +334,6 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
         Copy-Item "$buildPath\API\inspector\hermesinspector.dll" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\inspector\hermesinspector.lib" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\inspector\hermesinspector.pdb" -Destination $finalOutputPath -force | Out-Null
-        
     }
 
     if (!(Test-Path -Path "$OutputPath\lib\uap\")) {
@@ -359,10 +353,11 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
     }
     Copy-Item "$buildPath\build.ninja" -Destination $flagsPath -force | Out-Null
 
-    Pop-Location
+    Copy-Headers $SourcesPath $WorkSpacePath $OutputPath $Platform $Configuration $AppPlatform $RNDIR
 }
 
-function Copy-Headers($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform, $RNDIR, $FOLLYDIR, $BOOSTDIR) {
+function Copy-Headers($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform, $RNDIR) {
+
     if (!(Test-Path -Path "$OutputPath\build\native\include\hermes")) {
         New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermes" | Out-Null
     }
@@ -375,27 +370,29 @@ function Copy-Headers($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Con
         New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\jsi" | Out-Null
     }
 
-    Write-Output "$RNDIR\ReactCommon\hermes\**\*.h"
+    if (!(Test-Path -Path "$OutputPath\build\native\include\napi")) {
+        New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\napi" | Out-Null
+    }
 
     Copy-Item "$SourcesPath\include\hermes\BCGen\HBC\BytecodeVersion.h" -Destination "$OutputPath\build\native\include\hermes" -force
     Copy-Item "$SourcesPath\API\jsi\jsi\*" -Destination "$OutputPath\build\native\include\jsi" -force -Recurse
     Copy-Item "$SourcesPath\API\hermes\hermes.h" -Destination "$OutputPath\build\native\include\hermes" -force
     Copy-Item "$SourcesPath\API\hermes\hermes_dbg.h" -Destination "$OutputPath\build\native\include\hermes" -force
     Copy-Item "$SourcesPath\API\hermes\DebuggerAPI.h" -Destination "$OutputPath\build\native\include\hermes" -force
+    Copy-Item "$SourcesPath\public\hermes\*" -Destination "$OutputPath\build\native\include\hermes" -force -Recurse
+    Copy-Item "$SourcesPath\API\inspector\InspectorProxy.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force
+
     Copy-Item "$SourcesPath\API\napi\hermes_napi.h" -Destination "$OutputPath\build\native\include\napi" -force
     Copy-Item "$SourcesPath\API\napi\js_native_api.h" -Destination "$OutputPath\build\native\include\napi" -force
     Copy-Item "$SourcesPath\API\napi\js_native_api_types.h" -Destination "$OutputPath\build\native\include\napi" -force
     Copy-Item "$SourcesPath\API\napi\js_native_ext_api.h" -Destination "$OutputPath\build\native\include\napi" -force
-    Copy-Item "$SourcesPath\public\hermes\*" -Destination "$OutputPath\build\native\include\hermes" -force -Recurse
+
     Copy-Item "$RNDIR\ReactCommon\jsinspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force -Recurse
     Copy-Item "$RNDIR\ReactCommon\hermes\**\*.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force -Recurse
-    Copy-Item "$SourcesPath\API\inspector\InspectorProxy.h" -Destination "$OutputPath\build\native\include\hermesinspector" -force
-
     if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector\jsinspector")) {
         New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\jsinspector" | Out-Null
     }
     Copy-Item "$RNDIR\ReactCommon\jsinspector\*.h" -Destination "$OutputPath\build\native\include\hermesinspector\jsinspector" -force -Recurse
-
 
     if (!(Test-Path -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector")) {
         New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector" | Out-Null
@@ -406,42 +403,9 @@ function Copy-Headers($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Con
         New-Item -ItemType "directory" -Path "$OutputPath\build\native\include\hermesinspector\hermes\inspector\chrome" | Out-Null
     }
     Copy-Item "$RNDIR\ReactCommon\hermes\inspector\chrome\*.h" -Destination "$OutputPath\build\native\include\hermesinspector\hermes\inspector\chrome" -force -Recurse
-
 }
 
-function Copy-Sources($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
-    if (!(Test-Path -Path "$OutputPath\src\API\")) {
-        New-Item -ItemType "directory" -Path "$OutputPath\src\API\" | Out-Null
-    }
-
-    if (!(Test-Path -Path "$OutputPath\src\external\")) {
-        New-Item -ItemType "directory" -Path "$OutputPath\src\external\" | Out-Null
-    }
-
-    if (!(Test-Path -Path "$OutputPath\src\external\llvh")) {
-        New-Item -ItemType "directory" -Path "$OutputPath\src\external\llvh" | Out-Null
-    }
-
-    if (!(Test-Path -Path "$OutputPath\src\include\")) {
-        New-Item -ItemType "directory" -Path "$OutputPath\src\include\" | Out-Null
-    }
-
-    if (!(Test-Path -Path "$OutputPath\src\lib\")) {
-        New-Item -ItemType "directory" -Path "$OutputPath\src\lib\" | Out-Null
-    }
-
-    if (!(Test-Path -Path "$OutputPath\src\public\")) {
-        New-Item -ItemType "directory" -Path "$OutputPath\src\public\" | Out-Null
-    }
-
-    Copy-Item "$SourcesPath\API\*" -Destination "$OutputPath\src\API\" -force -Recurse
-    Copy-Item "$SourcesPath\external\llvh\*" -Destination "$OutputPath\src\external\llvh\" -force -Recurse # TODO :: Scope it.
-    Copy-Item "$SourcesPath\include\*" -Destination "$OutputPath\src\include\" -force -Recurse
-    Copy-Item "$SourcesPath\lib\*" -Destination "$OutputPath\src\lib\" -force -Recurse
-    Copy-Item "$SourcesPath\public\*" -Destination "$OutputPath\src\public\" -force -Recurse
-}
-
-function Prepare-NugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
+function Invoke-PrepareNugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
     $nugetPath = Join-Path $OutputPath "nuget"
     if (!(Test-Path -Path $nugetPath)) {
         New-Item -ItemType "directory" -Path $nugetPath | Out-Null
@@ -477,44 +441,24 @@ $StartTime = (Get-Date)
 
 $VCVARS_PATH = Find-VS-Path
 $PYTHON_PATH = Find-Path "python.exe"
-# $CMAKE_PATH = Find-Path "cmake.exe"
-# $GIT_PATH = Find-Path "git.exe"
 
 if (!(Test-Path -Path $WorkSpacePath)) {
     New-Item -ItemType "directory" -Path $WorkSpacePath | Out-Null
 }
+
 Push-Location $WorkSpacePath
-
-$BOOST_DIR = Invoke-Expression "$PSScriptRoot\prepare_boost.ps1".Replace("\", "/")
-$FOLLY_DIR = Invoke-Expression "$PSScriptRoot\prepare_folly.ps1".Replace("\", "/")
-$RN_DIR = Invoke-Expression "$PSScriptRoot\prepare_reactnative.ps1".Replace("\", "/")
-
-$FOLLY_DIR = $FOLLY_DIR.Replace("\", "/")
-$BOOST_DIR = $BOOST_DIR.Replace("\", "/")
-$RN_DIR = $RN_DIR.Replace("\", "/")
-
-Write-Output "FOLLY_DIR: $FOLLY_DIR"
-Write-Output "BOOST_DIR: $BOOST_DIR"
-Write-Output "RN_DIR: $RN_DIR"
-
-# first copy the headers into the output
-Copy-Headers -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform -RNDIR $RN_DIR -FOLLYDIR $FOLLY_DIR -BOOSTDIR $BOOST_DIR
-
-# Copy sources
-# Copy-Sources -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
-
-# run the actual builds and copy artefacts
-foreach ($Plat in $Platform) {
-    foreach ($Config in $Configuration) {
-        Invoke-BuildAndCopy -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform -RNDIR $RN_DIR -FOLLYDIR $FOLLY_DIR -BOOSTDIR $BOOST_DIR
+try {
+    # run the actual builds and copy artefacts
+    foreach ($Plat in $Platform) {
+        foreach ($Config in $Configuration) {
+            Invoke-BuildAndCopy -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
+            Invoke-PrepareNugetPackage -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
+        }
     }
+} finally {
+    Pop-Location
 }
-
-Prepare-NugetPackage -SourcesPath $SourcesPath -WorkSpacePath $WorkSpacePath -OutputPath $OutputPath -Platform $Plat -Configuration $Config -AppPlatform $AppPlatform
 
 $elapsedTime = $(get-date) - $StartTime
 $totalTime = "{0:HH:mm:ss}" -f ([datetime]$elapsedTime.Ticks)
-
-Pop-Location
-
 Write-Host "Build took $totalTime to run"
