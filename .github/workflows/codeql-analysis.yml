@@ -45,7 +45,7 @@ jobs:
       uses: github/codeql-action/init@v1
       with:
         languages: ${{ matrix.language }}
-        paths-ignore: 'D:\a\hermes-windows\hermes-windows\test'
+        paths-ignore: test
 
     - name: Build
       shell: pwsh
