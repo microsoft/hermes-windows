@@ -68,6 +68,17 @@ jobs:
           SearchPattern: $(Build.ArtifactStagingDirectory)/**/*.pdb
           SymbolServerType: TeamServices
 
+      # Guardian does not handle cmake, so manually running Binskim
+      - task: BinSkim@3
+        displayName: Run Binskim Analysis
+        inputs:
+            InputType: 'Basic'
+            Function: 'analyze'
+            AnalyzeTarget: $(Build.ArtifactStagingDirectory)/**/*.dll
+            AnalyzeVerbose: true
+            toolVersion: 'LatestPreRelease'
+        continueOnError: true
+
       - task: ComponentGovernanceComponentDetection@0
 
   - job: CreateNuGet
