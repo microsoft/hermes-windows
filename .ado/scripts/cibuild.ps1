@@ -3,10 +3,10 @@ param(
     [string]$WorkSpacePath = "$SourcesPath\workspace",
     [string]$OutputPath = "$WorkSpacePath\out",
     
-    [ValidateSet("x64", "x86", "arm", "arm64")]
+    [ValidateSet("x64", "x86", "arm64")]
     [String[]]$Platform = @("x64"),
 
-    [ValidateSet("x64", "x86", "arm", "arm64")]
+    [ValidateSet("x64", "x86", "arm64")]
     [String]$ToolsPlatform = @("x86"), # Platform used for building tools when cross compiling
     
     [ValidateSet("debug", "release")]
@@ -73,7 +73,6 @@ function Get-VCVarsParam($plat = "x64", $arch = "win32") {
     {
         "x64" {"x64"}
         "x86" {"x64_x86"}
-        "arm" {"x64_arm"}
         "arm64" {"x64_arm64"}
         default { "x64" }
     }
@@ -196,7 +195,7 @@ function Invoke-Compiler-Build($SourcesPath, $buildPath, $Platform, $Configurati
     Invoke-BuildImpl $SourcesPath $buildPath $genArgs @('hermes','hermesc') $incrementalBuild $Platform $Configuration $AppPlatform
 }
 
-function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, $Platform, $Configuration, $AppPlatform, $incrementalBuild, $WithHermesDebugger, $CheckedStlIterators) {
+function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, $Platform, $Configuration, $AppPlatform, $incrementalBuild, $WithHermesDebugger) {
     $genArgs = @();
     get-CommonArgs $Platform $Configuration $AppPlatform ([ref]$genArgs)
 
@@ -208,10 +207,6 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
         $targets += 'hermesinspector'
     } else {
         $genArgs += '-DHERMES_ENABLE_DEBUGGER=OFF'
-    }
-
-    if($CheckedStlIterators) {
-        $genArgs += '-DHERMES_MSVC_CHECKED_ITERATORS=ON'
     }
 
     $genArgs += '-DHERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB=ON'
@@ -265,21 +260,13 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
     
     $buildPath = Join-Path $WorkSpacePath "build\$Triplet"
     $buildPathWithDebugger = Join-Path $buildPath "withdebugger"
-    $buildPathWithDebuggerAndCheckedIter = Join-Path $buildPath "withCheckedIterDebugger"
     
     if ($Configuration -eq "release") {
-        $CheckedStlIterators = $False
         $WithHermesDebugger = $False
-        Invoke-Dll-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
+        Invoke-Dll-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger
 
-        $CheckedStlIterators = $False
         $WithHermesDebugger = $True
-        Invoke-Dll-Build $SourcesPath $buildPathWithDebugger $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
-
-        $CheckedStlIterators = $True
-        $WithHermesDebugger = $True
-        Invoke-Dll-Build $SourcesPath $buildPathWithDebuggerAndCheckedIter $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger $CheckedStlIterators
-
+        Invoke-Dll-Build $SourcesPath $buildPathWithDebugger $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger
     } else {
         $WithHermesDebugger = $True
         Invoke-Dll-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent $WithHermesDebugger
@@ -297,25 +284,11 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
     $RNDIR = Join-Path $buildPath "_deps\reactnative-src"
 
     if ($Configuration -eq "release") {
-
         $RNDIR = Join-Path $buildPathWithDebugger "_deps\reactnative-src"
 
         Copy-Item "$buildPath\API\hermes\hermes.dll" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
         Copy-Item "$buildPath\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
-
-        $finalOutputPathWithCheckedIterDebugger = Join-Path $finalOutputPath "checkediterdebugger"
-        if (!(Test-Path -Path $finalOutputPathWithCheckedIterDebugger)) {
-            New-Item -ItemType "directory" -Path $finalOutputPathWithCheckedIterDebugger | Out-Null
-        }
-
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.dll" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.lib" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\hermes\hermes.pdb" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
-
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.dll" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.lib" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
-        Copy-Item "$buildPathWithDebuggerAndCheckedIter\API\inspector\hermesinspector.pdb" -Destination $finalOutputPathWithCheckedIterDebugger -force | Out-Null
 
         $finalOutputPathWithDebugger = Join-Path $finalOutputPath "debugger"
         if (!(Test-Path -Path $finalOutputPathWithDebugger)) {
