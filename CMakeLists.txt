@@ -73,8 +73,8 @@ endif()
 project(Hermes
         VERSION 0.11.0
         LANGUAGES C CXX)
-# Optional suffix like "-rc3"
-set(VERSION_SUFFIX "")
+# Optional suffix like "rc3"
+set(VERSION_SUFFIX "ms.3")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
 
@@ -83,7 +83,7 @@ set(LLVH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/llvh)
 include(Hermes)
 include(Lit)
 
-set(HERMES_RELEASE_VERSION ${PROJECT_VERSION}${VERSION_SUFFIX})
+set(HERMES_RELEASE_VERSION ${PROJECT_VERSION}-${VERSION_SUFFIX})
 
 include(FindPythonInterp)
 if (NOT PYTHONINTERP_FOUND)
@@ -455,7 +455,7 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4312")
   # Parallelize build
   if (HERMES_MSVC_MP)
-    add_definitions( /MP )
+    add_compile_options( /MP )
   endif()
 endif()
 

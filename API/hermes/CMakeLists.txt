@@ -47,7 +47,15 @@ add_hermes_library(compileJS STATIC CompileJS.cpp)
 set(HERMES_ENABLE_EH ON)
 set(HERMES_ENABLE_RTTI ON)
 
-add_library(libhermes SHARED ${api_sources})
+set(HERMESVER_MAJOR ${PROJECT_VERSION_MAJOR})
+set(HERMESVER_MINOR ${PROJECT_VERSION_MINOR})
+set(HERMESVER_BUILD ${PROJECT_VERSION_PATCH})
+set(HERMESVER_REF ${VERSION_SUFFIX})
+
+configure_file(version.rc.in version.rc @ONLY)
+
+add_library(libhermes SHARED ${api_sources}
+  ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 
 # This is configured using a cmake flag instead of a separate target, because
 # we need the output to be named "libhermes.so".

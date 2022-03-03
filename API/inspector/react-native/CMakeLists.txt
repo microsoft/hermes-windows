@@ -39,7 +39,9 @@ if(NOT reactnative_POPULATED)
 
   file(GLOB_RECURSE YARN_FILES ${reactnative_SOURCE_DIR}/yarn.lock ${reactnative_SOURCE_DIR}/**/yarn.lock)
   message("Removing unused yarn.lock files: ${YARN_FILES}")
-  file(REMOVE ${YARN_FILES})
+  if(YARN_FILES)
+    file(REMOVE ${YARN_FILES})
+  endif()
 endif()
 
 set(REACT_NATIVE_SOURCE ${reactnative_SOURCE_DIR} PARENT_SCOPE)
