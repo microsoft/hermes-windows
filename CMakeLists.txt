@@ -74,7 +74,7 @@ project(Hermes
         VERSION 0.11.0
         LANGUAGES C CXX)
 # Optional suffix like "rc3"
-set(VERSION_SUFFIX "ms.4")
+set(VERSION_SUFFIX "ms.5")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
 
