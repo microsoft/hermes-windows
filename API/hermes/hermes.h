@@ -61,21 +61,9 @@ class Debugger;
 
 class HermesRuntimeImpl;
 
-// This class wraps an std::string created within the hermes dll, to be safely consumed outside the hermes dll.
-// Used to consume release flavored hermes dll in the debug flavored RNW.
-struct IHermesString {
-  virtual const char* c_str() = 0;
-  virtual ~IHermesString(){};
-};
-
 /// Represents a Hermes JS runtime.
 class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
  public:
-
-  virtual std::unique_ptr<IHermesString> __utf8(const facebook::jsi::PropNameID&) = 0;
-  virtual std::unique_ptr<IHermesString> __utf8(const facebook::jsi::String &) = 0;
-  virtual std::unique_ptr<IHermesString> __description() = 0;
-
   static bool isHermesBytecode(const uint8_t *data, size_t len);
   // Returns the supported bytecode version.
   static uint32_t getBytecodeVersion();

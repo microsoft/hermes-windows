@@ -17,15 +17,10 @@
 namespace facebook {
 namespace react {
 
-struct IHermesString {
-  virtual const char *c_str() = 0;
-  virtual ~IHermesString() = 0;
-};
-
 struct InspectorPage2 {
   int id;
-  std::unique_ptr<IHermesString> title;
-  std::unique_ptr<IHermesString> vm;
+  std::string title;
+  std::string vm;
 };
 
 struct IInspectorPages {
@@ -37,7 +32,7 @@ struct IInspectorPages {
 class JSINSPECTOR_EXPORT IRemoteConnection2 : public IDestructible {
  public:
   virtual ~IRemoteConnection2() = 0;
-  virtual void onMessage(std::unique_ptr<IHermesString> message) = 0;
+  virtual void onMessage(std::string message) = 0;
   virtual void onDisconnect() = 0;
 };
 

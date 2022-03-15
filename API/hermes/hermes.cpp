@@ -198,16 +198,6 @@ class InstallHermesFatalErrorHandler {
   const vm::instrumentation::RAIITimer _timer{desc, _stats, _stats.field};
 #endif
 
-struct HermesStringImpl : public IHermesString {
-  virtual const char *c_str() override {
-    return str_.c_str();
-  }
-
-  HermesStringImpl(std::string &&str) : str_(std::move(str)){};
-  std::string str_;
-  ~HermesStringImpl() {}
-};
-
 // Recording timing stats for every JS<->C++ transition has some overhead, so
 // applications where such transitions are extremely frequent may want to define
 // the HERMESJSI_DISABLE_STATS_TIMER symbol to save this overhead.
@@ -224,20 +214,6 @@ class HermesRuntimeImpl final : public HermesRuntime,
                                 private jsi::Instrumentation {
  public:
   static constexpr uint32_t kSentinelNativeValue = 0x6ef71fe1;
-
-  std::unique_ptr<IHermesString> __utf8(
-      const facebook::jsi::PropNameID &propNameId) override {
-    return std::make_unique<HermesStringImpl>(utf8(propNameId));
-  }
-
-  std::unique_ptr<IHermesString> __utf8(
-      const facebook::jsi::String &s) override {
-    return std::make_unique<HermesStringImpl>(utf8(s));
-  }
-
-  std::unique_ptr<IHermesString> __description() override {
-    return std::make_unique<HermesStringImpl>(description());
-  }
 
   HermesRuntimeImpl(const vm::RuntimeConfig &runtimeConfig)
       : rt_(::hermes::vm::Runtime::create(

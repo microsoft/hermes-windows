@@ -14,29 +14,16 @@
 namespace facebook {
 namespace react {
 
-IHermesString::~IHermesString() {}
 IInspectorPages::~IInspectorPages() {}
 IRemoteConnection2::~IRemoteConnection2() {}
 
-struct HermesStringImpl : public IHermesString {
-  virtual const char *c_str() override {
-    return str_.c_str();
-  }
-
-  HermesStringImpl(std::string &&str) : str_(std::move(str)){};
-  HermesStringImpl(const std::string &str) : str_(str){};
-  std::string str_;
-  ~HermesStringImpl() {
-    
-  }
-};
 struct ProxyRemoteConnection : public IRemoteConnection {
   ProxyRemoteConnection(std::unique_ptr<IRemoteConnection2> remote)
       : remote_(std::move(remote)) {}
   std::unique_ptr<IRemoteConnection2> remote_;
 
   virtual void onMessage(std::string message) override {
-    remote_->onMessage(std::make_unique<HermesStringImpl>(message));
+    remote_->onMessage(message);
   }
 
   virtual void onDisconnect() override{
@@ -59,8 +46,8 @@ struct InspectorPagesImpl : public IInspectorPages {
     InspectorPage page = pages_[n];
     return InspectorPage2{
         page.id,
-        std::make_unique<HermesStringImpl>(page.title),
-        std::make_unique<HermesStringImpl>(page.vm)};
+        page.title,
+        page.vm};
   }
 
   virtual int size() {
