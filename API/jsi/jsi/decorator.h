@@ -176,6 +176,9 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   PropNameID createPropNameIDFromString(const String& str) override {
     return plain_.createPropNameIDFromString(str);
   };
+  PropNameID createPropNameIDFromSymbol(const Symbol& sym) override {
+    return plain_.createPropNameIDFromSymbol(sym);
+  };
   std::string utf8(const PropNameID& id) override {
     return plain_.utf8(id);
   };
@@ -552,6 +555,10 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
   PropNameID createPropNameIDFromString(const String& str) override {
     Around around{with_};
     return RD::createPropNameIDFromString(str);
+  };
+  PropNameID createPropNameIDFromSymbol(const Symbol& sym) override {
+    Around around{with_};
+    return RD::createPropNameIDFromSymbol(sym);
   };
   std::string utf8(const PropNameID& id) override {
     Around around{with_};
