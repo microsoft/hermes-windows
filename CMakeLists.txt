@@ -465,6 +465,22 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   endif()
 endif()
 
+if ("${CMAKE_C_COMPILER_ID}" STREQUAL "MSVC")
+  # Enable source linking
+  # NOTE: Dependencies are not properly setup here.
+  #       Currently, CMake does not know to re-link if SOURCE_LINK_JSON changes
+  #       Currently, CMake does not re-generate SOURCE_LINK_JSON if git's HEAD changes
+  if ("${CMAKE_C_COMPILER_VERSION}" VERSION_GREATER_EQUAL "19.20")
+    include(SourceLink)
+    file(TO_NATIVE_PATH "${PROJECT_BINARY_DIR}/source_link.json" SOURCE_LINK_JSON)
+    source_link(${PROJECT_SOURCE_DIR} ${SOURCE_LINK_JSON})
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SOURCELINK:${SOURCE_LINK_JSON}")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SOURCELINK:${SOURCE_LINK_JSON}")
+  else()
+    message(WARNING "Disabling SourceLink due to old version of MSVC. Please update to VS2019!")
+  endif()
+endif()
+
 # Export a JSON file with the compilation commands that external tools can use
 # to analyze the source code of the project.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
