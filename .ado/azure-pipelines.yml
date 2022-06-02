@@ -3,6 +3,7 @@ name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
 trigger: none
 pr:
   - main
+  - temp/v0.11
 
 pool:
   vmImage: 'windows-latest'
