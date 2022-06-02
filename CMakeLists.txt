@@ -71,10 +71,10 @@ endif()
 # - npm/package.json
 # - hermes-engine.podspec
 project(Hermes
-        VERSION 0.11.0
+        VERSION 0.11.6
         LANGUAGES C CXX)
 # Optional suffix like "rc3"
-set(VERSION_SUFFIX "ms.5")
+set(VERSION_SUFFIX "ms.6")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
 
@@ -226,6 +226,9 @@ set(HERMESVM_EXCEPTION_ON_OOM OFF CACHE BOOL
 
 set(HERMESVM_PLATFORM_LOGGING OFF CACHE BOOL
     "hermesLog(...) is enabled, using the platform's logging mechanism")
+
+set(HERMESJSI_DISABLE_STATS_TIMER OFF CACHE BOOL
+    "Record timing stats for every JS<->C++ transition")
 
 set(HERMES_RUN_WASM OFF CACHE BOOL
     "Emit Asm.js/Wasm unsafe compiler intrinsics")
@@ -392,6 +395,9 @@ if(HERMESVM_EXCEPTION_ON_OOM)
 endif()
 if(HERMESVM_PLATFORM_LOGGING)
     add_definitions(-DHERMESVM_PLATFORM_LOGGING)
+endif()
+if(HERMESJSI_DISABLE_STATS_TIMER)
+    add_definitions(-DHERMESJSI_DISABLE_STATS_TIMER)
 endif()
 if(HERMES_RUN_WASM)
     add_definitions(-DHERMES_RUN_WASM)
