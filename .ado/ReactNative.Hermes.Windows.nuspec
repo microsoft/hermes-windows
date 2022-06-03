@@ -22,7 +22,7 @@
     <file src="$nugetroot$\build\native\ReactNative.Hermes.Windows.targets" target="build/native/ReactNative.Hermes.Windows.targets" />
     <file src="$nugetroot$\build\uap\ReactNative.Hermes.Windows.targets" target="build/uap/ReactNative.Hermes.Windows.targets" />
     
-    <file src="$nugetroot$\license\*.*" target="license"/>
+    <file src="$nugetroot$\license\*" target="license"/>
     <file src="$nugetroot$\tools\**\*.*" target="tools"/>
   </files>
 </package>

@@ -71,7 +71,7 @@ endif()
 # - npm/package.json
 # - hermes-engine.podspec
 project(Hermes
-        VERSION 0.11.0
+        VERSION 0.11.6
         LANGUAGES C CXX)
 # Optional suffix like "rc3"
 set(VERSION_SUFFIX "ms.6")
@@ -226,6 +226,9 @@ set(HERMESVM_EXCEPTION_ON_OOM OFF CACHE BOOL
 
 set(HERMESVM_PLATFORM_LOGGING OFF CACHE BOOL
     "hermesLog(...) is enabled, using the platform's logging mechanism")
+
+set(HERMESJSI_DISABLE_STATS_TIMER OFF CACHE BOOL
+    "Record timing stats for every JS<->C++ transition")
 
 set(HERMES_RUN_WASM OFF CACHE BOOL
     "Emit Asm.js/Wasm unsafe compiler intrinsics")
@@ -393,6 +396,9 @@ endif()
 if(HERMESVM_PLATFORM_LOGGING)
     add_definitions(-DHERMESVM_PLATFORM_LOGGING)
 endif()
+if(HERMESJSI_DISABLE_STATS_TIMER)
+    add_definitions(-DHERMESJSI_DISABLE_STATS_TIMER)
+endif()
 if(HERMES_RUN_WASM)
     add_definitions(-DHERMES_RUN_WASM)
 endif()
@@ -452,6 +458,22 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   # Parallelize build
   if (HERMES_MSVC_MP)
     add_compile_options( /MP )
+  endif()
+endif()
+
+if ("${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
+  # Enable source linking
+  # NOTE: Dependencies are not properly setup here.
+  #       Currently, CMake does not know to re-link if SOURCE_LINK_JSON changes
+  #       Currently, CMake does not re-generate SOURCE_LINK_JSON if git's HEAD changes
+  if ("${CMAKE_C_COMPILER_VERSION}" VERSION_GREATER_EQUAL "19.20")
+    include(SourceLink)
+    file(TO_NATIVE_PATH "${PROJECT_BINARY_DIR}/source_link.json" SOURCE_LINK_JSON)
+    source_link(${PROJECT_SOURCE_DIR} ${SOURCE_LINK_JSON})
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SOURCELINK:${SOURCE_LINK_JSON}")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SOURCELINK:${SOURCE_LINK_JSON}")
+  else()
+    message(WARNING "Disabling SourceLink due to old version of MSVC. Please update to VS2019!")
   endif()
 endif()
 

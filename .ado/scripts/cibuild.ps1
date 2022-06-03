@@ -129,6 +129,7 @@ function get-CommonArgs($Platform, $Configuration, $AppPlatform, [ref]$genArgs) 
     $genArgs.Value += ('-DCMAKE_BUILD_TYPE={0}' -f (Get-CMakeConfiguration $Configuration))
 
     $genArgs.Value += '-DHERMESVM_PLATFORM_LOGGING=On'
+    $genArgs.Value += '-DHERMESJSI_DISABLE_STATS_TIMER=On'
 }
 
 function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $incrementalBuild, $Platform, $Configuration, $AppPlatform) {
