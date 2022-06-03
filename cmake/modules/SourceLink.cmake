@@ -18,12 +18,12 @@
 #
 include(GitCommands)
 
-# Warn if this is included and the compilier doesn't support source link
+# Warn if this is included and the compiler doesn't support source link
 if ("${CMAKE_C_COMPILER_ID}" STREQUAL "MSVC")
     if ("${CMAKE_C_COMPILER_VERSION}" VERSION_GREATER_EQUAL "19.20")
         # Good to go!
     elseif("${CMAKE_C_COMPILER_VERSION}" VERSION_GREATER_EQUAL "19.14")
-        message(STATUS "SourceLink enabled but case insensative")
+        message(STATUS "SourceLink enabled but case insensitive")
     else()
         message(WARNING "SourceLink will not work on version of MSVC less than 19.14")
     endif()
@@ -104,4 +104,4 @@ function(build_source_link_rule LOCAL_PATH GIT_REMOTE GIT_CURRENT_HASH OUTPUT)
 
     set(${OUTPUT} "\"${LOCAL_PATH}\" : \"${RAW_GIT_URL}\"" PARENT_SCOPE)
 
-endfunction(build_source_link_rule)
+endfunction()

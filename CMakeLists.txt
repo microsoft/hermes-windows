@@ -465,7 +465,7 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   endif()
 endif()
 
-if ("${CMAKE_C_COMPILER_ID}" STREQUAL "MSVC")
+if ("${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
   # Enable source linking
   # NOTE: Dependencies are not properly setup here.
   #       Currently, CMake does not know to re-link if SOURCE_LINK_JSON changes
