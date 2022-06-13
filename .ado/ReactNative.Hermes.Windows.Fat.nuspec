@@ -6,7 +6,9 @@
     <description>Contains a Windows implementation of Hermes for use with ReactNative (VERSION_DETAILS)</description>
     <authors>Facebook, Microsoft</authors>
     <projectUrl>https://github.com/microsoft/hermes-windows</projectUrl>
-    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <license type="expression">MIT</license>
+    <copyright>&#169; Microsoft Corporation. All rights reserved.</copyright>
     <repository type="git" url="$RepoUri$" commit="$CommitId$" />
   </metadata>
   <files>
