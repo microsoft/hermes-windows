@@ -19,7 +19,6 @@ function testServiceTypes(service) {
   assert(service !== undefined);
   assert(service.prototype.constructor === service);
   assert(service.__proto__ === Function.prototype);
-  assert(service.prototype[Symbol.toStringTag] === 'Object');
   assert(service.supportedLocalesOf.__proto__ === Function.prototype);
 
   var s = service();
@@ -29,6 +28,9 @@ function testServiceTypes(service) {
   var snew = new service();
   assert(s.constructor === service);
   assert(s.__proto__ === service.prototype);
+
+  // Verify that the type tag is not visible to JS.
+  assert(Object.getOwnPropertySymbols(snew).length === 0);
 }
 
 function testServiceGetterTypes(service, getter) {

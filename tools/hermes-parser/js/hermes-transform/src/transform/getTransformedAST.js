@@ -11,8 +11,7 @@
 'use strict';
 
 import type {ESNode, Program} from 'hermes-estree';
-import type {Visitor} from '../traverse/traverse';
-import type {TransformContext} from './TransformContext';
+import type {TransformVisitor} from './transform';
 import type {RemoveCommentMutation} from './mutations/RemoveComment';
 
 import {parseForESLint} from 'hermes-eslint';
@@ -21,8 +20,7 @@ import {traverseWithContext} from '../traverse/traverse';
 import {MutationContext} from './MutationContext';
 import {getTransformContext} from './TransformContext';
 import {attachComments} from './comments/comments';
-import {performAddLeadingCommentsMutation} from './mutations/AddLeadingComments';
-import {performAddTrailingCommentsMutation} from './mutations/AddTrailingComments';
+import {performAddCommentsMutation} from './mutations/AddComments';
 import {performCloneCommentsToMutation} from './mutations/CloneCommentsTo';
 import {performInsertStatementMutation} from './mutations/InsertStatement';
 import {performRemoveCommentMutations} from './mutations/RemoveComment';
@@ -33,7 +31,7 @@ import {performReplaceStatementWithManyMutation} from './mutations/ReplaceStatem
 
 export function getTransformedAST(
   code: string,
-  visitors: Visitor<TransformContext>,
+  visitors: TransformVisitor,
 ): {
   ast: Program,
   astWasMutated: boolean,
@@ -48,8 +46,14 @@ export function getTransformedAST(
   attachComments(ast.comments, ast, code);
 
   // traverse the AST and colllect the mutations
-  const transformContext = getTransformContext(code);
-  traverseWithContext(ast, scopeManager, () => transformContext, visitors);
+  const transformContext = getTransformContext();
+  traverseWithContext(
+    code,
+    ast,
+    scopeManager,
+    () => transformContext,
+    visitors,
+  );
 
   // apply the mutations to the AST
   const mutationContext = new MutationContext(code);
@@ -88,12 +92,8 @@ export function getTransformedAST(
           return null;
         }
 
-        case 'addLeadingComments': {
-          return performAddLeadingCommentsMutation(mutationContext, mutation);
-        }
-
-        case 'addTrailingComments': {
-          return performAddTrailingCommentsMutation(mutationContext, mutation);
+        case 'addComments': {
+          return performAddCommentsMutation(mutationContext, mutation);
         }
 
         case 'cloneCommentsTo': {

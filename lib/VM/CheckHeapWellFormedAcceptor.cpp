@@ -59,11 +59,11 @@ void CheckHeapWellFormedAcceptor::acceptSym(SymbolID sym) {
     return;
   }
   assert(
-      gc.getCallbacks()->isSymbolLive(sym) &&
+      gc.getCallbacks().isSymbolLive(sym) &&
       "Symbol is marked but is not live");
   // Check that the string used by this symbol is valid.
   accept(
-      static_cast<const GCCell *>(gc.getCallbacks()->getStringForSymbol(sym)));
+      static_cast<const GCCell *>(gc.getCallbacks().getStringForSymbol(sym)));
 }
 
 void CheckHeapWellFormedAcceptor::accept(WeakRefBase &wr) {
@@ -71,8 +71,8 @@ void CheckHeapWellFormedAcceptor::accept(WeakRefBase &wr) {
   // empty weak ref.
   const WeakRefSlot *slot = wr.unsafeGetSlot();
   // If the weak value is a pointer, check that it's within the valid region.
-  if (slot->state() != WeakSlotState::Free && slot->hasPointer()) {
-    GCCell *cell = static_cast<GCCell *>(slot->getPointer());
+  if (slot->state() != WeakSlotState::Free && slot->hasValue()) {
+    GCCell *cell = slot->getNoBarrierUnsafe(gc.getPointerBase());
     accept(cell);
   }
 }

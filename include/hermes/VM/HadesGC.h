@@ -47,7 +47,7 @@ class WeakRef;
 ///
 /// The old generation is a collection of heap segments, and allocations in the
 /// old gen are done with a freelist (not a bump-pointer). When the old
-/// collection is nearly full, it starts a backthround thread that will mark all
+/// collection is nearly full, it starts a background thread that will mark all
 /// objects in the old gen, and then sweep the dead ones onto freelists.
 ///
 /// Compaction is done in the old gen on a per-segment basis.
@@ -64,8 +64,8 @@ class HadesGC final : public GCBase {
   /// sizes.
   /// \param provider A provider of storage to be used by segments.
   HadesGC(
-      GCCallbacks *gcCallbacks,
-      PointerBase *pointerBase,
+      GCCallbacks &gcCallbacks,
+      PointerBase &pointerBase,
       const GCConfig &gcConfig,
       std::shared_ptr<CrashManager> crashMgr,
       std::shared_ptr<StorageProvider> provider,
@@ -246,7 +246,8 @@ class HadesGC final : public GCBase {
   }
   void snapshotWriteBarrier(const GCPointerBase *loc) {
     if (LLVM_UNLIKELY(!inYoungGen(loc) && ogMarkingBarriers_))
-      snapshotWriteBarrierInternal(*loc);
+      if (CompressedPointer cp = *loc)
+        snapshotWriteBarrierInternal(cp);
   }
   void snapshotWriteBarrier(const GCSymbolID *loc) {
     if (LLVM_UNLIKELY(!inYoungGen(loc) && ogMarkingBarriers_))
@@ -283,7 +284,7 @@ class HadesGC final : public GCBase {
   /// succeed.)
   bool canAllocExternalMemory(uint32_t size) override;
 
-  WeakRefSlot *allocWeakSlot(HermesValue init) override;
+  WeakRefSlot *allocWeakSlot(CompressedPointer ptr) override;
 
   /// Iterate over all objects in the heap, and call \p callback on them.
   /// \param callback A function to call on each found object.
@@ -335,9 +336,6 @@ class HadesGC final : public GCBase {
   /// found reachable in a full GC.
   void trackReachable(CellKind kind, unsigned sz) override;
 
-  /// Returns true if \p cell is the most-recently allocated finalizable object.
-  bool isMostRecentFinalizableObj(const GCCell *cell) const override;
-
   /// \}
 #endif
 
@@ -380,12 +378,12 @@ class HadesGC final : public GCBase {
     void forAllObjs(CallbackFunction callback);
     /// Only call the callback on cells without forwarding pointers.
     template <typename CallbackFunction>
-    void forCompactedObjs(CallbackFunction callback, PointerBase *base);
+    void forCompactedObjs(CallbackFunction callback, PointerBase &base);
   };
 
   class OldGen final {
    public:
-    explicit OldGen(HadesGC *gc);
+    explicit OldGen(HadesGC &gc);
 
     std::deque<HeapSegment>::iterator begin();
     std::deque<HeapSegment>::iterator end();
@@ -393,7 +391,6 @@ class HadesGC final : public GCBase {
     std::deque<HeapSegment>::const_iterator end() const;
 
     size_t numSegments() const;
-    size_t maxNumSegments() const;
 
     HeapSegment &operator[](size_t i);
 
@@ -450,17 +447,14 @@ class HadesGC final : public GCBase {
     uint64_t size() const;
 
     /// \return the total number of bytes that we aim to use in the OG
-    /// section of the JS heap, including free list entries. This may be smaller
-    /// or greater than size(). It is rounded up to the nearest segment to make
-    /// to reflect the fact that in practice, the heap size will be an integer
-    /// multiple of segment size.
+    /// section of the heap, including free list entries and external memory.
+    /// This may be smaller or greater than size() + externalBytes().
     uint64_t targetSizeBytes() const;
 
     /// Add some external memory cost to the OG.
     void creditExternalMemory(uint32_t size) {
       assert(
-          gc_->gcMutex_ &&
-          "OG external bytes must be accessed under gcMutex_.");
+          gc_.gcMutex_ && "OG external bytes must be accessed under gcMutex_.");
       externalBytes_ += size;
     }
 
@@ -469,8 +463,7 @@ class HadesGC final : public GCBase {
       assert(
           externalBytes_ >= size && "Debiting more memory than was credited");
       assert(
-          gc_->gcMutex_ &&
-          "OG external bytes must be accessed under gcMutex_.");
+          gc_.gcMutex_ && "OG external bytes must be accessed under gcMutex_.");
       externalBytes_ -= size;
     }
 
@@ -484,8 +477,6 @@ class HadesGC final : public GCBase {
       // If null, this is the tail of the free list.
       AssignableCompressedPointer next_{nullptr};
 
-      explicit FreelistCell(uint32_t sz) : VariableSizeRuntimeCell{&vt, sz} {}
-
       /// Shrink this cell by carving out a region of size \p sz bytes. Unpoison
       /// the carved out region if necessary and return it (without any
       /// initialisation).
@@ -493,6 +484,9 @@ class HadesGC final : public GCBase {
       /// \pre getAllocatedSize() >= sz + minAllocationSize()
       GCCell *carve(uint32_t sz);
 
+      static constexpr CellKind getCellKind() {
+        return CellKind::FreelistKind;
+      }
       static bool classof(const GCCell *cell) {
         return cell->getKind() == CellKind::FreelistKind;
       }
@@ -552,16 +546,13 @@ class HadesGC final : public GCBase {
         char *freeRangeEnd,
         bool setHead);
 
-    HadesGC *gc_;
+    HadesGC &gc_;
 
     /// Use a std::deque instead of a std::vector so that references into it
     /// remain valid across a push_back.
     std::deque<HeapSegment> segments_;
 
-    /// This is the target size in bytes for the OG JS heap. It does not
-    /// include external memory and may be larger or smaller than the actual
-    /// capacity of the heap. Should be initialised using setTargetSizeBytes
-    /// before use.
+    /// See \c targetSizeBytes() above.
     ExponentialMovingAverage targetSizeBytes_{0, 0};
 
     /// This is the sum of all bytes currently allocated in the heap, excluding
@@ -688,7 +679,8 @@ class HadesGC final : public GCBase {
   /// Note that we only set the YG size using this at the end of the first real
   /// YG, since doing it for direct promotions would waste OG memory without a
   /// pause time benefit.
-  double ygSizeFactor_{0.5};
+  static constexpr double kYGInitialSizeFactor = 0.5;
+  double ygSizeFactor_{kYGInitialSizeFactor};
 
   /// oldGen_ is a free list space, so it needs a different segment
   /// representation.
@@ -722,7 +714,7 @@ class HadesGC final : public GCBase {
   /// Represents whether the background thread is currently marking. Should only
   /// be accessed by the mutator thread or during a STW pause.
   /// ogMarkingBarriers_ is true from the start of marking the OG heap until the
-  /// start of WeakMap marking but is kept separate from concurrentPhase_ in
+  /// start of the STW pause but is kept separate from concurrentPhase_ in
   /// order to reduce synchronisation requirements for write barriers.
   bool ogMarkingBarriers_{false};
 
@@ -771,8 +763,9 @@ class HadesGC final : public GCBase {
   /// together in a linked list.
   WeakRefSlot *firstFreeWeak_{nullptr};
 
-  /// The weighted average of the YG survival ratio over time.
-  ExponentialMovingAverage ygAverageSurvivalRatio_;
+  /// The weighted average of the number of bytes that are promoted to the OG in
+  /// each YG collection.
+  ExponentialMovingAverage ygAverageSurvivalBytes_;
 
   /// The amount of bytes of external memory credited to objects in the YG.
   /// Only accessible to the mutator.
@@ -935,12 +928,21 @@ class HadesGC final : public GCBase {
   /// thread, to perform it concurrently with the mutator.
   void collectOGInBackground();
 
+  /// Ensures that work on the background thread to be suspended when
+  /// concurrent GC is enabled.
+  LLVM_NODISCARD std::lock_guard<Mutex> ensureBackgroundTaskPaused() {
+    if constexpr (kConcurrentGC) {
+      return pauseBackgroundTask();
+    }
+    return std::lock_guard(gcMutex_);
+  }
+
   /// Forces work on the background thread to be suspended and returns a lock
   /// holding gcMutex_. This is used to ensure that the mutator receives
   /// priority in acquiring gcMutex_, and does not remain blocked on the
   /// background thread for an extended period of time. The background thread
   /// will resume once the lock is released.
-  std::unique_lock<Mutex> pauseBackgroundTask();
+  LLVM_NODISCARD std::lock_guard<Mutex> pauseBackgroundTask();
 
   /// Perform a single step of an OG collection. \p backgroundThread indicates
   /// whether this call was made from the background thread.
@@ -998,10 +1000,6 @@ class HadesGC final : public GCBase {
 
   /// Finalize all objects in YG that have finalizers.
   void finalizeYoungGenObjects();
-
-  /// Run the finalizers for all heap objects, if the gcMutex_ is already
-  /// locked.
-  void finalizeAllLocked();
 
   /// Update all of the weak references and invalidate the ones that point to
   /// dead objects.
@@ -1105,12 +1103,15 @@ inline T *HadesGC::makeA(uint32_t size, Args &&...args) {
       "Call to makeA must use a size aligned to HeapAlign");
   assert(noAllocLevel_ == 0 && "No allocs allowed right now.");
   if (longLived == LongLived::Yes) {
-    auto lk = kConcurrentGC ? pauseBackgroundTask() : std::unique_lock<Mutex>();
-    return new (allocLongLived(size)) T(std::forward<Args>(args)...);
+    auto lk = ensureBackgroundTaskPaused();
+    return constructCell<T>(
+        allocLongLived(size), size, std::forward<Args>(args)...);
   }
 
-  return new (allocWork<fixedSize, hasFinalizer>(size))
-      T(std::forward<Args>(args)...);
+  return constructCell<T>(
+      allocWork<fixedSize, hasFinalizer>(size),
+      size,
+      std::forward<Args>(args)...);
 }
 
 template <bool fixedSize, HasFinalizer hasFinalizer>

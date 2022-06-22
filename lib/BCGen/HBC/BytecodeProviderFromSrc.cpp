@@ -9,9 +9,6 @@
 
 #include "hermes/AST/SemValidate.h"
 #include "hermes/BCGen/HBC/HBC.h"
-#ifdef HERMESVM_ENABLE_OPTIMIZATION_AT_RUNTIME
-#include "hermes/Optimizer/PassManager/Pipeline.h"
-#endif
 #include "hermes/Parser/JSParser.h"
 #include "hermes/Runtime/Libhermes.h"
 #include "hermes/SourceMap/SourceMapTranslator.h"
@@ -89,31 +86,7 @@ BCProviderFromSrc::createBCProviderFromSrc(
     std::unique_ptr<SourceMap> sourceMap,
     const CompileFlags &compileFlags) {
   return createBCProviderFromSrc(
-      std::move(buffer), sourceURL, std::move(sourceMap), compileFlags, {});
-}
-
-std::pair<std::unique_ptr<BCProviderFromSrc>, std::string>
-BCProviderFromSrc::createBCProviderFromSrc(
-    std::unique_ptr<Buffer> buffer,
-    llvh::StringRef sourceURL,
-    std::unique_ptr<SourceMap> sourceMap,
-    const CompileFlags &compileFlags,
-    const ScopeChain &scopeChain) {
-  std::function<void(Module &)> runOptimizationPasses{};
-#ifdef HERMESVM_ENABLE_OPTIMIZATION_AT_RUNTIME
-  if (compileFlags.optimize) {
-    runOptimizationPasses = runFullOptimizationPasses;
-  } else {
-    runOptimizationPasses = runNoOptimizationPasses;
-  }
-#endif
-  return createBCProviderFromSrc(
-      std::move(buffer),
-      sourceURL,
-      std::move(sourceMap),
-      compileFlags,
-      scopeChain,
-      runOptimizationPasses);
+      std::move(buffer), sourceURL, std::move(sourceMap), compileFlags, {}, {});
 }
 
 std::pair<std::unique_ptr<BCProviderFromSrc>, std::string>
@@ -123,6 +96,29 @@ BCProviderFromSrc::createBCProviderFromSrc(
     std::unique_ptr<SourceMap> sourceMap,
     const CompileFlags &compileFlags,
     const ScopeChain &scopeChain,
+    SourceErrorManager::DiagHandlerTy diagHandler,
+    void *diagContext,
+    const std::function<void(Module &)> &runOptimizationPasses) {
+  return createBCProviderFromSrcImpl(
+      std::move(buffer),
+      sourceURL,
+      std::move(sourceMap),
+      compileFlags,
+      scopeChain,
+      diagHandler,
+      diagContext,
+      runOptimizationPasses);
+}
+
+std::pair<std::unique_ptr<BCProviderFromSrc>, std::string>
+BCProviderFromSrc::createBCProviderFromSrcImpl(
+    std::unique_ptr<Buffer> buffer,
+    llvh::StringRef sourceURL,
+    std::unique_ptr<SourceMap> sourceMap,
+    const CompileFlags &compileFlags,
+    const ScopeChain &scopeChain,
+    SourceErrorManager::DiagHandlerTy diagHandler,
+    void *diagContext,
     const std::function<void(Module &)> &runOptimizationPasses) {
   using llvh::Twine;
 
@@ -142,7 +138,19 @@ BCProviderFromSrc::createBCProviderFromSrc(
       : false;
 
   auto context = std::make_shared<Context>(codeGenOpts, optSettings);
-  SimpleDiagHandlerRAII outputManager{context->getSourceErrorManager()};
+  std::unique_ptr<SimpleDiagHandlerRAII> outputManager;
+  if (diagHandler) {
+    context->getSourceErrorManager().setDiagHandler(diagHandler, diagContext);
+  } else {
+    outputManager.reset(
+        new SimpleDiagHandlerRAII(context->getSourceErrorManager()));
+  }
+  // If a custom diagHandler was provided, it will receive the details and we
+  // just return the string "error" on failure.
+  auto getErrorString = [&outputManager]() {
+    return outputManager ? outputManager->getErrorString()
+                         : std::string("error");
+  };
 
   // To avoid frequent source buffer rescans, avoid emitting warnings about
   // undefined variables.
@@ -156,7 +164,7 @@ BCProviderFromSrc::createBCProviderFromSrc(
   context->setPreemptiveFileCompilationThreshold(
       compileFlags.preemptiveFileCompilationThreshold);
 
-  if (compileFlags.lazy && !compileFlags.optimize) {
+  if (compileFlags.lazy && !runOptimizationPasses) {
     context->setLazyCompilation(true);
   }
 
@@ -191,7 +199,7 @@ BCProviderFromSrc::createBCProviderFromSrc(
   if (context->isLazyCompilation() && isLargeFile) {
     if (!parser::JSParser::preParseBuffer(
             *context, fileBufId, useStaticBuiltinDetected)) {
-      return {nullptr, outputManager.getErrorString()};
+      return {nullptr, getErrorString()};
     }
     parserMode = parser::LazyParse;
   }
@@ -200,7 +208,7 @@ BCProviderFromSrc::createBCProviderFromSrc(
   parser::JSParser parser(*context, fileBufId, parserMode);
   auto parsed = parser.parse();
   if (!parsed || !hermes::sem::validateAST(*context, semCtx, *parsed)) {
-    return {nullptr, outputManager.getErrorString()};
+    return {nullptr, getErrorString()};
   }
   // If we are using lazy parse mode, we should have already detected the 'use
   // static builtin' directive in the pre-parsing stage.
@@ -216,14 +224,14 @@ BCProviderFromSrc::createBCProviderFromSrc(
   Module M(context);
   hermes::generateIRFromESTree(parsed.getValue(), &M, declFileList, scopeChain);
   if (context->getSourceErrorManager().getErrorCount() > 0) {
-    return {nullptr, outputManager.getErrorString()};
+    return {nullptr, getErrorString()};
   }
 
-  if (compileFlags.optimize && runOptimizationPasses)
+  if (runOptimizationPasses)
     runOptimizationPasses(M);
 
   BytecodeGenerationOptions opts{compileFlags.format};
-  opts.optimizationEnabled = compileFlags.optimize;
+  opts.optimizationEnabled = !!runOptimizationPasses;
   opts.staticBuiltinsEnabled =
       context->getOptimizationSettings().staticBuiltins;
   opts.verifyIR = compileFlags.verifyIR;

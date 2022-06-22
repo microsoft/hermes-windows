@@ -3,6 +3,9 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(api_sources
   hermes.cpp
   hermes_napi.cpp 
@@ -25,7 +28,7 @@ target_include_directories(hermesapiLean PUBLIC ..)
 add_hermes_library(synthTrace hermes_tracing.cpp SynthTrace.cpp TracingRuntime.cpp
   LINK_LIBS hermesapi)
 
-add_hermes_library(timerStats TimerStats.cpp LINK_LIBS hermesapi)
+add_hermes_library(timerStats TimerStats.cpp LINK_LIBS jsi hermesSupport)
 
 add_hermes_library(traceInterpreter TraceInterpreter.cpp
   LINK_LIBS hermesapi hermesInstrumentation synthTrace synthTraceParser)
@@ -39,7 +42,7 @@ add_hermes_library(synthTraceParser SynthTraceParser.cpp LINK_LIBS hermesSupport
 set(HERMES_ENABLE_EH OFF)
 
 # compileJS uses neither exceptions nor RTTI
-add_hermes_library(compileJS STATIC CompileJS.cpp)
+add_hermes_library(compileJS STATIC CompileJS.cpp LINK_LIBS hermesPublic)
 
 # Restore EH and RTTI (Note: At the time of writing, there is no usage of
 # add_hermes_library either after this line in this file or in a sub directory.
@@ -68,9 +71,8 @@ target_link_libraries(libhermes
   jsi
   hermesNapi
   ${LIBHERMES_VM_DEP}
-  # Linker flags
-  ${OPTIONAL_GC_SECTIONS}
 )
+target_link_options(libhermes PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 
 # Export the required header directory
 target_include_directories(libhermes PUBLIC ..)
@@ -87,6 +89,9 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
 
   # Generate PDBs
   set(compile_flags "${compile_flags} /Zi")
+
+   # Use C++17
+  set(compile_flags "${compile_flags} /std:c++17")
 
   set(link_flags_debug "/DEBUG")
   # Use /OPT:NOICF because hermes associates function pointer with its name.
@@ -131,7 +136,7 @@ if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
   )
   if(HERMES_ENABLE_BITCODE)
     target_compile_options(libhermes PUBLIC "-fembed-bitcode")
-    target_link_libraries(libhermes PUBLIC "-fembed-bitcode")
+    target_link_options(libhermes PUBLIC "-fembed-bitcode")
   endif()
   # Define the deployment target in the frameworks metadata
   if(HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone")

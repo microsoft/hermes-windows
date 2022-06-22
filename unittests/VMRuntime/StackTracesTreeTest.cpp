@@ -36,7 +36,7 @@ struct StackTracesTreeTest : public RuntimeTestFixtureBase {
                 .withIntl(true)
                 .withGCConfig(GCConfig::Builder(kTestGCConfigBuilder).build())
                 .build()) {
-    runtime->enableAllocationLocationTracker();
+    runtime.enableAllocationLocationTracker();
   }
 
   explicit StackTracesTreeTest(const RuntimeConfig &config)
@@ -47,8 +47,7 @@ struct StackTracesTreeTest : public RuntimeTestFixtureBase {
     // Ideally none of this should require debug info, so let's ensure it
     // doesn't.
     flags.debug = false;
-    flags.optimize = false;
-    auto runRes = runtime->run(code, "eval.js", flags);
+    auto runRes = runtime.run(code, "eval.js", flags);
     return isException(runRes);
   };
 
@@ -57,8 +56,7 @@ struct StackTracesTreeTest : public RuntimeTestFixtureBase {
       const std::string &expectedTrace) {
     hbc::CompileFlags flags;
     flags.debug = false;
-    flags.optimize = false;
-    auto runRes = runtime->run(code, "test.js", flags);
+    auto runRes = runtime.run(code, "test.js", flags);
     if (isException(runRes)) {
       return isException(runRes);
     }
@@ -68,11 +66,11 @@ struct StackTracesTreeTest : public RuntimeTestFixtureBase {
     }
     std::string res;
     llvh::raw_string_ostream resStream(res);
-    auto stringTable = runtime->getStackTracesTree()->getStringTable();
+    auto stringTable = runtime.getStackTracesTree()->getStringTable();
     auto &allocationLocationTracker =
-        runtime->getHeap().getAllocationLocationTracker();
+        runtime.getHeap().getAllocationLocationTracker();
     auto node = allocationLocationTracker.getStackTracesTreeNodeForAlloc(
-        runtime->getHeap().getObjectID(
+        runtime.getHeap().getObjectID(
             static_cast<GCCell *>(runRes->getPointer())));
     while (node) {
       resStream << (*stringTable)[node->name] << " "
@@ -102,7 +100,7 @@ struct StackTracesTreeTest : public RuntimeTestFixtureBase {
         hbc::BCProviderFromBuffer::createBCProviderFromBuffer(
             std::make_unique<Buffer>(&bytecode[0], bytecode.size()))
             .first;
-    auto runRes = runtime->runBytecode(
+    auto runRes = runtime.runBytecode(
         std::move(bcProvider),
         runtimeModuleFlags,
         "test.js.hbc",
@@ -132,20 +130,20 @@ struct StackTracesTreeTest : public RuntimeTestFixtureBase {
 };
 
 // Used to inject a no-op function into JS.
-static CallResult<HermesValue> noop(void *, Runtime *runtime, NativeArgs) {
+static CallResult<HermesValue> noop(void *, Runtime &runtime, NativeArgs) {
   return HermesValue::encodeUndefinedValue();
 }
 
 static CallResult<HermesValue>
-enableAllocationLocationTracker(void *, Runtime *runtime, NativeArgs) {
-  runtime->enableAllocationLocationTracker();
+enableAllocationLocationTracker(void *, Runtime &runtime, NativeArgs) {
+  runtime.enableAllocationLocationTracker();
   // syncWithRuntimeStack adds a native stack frame here, but the interpreter
   // doesn't pop that frame. This seems to only be a problem if
   // enableAllocationLocationTracker is called in a native callback within
   // the JS stack.
   // In practice, it is only ever called by the Chrome inspector, so this
   // case isn't important to fix.
-  runtime->getStackTracesTree()->popCallStack();
+  runtime.getStackTracesTree()->popCallStack();
   return HermesValue::encodeUndefinedValue();
 }
 
@@ -160,7 +158,7 @@ struct StackTracesTreeParameterizedTest
                 .withGCConfig(GCConfig::Builder(kTestGCConfigBuilder).build())
                 .build()) {
     if (trackerOnByDefault()) {
-      runtime->enableAllocationLocationTracker();
+      runtime.enableAllocationLocationTracker();
     }
   }
 
@@ -174,12 +172,12 @@ struct StackTracesTreeParameterizedTest
   /// Delete the existing tree and reset all state related to allocations.
   void resetTree() {
     // Calling this should clear all existing StackTracesTree data.
-    runtime->disableAllocationLocationTracker(true);
-    ASSERT_FALSE(runtime->getStackTracesTree());
+    runtime.disableAllocationLocationTracker(true);
+    ASSERT_FALSE(runtime.getStackTracesTree());
     // If the tracker was on by default, after cleaning it should be re-enabled,
     // so the function doesn't need to be called.
     if (trackerOnByDefault()) {
-      runtime->enableAllocationLocationTracker();
+      runtime.enableAllocationLocationTracker();
     }
   }
 
@@ -200,10 +198,10 @@ struct StackTracesTreeParameterizedTest
     }
 
     ASSERT_FALSE(isException(JSObject::putNamed_RJS(
-        runtime->getGlobal(),
+        runtime.getGlobal(),
         runtime,
         enableAllocationLocationTrackerSym,
-        runtime->makeHandle<NativeFunction>(
+        runtime.makeHandle<NativeFunction>(
             *NativeFunction::createWithoutPrototype(
                 runtime,
                 nullptr,
@@ -268,7 +266,7 @@ static std::string stackTraceToJSON(
 #define ASSERT_RUN_TRACE(code, trace)                                        \
   ASSERT_TRUE(                                                               \
       checkTraceMatches(code, llvh::StringRef(trace).trim().str().c_str())); \
-  ASSERT_TRUE(runtime->getStackTracesTree()->isHeadAtRoot())
+  ASSERT_TRUE(runtime.getStackTracesTree()->isHeadAtRoot())
 
 TEST_F(StackTracesTreeTest, BasicOperation) {
   ASSERT_RUN_TRACE(
@@ -344,7 +342,7 @@ global test.js:1:1
 }
   )#")
                                 .trim();
-  auto stackTracesTree = runtime->getStackTracesTree();
+  auto stackTracesTree = runtime.getStackTracesTree();
   ASSERT_TRUE(stackTracesTree);
   ASSERT_STREQ(
       stackTraceToJSON(*stackTracesTree).c_str(), expectedTree.str().c_str());
@@ -778,7 +776,7 @@ function baz() {
 }
   )#")
                                 .trim();
-  auto stackTracesTree = runtime->getStackTracesTree();
+  auto stackTracesTree = runtime.getStackTracesTree();
   ASSERT_TRUE(stackTracesTree);
   ASSERT_STREQ(
       stackTraceToJSON(*stackTracesTree).c_str(), expectedTree.str().c_str());
@@ -887,7 +885,7 @@ foo();
 }
   )#")
                                 .trim();
-  auto stackTracesTree = runtime->getStackTracesTree();
+  auto stackTracesTree = runtime.getStackTracesTree();
   ASSERT_TRUE(stackTracesTree);
   ASSERT_STREQ(
       stackTraceToJSON(*stackTracesTree, sourceMap.get()).c_str(),

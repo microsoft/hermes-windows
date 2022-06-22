@@ -264,8 +264,8 @@ TEST(HermesValueTest, NanTest) {
           .getDouble();
   EXPECT_TRUE(std::isnan(v1));
   EXPECT_TRUE(std::isnan(v2));
-  int64_t v1_int = hermes::safeTypeCast<double, int64_t>(v1);
-  int64_t v2_int = hermes::safeTypeCast<double, int64_t>(v2);
+  int64_t v1_int = llvh::DoubleToBits(v1);
+  int64_t v2_int = llvh::DoubleToBits(v2);
   EXPECT_EQ(v1_int, v2_int);
 }
 
@@ -305,11 +305,11 @@ TEST(HermesValueTest, OutputStreamTest) {
   llvh::raw_string_ostream OS(result);
 
   result.clear();
-  OS << HermesValue::encodeObjectValue(nullptr);
+  OS << HermesValue::encodeObjectValueUnsafe(nullptr);
   EXPECT_EQ("[Object :0 0x00000000]", OS.str());
 
   result.clear();
-  OS << HermesValue::encodeStringValue(nullptr);
+  OS << HermesValue::encodeStringValueUnsafe(nullptr);
   EXPECT_EQ("[String :0 0x00000000]", OS.str());
 
   result.clear();

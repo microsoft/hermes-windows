@@ -11,6 +11,7 @@
 #include "hermes/VM/PointerBase.h"
 #include "hermes/VM/SlotAcceptor.h"
 #include "hermes/VM/WeakRef.h"
+#include "hermes/VM/WeakRoot.h"
 
 namespace hermes {
 namespace vm {
@@ -19,7 +20,7 @@ namespace vm {
 /// to be lowered into raw pointers.
 class RootAndSlotAcceptorDefault : public RootAndSlotAcceptor {
  public:
-  explicit RootAndSlotAcceptorDefault(PointerBase *pointerBase)
+  explicit RootAndSlotAcceptorDefault(PointerBase &pointerBase)
       : pointerBase_(pointerBase) {}
 
   using RootAndSlotAcceptor::accept;
@@ -31,6 +32,10 @@ class RootAndSlotAcceptorDefault : public RootAndSlotAcceptor {
   }
 
   void accept(PinnedHermesValue &hv) final {
+    assert((!hv.isPointer() || hv.getPointer()) && "Value is not nullable.");
+    acceptHV(hv);
+  }
+  void acceptNullable(PinnedHermesValue &hv) final {
     acceptHV(hv);
   }
 
@@ -61,7 +66,7 @@ class RootAndSlotAcceptorDefault : public RootAndSlotAcceptor {
   }
 
  protected:
-  PointerBase *pointerBase_;
+  PointerBase &pointerBase_;
 };
 
 /// A RootAndSlotAcceptorWithNamesDefault is similar to a
@@ -70,7 +75,7 @@ class RootAndSlotAcceptorDefault : public RootAndSlotAcceptor {
 class RootAndSlotAcceptorWithNamesDefault
     : public RootAndSlotAcceptorWithNames {
  public:
-  explicit RootAndSlotAcceptorWithNamesDefault(PointerBase *pointerBase)
+  explicit RootAndSlotAcceptorWithNamesDefault(PointerBase &pointerBase)
       : pointerBase_(pointerBase) {}
 
   using RootAndSlotAcceptorWithNames::accept;
@@ -82,6 +87,10 @@ class RootAndSlotAcceptorWithNamesDefault
   }
 
   void accept(PinnedHermesValue &hv, const char *name) final {
+    assert((!hv.isPointer() || hv.getPointer()) && "Value is not nullable.");
+    acceptHV(hv, name);
+  }
+  void acceptNullable(PinnedHermesValue &hv, const char *name) final {
     acceptHV(hv, name);
   }
 
@@ -112,12 +121,12 @@ class RootAndSlotAcceptorWithNamesDefault
   }
 
  protected:
-  PointerBase *pointerBase_;
+  PointerBase &pointerBase_;
 };
 
 class WeakAcceptorDefault : public WeakRefAcceptor, public WeakRootAcceptor {
  public:
-  explicit WeakAcceptorDefault(PointerBase *base)
+  explicit WeakAcceptorDefault(PointerBase &base)
       : pointerBaseForWeakRoot_(base) {}
 
   void acceptWeak(WeakRootBase &ptr) final;
@@ -128,7 +137,7 @@ class WeakAcceptorDefault : public WeakRefAcceptor, public WeakRootAcceptor {
  protected:
   // Named differently to avoid collisions with
   // RootAndSlotAcceptorDefault::pointerBase_.
-  PointerBase *pointerBaseForWeakRoot_;
+  PointerBase &pointerBaseForWeakRoot_;
 };
 
 /// @name Inline implementations.

@@ -56,6 +56,7 @@ import type {
   MetaProperty,
   NewExpression,
   OpaqueType,
+  OptionalCallExpression,
   OptionalMemberExpression,
   PrivateName,
   Program,
@@ -67,6 +68,7 @@ import type {
   UpdateExpression,
   VariableDeclaration,
   WithStatement,
+  DeclareModuleExports,
 } from 'hermes-estree';
 import type {ReferenceImplicitGlobal} from './Reference';
 import type {VisitorOptions} from './Visitor';
@@ -193,6 +195,11 @@ class Referencer extends Visitor {
   ///////////////////
   // Visit helpers //
   ///////////////////
+
+  visitCallExpression(node: CallExpression | OptionalCallExpression): void {
+    this.visitChildren(node, ['typeArguments']);
+    this.visitType(node.typeArguments);
+  }
 
   visitClass(node: ClassDeclaration | ClassExpression): void {
     ClassVisitor.visit(this, node);
@@ -343,7 +350,7 @@ class Referencer extends Visitor {
     node: MemberExpression | OptionalMemberExpression,
   ): void {
     this.visit(node.object);
-    if (node.computed) {
+    if (node.computed === true) {
       this.visit(node.property);
     }
   }
@@ -429,8 +436,7 @@ class Referencer extends Visitor {
   }
 
   CallExpression(node: CallExpression): void {
-    this.visitChildren(node, ['typeArguments']);
-    this.visitType(node.typeArguments);
+    this.visitCallExpression(node);
   }
 
   CatchClause(node: CatchClause): void {
@@ -613,6 +619,10 @@ class Referencer extends Visitor {
     this.visitType(node.typeArguments);
   }
 
+  OptionalCallExpression(node: OptionalCallExpression): void {
+    this.visitCallExpression(node);
+  }
+
   OptionalMemberExpression(node: MemberExpression): void {
     this.visitMemberExpression(node);
   }
@@ -754,6 +764,10 @@ class Referencer extends Visitor {
   }
 
   DeclareModule(node: DeclareModule): void {
+    this.visitType(node);
+  }
+
+  DeclareModuleExports(node: DeclareModuleExports): void {
     this.visitType(node);
   }
 

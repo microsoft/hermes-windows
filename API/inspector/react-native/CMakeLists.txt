@@ -3,7 +3,7 @@ include(FetchContent)
 FetchContent_Declare(
   reactnative
   GIT_REPOSITORY https://github.com/facebook/react-native.git
-  GIT_TAG        v0.66.4
+  GIT_TAG        v0.69.0-rc.6
   GIT_SHALLOW    1
   GIT_PROGRESS   1
 )

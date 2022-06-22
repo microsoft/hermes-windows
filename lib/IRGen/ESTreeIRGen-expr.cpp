@@ -339,11 +339,16 @@ Value *ESTreeIRGen::genArrayFromElements(ESTree::NodeList &list) {
         "variable length arrays must allocate their own arrays");
     allocArrayInst = Builder.createAllocArrayInst(elements, list.size());
   }
-  if (count > 0 && llvh::isa<ESTree::EmptyNode>(&list.back())) {
+  if (!list.empty() && llvh::isa<ESTree::EmptyNode>(&list.back())) {
     // Last element is an elision, VM cannot derive the length properly.
     // We have to explicitly set it.
+    Value *newLength;
+    if (variableLength)
+      newLength = Builder.createLoadStackInst(nextIndex);
+    else
+      newLength = Builder.getLiteralNumber(count);
     Builder.createStorePropertyInst(
-        Builder.getLiteralNumber(count), allocArrayInst, StringRef("length"));
+        newLength, allocArrayInst, StringRef("length"));
   }
   return allocArrayInst;
 }
@@ -1444,14 +1449,11 @@ Value *ESTreeIRGen::genUpdateExpr(ESTree::UpdateExpressionNode *updateExpr) {
   LLVM_DEBUG(dbgs() << "IRGen update expression.\n");
   bool isPrefix = updateExpr->_prefix;
 
-  // The operands ++ and -- are equivalent to adding or subtracting the
-  // literal 1.
-  // See section 12.4.4.1.
-  BinaryOperatorInst::OpKind opKind;
+  UnaryOperatorInst::OpKind opKind;
   if (updateExpr->_operator->str() == "++") {
-    opKind = BinaryOperatorInst::OpKind::AddKind;
+    opKind = UnaryOperatorInst::OpKind::IncKind;
   } else if (updateExpr->_operator->str() == "--") {
-    opKind = BinaryOperatorInst::OpKind::SubtractKind;
+    opKind = UnaryOperatorInst::OpKind::DecKind;
   } else {
     llvm_unreachable("Invalid update operator");
   }
@@ -1459,15 +1461,10 @@ Value *ESTreeIRGen::genUpdateExpr(ESTree::UpdateExpressionNode *updateExpr) {
   LReference lref = createLRef(updateExpr->_argument, false);
 
   // Load the original value.
-  Value *original = lref.emitLoad();
+  Value *original = Builder.createAsNumberInst(lref.emitLoad());
 
-  // Convert the original value to number. Even on suffix operators we return
-  // the converted value.
-  original = Builder.createAsNumberInst(original);
-
-  // Create the +1 or -1.
-  Value *result = Builder.createBinaryOperatorInst(
-      original, Builder.getLiteralNumber(1), opKind);
+  // Create the inc or dec.
+  Value *result = Builder.createUnaryOperatorInst(original, opKind);
 
   // Store the result.
   lref.emitStore(result);

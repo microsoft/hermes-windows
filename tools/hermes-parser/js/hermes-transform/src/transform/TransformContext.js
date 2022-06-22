@@ -21,8 +21,8 @@ import type {
 import type {DetachedNode} from '../detachedNode';
 import type {TransformCloneSignatures} from '../generated/TransformCloneSignatures';
 import type {TransformReplaceSignatures} from '../generated/TransformReplaceSignatures';
-import type {AddLeadingCommentsMutation} from './mutations/AddLeadingComments';
-import type {AddTrailingCommentsMutation} from './mutations/AddTrailingComments';
+import type {TraversalContext} from '../traverse/traverse';
+import type {AddCommentsMutation} from './mutations/AddComments';
 import type {CloneCommentsToMutation} from './mutations/CloneCommentsTo';
 import type {InsertStatementMutation} from './mutations/InsertStatement';
 import type {RemoveCommentMutation} from './mutations/RemoveComment';
@@ -31,15 +31,14 @@ import type {RemoveStatementMutation} from './mutations/RemoveStatement';
 import type {ReplaceNodeMutation} from './mutations/ReplaceNode';
 import type {ReplaceStatementWithManyMutation} from './mutations/ReplaceStatementWithMany';
 
-import {codeFrameColumns} from '@babel/code-frame';
 import {deepCloneNode, shallowCloneNode} from '../detachedNode';
 import {
+  CommentPlacement,
   getCommentsForNode,
   isLeadingComment,
   isTrailingComment,
 } from './comments/comments';
-import {createAddLeadingCommentsMutation} from './mutations/AddLeadingComments';
-import {createAddTrailingCommentsMutation} from './mutations/AddTrailingComments';
+import {createAddCommentsMutation} from './mutations/AddComments';
 import {createCloneCommentsToMutation} from './mutations/CloneCommentsTo';
 import {createInsertStatementMutation} from './mutations/InsertStatement';
 import {createRemoveCommentMutation} from './mutations/RemoveComment';
@@ -49,8 +48,7 @@ import {createReplaceNodeMutation} from './mutations/ReplaceNode';
 import {createReplaceStatementWithManyMutation} from './mutations/ReplaceStatementWithMany';
 
 type Mutation = $ReadOnly<
-  | AddLeadingCommentsMutation
-  | AddTrailingCommentsMutation
+  | AddCommentsMutation
   | CloneCommentsToMutation
   | InsertStatementMutation
   | RemoveCommentMutation
@@ -154,7 +152,7 @@ type TransformCommentAPIs = $ReadOnly<{
   ) => void,
 
   /**
-   * Add leading comments to the specified node.
+   * Add comments on the line before a specified node.
    */
   addLeadingComments: (
     node: ESNode | DetachedNode<ESNode>,
@@ -162,9 +160,25 @@ type TransformCommentAPIs = $ReadOnly<{
   ) => void,
 
   /**
-   * Add trailing comments to the specified node.
+   * Add comments inline before a specified node.
+   */
+  addLeadingInlineComments: (
+    node: ESNode | DetachedNode<ESNode>,
+    comments: SingleOrArray<Comment>,
+  ) => void,
+
+  /**
+   * Add comments on the line after a specified node.
    */
   addTrailingComments: (
+    node: ESNode | DetachedNode<ESNode>,
+    comments: SingleOrArray<Comment>,
+  ) => void,
+
+  /**
+   * Add comments inline after a specified node.
+   */
+  addTrailingInlineComments: (
     node: ESNode | DetachedNode<ESNode>,
     comments: SingleOrArray<Comment>,
   ) => void,
@@ -275,34 +289,9 @@ type TransformReplaceAPIs = $ReadOnly<{
   ) => void,
 }>;
 
-export type TransformContext = $ReadOnly<{
+export type TransformContextAdditions = $ReadOnly<{
   mutations: $ReadOnlyArray<Mutation>,
   astWasMutated: boolean,
-
-  /**
-   * Creates a full code frame for the node along with the message.
-   *
-   * i.e. `context.buildCodeFrame(node, 'foo')` will create a string like:
-   * ```
-   * 56 | function () {
-   *    | ^^^^^^^^^^^^^
-   * 57 | }.bind(this)
-   *    | ^^ foo
-   * ```
-   */
-  buildCodeFrame: (node: ESNode, message: string) => string,
-
-  /**
-   * Creates a simple code frame for the node along with the message.
-   * Use this if you want a condensed marker for your message.
-   *
-   * i.e. `context.logWithNode(node, 'foo')` will create a string like:
-   * ```
-   * [FunctionExpression:56:44] foo
-   * ```
-   * (where 56:44 represents L56, Col44)
-   */
-  buildSimpleCodeFrame: (node: ESNode, message: string) => string,
 
   ...TransformCommentAPIs,
   ...TransformCloneAPIs,
@@ -310,8 +299,9 @@ export type TransformContext = $ReadOnly<{
   ...TransformRemoveAPIs,
   ...TransformReplaceAPIs,
 }>;
+export type TransformContext = TraversalContext<TransformContextAdditions>;
 
-export function getTransformContext(code: string): TransformContext {
+export function getTransformContext(): TransformContextAdditions {
   /**
    * The mutations in order of collection.
    */
@@ -323,7 +313,6 @@ export function getTransformContext(code: string): TransformContext {
   }
 
   const cloneAPIs: TransformCloneAPIs = {
-    // $FlowExpectedError[incompatible-exact]
     shallowCloneNode: ((
       node: ?ESNode,
     ): // $FlowExpectedError[incompatible-cast]
@@ -339,8 +328,7 @@ export function getTransformContext(code: string): TransformContext {
     shallowCloneNodeWithOverrides: ((
       node: ?ESNode,
       newProps?: $ReadOnly<{...}>,
-    ): // $FlowExpectedError[incompatible-cast]
-    ?DetachedNode<ESNode> => {
+    ): ?DetachedNode<ESNode> => {
       if (node == null) {
         return null;
       }
@@ -359,7 +347,6 @@ export function getTransformContext(code: string): TransformContext {
       return nodes.map(node => shallowCloneNode<T>(node));
     }: TransformCloneAPIs['shallowCloneArray']),
 
-    // $FlowExpectedError[incompatible-exact]
     deepCloneNode: ((
       node: ?ESNode,
     ): // $FlowExpectedError[incompatible-cast]
@@ -375,8 +362,7 @@ export function getTransformContext(code: string): TransformContext {
     deepCloneNodeWithOverrides: ((
       node: ?ESNode,
       newProps?: $ReadOnly<{...}>,
-    ): // $FlowExpectedError[incompatible-cast]
-    ?DetachedNode<ESNode> => {
+    ): ?DetachedNode<ESNode> => {
       if (node == null) {
         return null;
       }
@@ -402,12 +388,52 @@ export function getTransformContext(code: string): TransformContext {
     }: TransformCommentAPIs['cloneCommentsTo']),
 
     addLeadingComments: ((node, comments): void => {
-      pushMutation(createAddLeadingCommentsMutation(node, toArray(comments)));
+      pushMutation(
+        createAddCommentsMutation(
+          node,
+          toArray(comments).map(comment => ({
+            comment,
+            placement: CommentPlacement.LEADING_OWN_LINE,
+          })),
+        ),
+      );
     }: TransformCommentAPIs['addLeadingComments']),
 
+    addLeadingInlineComments: ((node, comments): void => {
+      pushMutation(
+        createAddCommentsMutation(
+          node,
+          toArray(comments).map(comment => ({
+            comment,
+            placement: CommentPlacement.LEADING_INLINE,
+          })),
+        ),
+      );
+    }: TransformCommentAPIs['addLeadingInlineComments']),
+
     addTrailingComments: ((node, comments): void => {
-      pushMutation(createAddTrailingCommentsMutation(node, toArray(comments)));
+      pushMutation(
+        createAddCommentsMutation(
+          node,
+          toArray(comments).map(comment => ({
+            comment,
+            placement: CommentPlacement.TRAILING_OWN_LINE,
+          })),
+        ),
+      );
     }: TransformCommentAPIs['addTrailingComments']),
+
+    addTrailingInlineComments: ((node, comments): void => {
+      pushMutation(
+        createAddCommentsMutation(
+          node,
+          toArray(comments).map(comment => ({
+            comment,
+            placement: CommentPlacement.TRAILING_INLINE,
+          })),
+        ),
+      );
+    }: TransformCommentAPIs['addTrailingInlineComments']),
 
     removeComments: ((comments): void => {
       toArray(comments).forEach(comment => {
@@ -441,7 +467,7 @@ export function getTransformContext(code: string): TransformContext {
     replaceNode: ((
       target: ESNode,
       nodeToReplaceWith: DetachedNode<ESNode>,
-      options?: $ReadOnly<{keepComments?: boolean}>,
+      options?: ReplaceNodeOptions,
     ): void => {
       pushMutation(
         createReplaceNodeMutation(target, nodeToReplaceWith, options),
@@ -451,7 +477,7 @@ export function getTransformContext(code: string): TransformContext {
     replaceStatementWithMany: ((
       target,
       nodesToReplaceWith,
-      options?: $ReadOnly<{keepComments?: boolean}>,
+      options?: ReplaceNodeOptions,
     ): void => {
       pushMutation(
         createReplaceStatementWithManyMutation(
@@ -469,30 +495,6 @@ export function getTransformContext(code: string): TransformContext {
     // $FlowExpectedError[unsafe-getters-setters]
     get astWasMutated(): boolean {
       return mutations.length > 0;
-    },
-
-    buildCodeFrame: (node: ESNode, message: string): string => {
-      // babel uses 1-indexed columns
-      const locForBabel = {
-        start: {
-          line: node.loc.start.line,
-          column: node.loc.start.column + 1,
-        },
-        end: {
-          line: node.loc.end.line,
-          column: node.loc.end.column + 1,
-        },
-      };
-      return codeFrameColumns(code, locForBabel, {
-        linesAbove: 0,
-        linesBelow: 0,
-        highlightCode: process.env.NODE_ENV !== 'test',
-        message: message,
-      });
-    },
-
-    buildSimpleCodeFrame: (node: ESNode, message: string): string => {
-      return `[${node.type}:${node.loc.start.line}:${node.loc.start.column}] ${message}`;
     },
 
     ...cloneAPIs,

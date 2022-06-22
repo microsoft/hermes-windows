@@ -245,7 +245,7 @@ describe('Enums', () => {
 });
 
 describe('QualifiedTypeIdentifier', () => {
-  test('References value', () => {
+  test('References values', () => {
     const {scopeManager} = parseForESLint(`
       import * as Foo from 'Foo';
       (1: Foo.Bar);
@@ -259,7 +259,23 @@ describe('QualifiedTypeIdentifier', () => {
     expect(variable.name).toEqual('Foo');
     expect(variable.references).toHaveLength(1);
     expect(variable.references[0].isValueReference).toBe(true);
-    expect(variable.references[0].isTypeReference).toBe(false);
+    expect(variable.references[0].isTypeReference).toBe(true);
+  });
+  test('References types', () => {
+    const {scopeManager} = parseForESLint(`
+      import type Foo from 'Foo';
+      (1: Foo.Bar);
+    `);
+
+    // Verify that scope contains single value reference to 'Foo'
+    const scope = scopeManager.scopes[1];
+    expect(scope.variables).toHaveLength(1);
+
+    const variable = scope.variables[0];
+    expect(variable.name).toEqual('Foo');
+    expect(variable.references).toHaveLength(1);
+    expect(variable.references[0].isValueReference).toBe(true);
+    expect(variable.references[0].isTypeReference).toBe(true);
   });
 });
 
@@ -398,6 +414,42 @@ describe('Identifiers not mistakenly treated as references', () => {
       [
         {name: 'Foo', count: 1},
         {name: 'Bar', count: 0},
+      ],
+    );
+  });
+
+  test('CallExpression', () => {
+    verifyHasReferences(
+      `
+        import Foo from 'Foo';
+        import Bar from 'Bar';
+        import type Baz from 'Baz';
+
+        Foo.Bar<Baz>();
+        Bar<Baz>();
+      `,
+      [
+        {name: 'Foo', count: 1},
+        {name: 'Bar', count: 1},
+        {name: 'Baz', count: 2},
+      ],
+    );
+  });
+
+  test('OptionalCallExpression', () => {
+    verifyHasReferences(
+      `
+        import Foo from 'Foo';
+        import Bar from 'Bar';
+        import type Baz from 'Baz';
+
+        Foo.Bar?.<Baz>();
+        Bar?.<Baz>();
+      `,
+      [
+        {name: 'Foo', count: 1},
+        {name: 'Bar', count: 1},
+        {name: 'Baz', count: 2},
       ],
     );
   });
@@ -1011,6 +1063,27 @@ describe('Declare statements', () => {
     );
   });
 
+  test('DeclareModuleExports', () => {
+    verifyHasScopes(
+      `
+        import type {Foo} from 'foo';
+        declare module.exports: Foo;
+      `,
+      [
+        {
+          type: ScopeType.Module,
+          variables: [
+            {
+              name: 'Foo',
+              type: DefinitionType.ImportBinding,
+              referenceCount: 1,
+            },
+          ],
+        },
+      ],
+    );
+  });
+
   test('DeclareModule', () => {
     verifyHasScopes(
       `
@@ -1079,7 +1152,7 @@ describe('Declare statements', () => {
     expect(references[1].resolved).toBe(null);
   });
 
-  test('DeclareModuleExports', () => {
+  test('DeclareModule DeclareModuleExports', () => {
     verifyHasScopes(
       `
         import {module, exports} from 'Foo';
@@ -1118,7 +1191,7 @@ describe('Declare statements', () => {
     );
   });
 
-  test('DeclareExportDeclaration', () => {
+  test('DeclareModule DeclareExportDeclaration', () => {
     // Verify that all declare export nodes introduce a definition, with a single
     // additional reference in the declare module body.
     verifyHasScopes(

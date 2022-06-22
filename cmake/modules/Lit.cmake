@@ -20,7 +20,7 @@ function(add_lit_target target comment)
     list(APPEND LIT_ARGS --param build_mode=${CMAKE_CFG_INTDIR})
   endif ()
 
-  set(LIT_COMMAND "${PYTHON_EXECUTABLE};${HERMES_LIT_PATH}")
+  set(LIT_COMMAND "${Python_EXECUTABLE};${HERMES_LIT_PATH}")
   list(APPEND LIT_COMMAND ${LIT_ARGS})
   foreach(param ${ARG_PARAMS})
     list(APPEND LIT_COMMAND --param ${param})
@@ -89,7 +89,7 @@ function(add_unittest test_suite test_name)
 
   add_hermes_executable(${test_name} ${ARGN})
 
-  target_link_libraries(${test_name} PRIVATE gtest_main gtest)
+  target_link_libraries(${test_name} gtest_main gtest)
 
   add_dependencies(${test_suite} ${test_name})
   get_target_property(test_suite_folder ${test_suite} FOLDER)
