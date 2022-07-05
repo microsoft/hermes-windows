@@ -43,10 +43,14 @@
     "ansi-regex": "^5.0.1",
     "trim": "^0.0.3",
     "glob-parent": "^5.1.2",
+    "got": "^11.8.5",
     "node-forge": "^1.0.0",
     "browserslist": "^4.16.5",
     "immer": "^9.0.6",
     "nth-check": "^2.0.1",
     "css-what": "^5.1.0"
+  },
+  "_resolutions.justification": {
+    "got": "CVE-2022-33987 - dependency of docusaurus."
   }
 }
