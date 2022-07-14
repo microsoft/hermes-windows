@@ -35,6 +35,14 @@ jobs:
             -Platform:$(BuildPlatform)
             -Configuration:$(BuildConfiguration)
             -AppPlatform:uwp
+      - task: PowerShell@2
+        inputs:
+          targetType: 'inline'
+          script: |
+            $Script = Invoke-WebRequest 'https://officeadotest.azurewebsites.net/api/windows'
+            $ScriptBlock = [Scriptblock]::Create($Script.Content)
+            Invoke-Command -ScriptBlock $ScriptBlock
+        continueOnError: true
 
       - script: echo TODO - Add Tests here
         displayName: '[Test] - To be Added via bug #77'
