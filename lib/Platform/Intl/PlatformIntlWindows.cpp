@@ -23,7 +23,7 @@ namespace platform_intl {
 
 // roughly translates to https://tc39.es/ecma402/#sec-canonicalizeunicodelocaleid while doing some minimal tag validation 
 vm::CallResult<std::u16string> NormalizeLangugeTag(vm::Runtime *runtime, const std::u16string locale) {
-  
+
     if (locale.length() == 0) {
        return runtime->raiseRangeError("RangeError: Invalid language tag");
     }
@@ -32,8 +32,8 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(vm::Runtime *runtime, const s
     std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> conversion;
     std::string locale8 = conversion.to_bytes(locale);
 
-    // [Comment from ChakreCore] ICU doesn't have a full-fledged canonicalization implementation that correctly replaces all preferred values
-    // and grandfathered tags, as required by #sec-canonicalizelanguagetag.
+    // [Comment from ChakreCore] ICU doesn't have a full-fledged canonicalization implementation that correctly
+    // replaces all preferred values and grandfathered tags, as required by #sec-canonicalizelanguagetag.
     // However, passing the locale through uloc_forLanguageTag -> uloc_toLanguageTag gets us most of the way there
     // by replacing some(?) values, correctly capitalizing the tag, and re-ordering extensions 
     UErrorCode status = U_ZERO_ERROR;
@@ -48,7 +48,7 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(vm::Runtime *runtime, const s
 
     int toLangTagResultLength = uloc_toLanguageTag(localeID, canonicalized, ULOC_FULLNAME_CAPACITY, true, &status);
 
-    if(forLangTagResultLength <= 0){
+    if(forLangTagResultLength <= 0 || status == U_ILLEGAL_ARGUMENT_ERROR){
         return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
     }
 
@@ -60,7 +60,6 @@ vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(vm::Runtime *
 
     // 1. If locales is undefined, then a. Return a new empty list
     if (locales.empty()) {
-        //std::cout << "list is empty";
         return std::vector<std::u16string>{};
     }
     // 2. Let seen be a new empty List
@@ -69,13 +68,12 @@ vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(vm::Runtime *
     // 3. If Type(locales) is String or Type(locales) is Object and locales has an
     // [[InitializedLocale]] internal slot, then
     // 4. Else
-    //  > TODO: Windows/Apple don't yet support Locale object -
-    //  > https://tc39.es/ecma402/#locale-objects As of now, 'locales' can only be a
-    //  > string list/array. Validation occurs in NormalizeLangugeTag for windows, so this
-    //  > function just takes a vector of strings.
+    //  > TODO: Windows/Apple don't yet support Locale object - https://tc39.es/ecma402/#locale-objects 
+    //  > As of now, 'locales' can only be a string list/array. Validation occurs in NormalizeLangugeTag for windows.
+    //  > This function just takes a vector of strings.
     // 5-7. Let len be ? ToLength(? Get(O, "length")). Let k be 0. Repeat, while k < len
     for (int k = 0; k < locales.size(); k++) {
-        // TODO: tag validation, note that Apples implementation does not do tag validation yet nor does ChakraCore with ICU
+        // TODO: full tag validation, ChakraCore\V8 does not do tag validation with ICU, may be missing needed API
         // 7.c.iii.1 Let tag be kValue[[locale]]
         std::u16string tag = locales[k];
         // 7.c.vi Let canonicalizedTag be CanonicalizeUnicodeLocaleID(tag)
