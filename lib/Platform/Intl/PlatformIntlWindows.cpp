@@ -10,17 +10,92 @@
 #include <deque>
 #include <string>
 #include <unordered_map>
+#include <icu.h>
+#include <codecvt>
+
 
 using namespace ::facebook;
 using namespace ::hermes;
 
+
 namespace hermes {
 namespace platform_intl {
 
+// roughly translates to https://tc39.es/ecma402/#sec-canonicalizeunicodelocaleid while doing some minimal tag validation 
+vm::CallResult<std::u16string> NormalizeLangugeTag(vm::Runtime *runtime, const std::u16string locale) {
+  
+    if (locale.length() == 0) {
+       return runtime->raiseRangeError("RangeError: Invalid language tag");
+    }
+   
+    // conversion helper: UTF-8 to/from UTF-16
+    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> conversion;
+    std::string locale8 = conversion.to_bytes(locale);
+
+    // [Comment from ChakreCore] ICU doesn't have a full-fledged canonicalization implementation that correctly replaces all preferred values
+    // and grandfathered tags, as required by #sec-canonicalizelanguagetag.
+    // However, passing the locale through uloc_forLanguageTag -> uloc_toLanguageTag gets us most of the way there
+    // by replacing some(?) values, correctly capitalizing the tag, and re-ordering extensions 
+    UErrorCode status = U_ZERO_ERROR;
+    int parsedLength = 0;
+    char localeID[ULOC_FULLNAME_CAPACITY] = { 0 };
+    char canonicalized[ULOC_FULLNAME_CAPACITY] = { 0 };
+    int forLangTagResultLength = uloc_forLanguageTag(locale8.c_str(), localeID, ULOC_FULLNAME_CAPACITY, &parsedLength, &status);
+
+    if(forLangTagResultLength < 0 || parsedLength < locale.length() || status == U_ILLEGAL_ARGUMENT_ERROR){
+        return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
+    }
+
+    int toLangTagResultLength = uloc_toLanguageTag(localeID, canonicalized, ULOC_FULLNAME_CAPACITY, true, &status);
+
+    if(forLangTagResultLength <= 0){
+        return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
+    }
+
+    return conversion.from_bytes(canonicalized);
+}
+
+// https://tc39.es/ecma402/#sec-canonicalizelocalelist
+vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(vm::Runtime *runtime, const std::vector<std::u16string>& locales) {
+
+    // 1. If locales is undefined, then a. Return a new empty list
+    if (locales.empty()) {
+        //std::cout << "list is empty";
+        return std::vector<std::u16string>{};
+    }
+    // 2. Let seen be a new empty List
+    std::vector<std::u16string> seen = std::vector<std::u16string>{};
+    
+    // 3. If Type(locales) is String or Type(locales) is Object and locales has an
+    // [[InitializedLocale]] internal slot, then
+    // 4. Else
+    //  > TODO: Windows/Apple don't yet support Locale object -
+    //  > https://tc39.es/ecma402/#locale-objects As of now, 'locales' can only be a
+    //  > string list/array. Validation occurs in NormalizeLangugeTag for windows, so this
+    //  > function just takes a vector of strings.
+    // 5-7. Let len be ? ToLength(? Get(O, "length")). Let k be 0. Repeat, while k < len
+    for (int k = 0; k < locales.size(); k++) {
+        // TODO: tag validation, note that Apples implementation does not do tag validation yet nor does ChakraCore with ICU
+        // 7.c.iii.1 Let tag be kValue[[locale]]
+        std::u16string tag = locales[k];
+        // 7.c.vi Let canonicalizedTag be CanonicalizeUnicodeLocaleID(tag)
+        auto canonicalizedTag = NormalizeLangugeTag(runtime, tag);
+        if (LLVM_UNLIKELY(canonicalizedTag == vm::ExecutionStatus::EXCEPTION)) {
+          return vm::ExecutionStatus::EXCEPTION;
+        }
+        // 7.c.vii. If canonicalizedTag is not an element of seen, append canonicalizedTag as the last element of seen.
+        if (std::find(seen.begin(), seen.end(), canonicalizedTag.getValue()) == seen.end()) {
+            seen.push_back(std::move(canonicalizedTag.getValue()));
+        }
+    }
+    return seen;
+}
+
+// https://tc39.es/ecma402/#sec-intl.getcanonicallocales
 vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
     vm::Runtime *runtime,
     const std::vector<std::u16string> &locales) {
-  return std::vector<std::u16string>{u"fr-FR", u"es-ES"};
+  return CanonicalizeLocaleList(runtime, locales);
 }
 
 vm::CallResult<std::u16string> toLocaleLowerCase(
