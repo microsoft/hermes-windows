@@ -11,7 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <icu.h>
-#include <codecvt>
+#include "llvh/Support/ConvertUTF.h"
 
 
 using namespace ::facebook;
@@ -21,16 +21,41 @@ using namespace ::hermes;
 namespace hermes {
 namespace platform_intl {
 
+// convert utf8 string to utf16
+std::u16string UTF8toUTF16(std::string in){
+  std::u16string out;
+  size_t length = in.length();
+  out.resize(length);
+  const llvh::UTF8 *sourceStart = reinterpret_cast<const llvh::UTF8 *>(in.c_str());
+  const llvh::UTF8 *sourceEnd = sourceStart + length;
+  llvh::UTF16 *targetStart = reinterpret_cast<llvh::UTF16 *>(&out[0]);
+  llvh::UTF16 *targetEnd = targetStart + out.size();
+  llvh::ConversionResult convRes = ConvertUTF8toUTF16(&sourceStart, sourceEnd, &targetStart, targetEnd, llvh::lenientConversion);
+  out.resize(reinterpret_cast<char16_t *>(targetStart) - &out[0]);
+  return out;
+}
+
+// convert utf16 string to utf8
+std::string UTF16toUTF8(std::u16string in){
+  std::string out;
+  size_t length = in.length();
+  out.resize(length);
+  const llvh::UTF16 *sourceStart = reinterpret_cast<const llvh::UTF16 *>(in.c_str());
+  const llvh::UTF16 *sourceEnd = sourceStart + length;
+  llvh::UTF8 *targetStart = reinterpret_cast<llvh::UTF8 *>(&out[0]);
+  llvh::UTF8 *targetEnd = targetStart + out.size();
+  llvh::ConversionResult convRes = ConvertUTF16toUTF8(&sourceStart, sourceEnd, &targetStart, targetEnd, llvh::lenientConversion);
+  out.resize(reinterpret_cast<char *>(targetStart) - &out[0]);
+  return out;
+}
+
+
 // roughly translates to https://tc39.es/ecma402/#sec-canonicalizeunicodelocaleid while doing some minimal tag validation 
 vm::CallResult<std::u16string> NormalizeLangugeTag(vm::Runtime *runtime, const std::u16string locale) {
-
     if (locale.length() == 0) {
        return runtime->raiseRangeError("RangeError: Invalid language tag");
     }
-   
-    // conversion helper: UTF-8 to/from UTF-16
-    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> conversion;
-    std::string locale8 = conversion.to_bytes(locale);
+    std::string locale8 = UTF16toUTF8(locale);
 
     // [Comment from ChakreCore] ICU doesn't have a full-fledged canonicalization implementation that correctly
     // replaces all preferred values and grandfathered tags, as required by #sec-canonicalizelanguagetag.
@@ -39,20 +64,25 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(vm::Runtime *runtime, const s
     UErrorCode status = U_ZERO_ERROR;
     int parsedLength = 0;
     char localeID[ULOC_FULLNAME_CAPACITY] = { 0 };
-    char canonicalized[ULOC_FULLNAME_CAPACITY] = { 0 };
-    int forLangTagResultLength = uloc_forLanguageTag(locale8.c_str(), localeID, ULOC_FULLNAME_CAPACITY, &parsedLength, &status);
+    char normalize[ULOC_FULLNAME_CAPACITY] = { 0 };
+    char canonicalize[ULOC_FULLNAME_CAPACITY] = { 0 };
 
+    int forLangTagResultLength = uloc_forLanguageTag(locale8.c_str(), localeID, ULOC_FULLNAME_CAPACITY, &parsedLength, &status);
     if(forLangTagResultLength < 0 || parsedLength < locale.length() || status == U_ILLEGAL_ARGUMENT_ERROR){
         return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
     }
 
-    int toLangTagResultLength = uloc_toLanguageTag(localeID, canonicalized, ULOC_FULLNAME_CAPACITY, true, &status);
-
+    int toLangTagResultLength = uloc_toLanguageTag(localeID, normalize, ULOC_FULLNAME_CAPACITY, true, &status);
     if(forLangTagResultLength <= 0 || status == U_ILLEGAL_ARGUMENT_ERROR){
         return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
     }
 
-    return conversion.from_bytes(canonicalized);
+    int canonicalizeResultLength = uloc_canonicalize(normalize, canonicalize, ULOC_FULLNAME_CAPACITY, &status);
+    if(canonicalizeResultLength <= 0){
+        return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
+    }
+
+    return UTF8toUTF16(canonicalize);
 }
 
 // https://tc39.es/ecma402/#sec-canonicalizelocalelist
