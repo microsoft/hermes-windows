@@ -72,13 +72,13 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(vm::Runtime *runtime, const s
         return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
     }
 
-    int toLangTagResultLength = uloc_toLanguageTag(localeID, normalize, ULOC_FULLNAME_CAPACITY, true, &status);
-    if(forLangTagResultLength <= 0 || status == U_ILLEGAL_ARGUMENT_ERROR){
+    int canonicalizeResultLength = uloc_canonicalize(localeID, normalize, ULOC_FULLNAME_CAPACITY, &status);
+    if(canonicalizeResultLength <= 0){
         return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
     }
 
-    int canonicalizeResultLength = uloc_canonicalize(normalize, canonicalize, ULOC_FULLNAME_CAPACITY, &status);
-    if(canonicalizeResultLength <= 0){
+    int toLangTagResultLength = uloc_toLanguageTag(normalize, canonicalize, ULOC_FULLNAME_CAPACITY, true, &status);
+    if(forLangTagResultLength <= 0){
         return runtime->raiseRangeError(vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8.c_str()));
     }
 
