@@ -1,0 +1,29 @@
+name: Hermes-Update-$(Date:yyMM.d)$(Rev:rrr)
+
+pr: none
+trigger: none
+schedules:
+  - cron: "0 0 * * *"
+    displayName: Daily midnight Facebook/Hermes ingestion
+    branches:
+      include:
+        - main
+
+jobs:
+  - job: UpdateMetaMain
+    timeoutInMinutes: 10
+    pool: 
+      vmImage: ubuntu-latest
+    displayName: Update Hermes Branch to latest
+    steps:
+      - script: git remote add fb https://github.com/facebook/hermes
+        displayName: Add facebook/hermes as report
+      
+      - script: git fetch fb
+        displayName: Fetch latest facebook commit
+      
+      - script: git reset fb/main --hard
+        displayName: Get local state to latest main commit in facebook org
+
+      - script: git push origin HEAD:meta_main --force
+        displayName: Push latest commit to meta_main by force-pushing
