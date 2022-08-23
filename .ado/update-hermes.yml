@@ -26,9 +26,6 @@ jobs:
       - script: git remote add authenticated https://rnbot:$(githubAuthToken)@github.com/microsoft/hermes-windows
         displayName: Add authenticated remote for updates
 
-      - script: git remote -v
-        displayName: Show remotes
-
       - script: git fetch fb
         displayName: Fetch all latest facebook/hermes commits
       
