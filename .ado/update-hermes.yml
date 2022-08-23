@@ -20,17 +20,22 @@ jobs:
       vmImage: ubuntu-latest
     displayName: Update Hermes Branch to latest
     steps:
-      - checkout: self  # self represents the repo where the initial Pipelines YAML file was found
-        persistCredentials: true
-
       - script: git remote add fb https://github.com/facebook/hermes
         displayName: Add facebook/hermes as report
       
+      - script: git remote add authenticated https://rnbot:$(githubAuthToken)@github.com/microsoft/hermes-windows
+        displayName: Add facebook/hermes as report
+
+      - script: git remotes
+        displayName: Show remotes
+
       - script: git fetch fb
         displayName: Fetch all latest facebook/hermes commits
       
-      - script: git reset fb/main --hard
+      - script: |
+          git reset fb/main --hard
+          git log -1
         displayName: Get local state to match main commit in facebook/hermes
 
-      - script: git push origin HEAD:meta_main --force
+      - script: git push authenticated HEAD:meta_main --force
         displayName: Push latest commit to meta_main by force-pushing
