@@ -23,9 +23,6 @@
 
 using namespace hermes;
 
-using llvh::cast;
-using llvh::dyn_cast;
-
 // Make sure the ValueKinds.def tree is consistent with the class hierarchy.
 #define QUOTE(X) #X
 #define DEF_VALUE(CLASS, PARENT)                                           \
@@ -543,6 +540,9 @@ Module::~Module() {
   for (auto &L : literalNumbers) {
     toDelete.push_back(&L);
   }
+  for (auto &L : literalBigInts) {
+    toDelete.push_back(&L);
+  }
   for (auto &L : literalStrings) {
     toDelete.push_back(&L);
   }
@@ -758,6 +758,22 @@ LiteralNumber *Module::getLiteralNumber(double value) {
 
   auto New = new LiteralNumber(value);
   literalNumbers.InsertNode(New, InsertPos);
+  return New;
+}
+
+LiteralBigInt *Module::getLiteralBigInt(UniqueString *value) {
+  // Check to see if we've already seen this tuple before.
+  llvh::FoldingSetNodeID ID;
+
+  LiteralBigInt::Profile(ID, value);
+
+  // If this is not the first time we see this tuple then return the old copy.
+  void *InsertPos = nullptr;
+  if (LiteralBigInt *LN = literalBigInts.FindNodeOrInsertPos(ID, InsertPos))
+    return LN;
+
+  auto New = new LiteralBigInt(value);
+  literalBigInts.InsertNode(New, InsertPos);
   return New;
 }
 

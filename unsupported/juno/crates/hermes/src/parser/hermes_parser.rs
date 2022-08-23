@@ -5,13 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use super::node::{Node, NodePtr, NodePtrOpt, SMLoc, StringRef};
+use super::node::Node;
+use super::node::NodePtr;
+use super::node::NodePtrOpt;
+use super::node::SMLoc;
+use super::node::StringRef;
 use crate::utf::utf8_with_surrogates_to_string_lossy;
 use juno_support::NullTerminatedBuf;
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::os::raw::{c_char, c_uint};
+use std::os::raw::c_char;
+use std::os::raw::c_uint;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,6 +33,10 @@ pub enum ParserDialect {
     /// containing two comparisons, even though it could otherwise be interpreted
     /// as a call expression with Flow type arguments.
     FlowUnambiguous,
+    /// Look for the '@flow' pragma in the first comment in the JS file.
+    /// If it exists, then parse all Flow type syntax, otherwise only parse
+    /// Flow type syntax according to the FlowUnambiguous mode.
+    FlowDetect,
     /// Parse TypeScript.
     TypeScript,
 }
@@ -42,6 +51,8 @@ pub struct ParserFlags {
     pub enable_jsx: bool,
     /// Dialect control.
     pub dialect: ParserDialect,
+    /// Store doc-comment block at the top of the file.
+    pub store_doc_block: bool,
 }
 
 impl Default for ParserFlags {
@@ -50,6 +61,7 @@ impl Default for ParserFlags {
             strict_mode: false,
             enable_jsx: false,
             dialect: ParserDialect::JavaScript,
+            store_doc_block: false,
         }
     }
 }
@@ -80,6 +92,21 @@ impl<'a, T> DataRef<'a, T> {
             &[]
         } else {
             unsafe { std::slice::from_raw_parts(self.data, self.length) }
+        }
+    }
+
+    /// Returns a new `DataRef` which is one byte longer than this one.
+    ///
+    /// # Safety
+    ///
+    /// This is only safe when the user is certain that one more byte past
+    /// the end of the `DataRef` is still valid memory, such as when we know the `data` is
+    /// null-terminated.
+    pub unsafe fn extend_by_1(&self) -> Self {
+        Self {
+            data: self.data,
+            length: self.length + 1,
+            _marker: self._marker,
         }
     }
 
@@ -184,7 +211,7 @@ extern "C" {
     fn hermes_parser_free(parser_ctx: *mut ParserContext);
     fn hermes_parser_get_first_error(parser_ctx: *const ParserContext) -> isize;
     fn hermes_parser_get_messages<'a>(parser_ctx: *const ParserContext)
-        -> DataRef<'a, DiagMessage>;
+    -> DataRef<'a, DiagMessage>;
     fn hermes_parser_get_ast(parser_ctx: *const ParserContext) -> NodePtrOpt;
     fn hermes_parser_find_location(
         parser_ctx: *mut ParserContext,
@@ -212,6 +239,8 @@ extern "C" {
         kind: MagicCommentKind,
     ) -> DataRef<'a, u8>;
     fn hermes_get_node_name(node: NodePtr) -> DataRef<'static, u8>;
+    /// Return the doc block for the file if `storeDocBlock` was provided at parse time.
+    fn hermes_parser_get_doc_block<'a>(parser_ctx: *const ParserContext) -> DataRef<'a, u8>;
 }
 
 pub struct HermesParser<'a> {
@@ -250,6 +279,16 @@ impl HermesParser<'_> {
     /// Return true if there was at least one parser error. That implies that there is no AST.
     pub fn has_errors(&self) -> bool {
         self.first_error_index().is_some()
+    }
+
+    /// Return the doc block at the top of the file if it exists.
+    pub fn get_doc_block(&self) -> Option<&str> {
+        let result = unsafe { hermes_parser_get_doc_block(self.parser_ctx) };
+        if result.is_empty() {
+            None
+        } else {
+            Some(unsafe { std::str::from_utf8_unchecked(result.as_slice()) })
+        }
     }
 
     /// Return a slice containing all parser messages.

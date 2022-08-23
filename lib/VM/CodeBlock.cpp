@@ -26,8 +26,6 @@ namespace hermes {
 namespace vm {
 
 using namespace hermes::inst;
-using llvh::ArrayRef;
-using llvh::StringRef;
 using SLP = SerializedLiteralParser;
 
 #ifdef HERMES_SLOW_DEBUG
@@ -194,10 +192,10 @@ SymbolID CodeBlock::getNameMayAllocate() const {
       functionHeader_.functionName());
 }
 
-std::string CodeBlock::getNameString(GCBase::GCCallbacks *runtime) const {
+std::string CodeBlock::getNameString(GCBase::GCCallbacks &runtime) const {
 #ifndef HERMESVM_LEAN
   if (isLazy()) {
-    return runtime->convertSymbolToUTF8(runtimeModule_->getLazyName());
+    return runtime.convertSymbolToUTF8(runtimeModule_->getLazyName());
   }
 #endif
   return runtimeModule_->getStringFromStringID(functionHeader_.functionName());
@@ -332,7 +330,7 @@ std::unique_ptr<hbc::BytecodeModule> compileLazyFunction(
 }
 } // namespace
 
-void CodeBlock::lazyCompileImpl(Runtime *runtime) {
+void CodeBlock::lazyCompileImpl(Runtime &runtime) {
   assert(isLazy() && "Laziness has not been checked");
   PerfSection perf("Lazy function compilation");
   auto *provider = (hbc::BCProviderLazy *)runtimeModule_->getBytecode();
@@ -352,7 +350,7 @@ void CodeBlock::lazyCompileImpl(Runtime *runtime) {
 #endif // HERMESVM_LEAN
 
 void CodeBlock::markCachedHiddenClasses(
-    Runtime *runtime,
+    Runtime &runtime,
     WeakRootAcceptor &acceptor) {
   for (auto &prop :
        llvh::makeMutableArrayRef(propertyCache(), propertyCacheSize_)) {
@@ -374,7 +372,7 @@ uint32_t CodeBlock::getNextOffset(uint32_t offset) const {
   assert(offset < opcodes.size() && "invalid offset to breakOnNextInstruction");
 
   auto opCode = reinterpret_cast<const Inst *>(&opcodes[offset])->opCode;
-  assert(opCode < OpCode::_last && "invalid opecode");
+  assert(opCode < OpCode::_last && "invalid opcode");
 
   static const uint8_t sizes[] = {
 #define DEFINE_OPCODE(name) sizeof(inst::name##Inst),
@@ -390,8 +388,8 @@ static void makeWritable(void *address, size_t length) {
   void *endAddress = static_cast<void *>(static_cast<char *>(address) + length);
 
   // Align the address to page size before setting the pagesize.
-  void *alignedAddress = safeTypeCast<size_t, void *>(llvh::alignDown(
-      safeTypeCast<void *, size_t>(address), hermes::oscompat::page_size()));
+  void *alignedAddress = reinterpret_cast<void *>(llvh::alignDown(
+      reinterpret_cast<uintptr_t>(address), hermes::oscompat::page_size()));
 
   size_t totalLength =
       static_cast<char *>(endAddress) - static_cast<char *>(alignedAddress);

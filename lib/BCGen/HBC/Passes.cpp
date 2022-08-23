@@ -8,7 +8,6 @@
 #include "hermes/BCGen/HBC/Passes.h"
 
 #include "hermes/BCGen/BCOpt.h"
-#include "hermes/BCGen/HBC/Bytecode.h"
 #include "hermes/BCGen/HBC/BytecodeGenerator.h"
 #include "hermes/BCGen/HBC/BytecodeStream.h"
 #include "hermes/BCGen/HBC/HBC.h"
@@ -477,6 +476,9 @@ bool LowerArgumentsArray::runOnFunction(Function *F) {
         builder.createBranchInst(thisBlock);
 
         phi->updateEntry(i, reifiedValue, newBlock);
+        // Update all other PHI nodes in thisBlock that currently reference
+        // previousBlock so they instead reference newBlock.
+        updateIncomingPhiValues(thisBlock, previousBlock, newBlock);
 
         auto *branch = previousBlock->getTerminator();
         for (int j = 0, m = branch->getNumOperands(); j < m; j++)

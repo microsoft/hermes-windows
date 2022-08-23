@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+
 #include "hermes/VM/HeapSnapshot.h"
 #include "TestHelpers.h"
 #include "gtest/gtest.h"
@@ -427,10 +429,10 @@ TEST(HeapSnapshotTest, IDReversibleTest) {
                                           .build());
   DummyRuntime &rt = *runtime;
   auto &gc = rt.getHeap();
-  GCScope gcScope(&rt);
+  GCScope gcScope(rt);
 
   // Make a dummy object.
-  auto obj = rt.makeHandle(DummyObject::create(&gc));
+  auto obj = rt.makeHandle(DummyObject::create(gc, rt));
   const auto objID = gc.getObjectID(obj.get());
   // Make sure the ID can be translated back to the object pointer.
   EXPECT_EQ(obj.get(), gc.getObjectForID(objID));
@@ -452,7 +454,7 @@ TEST(HeapSnapshotTest, HeaderTest) {
   auto &gc = rt.getHeap();
 
   JSONObject *root = TAKE_SNAPSHOT(gc, jsonFactory);
-  ASSERT_NE(root, nullptr);
+  ASSERT_TRUE(root != nullptr);
 
   JSONObject *snapshot = llvh::cast<JSONObject>(root->at("snapshot"));
 
@@ -579,15 +581,15 @@ TEST(HeapSnapshotTest, TestNodesAndEdgesForDummyObjects) {
                                           .build());
   DummyRuntime &rt = *runtime;
   auto &gc = rt.getHeap();
-  GCScope gcScope(&rt);
+  GCScope gcScope(rt);
 
-  auto dummy = rt.makeHandle(DummyObject::create(&gc));
-  auto *dummy2 = DummyObject::create(&gc);
-  dummy->setPointer(&gc, dummy2);
+  auto dummy = rt.makeHandle(DummyObject::create(gc, rt));
+  auto *dummy2 = DummyObject::create(gc, rt);
+  dummy->setPointer(gc, dummy2);
   const auto blockSize = dummy->getAllocatedSize();
 
   JSONObject *root = TAKE_SNAPSHOT(gc, jsonFactory);
-  ASSERT_NE(root, nullptr);
+  ASSERT_TRUE(root != nullptr);
 
   // Check the nodes and edges.
   JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
@@ -695,16 +697,16 @@ TEST(HeapSnapshotTest, SnapshotFromCallbackContext) {
                                   .build())
           .build());
   DummyRuntime &rt = *runtime;
-  GCScope scope{&rt};
-  auto dummy = rt.makeHandle(DummyObject::create(&runtime->getHeap()));
-  const auto dummyID = runtime->getHeap().getObjectID(dummy.get());
+  GCScope scope{rt};
+  auto dummy = rt.makeHandle(DummyObject::create(rt.getHeap(), rt));
+  const auto dummyID = rt.getHeap().getObjectID(dummy.get());
   rt.collect();
   ASSERT_TRUE(triggeredTripwire);
 
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   JSONObject *root = PARSE_SNAPSHOT(stream.str(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  ASSERT_TRUE(root != nullptr);
 
   JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
@@ -743,13 +745,13 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationForLazyCode) {
     source += " Math.random(); ";
   source += "};\nmyGlobal;";
 
-  CallResult<HermesValue> res = runtime->run(source, "file:///fake.js", flags);
+  CallResult<HermesValue> res = runtime.run(source, "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSFunction> func = runtime->makeHandle(vmcast<JSFunction>(*res));
-  const auto funcID = runtime->getHeap().getObjectID(func.get());
+  Handle<JSFunction> func = runtime.makeHandle(vmcast<JSFunction>(*res));
+  const auto funcID = runtime.getHeap().getObjectID(func.get());
 
-  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory);
+  ASSERT_TRUE(root != nullptr);
 
   const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
@@ -770,7 +772,7 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationForLazyCode) {
   const JSONArray &locations = *llvh::cast<JSONArray>(root->at("locations"));
   Location loc = FIND_LOCATION_FOR_ID(funcID, locations, nodes, strings);
   // The location should be the given file, at line 1 column 5 with indenting
-  auto scriptId = func->getRuntimeModule()->getScriptID();
+  auto scriptId = func->getRuntimeModule(runtime)->getScriptID();
   EXPECT_EQ(loc, Location(expected, scriptId, 1, 5));
 #else
   (void)findLocationForID;
@@ -786,13 +788,13 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationAndNameTest) {
   flags.debug = true;
   // Indent the function slightly to test that the source location is correct
   CallResult<HermesValue> res =
-      runtime->run("\n  function foo() {}; foo;", "file:///fake.js", flags);
+      runtime.run("\n  function foo() {}; foo;", "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSFunction> func = runtime->makeHandle(vmcast<JSFunction>(*res));
-  const auto funcID = runtime->getHeap().getObjectID(func.get());
+  Handle<JSFunction> func = runtime.makeHandle(vmcast<JSFunction>(*res));
+  const auto funcID = runtime.getHeap().getObjectID(func.get());
 
-  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory);
+  ASSERT_TRUE(root != nullptr);
 
   const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
@@ -813,7 +815,7 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationAndNameTest) {
   const JSONArray &locations = *llvh::cast<JSONArray>(root->at("locations"));
   Location loc = FIND_LOCATION_FOR_ID(funcID, locations, nodes, strings);
   // The location should be the given file, second line, third column
-  auto scriptId = func->getRuntimeModule()->getScriptID();
+  auto scriptId = func->getRuntimeModule(runtime)->getScriptID();
   EXPECT_EQ(loc, Location(expected, scriptId, 2, 3));
 #else
   (void)findLocationForID;
@@ -827,16 +829,16 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionDisplayNameTest) {
   // Make sure that debug info is emitted for this source file when it's
   // compiled.
   flags.debug = true;
-  CallResult<HermesValue> res = runtime->run(
+  CallResult<HermesValue> res = runtime.run(
       R"(function foo() {}; foo.displayName = "bar"; foo;)",
       "file:///fake.js",
       flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSFunction> func = runtime->makeHandle(vmcast<JSFunction>(*res));
-  const auto funcID = runtime->getHeap().getObjectID(func.get());
+  Handle<JSFunction> func = runtime.makeHandle(vmcast<JSFunction>(*res));
+  const auto funcID = runtime.getHeap().getObjectID(func.get());
 
-  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory);
+  ASSERT_TRUE(root != nullptr);
 
   const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
@@ -856,28 +858,28 @@ TEST_F(HeapSnapshotRuntimeTest, WeakMapTest) {
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   auto mapResult = JSWeakMap::create(
-      runtime, Handle<JSObject>::vmcast(&runtime->weakMapPrototype));
+      runtime, Handle<JSObject>::vmcast(&runtime.weakMapPrototype));
   ASSERT_FALSE(isException(mapResult));
-  Handle<JSWeakMap> map = runtime->makeHandle(std::move(*mapResult));
-  Handle<JSObject> key = runtime->makeHandle(JSObject::create(runtime));
-  Handle<JSObject> value = runtime->makeHandle(JSObject::create(runtime));
+  Handle<JSWeakMap> map = runtime.makeHandle(std::move(*mapResult));
+  Handle<JSObject> key = runtime.makeHandle(JSObject::create(runtime));
+  Handle<JSObject> value = runtime.makeHandle(JSObject::create(runtime));
   // Add a key so the DenseMap will exist.
   ASSERT_FALSE(isException(JSWeakMap::setValue(map, runtime, key, value)));
 
-  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory);
+  ASSERT_TRUE(root != nullptr);
   const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &edges = *llvh::cast<JSONArray>(root->at("edges"));
   const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
 
-  const auto mapID = runtime->getHeap().getObjectID(map.get());
+  const auto mapID = runtime.getHeap().getObjectID(map.get());
   auto nodesAndEdges = FIND_NODE_AND_EDGES_FOR_ID(mapID, nodes, edges, strings);
   auto firstNamed = firstNamedPropertyEdge<JSWeakMap>();
   EXPECT_EQ(
       nodesAndEdges.first,
       Node(
           HeapSnapshot::NodeType::Object,
-          "WeakMap",
+          "JSWeakMap",
           mapID,
           map->getAllocatedSize(),
           firstNamed + 3));
@@ -889,9 +891,9 @@ TEST_F(HeapSnapshotRuntimeTest, WeakMapTest) {
       Edge(
           HeapSnapshot::EdgeType::Weak,
           "0",
-          runtime->getHeap().getObjectID(key.get())));
+          runtime.getHeap().getObjectID(key.get())));
   // Test the native edge.
-  const auto nativeMapID = map->getMapID(&runtime->getHeap());
+  const auto nativeMapID = map->getMapID(runtime.getHeap());
   EXPECT_EQ(
       nodesAndEdges.second[firstNamed + 2],
       Edge(HeapSnapshot::EdgeType::Internal, "map", nativeMapID));
@@ -908,7 +910,7 @@ TEST_F(HeapSnapshotRuntimeTest, WeakMapTest) {
 TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
-  Handle<JSObject> obj = runtime->makeHandle(JSObject::create(runtime));
+  Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime));
   SymbolID fooSym, barSym;
   {
     vm::GCScope gcScope(runtime);
@@ -928,13 +930,13 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
       runtime,
       fooSym,
       dpf,
-      runtime->makeHandle(HermesValue::encodeNumberValue(100)))));
+      runtime.makeHandle(HermesValue::encodeNumberValue(100)))));
   ASSERT_FALSE(isException(JSObject::defineOwnProperty(
       obj,
       runtime,
       barSym,
       dpf,
-      runtime->makeHandle(HermesValue::encodeNumberValue(200)))));
+      runtime.makeHandle(HermesValue::encodeNumberValue(200)))));
   // Trigger update transitions for both properties.
   dpf.writable = false;
   ASSERT_FALSE(isException(JSObject::defineOwnProperty(
@@ -942,24 +944,24 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
       runtime,
       fooSym,
       dpf,
-      runtime->makeHandle(HermesValue::encodeNumberValue(100)))));
+      runtime.makeHandle(HermesValue::encodeNumberValue(100)))));
   ASSERT_FALSE(isException(JSObject::defineOwnProperty(
       obj,
       runtime,
       barSym,
       dpf,
-      runtime->makeHandle(HermesValue::encodeNumberValue(200)))));
+      runtime.makeHandle(HermesValue::encodeNumberValue(200)))));
   // Forcibly clear the final hidden class's property map.
   auto *clazz = obj->getClass(runtime);
-  clazz->clearPropertyMap(&runtime->getHeap());
+  clazz->clearPropertyMap(runtime.getHeap());
 
-  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory);
+  ASSERT_TRUE(root != nullptr);
   const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &edges = *llvh::cast<JSONArray>(root->at("edges"));
   const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
 
-  const auto objID = runtime->getHeap().getObjectID(obj.get());
+  const auto objID = runtime.getHeap().getObjectID(obj.get());
   auto nodesAndEdges = FIND_NODE_AND_EDGES_FOR_ID(objID, nodes, edges, strings);
 
   const auto FIRST_NAMED_PROPERTY_EDGE = firstNamedPropertyEdge<JSObject>();
@@ -968,7 +970,7 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
       nodesAndEdges.first,
       Node(
           HeapSnapshot::NodeType::Object,
-          "Object(foo, bar)",
+          "JSObject(foo, bar)",
           objID,
           obj->getAllocatedSize(),
           FIRST_NAMED_PROPERTY_EDGE + 2));
@@ -979,14 +981,14 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
       Edge(
           HeapSnapshot::EdgeType::Property,
           "foo",
-          runtime->getHeap().getIDTracker().getNumberID(100)));
+          runtime.getHeap().getIDTracker().getNumberID(100)));
 
   EXPECT_EQ(
       nodesAndEdges.second[FIRST_NAMED_PROPERTY_EDGE + 1],
       Edge(
           HeapSnapshot::EdgeType::Property,
           "bar",
-          runtime->getHeap().getIDTracker().getNumberID(200)));
+          runtime.getHeap().getIDTracker().getNumberID(200)));
 }
 
 TEST_F(HeapSnapshotRuntimeTest, ArrayElements) {
@@ -996,23 +998,23 @@ TEST_F(HeapSnapshotRuntimeTest, ArrayElements) {
   // Build an array that doesn't start at index 0.
   std::string source =
       "var a = []; a[10] = {}; a[15] = {}; a[(1 << 20) + 1000] = {}; a";
-  CallResult<HermesValue> res = runtime->run(source, "file:///fake.js", flags);
+  CallResult<HermesValue> res = runtime.run(source, "file:///fake.js", flags);
   ASSERT_FALSE(isException(res));
-  Handle<JSArray> array = runtime->makeHandle(vmcast<JSArray>(*res));
-  Handle<JSObject> firstElement =
-      runtime->makeHandle<JSObject>(array->at(runtime, 10));
-  Handle<JSObject> secondElement =
-      runtime->makeHandle<JSObject>(array->at(runtime, 15));
+  Handle<JSArray> array = runtime.makeHandle(vmcast<JSArray>(*res));
+  Handle<JSObject> firstElement = runtime.makeHandle<JSObject>(
+      vmcast<JSObject>(array->at(runtime, 10).getObject(runtime)));
+  Handle<JSObject> secondElement = runtime.makeHandle(
+      vmcast<JSObject>(array->at(runtime, 15).getObject(runtime)));
   auto cr = JSObject::getComputed_RJS(
       array,
       runtime,
-      runtime->makeHandle(HermesValue::encodeNumberValue((1 << 20) + 1000)));
+      runtime.makeHandle(HermesValue::encodeNumberValue((1 << 20) + 1000)));
   ASSERT_FALSE(isException(cr));
-  Handle<JSObject> thirdElement = runtime->makeHandle<JSObject>(std::move(*cr));
-  const auto arrayID = runtime->getHeap().getObjectID(array.get());
+  Handle<JSObject> thirdElement = runtime.makeHandle<JSObject>(std::move(*cr));
+  const auto arrayID = runtime.getHeap().getObjectID(array.get());
 
-  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory);
+  ASSERT_TRUE(root != nullptr);
 
   const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &edges = *llvh::cast<JSONArray>(root->at("edges"));
@@ -1025,7 +1027,7 @@ TEST_F(HeapSnapshotRuntimeTest, ArrayElements) {
       nodeAndEdges.first,
       Node(
           HeapSnapshot::NodeType::Object,
-          "Array",
+          "JSArray",
           arrayID,
           array->getAllocatedSize(),
           FIRST_NAMED_PROPERTY_EDGE + 6));
@@ -1035,19 +1037,19 @@ TEST_F(HeapSnapshotRuntimeTest, ArrayElements) {
       Edge(
           HeapSnapshot::EdgeType::Element,
           (1 << 20) + 1000,
-          runtime->getHeap().getObjectID(thirdElement.get())));
+          runtime.getHeap().getObjectID(thirdElement.get())));
   EXPECT_EQ(
       nodeAndEdges.second[FIRST_NAMED_PROPERTY_EDGE + 4],
       Edge(
           HeapSnapshot::EdgeType::Element,
           10,
-          runtime->getHeap().getObjectID(firstElement.get())));
+          runtime.getHeap().getObjectID(firstElement.get())));
   EXPECT_EQ(
       nodeAndEdges.second[FIRST_NAMED_PROPERTY_EDGE + 5],
       Edge(
           HeapSnapshot::EdgeType::Element,
           15,
-          runtime->getHeap().getObjectID(secondElement.get())));
+          runtime.getHeap().getObjectID(secondElement.get())));
 }
 
 #ifdef HERMES_ENABLE_DEBUGGER
@@ -1144,11 +1146,11 @@ struct ChromeStackTreeNode {
 };
 
 TEST_F(HeapSnapshotRuntimeTest, AllocationTraces) {
-  runtime->enableAllocationLocationTracker();
+  runtime.enableAllocationLocationTracker();
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   hbc::CompileFlags flags;
-  CallResult<HermesValue> res = runtime->run(
+  CallResult<HermesValue> res = runtime.run(
       R"#(
 function foo() {
   return new Object();
@@ -1165,7 +1167,7 @@ baz();
       flags);
   ASSERT_FALSE(isException(res));
   ASSERT_TRUE(res->isObject());
-  Handle<JSObject> resObj = runtime->makeHandle(vmcast<JSObject>(*res));
+  Handle<JSObject> resObj = runtime.makeHandle(vmcast<JSObject>(*res));
   SymbolID fooSym, barSym;
   {
     vm::GCScope gcScope(runtime);
@@ -1181,12 +1183,12 @@ baz();
   auto fooObj = JSObject::getNamed_RJS(resObj, runtime, fooSym);
   auto barObj = JSObject::getNamed_RJS(resObj, runtime, barSym);
   auto fooObjID =
-      runtime->getHeap().getObjectID(vmcast<JSObject>(fooObj->get()));
+      runtime.getHeap().getObjectID(vmcast<JSObject>(fooObj->get()));
   auto barObjID =
-      runtime->getHeap().getObjectID(vmcast<JSObject>(barObj->get()));
+      runtime.getHeap().getObjectID(vmcast<JSObject>(barObj->get()));
 
-  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory);
+  ASSERT_TRUE(root != nullptr);
 
   const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
@@ -1246,11 +1248,11 @@ bar(5) @ test.js(2):6:20)#");
 }
 
 TEST_F(HeapSnapshotRuntimeTest, TwoPathsToFunction) {
-  runtime->enableAllocationLocationTracker();
+  runtime.enableAllocationLocationTracker();
   JSONFactory::Allocator alloc;
   JSONFactory jsonFactory{alloc};
   hbc::CompileFlags flags;
-  CallResult<HermesValue> res = runtime->run(
+  CallResult<HermesValue> res = runtime.run(
       R"#(
 var objects = [];
 function A() {
@@ -1274,11 +1276,11 @@ objects[0];
       flags);
   ASSERT_FALSE(isException(res));
   ASSERT_TRUE(res->isObject());
-  Handle<JSObject> obj = runtime->makeHandle(vmcast<JSObject>(*res));
-  auto objID = runtime->getHeap().getObjectID(*obj);
+  Handle<JSObject> obj = runtime.makeHandle(vmcast<JSObject>(*res));
+  auto objID = runtime.getHeap().getObjectID(*obj);
 
-  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
-  ASSERT_NE(root, nullptr);
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory);
+  ASSERT_TRUE(root != nullptr);
 
   const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
   const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
@@ -1309,3 +1311,5 @@ B(4) @ test.js(2):7:15)#");
 } // namespace heapsnapshottest
 } // namespace unittest
 } // namespace hermes
+
+#endif // HERMES_MEMORY_INSTRUMENTATION

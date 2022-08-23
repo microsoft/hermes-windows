@@ -71,7 +71,6 @@ android {
         arguments "-DANDROID_STL=c++_shared"
         arguments "-DANDROID_PIE=True"
         arguments "-DIMPORT_HERMESC=${rootProject.ext.hermesC}"
-        arguments "-DFBSOURCE_DIR=${rootProject.ext.fbsource}"
         arguments "-DHERMES_SLOW_DEBUG=False"
         arguments "-DHERMES_ENABLE_INTL=True"
         targets "jsijni", "jsijniepi", "libhermes"
@@ -84,7 +83,7 @@ android {
 
   externalNativeBuild {
     cmake {
-      version "3.10.2"
+      version "3.18.1"
       path "../../CMakeLists.txt"
       buildStagingDirectory = "${rootProject.ext.hermes_ws}/staging/intl"
       buildStagingDirectory.mkdirs()
@@ -103,13 +102,11 @@ android {
     androidTestImplementation 'androidx.test.ext:junit:1.1.1'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
     androidTestImplementation 'org.easytesting:fest-assert-core:2.0M10'
-    androidTestImplementation 'com.facebook.soloader:soloader:0.9.0'
-    androidTestImplementation 'com.facebook.yoga:proguard-annotations:1.14.1'
-  }
+    androidTestImplementation 'com.facebook.soloader:soloader:0.10.3'
+    androidTestImplementation 'com.facebook.yoga:proguard-annotations:1.19.0'
 
-  dependencies {
     implementation 'com.facebook.fbjni:fbjni:0.2.2'
-    implementation "androidx.annotation:annotation:1.1.0"
+    implementation "androidx.annotation:annotation:1.3.0"
     implementation "androidx.annotation:annotation-experimental:1.0.0"
   }
 

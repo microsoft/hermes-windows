@@ -14,6 +14,7 @@ set(RTSources
   AlignedStorageTest.cpp
   ArrayTest.cpp
   ArrayStorageTest.cpp
+  BigIntPrimitiveTest.cpp
   BytecodeProviderTest.cpp
   CallResultTest.cpp
   CardObjectBoundaryNCTest.cpp
@@ -47,6 +48,7 @@ set(RTSources
   JSLibTest.cpp
   NativeFrameTest.cpp
   NativeFunctionTest.cpp
+  NativeStateTest.cpp
   MarkBitArrayNCTest.cpp
   ObjectBufferTest.cpp
   ObjectModelTest.cpp
@@ -55,6 +57,7 @@ set(RTSources
   HandleTest.cpp
   RuntimeConfigTest.cpp
   SamplingHeapProfilerTest.cpp
+  SamplingProfilerPosixTest.cpp
   SegmentedArrayTest.cpp
   SmallHermesValueTest.cpp
   SmallXStringTest.cpp

@@ -17,8 +17,6 @@
 
 #define INCLUDE_ALL_INSTRS
 
-using llvh::cast;
-
 using namespace hermes;
 
 unsigned TerminatorInst::getNumSuccessors() const {
@@ -53,7 +51,7 @@ bool hermes::isSideEffectFree(Type T) {
 }
 
 const char *UnaryOperatorInst::opStringRepr[] =
-    {"delete", "void", "typeof", "+", "-", "~", "!"};
+    {"delete", "void", "typeof", "+", "-", "~", "!", "++", "--"};
 
 const char *BinaryOperatorInst::opStringRepr[] = {
     "",   "==", "!=",  "===", "!==", "<", "<=", ">",         ">=",

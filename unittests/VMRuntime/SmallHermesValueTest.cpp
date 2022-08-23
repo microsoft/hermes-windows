@@ -177,10 +177,22 @@ TEST_F(SmallHermesValueRuntimeTest, StringTest) {
   EXPECT_EQ(HV.getString(), message.get());
 }
 
+TEST_F(SmallHermesValueRuntimeTest, BigIntTest) {
+  // Encode a bigint.
+  auto H = BigIntPrimitive::fromSignedNoThrow(runtime, 0x123);
+  auto SHV = SmallHermesValue::encodeHermesValue(
+      HermesValue::encodeBigIntValue(H.get()), runtime);
+  EXPECT_TRUE(SHV.isPointer());
+  EXPECT_TRUE(SHV.isBigInt());
+  auto HV = SHV.unboxToHV(runtime);
+  EXPECT_TRUE(HV.isBigInt());
+  EXPECT_EQ(HV.getBigInt(), H.get());
+}
+
 TEST_F(SmallHermesValueRuntimeTest, ObjectTest) {
   // Encode an object.
   auto obj = JSNumber::create(
-      runtime, 3.14, Handle<JSObject>::vmcast(&runtime->numberPrototype));
+      runtime, 3.14, Handle<JSObject>::vmcast(&runtime.numberPrototype));
   auto SHV = SmallHermesValue::encodeHermesValue(
       HermesValue::encodeObjectValue(obj.get()), runtime);
   EXPECT_TRUE(SHV.isPointer());

@@ -11,8 +11,7 @@
 'use strict';
 
 import type {ESNode, Program} from 'hermes-estree';
-import type {Visitor} from '../traverse/traverse';
-import type {TransformContext} from './TransformContext';
+import type {TransformVisitor} from './transform';
 import type {RemoveCommentMutation} from './mutations/RemoveComment';
 
 import {parseForESLint} from 'hermes-eslint';
@@ -20,9 +19,12 @@ import {updateAllParentPointers} from '../detachedNode';
 import {traverseWithContext} from '../traverse/traverse';
 import {MutationContext} from './MutationContext';
 import {getTransformContext} from './TransformContext';
-import {attachComments} from './comments/comments';
-import {performAddLeadingCommentsMutation} from './mutations/AddLeadingComments';
-import {performAddTrailingCommentsMutation} from './mutations/AddTrailingComments';
+import {
+  addCommentsToNode,
+  attachComments,
+  getLeadingCommentsForNode,
+} from './comments/comments';
+import {performAddCommentsMutation} from './mutations/AddComments';
 import {performCloneCommentsToMutation} from './mutations/CloneCommentsTo';
 import {performInsertStatementMutation} from './mutations/InsertStatement';
 import {performRemoveCommentMutations} from './mutations/RemoveComment';
@@ -33,7 +35,7 @@ import {performReplaceStatementWithManyMutation} from './mutations/ReplaceStatem
 
 export function getTransformedAST(
   code: string,
-  visitors: Visitor<TransformContext>,
+  visitors: TransformVisitor,
 ): {
   ast: Program,
   astWasMutated: boolean,
@@ -48,8 +50,14 @@ export function getTransformedAST(
   attachComments(ast.comments, ast, code);
 
   // traverse the AST and colllect the mutations
-  const transformContext = getTransformContext(code);
-  traverseWithContext(ast, scopeManager, () => transformContext, visitors);
+  const transformContext = getTransformContext();
+  traverseWithContext(
+    code,
+    ast,
+    scopeManager,
+    () => transformContext,
+    visitors,
+  );
 
   // apply the mutations to the AST
   const mutationContext = new MutationContext(code);
@@ -88,12 +96,8 @@ export function getTransformedAST(
           return null;
         }
 
-        case 'addLeadingComments': {
-          return performAddLeadingCommentsMutation(mutationContext, mutation);
-        }
-
-        case 'addTrailingComments': {
-          return performAddTrailingCommentsMutation(mutationContext, mutation);
+        case 'addComments': {
+          return performAddCommentsMutation(mutationContext, mutation);
         }
 
         case 'cloneCommentsTo': {
@@ -117,6 +121,20 @@ export function getTransformedAST(
     // Being strict here just helps us ensure we keep everything in sync
     if (mutationRoot) {
       updateAllParentPointers(mutationRoot);
+    }
+  }
+
+  // if the very first node in the program is replaced, it will take the docblock with it
+  // this is bad as it means we'll lose `@format`, `@flow`, licence, etc.
+  // so this hack just makes sure that we keep the docblock
+  // note that we do this **BEFORE** the comment mutations in case someone intentionally
+  // wants to remove the docblock comment for some weird reason
+  if (ast.docblock != null && ast.body.length > 0) {
+    const firstNode = ast.body[0];
+    const docblockComment = ast.docblock.comment;
+    const leadingComments = getLeadingCommentsForNode(firstNode);
+    if (!leadingComments.includes(docblockComment)) {
+      addCommentsToNode(firstNode, [docblockComment], 'leading');
     }
   }
 

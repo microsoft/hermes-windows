@@ -12,7 +12,6 @@
 #include "llvh/ADT/SmallString.h"
 
 using namespace hermes;
-using llvh::isa;
 using llvh::SmallString;
 
 namespace {
@@ -122,6 +121,18 @@ Literal *hermes::evalUnaryOperator(
 
     case UnaryOperatorInst::OpKind::VoidKind:
       return builder.getLiteralUndefined();
+
+    case UnaryOperatorInst::OpKind::IncKind:
+      if (auto *V = evalToNumber(builder, operand)) {
+        return builder.getLiteralNumber(V->getValue() + 1);
+      }
+      break;
+
+    case UnaryOperatorInst::OpKind::DecKind:
+      if (auto *V = evalToNumber(builder, operand)) {
+        return builder.getLiteralNumber(V->getValue() - 1);
+      }
+      break;
 
     default:
       break;

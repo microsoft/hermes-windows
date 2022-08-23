@@ -26,6 +26,8 @@ T *GCBase::makeAFixed(Args &&...args) {
       cellSize<T>() >= minAllocationSize() &&
           cellSize<T>() <= maxAllocationSize(),
       "Cell size outside legal range.");
+  assert(
+      VTable::getVTable(T::getCellKind())->size && "Cell is not fixed size.");
   return makeA<T, true /* fixedSize */, hasFinalizer, longLived>(
       cellSize<T>(), std::forward<Args>(args)...);
 }
@@ -39,6 +41,9 @@ T *GCBase::makeAVariable(uint32_t size, Args &&...args) {
   // If size is greater than the max, we should OOM.
   assert(
       size >= GC::minAllocationSize() && "Cell size is smaller than minimum");
+  assert(
+      !VTable::getVTable(T::getCellKind())->size &&
+      "Cell is not variable size.");
   return makeA<T, false /* fixedSize */, hasFinalizer, longLived>(
       heapAlignSize(size), std::forward<Args>(args)...);
 }
@@ -52,6 +57,10 @@ template <
 T *GCBase::makeA(uint32_t size, Args &&...args) {
   assert(
       isSizeHeapAligned(size) && "Size must be aligned before reaching here");
+  assert(
+      !!VTable::getVTable(T::getCellKind())->finalize_ ==
+          (hasFinalizer == HasFinalizer::Yes) &&
+      "hasFinalizer should be set iff the cell has a finalizer.");
 #ifdef HERMESVM_GC_RUNTIME
   T *ptr = runtimeGCDispatch([&](auto *gc) {
     return gc->template makeA<T, fixedSize, hasFinalizer, longLived>(
@@ -62,7 +71,7 @@ T *GCBase::makeA(uint32_t size, Args &&...args) {
       static_cast<GC *>(this)->makeA<T, fixedSize, hasFinalizer, longLived>(
           size, std::forward<Args>(args)...);
 #endif
-#ifdef HERMES_ENABLE_ALLOCATION_LOCATION_TRACES
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   newAlloc(ptr, size);
 #endif
   return ptr;

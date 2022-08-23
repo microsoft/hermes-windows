@@ -10,80 +10,11 @@
 
 'use strict';
 
-import type {DefinitionTypeType, ScopeTypeType} from '../src';
+import type {ScopeManager} from '../src/scope-manager/ScopeManager';
 
 import {parseForESLint} from '../src';
 import {DefinitionType, ScopeType} from '../src';
-
-/**
- * Utility to check that scope manager produces correct scopes and variables.
- *
- * Scopes are passed as an array of objects, starting with the module scope,
- * where each object has a scope type and array of variables, Each variable is
- * an object with a name, optional reference count, and optional definition type.
- */
-function verifyHasScopes(
-  code: string,
-  expectedScopes: $ReadOnlyArray<{
-    type: ScopeTypeType,
-    variables: $ReadOnlyArray<{
-      name: string,
-      type: ?DefinitionTypeType,
-      referenceCount: ?number,
-    }>,
-  }>,
-) {
-  const {scopeManager} = parseForESLint(code);
-
-  // report as an array so that it's easier to debug the tests
-  // otherwise you get a cryptic failure that just says "expected 1 but received 2"
-  expect(scopeManager.scopes.map(s => s.type)).toEqual([
-    // Global scope (at index 0 of actual scopes) is not passed as an expected scope
-    'global',
-    ...expectedScopes.map(s => s.type),
-  ]);
-
-  for (let i = 0; i < expectedScopes.length; i++) {
-    const actualScope = scopeManager.scopes[i + 1];
-    const expectedScope = expectedScopes[i];
-
-    expect(actualScope.type).toEqual(expectedScope.type);
-    // report as an object so that it's easier to debug the tests
-    expect({
-      type: actualScope.type,
-      variables: actualScope.variables.map(v => v.name),
-    }).toEqual({
-      type: actualScope.type,
-      variables: expectedScope.variables.map(v => v.name),
-    });
-
-    for (let j = 0; j < expectedScope.variables.length; j++) {
-      const expectedVariable = expectedScope.variables[j];
-      const actualVariable = actualScope.variables[j];
-
-      expect(actualVariable.name).toEqual(expectedVariable.name);
-
-      if (expectedVariable.referenceCount != null) {
-        const cnt = expectedVariable.referenceCount;
-        // report as an object so that it's easier to debug the tests
-        expect({
-          type: expectedVariable.type,
-          name: actualVariable.name,
-          refCount: actualVariable.references.length,
-        }).toEqual({
-          type: expectedVariable.type,
-          name: actualVariable.name,
-          refCount: cnt,
-        });
-      }
-
-      if (expectedVariable.type != null) {
-        expect(actualVariable.defs).toHaveLength(1);
-        expect(actualVariable.defs[0].type).toEqual(expectedVariable.type);
-      }
-    }
-  }
-}
+import {verifyHasScopes} from '../__test_utils__/verifyHasScopes';
 
 describe('Source type option', () => {
   test('script', () => {
@@ -114,7 +45,11 @@ describe('Source type option', () => {
 });
 
 describe('Type and value references', () => {
-  function verifyValueAndTypeReferences(code, name, definitionType) {
+  function verifyValueAndTypeReferences(
+    code: string,
+    name: string,
+    definitionType: 'ClassName' | 'Enum',
+  ) {
     it(code, () => {
       const {scopeManager} = parseForESLint(code);
 
@@ -158,7 +93,7 @@ describe('Type and value references', () => {
 });
 
 describe('Type definitions', () => {
-  function verifyTypeDefinition(scopeManager) {
+  function verifyTypeDefinition(scopeManager: ScopeManager) {
     // Verify there is a module scope, variable, and reference
     expect(scopeManager.scopes).toHaveLength(2);
 
@@ -245,7 +180,7 @@ describe('Enums', () => {
 });
 
 describe('QualifiedTypeIdentifier', () => {
-  test('References value', () => {
+  test('References values', () => {
     const {scopeManager} = parseForESLint(`
       import * as Foo from 'Foo';
       (1: Foo.Bar);
@@ -259,12 +194,31 @@ describe('QualifiedTypeIdentifier', () => {
     expect(variable.name).toEqual('Foo');
     expect(variable.references).toHaveLength(1);
     expect(variable.references[0].isValueReference).toBe(true);
-    expect(variable.references[0].isTypeReference).toBe(false);
+    expect(variable.references[0].isTypeReference).toBe(true);
+  });
+  test('References types', () => {
+    const {scopeManager} = parseForESLint(`
+      import type Foo from 'Foo';
+      (1: Foo.Bar);
+    `);
+
+    // Verify that scope contains single value reference to 'Foo'
+    const scope = scopeManager.scopes[1];
+    expect(scope.variables).toHaveLength(1);
+
+    const variable = scope.variables[0];
+    expect(variable.name).toEqual('Foo');
+    expect(variable.references).toHaveLength(1);
+    expect(variable.references[0].isValueReference).toBe(true);
+    expect(variable.references[0].isTypeReference).toBe(true);
   });
 });
 
 describe('Identifiers not mistakenly treated as references', () => {
-  function verifyHasReferences(code, references) {
+  function verifyHasReferences(
+    code: string,
+    references: Array<{count: number, name: string}>,
+  ) {
     const {scopeManager} = parseForESLint(code);
 
     // Module scope should contain variables with the given reference counts
@@ -402,7 +356,43 @@ describe('Identifiers not mistakenly treated as references', () => {
     );
   });
 
-  test('ClassProperty', () => {
+  test('CallExpression', () => {
+    verifyHasReferences(
+      `
+        import Foo from 'Foo';
+        import Bar from 'Bar';
+        import type Baz from 'Baz';
+
+        Foo.Bar<Baz>();
+        Bar<Baz>();
+      `,
+      [
+        {name: 'Foo', count: 1},
+        {name: 'Bar', count: 1},
+        {name: 'Baz', count: 2},
+      ],
+    );
+  });
+
+  test('OptionalCallExpression', () => {
+    verifyHasReferences(
+      `
+        import Foo from 'Foo';
+        import Bar from 'Bar';
+        import type Baz from 'Baz';
+
+        Foo.Bar?.<Baz>();
+        Bar?.<Baz>();
+      `,
+      [
+        {name: 'Foo', count: 1},
+        {name: 'Bar', count: 1},
+        {name: 'Baz', count: 2},
+      ],
+    );
+  });
+
+  test('PropertyDefinition', () => {
     verifyHasReferences(
       `
         import Foo from 'Foo';
@@ -1011,6 +1001,27 @@ describe('Declare statements', () => {
     );
   });
 
+  test('DeclareModuleExports', () => {
+    verifyHasScopes(
+      `
+        import type {Foo} from 'foo';
+        declare module.exports: Foo;
+      `,
+      [
+        {
+          type: ScopeType.Module,
+          variables: [
+            {
+              name: 'Foo',
+              type: DefinitionType.ImportBinding,
+              referenceCount: 1,
+            },
+          ],
+        },
+      ],
+    );
+  });
+
   test('DeclareModule', () => {
     verifyHasScopes(
       `
@@ -1079,7 +1090,7 @@ describe('Declare statements', () => {
     expect(references[1].resolved).toBe(null);
   });
 
-  test('DeclareModuleExports', () => {
+  test('DeclareModule DeclareModuleExports', () => {
     verifyHasScopes(
       `
         import {module, exports} from 'Foo';
@@ -1118,7 +1129,7 @@ describe('Declare statements', () => {
     );
   });
 
-  test('DeclareExportDeclaration', () => {
+  test('DeclareModule DeclareExportDeclaration', () => {
     // Verify that all declare export nodes introduce a definition, with a single
     // additional reference in the declare module body.
     verifyHasScopes(
@@ -1278,8 +1289,8 @@ describe('Flow specific properties visited on non-Flow nodes', () => {
   });
 });
 
-describe('ClassProperty', () => {
-  it('ClassProperty', () => {
+describe('PropertyDefinition', () => {
+  it('PropertyDefinition', () => {
     verifyHasScopes(
       `
         import Foo from 'Foo';
@@ -1499,6 +1510,135 @@ describe('This type annotation', () => {
         },
       ],
     );
+  });
+
+  describe('this annotation can reference generics', () => {
+    test('function decl', () => {
+      verifyHasScopes(
+        `
+          function foo<This>(this: This) {}
+        `,
+        [
+          {
+            type: ScopeType.Module,
+            variables: [
+              {
+                name: 'foo',
+                type: DefinitionType.FunctionName,
+                referenceCount: 0,
+              },
+            ],
+          },
+          {
+            type: ScopeType.Function,
+            variables: [
+              {
+                name: 'arguments',
+                type: null,
+                referenceCount: 0,
+              },
+              {
+                name: 'This',
+                type: DefinitionType.TypeParameter,
+                referenceCount: 1,
+              },
+            ],
+          },
+        ],
+      );
+    });
+    test('function expr', () => {
+      verifyHasScopes(
+        `
+          const foo = function <This>(this: This) {};
+        `,
+        [
+          {
+            type: ScopeType.Module,
+            variables: [
+              {
+                name: 'foo',
+                type: DefinitionType.Variable,
+                referenceCount: 1,
+              },
+            ],
+          },
+          {
+            type: ScopeType.Function,
+            variables: [
+              {
+                name: 'arguments',
+                type: null,
+                referenceCount: 0,
+              },
+              {
+                name: 'This',
+                type: DefinitionType.TypeParameter,
+                referenceCount: 1,
+              },
+            ],
+          },
+        ],
+      );
+    });
+    test('function type1', () => {
+      verifyHasScopes(
+        `
+          type foo = <This>(this: This) => void;
+        `,
+        [
+          {
+            type: ScopeType.Module,
+            variables: [
+              {
+                name: 'foo',
+                type: DefinitionType.Type,
+                referenceCount: 0,
+              },
+            ],
+          },
+          {
+            type: ScopeType.Type,
+            variables: [
+              {
+                name: 'This',
+                type: DefinitionType.TypeParameter,
+                referenceCount: 1,
+              },
+            ],
+          },
+        ],
+      );
+    });
+    test('function type2', () => {
+      verifyHasScopes(
+        `
+          type foo<This> = (this: This) => void;
+        `,
+        [
+          {
+            type: ScopeType.Module,
+            variables: [
+              {
+                name: 'foo',
+                type: DefinitionType.Type,
+                referenceCount: 0,
+              },
+            ],
+          },
+          {
+            type: ScopeType.Type,
+            variables: [
+              {
+                name: 'This',
+                type: DefinitionType.TypeParameter,
+                referenceCount: 1,
+              },
+            ],
+          },
+        ],
+      );
+    });
   });
 });
 

@@ -74,6 +74,8 @@ void JSParserImpl::initializeIdentifiers() {
   yieldIdent_ = lexer_.getIdentifier("yield");
   newIdent_ = lexer_.getIdentifier("new");
   targetIdent_ = lexer_.getIdentifier("target");
+  importIdent_ = lexer_.getIdentifier("import");
+  metaIdent_ = lexer_.getIdentifier("meta");
   valueIdent_ = lexer_.getIdentifier("value");
   typeIdent_ = lexer_.getIdentifier("type");
   asyncIdent_ = lexer_.getIdentifier("async");
@@ -3155,46 +3157,70 @@ Optional<ESTree::Node *> JSParserImpl::parseOptionalExpressionExceptNew(
       return None;
     }
   } else if (check(TokenKind::rw_import)) {
-    // ImportCall must be a call with an AssignmentExpression as the
-    // argument.
-    advance();
-    if (!eat(
-            TokenKind::l_paren,
-            JSLexer::AllowRegExp,
-            "in import call",
-            "location of 'import'",
-            startLoc))
-      return None;
-
-    auto optSource = parseAssignmentExpression(ParamIn);
-    if (!optSource)
-      return None;
-    ESTree::Node *source = *optSource;
-
-    checkAndEat(TokenKind::comma);
-
-    ESTree::Node *attributes = nullptr;
-    if (!check(TokenKind::r_paren)) {
-      auto optAttributes = parseAssignmentExpression();
-      if (!optAttributes)
+    SMRange importRange = advance();
+    if (checkAndEat(TokenKind::period)) {
+      // ImportMeta: import . meta
+      //                      ^
+      if (!check(metaIdent_)) {
+        error(tok_->getSourceRange(), "'meta' expected in member expression");
+        sm_.note(
+            importRange.Start, "start of member expression", Subsystem::Parser);
         return None;
-      attributes = *optAttributes;
+      }
+      auto *meta = setLocation(
+          importRange,
+          importRange,
+          new (context_) ESTree::IdentifierNode(importIdent_, nullptr, false));
+      auto *prop = setLocation(
+          tok_,
+          tok_,
+          new (context_) ESTree::IdentifierNode(metaIdent_, nullptr, false));
+      advance();
+      expr = setLocation(
+          meta,
+          getPrevTokenEndLoc(),
+          new (context_) ESTree::MetaPropertyNode(meta, prop));
+    } else {
+      // ImportCall must be a call with an AssignmentExpression as the
+      // argument.
+      if (!eat(
+              TokenKind::l_paren,
+              JSLexer::AllowRegExp,
+              "in import call",
+              "location of 'import'",
+              startLoc))
+        return None;
+
+      auto optSource = parseAssignmentExpression(ParamIn);
+      if (!optSource)
+        return None;
+      ESTree::Node *source = *optSource;
+
       checkAndEat(TokenKind::comma);
+
+      ESTree::Node *attributes = nullptr;
+      if (!check(TokenKind::r_paren)) {
+        auto optAttributes = parseAssignmentExpression();
+        if (!optAttributes)
+          return None;
+        attributes = *optAttributes;
+        checkAndEat(TokenKind::comma);
+      }
+
+      SMLoc endLoc = tok_->getEndLoc();
+      if (!eat(
+              TokenKind::r_paren,
+              JSLexer::AllowRegExp,
+              "in import call",
+              "location of 'import'",
+              startLoc))
+        return None;
+
+      expr = setLocation(
+          startLoc,
+          endLoc,
+          new (context_) ESTree::ImportExpressionNode(source, attributes));
     }
-
-    SMLoc endLoc = tok_->getEndLoc();
-    if (!eat(
-            TokenKind::r_paren,
-            JSLexer::AllowRegExp,
-            "in import call",
-            "location of 'import'",
-            startLoc))
-      return None;
-
-    expr = setLocation(
-        startLoc,
-        endLoc,
-        new (context_) ESTree::ImportExpressionNode(source, attributes));
   } else {
     auto primExpr = parsePrimaryExpression();
     if (!primExpr)
@@ -3985,15 +4011,44 @@ Optional<ESTree::Node *> JSParserImpl::parseBinaryExpression(Param param) {
     }
   };
 
+  /// Parse a private identifier, which can only be used as LHS in an `in`.
+  /// If it's not in a valid position, report an error.
+  const auto consumePrivateIdentifier = [this, &stack]() -> ESTree::Node * {
+    assert(check(TokenKind::private_identifier));
+    ESTree::Node *name = setLocation(
+        tok_,
+        tok_,
+        new (context_) ESTree::PrivateNameNode(setLocation(
+            tok_,
+            tok_,
+            new (context_) ESTree::IdentifierNode(
+                tok_->getPrivateIdentifier(), nullptr, false))));
+    advance();
+    unsigned prevPrec = stack.empty() ? 0 : getPrecedence(stack.back().opKind);
+    // Check the precedence of the previous operator on the stack if it exists.
+    // If prevPrec is higher precedence than `in`, the private name will end
+    // up as the RHS in an invalid binary expression, so report an error.
+    if (!check(TokenKind::rw_in) || prevPrec >= getPrecedence(TokenKind::rw_in))
+      error(
+          name->getSourceRange(),
+          "Private name can only be used as left-hand side of `in` expression");
+    return name;
+  };
+
   // Decide whether to recognize "in" as a binary operator.
   const TokenKind exceptKind =
       !param.has(ParamIn) ? TokenKind::rw_in : TokenKind::none;
 
   SMLoc topExprStartLoc = tok_->getStartLoc();
-  auto optExpr = parseUnaryExpression();
-  if (!optExpr)
-    return None;
-  ESTree::NodePtr topExpr = optExpr.getValue();
+  ESTree::Node *topExpr = nullptr;
+  if (LLVM_UNLIKELY(check(TokenKind::private_identifier))) {
+    topExpr = consumePrivateIdentifier();
+  } else {
+    auto optExpr = parseUnaryExpression();
+    if (!optExpr)
+      return None;
+    topExpr = optExpr.getValue();
+  }
   SMLoc topExprEndLoc = getPrevTokenEndLoc();
 
   // While the current token is a binary operator.
@@ -4041,10 +4096,14 @@ Optional<ESTree::Node *> JSParserImpl::parseBinaryExpression(Param param) {
     } else
 #endif
     {
-      auto optRightExpr = parseUnaryExpression();
-      if (!optRightExpr)
-        return None;
-      topExpr = optRightExpr.getValue();
+      if (LLVM_UNLIKELY(check(TokenKind::private_identifier))) {
+        topExpr = consumePrivateIdentifier();
+      } else {
+        auto optRightExpr = parseUnaryExpression();
+        if (!optRightExpr)
+          return None;
+        topExpr = optRightExpr.getValue();
+      }
     }
 
     topExprEndLoc = getPrevTokenEndLoc();

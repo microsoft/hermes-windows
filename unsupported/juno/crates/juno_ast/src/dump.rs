@@ -5,14 +5,27 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use super::{
-    AssignmentExpressionOperator, BinaryExpressionOperator, Context, ExportKind, GCLock,
-    ImportKind, LogicalExpressionOperator, MethodDefinitionKind, Node, NodeLabel, NodeList, NodeRc,
-    NodeString, PropertyKind, UnaryExpressionOperator, UpdateExpressionOperator,
-    VariableDeclarationKind,
-};
-use juno_support::{case::ascii_snake_to_camel, json::*};
-use std::io::{self, Write};
+use super::AssignmentExpressionOperator;
+use super::BinaryExpressionOperator;
+use super::Context;
+use super::ExportKind;
+use super::GCLock;
+use super::ImportKind;
+use super::LogicalExpressionOperator;
+use super::MethodDefinitionKind;
+use super::Node;
+use super::NodeLabel;
+use super::NodeList;
+use super::NodeRc;
+use super::NodeString;
+use super::PropertyKind;
+use super::UnaryExpressionOperator;
+use super::UpdateExpressionOperator;
+use super::VariableDeclarationKind;
+use juno_support::case::ascii_snake_to_camel;
+use juno_support::json::*;
+use std::io;
+use std::io::Write;
 
 pub use juno_support::json::Pretty;
 
@@ -139,8 +152,11 @@ impl<'gc> DumpChild<'gc> for ExportKind {
 }
 
 impl<'gc> DumpChild<'gc> for NodeString {
-    fn dump<W: Write>(&self, _ctx: &'gc GCLock, emitter: &mut JSONEmitter<W>) {
-        emitter.emit_string_literal(&self.str);
+    fn dump<W: Write>(&self, ctx: &'gc GCLock, emitter: &mut JSONEmitter<W>) {
+        emitter.emit_string(&format!(
+            "u{:?}",
+            String::from_utf16_lossy(ctx.str_u16(*self))
+        ))
     }
 }
 
@@ -162,7 +178,7 @@ impl<'gc> DumpChild<'gc> for &'gc Node<'gc> {
 impl<'gc> DumpChild<'gc> for NodeList<'gc> {
     fn dump<W: Write>(&self, ctx: &'gc GCLock, emitter: &mut JSONEmitter<W>) {
         emitter.open_array();
-        for &elem in self {
+        for elem in self.iter() {
             dump_node(ctx, elem, emitter);
         }
         emitter.close_array();

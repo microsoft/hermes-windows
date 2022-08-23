@@ -26,25 +26,29 @@ class JSArrayBuffer final : public JSObject {
 
   static const ObjectVTable vt;
 
+  static constexpr CellKind getCellKind() {
+    return CellKind::JSArrayBufferKind;
+  }
   static bool classof(const GCCell *cell) {
-    return cell->getKind() == CellKind::ArrayBufferKind;
+    return cell->getKind() == CellKind::JSArrayBufferKind;
   }
 
   static PseudoHandle<JSArrayBuffer> create(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<JSObject> prototype);
 
   /// ES7 24.1.1.4
   /// NOTE: since SharedArrayBuffer does not exist, this does not use the
   /// SpeciesConstructor, it always allocates a normal ArrayBuffer.
   static CallResult<Handle<JSArrayBuffer>> clone(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<JSArrayBuffer> src,
       size_type srcByteOffset,
       size_type srcSize);
 
   /// ES7 6.2.6.2
   static void copyDataBlockBytes(
+      Runtime &runtime,
       JSArrayBuffer *dst,
       size_type dstIndex,
       JSArrayBuffer *src,
@@ -57,25 +61,30 @@ class JSArrayBuffer final : public JSObject {
   ///   uninitialized.
   /// \return ExecutionStatus::RETURNED iff the allocation was successful.
   ExecutionStatus
-  createDataBlock(Runtime *runtime, size_type size, bool zero = true);
+  createDataBlock(Runtime &runtime, size_type size, bool zero = true);
 
   /// Sets data block to the external buffer for this JSArrayBuffer to hold.
   /// Replaces the currently used data block.
   void setExternalBuffer(
-      Runtime *runtime,
+      Runtime &runtime,
       std::unique_ptr<Buffer> externalBuffer);
 
   /// Retrieves a pointer to the held buffer.
   /// \return A pointer to the buffer owned by this object. This can be null
   ///   if the ArrayBuffer is empty.
   /// \pre attached() must be true
-  uint8_t *getDataBlock() {
+  uint8_t *getDataBlock(Runtime &runtime) {
+    // This check should never fail, because all ways to illegally access
+    // ArrayBuffer should raise exceptions. It's here as a last line of defense.
+    if (!runtime.hasArrayBuffer())
+      hermes_fatal("Illegal access to ArrayBuffer");
     assert(attached() && "Cannot get a data block from a detached ArrayBuffer");
-    return data_;
+    return data_.get(runtime);
   }
 
   /// Get the size of this buffer.
   size_type size() const {
+    assert(attached() && "Cannot get size from a detached ArrayBuffer");
     return size_;
   }
 
@@ -86,26 +95,32 @@ class JSArrayBuffer final : public JSObject {
     return attached_;
   }
 
+  /// Free the data block owned by this JSArrayBuffer.
+  void freeInternalBuffer(GC &gc);
+
   /// Detaches this buffer from its data block, effectively freeing the storage
   /// and setting this ArrayBuffer to have zero size.  The \p gc argument allows
   /// the GC to be informed of this external memory deletion.
-  void detach(GC *gc);
+  void detach(GC &gc);
 
  protected:
-  static void _finalizeImpl(GCCell *cell, GC *gc);
+  static void _finalizeImpl(GCCell *cell, GC &gc);
   static size_t _mallocSizeImpl(GCCell *cell);
-  static void _snapshotAddEdgesImpl(GCCell *cell, GC *gc, HeapSnapshot &snap);
-  static void _snapshotAddNodesImpl(GCCell *cell, GC *gc, HeapSnapshot &snap);
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+  static void _snapshotAddEdgesImpl(GCCell *cell, GC &gc, HeapSnapshot &snap);
+  static void _snapshotAddNodesImpl(GCCell *cell, GC &gc, HeapSnapshot &snap);
+#endif
 
  private:
-  uint8_t *data_;
+  /// data_ and size_ are only valid when attached_ is true.
+  XorPtr<uint8_t, XorPtrKeyID::ArrayBufferData> data_;
   size_type size_;
   std::unique_ptr<Buffer> externalBuffer_;
   bool attached_;
 
  public:
   JSArrayBuffer(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<JSObject> parent,
       Handle<HiddenClass> clazz);
 

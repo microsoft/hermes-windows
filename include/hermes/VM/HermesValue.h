@@ -117,6 +117,7 @@ class raw_ostream;
 namespace hermes {
 namespace vm {
 
+class BigIntPrimitive;
 class StringPrimitive;
 template <typename T>
 class PseudoHandle;
@@ -129,53 +130,49 @@ class PointerBase;
 class GCCell;
 class Runtime;
 
-// Tags are defined as 16-bit values positioned at the high bits of a 64-bit
-// word.
-
-using TagKind = uint32_t;
-
-/// If tag < FirstTag, the encoded value is a double.
-static constexpr TagKind FirstTag = 0xfff9;
-static constexpr TagKind LastTag = 0xffff;
-
-static constexpr TagKind EmptyInvalidTag = FirstTag;
-static constexpr TagKind UndefinedNullTag = FirstTag + 1;
-static constexpr TagKind BoolTag = FirstTag + 2;
-static constexpr TagKind SymbolTag = FirstTag + 3;
-
-// Tags with 48-bit data start here.
-static constexpr TagKind NativeValueTag = FirstTag + 4;
-
-// Pointer tags start here.
-static constexpr TagKind StrTag = FirstTag + 5;
-static constexpr TagKind ObjectTag = FirstTag + 6;
-
-static_assert(ObjectTag == LastTag, "Tags mismatch");
-
-/// Only values in the range [FirstPointerTag..LastTag] are pointers.
-static constexpr TagKind FirstPointerTag = StrTag;
-
 /// A NaN-box encoded value.
 class HermesValue {
  public:
+  using TagType = intptr_t;
+  /// Tags are defined as 16-bit values positioned at the high bits of a 64-bit
+  /// word.
+  enum class Tag : TagType {
+    /// If tag < FirstTag, the encoded value is a double.
+    First = llvh::SignExtend32<8>(0xf9),
+    EmptyInvalid = First,
+    UndefinedNull,
+    BoolSymbol,
+    NativeValue,
+
+    /// Pointer tags start here.
+    FirstPointer,
+    Str = FirstPointer,
+    BigInt,
+    Object,
+    Last = llvh::SignExtend32<8>(0xff),
+  };
+  static_assert(Tag::Object <= Tag::Last, "Tags overflow");
+
   /// An "extended tag", occupying one extra bit.
-  enum class ETag : uint32_t {
-    Empty = EmptyInvalidTag * 2,
+  enum class ETag : TagType {
+    Empty = (TagType)Tag::EmptyInvalid * 2,
 #ifdef HERMES_SLOW_DEBUG
     /// An invalid hermes value is one that should never exist in normal
     /// operation, it can be used as a sigil to indicate a programming failure.
-    Invalid = EmptyInvalidTag * 2 + 1,
+    Invalid = (TagType)Tag::EmptyInvalid * 2 + 1,
 #endif
-    Undefined = UndefinedNullTag * 2,
-    Null = UndefinedNullTag * 2 + 1,
-    Bool = BoolTag * 2,
-    Symbol = SymbolTag * 2,
-    Native1 = NativeValueTag * 2,
-    Native2 = NativeValueTag * 2 + 1,
-    Str1 = StrTag * 2,
-    Str2 = StrTag * 2 + 1,
-    Object1 = ObjectTag * 2,
-    Object2 = ObjectTag * 2 + 1,
+    Undefined = (TagType)Tag::UndefinedNull * 2,
+    Null = (TagType)Tag::UndefinedNull * 2 + 1,
+    Bool = (TagType)Tag::BoolSymbol * 2,
+    Symbol = (TagType)Tag::BoolSymbol * 2 + 1,
+    Native1 = (TagType)Tag::NativeValue * 2,
+    Native2 = (TagType)Tag::NativeValue * 2 + 1,
+    Str1 = (TagType)Tag::Str * 2,
+    Str2 = (TagType)Tag::Str * 2 + 1,
+    BigInt1 = (TagType)Tag::BigInt * 2,
+    BigInt2 = (TagType)Tag::BigInt * 2 + 1,
+    Object1 = (TagType)Tag::Object * 2,
+    Object2 = (TagType)Tag::Object * 2 + 1,
 
     FirstPointer = Str1,
   };
@@ -186,19 +183,19 @@ class HermesValue {
   static constexpr unsigned kNumDataBits = (64 - kNumTagExpBits);
 
   /// Width of a tag in bits. The tag is aligned to the right of the top bits.
-  static constexpr unsigned kTagWidth = 4;
+  static constexpr unsigned kTagWidth = 3;
   static constexpr unsigned kTagMask = (1 << kTagWidth) - 1;
   /// Mask to extract the data from the whole 64-bit word.
   static constexpr uint64_t kDataMask = (1ull << kNumDataBits) - 1;
 
-  static constexpr unsigned kETagWidth = 5;
-  static constexpr unsigned kETagMask = (1 << kTagWidth) - 1;
+  static constexpr unsigned kETagWidth = 4;
+  static constexpr unsigned kETagMask = (1 << kETagWidth) - 1;
 
   /// Assert that the pointer can be encoded in \c kNumDataBits.
   static void validatePointer(const void *ptr) {
 #if LLVM_PTR_SIZE == 8
     assert(
-        (safeTypeCast<const void *, uint64_t>(ptr) & ~kDataMask) == 0 &&
+        (reinterpret_cast<uintptr_t>(ptr) & ~kDataMask) == 0 &&
         "Pointer top bits are set");
 #endif
   }
@@ -219,37 +216,67 @@ class HermesValue {
   /// Dump the contents to stderr.
   void dump(llvh::raw_ostream &stream = llvh::errs()) const;
 
-  inline TagKind getTag() const {
-    return (TagKind)(raw_ >> kNumDataBits);
+  inline Tag getTag() const {
+    return (Tag)((int64_t)raw_ >> kNumDataBits);
   }
   inline ETag getETag() const {
-    return (ETag)(raw_ >> (kNumDataBits - 1));
+    return (ETag)((int64_t)raw_ >> (kNumDataBits - 1));
   }
 
   /// Combine two tags into an 8-bit value.
-  inline static constexpr unsigned combineTags(TagKind a, TagKind b) {
-    return ((a & kTagMask) << kTagWidth) | (b & kTagMask);
+  inline static constexpr unsigned combineETags(ETag aTag, ETag bTag) {
+    using UTagType = std::make_unsigned<TagType>::type;
+    auto a = static_cast<UTagType>(aTag), b = static_cast<UTagType>(bTag);
+    return ((a & kETagMask) << kETagWidth) | (b & kETagMask);
   }
 
-  constexpr inline static HermesValue encodeNullptrObjectValue() {
-    return HermesValue(0, ObjectTag);
+  /// Special functions that allow nullptr to be stored in a HermesValue.
+  /// WARNING: These should never be used on the JS stack or heap, and are only
+  /// intended for Handles.
+  constexpr inline static HermesValue encodeNullptrObjectValueUnsafe() {
+    return HermesValue(0, Tag::Object);
   }
-  inline static HermesValue encodeObjectValue(void *val) {
+
+  inline static HermesValue encodeObjectValueUnsafe(void *val) {
     validatePointer(val);
-    HermesValue RV(safeTypeCast<void *, uintptr_t>(val), ObjectTag);
+    HermesValue RV(reinterpret_cast<uintptr_t>(val), Tag::Object);
     assert(RV.isObject());
     return RV;
   }
 
-  inline static HermesValue encodeStringValue(const StringPrimitive *val) {
+  inline static HermesValue encodeStringValueUnsafe(
+      const StringPrimitive *val) {
     validatePointer(val);
-    HermesValue RV(safeTypeCast<const void *, uintptr_t>(val), StrTag);
+    HermesValue RV(reinterpret_cast<uintptr_t>(val), Tag::Str);
     assert(RV.isString());
     return RV;
   }
 
+  inline static HermesValue encodeBigIntValueUnsafe(
+      const BigIntPrimitive *val) {
+    validatePointer(val);
+    HermesValue RV(reinterpret_cast<uintptr_t>(val), Tag::BigInt);
+    assert(RV.isBigInt());
+    return RV;
+  }
+
+  inline static HermesValue encodeObjectValue(void *val) {
+    assert(val && "Null pointers require special handling.");
+    return encodeObjectValueUnsafe(val);
+  }
+
+  inline static HermesValue encodeStringValue(const StringPrimitive *val) {
+    assert(val && "Null pointers require special handling.");
+    return encodeStringValueUnsafe(val);
+  }
+
+  inline static HermesValue encodeBigIntValue(const BigIntPrimitive *val) {
+    assert(val && "Null pointers require special handling.");
+    return encodeBigIntValueUnsafe(val);
+  }
+
   inline static HermesValue encodeNativeUInt32(uint32_t val) {
-    HermesValue RV(val, NativeValueTag);
+    HermesValue RV(val, Tag::NativeValue);
     assert(
         RV.isNativeValue() && RV.getNativeUInt32() == val &&
         "native value doesn't fit");
@@ -265,13 +292,13 @@ class HermesValue {
   }
 
   inline static HermesValue encodeSymbolValue(SymbolID val) {
-    HermesValue RV(val.unsafeGetRaw(), SymbolTag);
+    HermesValue RV(val.unsafeGetRaw(), ETag::Symbol);
     assert(RV.isSymbol());
     return RV;
   }
 
   constexpr inline static HermesValue encodeBoolValue(bool val) {
-    return HermesValue((uint64_t)(val), BoolTag);
+    return HermesValue((uint64_t)(val), ETag::Bool);
   }
 
   inline static constexpr HermesValue encodeNullValue() {
@@ -293,7 +320,7 @@ class HermesValue {
 #endif
 
   inline static HermesValue encodeDoubleValue(double num) {
-    HermesValue RV(safeTypeCast<double, uint64_t>(num));
+    HermesValue RV(llvh::DoubleToBits(num));
     assert(RV.isDouble());
     return RV;
   }
@@ -322,15 +349,15 @@ class HermesValue {
     return encodeDoubleValue((double)num);
   }
 
-  static constexpr HermesValue encodeNaNValue() {
-    return HermesValue(safeTypeCast<double, uint64_t>(
-        std::numeric_limits<double>::quiet_NaN()));
+  static HermesValue encodeNaNValue() {
+    return HermesValue(
+        llvh::DoubleToBits(std::numeric_limits<double>::quiet_NaN()));
   }
 
   /// Keeping tag constant, make a new HermesValue with \p val stored in it.
   inline HermesValue updatePointer(void *val) const {
     assert(isPointer());
-    HermesValue V(safeTypeCast<void *, uintptr_t>(val), getTag());
+    HermesValue V(reinterpret_cast<uintptr_t>(val), getTag());
     assert(V.isPointer());
     return V;
   }
@@ -355,25 +382,28 @@ class HermesValue {
   }
 #endif
   inline bool isNativeValue() const {
-    return getTag() == NativeValueTag;
+    return getTag() == Tag::NativeValue;
   }
   inline bool isSymbol() const {
-    return getTag() == SymbolTag;
+    return getETag() == ETag::Symbol;
   }
   inline bool isBool() const {
-    return getTag() == BoolTag;
+    return getETag() == ETag::Bool;
   }
   inline bool isObject() const {
-    return getTag() == ObjectTag;
+    return getTag() == Tag::Object;
   }
   inline bool isString() const {
-    return getTag() == StrTag;
+    return getTag() == Tag::Str;
+  }
+  inline bool isBigInt() const {
+    return getTag() == Tag::BigInt;
   }
   inline bool isDouble() const {
-    return raw_ < ((uint64_t)FirstTag << kNumDataBits);
+    return raw_ < ((uint64_t)Tag::First << kNumDataBits);
   }
   inline bool isPointer() const {
-    return raw_ >= ((uint64_t)FirstPointerTag << kNumDataBits);
+    return raw_ >= ((uint64_t)Tag::FirstPointer << kNumDataBits);
   }
   inline bool isNumber() const {
     return isDouble();
@@ -386,12 +416,12 @@ class HermesValue {
   inline void *getPointer() const {
     assert(isPointer());
     // Mask out the tag.
-    return safeSizeTrunc<uint64_t, void *>(raw_ & kDataMask);
+    return reinterpret_cast<void *>(raw_ & kDataMask);
   }
 
   inline double getDouble() const {
     assert(isDouble());
-    return safeTypeCast<uint64_t, double>(raw_);
+    return llvh::BitsToDouble(raw_);
   }
 
   inline uint32_t getNativeUInt32() const {
@@ -418,6 +448,11 @@ class HermesValue {
   inline StringPrimitive *getString() const {
     assert(isString());
     return static_cast<StringPrimitive *>(getPointer());
+  }
+
+  inline BigIntPrimitive *getBigInt() const {
+    assert(isBigInt());
+    return static_cast<BigIntPrimitive *>(getPointer());
   }
 
   inline void *getObject() const {
@@ -451,7 +486,7 @@ class HermesValue {
   /// This form performs assignments of pointer values without
   /// write barriers, to be used only within GC. The GC argument is
   /// used to assert that this is used only within GC.
-  inline void setInGC(HermesValue hv, GC *gc);
+  inline void setInGC(HermesValue hv, GC &gc);
 
   /// We delete the assignment operator: HermesValues should either
   /// PinnedHermesValues, to indicate that they can be assigned, or
@@ -469,12 +504,18 @@ class HermesValue {
   /// @name HV32 Compatibility APIs - DO NOT CALL DIRECTLY
   /// @{
 
-  GCCell *getPointer(PointerBase *) const {
+  GCCell *getPointer(PointerBase &) const {
     return static_cast<GCCell *>(getPointer());
   }
+  GCCell *getObject(PointerBase &) const {
+    return static_cast<GCCell *>(getObject());
+  }
 
-  static HermesValue encodeHermesValue(HermesValue hv, Runtime *) {
+  static HermesValue encodeHermesValue(HermesValue hv, Runtime &) {
     return hv;
+  }
+  static HermesValue encodeObjectValue(GCCell *obj, Runtime &) {
+    return encodeObjectValue(obj);
   }
 
   /// }
@@ -492,7 +533,7 @@ class HermesValue {
 
  private:
   constexpr explicit HermesValue(uint64_t val) : raw_(val) {}
-  constexpr explicit HermesValue(uint64_t val, TagKind tag)
+  constexpr explicit HermesValue(uint64_t val, Tag tag)
       : raw_(val | ((uint64_t)tag << kNumDataBits)) {}
   constexpr explicit HermesValue(uint64_t val, ETag etag)
       : raw_(val | ((uint64_t)etag << (kNumDataBits - 1))) {}
@@ -553,66 +594,66 @@ class GCHermesValueBase final : public HVType {
   GCHermesValueBase() : HVType(HVType::encodeUndefinedValue()) {}
   /// Initialize a GCHermesValue from another HV. Performs a write barrier.
   template <typename NeedsBarriers = std::true_type>
-  GCHermesValueBase(HVType hv, GC *gc);
+  GCHermesValueBase(HVType hv, GC &gc);
   /// Initialize a GCHermesValue from a non-pointer HV. Might perform a write
   /// barrier, depending on the GC.
   /// NOTE: The last parameter is unused, but acts as an overload selector.
   template <typename NeedsBarriers = std::true_type>
-  GCHermesValueBase(HVType hv, GC *gc, std::nullptr_t);
+  GCHermesValueBase(HVType hv, GC &gc, std::nullptr_t);
   GCHermesValueBase(const HVType &) = delete;
 
   /// The HermesValue \p hv may be an object pointer.  Assign the
   /// value, and perform any necessary write barriers.
   template <typename NeedsBarriers = std::true_type>
-  inline void set(HVType hv, GC *gc);
+  inline void set(HVType hv, GC &gc);
 
   /// The HermesValue \p hv must not be an object pointer.  Assign the
   /// value.
   /// Some GCs still need to do a write barrier though, so pass a GC parameter.
-  inline void setNonPtr(HVType hv, GC *gc);
+  inline void setNonPtr(HVType hv, GC &gc);
 
   /// Force a write barrier to occur on this value, as if the value was being
   /// set to null. This should be used when a value is becoming unreachable by
   /// the GC, without having anything written to its memory.
   /// NOTE: This barrier is typically used when a variable-sized object's length
   /// decreases.
-  inline void unreachableWriteBarrier(GC *gc);
+  inline void unreachableWriteBarrier(GC &gc);
 
   /// Fills a region of GCHermesValues defined by [\p first, \p last) with the
   /// value \p fill.  If the fill value is an object pointer, must
   /// provide a non-null \p gc argument, to perform write barriers.
   template <typename InputIt>
-  static inline void fill(InputIt first, InputIt last, HVType fill, GC *gc);
+  static inline void fill(InputIt first, InputIt last, HVType fill, GC &gc);
 
   /// Same as \p fill except the range expressed by  [\p first, \p last) has not
   /// been previously initialized. Cannot use this on previously initialized
   /// memory, as it will use an incorrect write barrier.
   template <typename InputIt>
   static inline void
-  uninitialized_fill(InputIt first, InputIt last, HVType fill, GC *gc);
+  uninitialized_fill(InputIt first, InputIt last, HVType fill, GC &gc);
 
   /// Copies a range of values and performs a write barrier on each.
   template <typename InputIt, typename OutputIt>
   static inline OutputIt
-  copy(InputIt first, InputIt last, OutputIt result, GC *gc);
+  copy(InputIt first, InputIt last, OutputIt result, GC &gc);
 
   /// Same as \p copy, but the range [result, result + (last - first)) has not
   /// been previously initialized. Cannot use this on previously initialized
   /// memory, as it will use an incorrect write barrier.
   template <typename InputIt, typename OutputIt>
   static inline OutputIt
-  uninitialized_copy(InputIt first, InputIt last, OutputIt result, GC *gc);
+  uninitialized_copy(InputIt first, InputIt last, OutputIt result, GC &gc);
 
 #if !defined(HERMESVM_GC_HADES) && !defined(HERMESVM_GC_RUNTIME)
-  /// Same as \p copy, but specialised for raw pointers.
+  /// Same as \p copy, but specialized for raw pointers.
   static inline GCHermesValueBase<HVType> *copy(
       GCHermesValueBase<HVType> *first,
       GCHermesValueBase<HVType> *last,
       GCHermesValueBase<HVType> *result,
-      GC *gc);
+      GC &gc);
 #endif
 
-  /// Same as \p uninitialized_copy, but specialised for raw pointers. This is
+  /// Same as \p uninitialized_copy, but specialized for raw pointers. This is
   /// unsafe to use if the memory region being copied into (pointed to by
   /// \p result) is reachable by the GC (for instance, memory within the
   /// size of an ArrayStorage), since it does not update elements atomically.
@@ -620,19 +661,19 @@ class GCHermesValueBase final : public HVType {
       GCHermesValueBase<HVType> *first,
       GCHermesValueBase<HVType> *last,
       GCHermesValueBase<HVType> *result,
-      GC *gc);
+      GC &gc);
 
   /// Copies a range of values and performs a write barrier on each.
   template <typename InputIt, typename OutputIt>
   static inline OutputIt
-  copy_backward(InputIt first, InputIt last, OutputIt result, GC *gc);
+  copy_backward(InputIt first, InputIt last, OutputIt result, GC &gc);
 
   /// Same as \c unreachableWriteBarrier, but for a range of values all becoming
   /// unreachable.
   static inline void rangeUnreachableWriteBarrier(
       GCHermesValueBase<HVType> *first,
       GCHermesValueBase<HVType> *last,
-      GC *gc);
+      GC &gc);
 };
 
 using GCHermesValue = GCHermesValueBase<HermesValue>;

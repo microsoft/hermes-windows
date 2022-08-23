@@ -33,7 +33,6 @@
 #include "hermes/VM/PropertyDescriptor.h"
 #include "hermes/VM/RegExpMatch.h"
 #include "hermes/VM/RuntimeModule.h"
-#include "hermes/VM/RuntimeStats.h"
 #include "hermes/VM/StackFrame.h"
 #include "hermes/VM/StackTracesTree-NoRuntime.h"
 #include "hermes/VM/SymbolRegistry.h"
@@ -98,7 +97,7 @@ static const unsigned STACK_RESERVE = 32;
 /// Type used to assign object unique integer identifiers.
 using ObjectID = uint32_t;
 
-using DestructionCallback = std::function<void(Runtime *)>;
+using DestructionCallback = std::function<void(Runtime &)>;
 
 #define PROP_CACHE_IDS(V) V(RegExpLastIndex, Predefined::lastIndex)
 
@@ -194,13 +193,13 @@ using CrashTrace = CrashTraceNoop;
 
 /// The Runtime encapsulates the entire context of a VM. Multiple instances can
 /// exist and are completely independent from each other.
-class Runtime : public HandleRootOwner,
-                public PointerBase,
+class Runtime : public PointerBase,
+                public HandleRootOwner,
                 private GCBase::GCCallbacks {
  public:
   static std::shared_ptr<Runtime> create(const RuntimeConfig &runtimeConfig);
 
-  ~Runtime();
+  ~Runtime() override;
 
   /// Add a custom function that will be executed at the start of every garbage
   /// collection to mark additional GC roots that may not be known to the
@@ -368,10 +367,10 @@ class Runtime : public HandleRootOwner,
 
   /// A wrapper to facilitate printing the name of a SymbolID to a stream.
   struct FormatSymbolID {
-    Runtime *const runtime;
+    Runtime &runtime;
     SymbolID const symbolID;
 
-    FormatSymbolID(Runtime *runtime, SymbolID symbolID)
+    FormatSymbolID(Runtime &runtime, SymbolID symbolID)
         : runtime(runtime), symbolID(symbolID) {}
   };
 
@@ -408,6 +407,17 @@ class Runtime : public HandleRootOwner,
   /// exception per job is required by `queueMicrotask` to properly "report the
   /// exception" (https://html.spec.whatwg.org/C#microtask-queuing).
   ExecutionStatus drainJobs();
+
+  // ES2021 9.12 "When the abstract operation AddToKeptObjects is called with a
+  // target object reference, it adds the target to a list that will point
+  // strongly at the target until ClearKeptObjects is called."
+  ExecutionStatus addToKeptObjects(Handle<JSObject> obj);
+
+  // ES2021 9.11 "ECMAScript implementations are
+  // expected to call ClearKeptObjects when a synchronous sequence of ECMAScript
+  // executions completes." This method clears all kept WeakRefs and allows
+  // their targets to be eligible for garbage collection again.
+  void clearKeptObjects();
 
   IdentifierTable &getIdentifierTable() {
     return identifierTable_;
@@ -562,12 +572,6 @@ class Runtime : public HandleRootOwner,
   /// Returns trailing data for all runtime modules.
   std::vector<llvh::ArrayRef<uint8_t>> getEpilogues();
 
-  /// \return the set of runtime stats.
-  instrumentation::RuntimeStats &getRuntimeStats() {
-    return runtimeStats_;
-  }
-
-  /// Print the heap and other misc. stats to the given stream.
   void printHeapStats(llvh::raw_ostream &os);
 
   /// Write IO tracking (aka HBC page access) info to the supplied
@@ -852,8 +856,12 @@ class Runtime : public HandleRootOwner,
     return hasIntl_;
   }
 
-  bool useJobQueue() const {
-    return getVMExperimentFlags() & experiments::JobQueue;
+  bool hasArrayBuffer() const {
+    return hasArrayBuffer_;
+  }
+
+  bool hasMicrotaskQueue() const {
+    return hasMicrotaskQueue_;
   }
 
   bool builtinsAreFrozen() const {
@@ -880,6 +888,21 @@ class Runtime : public HandleRootOwner,
   /// for an out-of-memory exception.
   std::string getCallStackNoAlloc() override {
     return getCallStackNoAlloc(nullptr);
+  }
+
+  /// \return whether we are currently formatting a stack trace. Used to break
+  /// recursion in Error.prepareStackTrace.
+  bool formattingStackTrace() const {
+    return formattingStackTrace_;
+  }
+
+  /// Mark whether we are currently formatting a stack trace. Used to break
+  /// recursion in Error.prepareStackTrace.
+  void setFormattingStackTrace(bool value) {
+    assert(
+        value != formattingStackTrace() &&
+        "All calls to setFormattingStackTrace must actually change the current state");
+    formattingStackTrace_ = value;
   }
 
   /// A stack overflow exception is thrown when \c nativeCallFrameDepth_ exceeds
@@ -1102,6 +1125,12 @@ class Runtime : public HandleRootOwner,
   /// Set to true if we should enable ECMA-402 Intl APIs.
   const bool hasIntl_;
 
+  /// Set to true if we should enable ArrayBuffer, DataView and typed arrays.
+  const bool hasArrayBuffer_;
+
+  /// Set to true if we are using microtasks.
+  const bool hasMicrotaskQueue_;
+
   /// Set to true if we should randomize stack placement etc.
   const bool shouldRandomizeMemoryLayout_;
 
@@ -1110,6 +1139,10 @@ class Runtime : public HandleRootOwner,
 
   // Signal-based I/O tracking. Slows down execution.
   const bool trackIO_;
+
+  // Whether we are currently formatting a stack trace. Used to break recursion
+  // in Error.prepareStackTrace.
+  bool formattingStackTrace_{false};
 
   /// This value can be passed to the runtime as flags to test experimental
   /// features. Each experimental feature decides how to interpret these
@@ -1149,9 +1182,6 @@ class Runtime : public HandleRootOwner,
 
   /// The global symbol registry.
   SymbolRegistry symbolRegistry_{};
-
-  /// Set of runtime statistics.
-  instrumentation::RuntimeStats runtimeStats_;
 
   /// Shared location to place native objects required by JSLib
   std::shared_ptr<RuntimeCommonStorage> commonStorage_;
@@ -1198,7 +1228,9 @@ class Runtime : public HandleRootOwner,
 
   /// rootClazzes_[i] is a PinnedHermesValue pointing to a hidden class with
   /// its i first slots pre-reserved.
-  std::array<PinnedHermesValue, InternalProperty::NumInternalProperties + 1>
+  std::array<
+      PinnedHermesValue,
+      InternalProperty::NumAnonymousInternalProperties + 1>
       rootClazzes_;
 
   /// Cache for property lookups in non-JS code.
@@ -1284,7 +1316,7 @@ class Runtime : public HandleRootOwner,
         (uint8_t)AsyncBreakReasonBits::DebuggerImplicit);
   }
 
-  Debugger debugger_{this};
+  Debugger debugger_{*this};
 #endif
 
   /// Holds references to persistent BC providers for the lifetime of the
@@ -1320,7 +1352,7 @@ class Runtime : public HandleRootOwner,
     return oldFlag;
   }
 
-  /// \return whether timeout async break was requsted or not. Clear the
+  /// \return whether timeout async break was requested or not. Clear the
   /// timeout request bit afterward.
   bool testAndClearTimeoutAsyncBreakRequest() {
     return testAndClearAsyncBreakRequest(
@@ -1401,12 +1433,13 @@ class Runtime : public HandleRootOwner,
   }
 
  private:
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   /// Given the current last known IP used in the interpreter loop, returns the
   /// last known CodeBlock and IP combination. IP must not be null as this
   /// suggests we're not in the interpter loop, and there will be no CodeBlock
   /// to find.
   std::pair<const CodeBlock *, const inst::Inst *>
-  getCurrentInterpreterLocation(const inst::Inst *initialSearchIP) const;
+  getCurrentInterpreterLocation(const inst::Inst *initialSearchIP);
 
  public:
   /// Return a StackTraceTreeNode for the last known interpreter bytecode
@@ -1443,8 +1476,6 @@ class Runtime : public HandleRootOwner,
     }
   }
 
-  /// Enable allocation location tracking. Only works with
-  /// HERMES_ENABLE_ALLOCATION_LOCATION_TRACES.
   void enableAllocationLocationTracker() {
     enableAllocationLocationTracker(nullptr);
   }
@@ -1476,23 +1507,52 @@ class Runtime : public HandleRootOwner,
   void popCallStackImpl();
   void pushCallStackImpl(const CodeBlock *codeBlock, const inst::Inst *ip);
   std::unique_ptr<StackTracesTree> stackTracesTree_;
+#endif
 };
+
+/// An encrypted/obfuscated native pointer. The key is held by GCBase.
+template <typename T, XorPtrKeyID K>
+class XorPtr {
+  uintptr_t bits_;
+
+ public:
+  XorPtr() = default;
+  XorPtr(Runtime &runtime, T *ptr) {
+    set(runtime, ptr);
+  }
+  void set(Runtime &runtime, T *ptr) {
+    set(runtime.getHeap(), ptr);
+  }
+  void set(GC &gc, T *ptr) {
+    bits_ = reinterpret_cast<uintptr_t>(ptr) ^ gc.pointerEncryptionKey_[K];
+  }
+  T *get(Runtime &runtime) const {
+    return get(runtime.getHeap());
+  }
+  T *get(GC &gc) const {
+    return reinterpret_cast<T *>(bits_ ^ gc.pointerEncryptionKey_[K]);
+  }
+};
+
+static_assert(
+    std::is_trivial<XorPtr<void, XorPtrKeyID::_NumKeys>>::value,
+    "XorPtr must be trivial");
 
 /// An RAII class for automatically tracking the native call frame depth.
 class ScopedNativeDepthTracker {
-  Runtime *const runtime_;
+  Runtime &runtime_;
 
  public:
-  explicit ScopedNativeDepthTracker(Runtime *runtime) : runtime_(runtime) {
-    ++runtime->nativeCallFrameDepth_;
+  explicit ScopedNativeDepthTracker(Runtime &runtime) : runtime_(runtime) {
+    ++runtime.nativeCallFrameDepth_;
   }
   ~ScopedNativeDepthTracker() {
-    --runtime_->nativeCallFrameDepth_;
+    --runtime_.nativeCallFrameDepth_;
   }
 
   /// \return whether we overflowed the native call frame depth.
   bool overflowed() const {
-    return runtime_->nativeCallFrameDepth_ >
+    return runtime_.nativeCallFrameDepth_ >
         Runtime::MAX_NATIVE_CALL_FRAME_DEPTH;
   }
 };
@@ -1502,21 +1562,21 @@ class ScopedNativeDepthTracker {
 /// stack, as the error may represent an overflow.  Without this, a
 /// cascade of exceptions could occur, overflowing the C++ stack.
 class ScopedNativeDepthReducer {
-  Runtime *const runtime_;
+  Runtime &runtime_;
   bool undo = false;
   // This is empirically good enough.
   static constexpr int kDepthAdjustment = 3;
 
  public:
-  explicit ScopedNativeDepthReducer(Runtime *runtime) : runtime_(runtime) {
-    if (runtime->nativeCallFrameDepth_ >= kDepthAdjustment) {
-      runtime->nativeCallFrameDepth_ -= kDepthAdjustment;
+  explicit ScopedNativeDepthReducer(Runtime &runtime) : runtime_(runtime) {
+    if (runtime.nativeCallFrameDepth_ >= kDepthAdjustment) {
+      runtime.nativeCallFrameDepth_ -= kDepthAdjustment;
       undo = true;
     }
   }
   ~ScopedNativeDepthReducer() {
     if (undo) {
-      runtime_->nativeCallFrameDepth_ += kDepthAdjustment;
+      runtime_.nativeCallFrameDepth_ += kDepthAdjustment;
     }
   }
 };
@@ -1532,7 +1592,7 @@ class ScopedNativeDepthReducer {
 /// for this purpose.
 class ScopedNativeCallFrame {
   /// The runtime for this call frame.
-  Runtime *const runtime_;
+  Runtime &runtime_;
 
   /// The stack pointer that will be restored in the destructor.
   PinnedHermesValue *const savedSP_;
@@ -1552,10 +1612,10 @@ class ScopedNativeCallFrame {
   /// of registers. This may fail if we've overflowed our register stack, or
   /// exceeded the native call frame depth.
   static bool runtimeCanAllocateFrame(
-      Runtime *runtime,
+      Runtime &runtime,
       uint32_t registersNeeded) {
-    return runtime->checkAvailableStack(registersNeeded) &&
-        runtime->nativeCallFrameDepth_ <= Runtime::MAX_NATIVE_CALL_FRAME_DEPTH;
+    return runtime.checkAvailableStack(registersNeeded) &&
+        runtime.nativeCallFrameDepth_ <= Runtime::MAX_NATIVE_CALL_FRAME_DEPTH;
   }
 
  public:
@@ -1570,13 +1630,13 @@ class ScopedNativeCallFrame {
   /// The arguments are initially uninitialized. The caller should initialize
   /// them by storing into them, or via fillArguments().
   ScopedNativeCallFrame(
-      Runtime *runtime,
+      Runtime &runtime,
       uint32_t argCount,
       HermesValue callee,
       HermesValue newTarget,
       HermesValue thisArg)
-      : runtime_(runtime), savedSP_(runtime->getStackPointer()) {
-    runtime->nativeCallFrameDepth_++;
+      : runtime_(runtime), savedSP_(runtime.getStackPointer()) {
+    runtime.nativeCallFrameDepth_++;
     uint32_t registersNeeded =
         StackFrameLayout::callerOutgoingRegisters(argCount);
     overflowed_ = !runtimeCanAllocateFrame(runtime, registersNeeded);
@@ -1586,10 +1646,10 @@ class ScopedNativeCallFrame {
 
     // We have enough space. Increment the call frame depth and construct the
     // frame. The ScopedNativeCallFrame will restore both.
-    auto *stack = runtime->allocUninitializedStack(registersNeeded);
+    auto *stack = runtime.allocUninitializedStack(registersNeeded);
     frame_ = StackFramePtr::initFrame(
         stack,
-        runtime->currentFrame_,
+        runtime.currentFrame_,
         nullptr,
         nullptr,
         argCount,
@@ -1614,7 +1674,7 @@ class ScopedNativeCallFrame {
   /// The arguments are initially uninitialized. The caller should initialize
   /// them by storing into them, or via fillArguments().
   ScopedNativeCallFrame(
-      Runtime *runtime,
+      Runtime &runtime,
       uint32_t argCount,
       Callable *callee,
       bool construct,
@@ -1630,8 +1690,8 @@ class ScopedNativeCallFrame {
   ~ScopedNativeCallFrame() {
     // Note that we unconditionally increment the native call frame depth and
     // save the SP to avoid branching in the dtor.
-    runtime_->nativeCallFrameDepth_--;
-    runtime_->popToSavedStackPointer(savedSP_);
+    runtime_.nativeCallFrameDepth_--;
+    runtime_.popToSavedStackPointer(savedSP_);
 #ifndef NDEBUG
     // Clear the frame to detect use-after-free.
     frame_ = StackFramePtr{};
@@ -1660,37 +1720,96 @@ class ScopedNativeCallFrame {
   }
 };
 
-/// RAII class to temporarily disallow allocation.
-/// Enforced by the GC in slow debug mode only.
+#ifdef NDEBUG
+
+/// NoAllocScope and NoHandleScope have no impact in release mode (except that
+/// if they are embedded into another struct/class, they will still use space!)
 class NoAllocScope {
  public:
-#ifdef NDEBUG
-  explicit NoAllocScope(Runtime *runtime) {}
-  explicit NoAllocScope(GC *gc) {}
+  explicit NoAllocScope(Runtime &runtime) {}
+  explicit NoAllocScope(GC &gc) {}
+  NoAllocScope(const NoAllocScope &) = default;
+  NoAllocScope(NoAllocScope &&) = default;
+  NoAllocScope &operator=(const NoAllocScope &) = default;
+  NoAllocScope &operator=(NoAllocScope &&rhs) = default;
   void release() {}
+
+ private:
+  NoAllocScope() = delete;
+};
+using NoHandleScope = NoAllocScope;
+
 #else
-  explicit NoAllocScope(Runtime *runtime) : NoAllocScope(&runtime->getHeap()) {}
-  explicit NoAllocScope(GC *gc) : noAllocLevel_(&gc->noAllocLevel_) {
-    ++*noAllocLevel_;
+
+/// RAII class to temporarily disallow allocation of something.
+class BaseNoScope {
+ public:
+  explicit BaseNoScope(uint32_t *level) : level_(level) {
+    assert(level_ && "constructing BaseNoScope with moved/release object");
+    ++*level_;
   }
 
-  ~NoAllocScope() {
-    if (noAllocLevel_)
+  BaseNoScope(const BaseNoScope &other) : BaseNoScope(other.level_) {}
+  BaseNoScope(BaseNoScope &&other) : level_(other.level_) {
+    // not a release operation as this inherits the counter from other.
+    other.level_ = nullptr;
+  }
+
+  ~BaseNoScope() {
+    if (level_)
       release();
+  }
+
+  BaseNoScope &operator=(BaseNoScope &&rhs) {
+    if (level_) {
+      release();
+    }
+
+    // N.B.: to account for cases when this == &rhs, first copy rhs.level_
+    // to a temporary, then null it out.
+    auto ptr = rhs.level_;
+    rhs.level_ = nullptr;
+    level_ = ptr;
+    return *this;
+  }
+
+  BaseNoScope &operator=(const BaseNoScope &other) {
+    return *this = BaseNoScope(other.level_);
   }
 
   /// End this scope early. May only be called once.
   void release() {
-    assert(noAllocLevel_ && "already released");
-    assert(*noAllocLevel_ > 0 && "unbalanced no alloc");
-    --*noAllocLevel_;
-    noAllocLevel_ = nullptr;
+    assert(level_ && "already released");
+    assert(*level_ > 0 && "unbalanced no alloc");
+    --*level_;
+    level_ = nullptr;
   }
 
+ protected:
+  uint32_t *level_;
+
  private:
-  uint32_t *noAllocLevel_;
-#endif
+  BaseNoScope() = delete;
 };
+
+/// RAII class to temporarily disallow handle creation.
+class NoHandleScope : public BaseNoScope {
+ public:
+  explicit NoHandleScope(Runtime &runtime)
+      : BaseNoScope(&runtime.noHandleLevel_) {}
+  using BaseNoScope::BaseNoScope;
+  using BaseNoScope::operator=;
+};
+
+/// RAII class to temporarily disallow allocating cells in the JS heap.
+class NoAllocScope : public BaseNoScope {
+ public:
+  explicit NoAllocScope(Runtime &runtime) : NoAllocScope(runtime.getHeap()) {}
+  explicit NoAllocScope(GC &gc) : BaseNoScope(&gc.noAllocLevel_) {}
+  using BaseNoScope::BaseNoScope;
+  using BaseNoScope::operator=;
+};
+#endif
 
 //===----------------------------------------------------------------------===//
 // Runtime inline methods.
@@ -1768,12 +1887,12 @@ inline void Runtime::ttiReached() {
 
 template <class T>
 inline Handle<T> Runtime::makeHandle(const GCPointer<T> &p) {
-  return Handle<T>(this, p.get(this));
+  return Handle<T>(*this, p.get(*this));
 }
 
 template <class T>
 inline MutableHandle<T> Runtime::makeMutableHandle(const GCPointer<T> &p) {
-  return MutableHandle<T>(this, p.get(this));
+  return MutableHandle<T>(*this, p.get(*this));
 }
 
 inline StringPrimitive *Runtime::getPredefinedString(
@@ -1797,7 +1916,7 @@ inline Handle<StringPrimitive> Runtime::getPredefinedStringHandle(
 }
 
 inline StringPrimitive *Runtime::getStringPrimFromSymbolID(SymbolID id) {
-  return identifierTable_.getStringPrim(this, id);
+  return identifierTable_.getStringPrim(*this, id);
 }
 
 #ifdef HERMESVM_PROFILER_BB
@@ -1811,7 +1930,7 @@ inline void Runtime::dumpBasicBlockProfileTrace(llvh::raw_ostream &OS) {
 #endif
 
 inline Runtime::FormatSymbolID Runtime::formatSymbolID(SymbolID id) {
-  return FormatSymbolID(this, id);
+  return FormatSymbolID(*this, id);
 }
 
 inline void Runtime::popToSavedStackPointer(PinnedHermesValue *stackPointer) {

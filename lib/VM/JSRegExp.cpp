@@ -25,18 +25,22 @@ namespace vm {
 
 const ObjectVTable JSRegExp::vt{
     VTable(
-        CellKind::RegExpKind,
+        CellKind::JSRegExpKind,
         cellSize<JSRegExp>(),
         JSRegExp::_finalizeImpl,
         nullptr,
         JSRegExp::_mallocSizeImpl,
-        nullptr,
-        VTable::HeapSnapshotMetadata{
-            HeapSnapshot::NodeType::Regexp,
-            JSRegExp::_snapshotNameImpl,
-            JSRegExp::_snapshotAddEdgesImpl,
-            JSRegExp::_snapshotAddNodesImpl,
-            nullptr}),
+        nullptr
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+        ,
+        VTable::HeapSnapshotMetadata {
+          HeapSnapshot::NodeType::Regexp, JSRegExp::_snapshotNameImpl,
+              JSRegExp::_snapshotAddEdgesImpl, JSRegExp::_snapshotAddNodesImpl,
+              nullptr
+        }
+#endif
+
+        ),
     JSRegExp::_getOwnIndexedRangeImpl,
     JSRegExp::_haveOwnIndexedImpl,
     JSRegExp::_getOwnIndexedPropertyFlagsImpl,
@@ -46,35 +50,35 @@ const ObjectVTable JSRegExp::vt{
     JSRegExp::_checkAllOwnIndexedImpl,
 };
 
-void RegExpBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
+void JSRegExpBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.addJSObjectOverlapSlots(JSObject::numOverlapSlots<JSRegExp>());
-  ObjectBuildMeta(cell, mb);
+  JSObjectBuildMeta(cell, mb);
   const auto *self = static_cast<const JSRegExp *>(cell);
-  mb.setVTable(&JSRegExp::vt.base);
+  mb.setVTable(&JSRegExp::vt);
   mb.addField(&self->pattern_);
 }
 
 PseudoHandle<JSRegExp> JSRegExp::create(
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<JSObject> parentHandle) {
-  auto *cell = runtime->makeAFixed<JSRegExp, HasFinalizer::Yes>(
+  auto *cell = runtime.makeAFixed<JSRegExp, HasFinalizer::Yes>(
       runtime,
       parentHandle,
-      runtime->getHiddenClassForPrototype(
+      runtime.getHiddenClassForPrototype(
           *parentHandle, numOverlapSlots<JSRegExp>()));
   return JSObjectInit::initToPseudoHandle(runtime, cell);
 }
 
 void JSRegExp::initialize(
     Handle<JSRegExp> selfHandle,
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<StringPrimitive> pattern,
     Handle<StringPrimitive> flags,
     llvh::ArrayRef<uint8_t> bytecode) {
   assert(
       pattern && flags &&
       "Null pattern and/or flags passed to JSRegExp::initialize");
-  selfHandle->pattern_.set(runtime, *pattern, &runtime->getHeap());
+  selfHandle->pattern_.set(runtime, *pattern, runtime.getHeap());
 
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
   dpf.enumerable = 0;
@@ -96,7 +100,7 @@ void JSRegExp::initialize(
 
 ExecutionStatus JSRegExp::initialize(
     Handle<JSRegExp> selfHandle,
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<JSRegExp> otherHandle,
     Handle<StringPrimitive> flags) {
   llvh::SmallVector<char16_t, 16> flagsText16;
@@ -104,10 +108,10 @@ ExecutionStatus JSRegExp::initialize(
 
   auto sflags = regex::SyntaxFlags::fromString(flagsText16);
   if (!sflags) {
-    return runtime->raiseSyntaxError("Invalid RegExp: Invalid flags");
+    return runtime.raiseSyntaxError("Invalid RegExp: Invalid flags");
   }
 
-  auto pattern = runtime->makeHandle(getPattern(otherHandle.get(), runtime));
+  auto pattern = runtime.makeHandle(getPattern(otherHandle.get(), runtime));
 
   // Fast path to avoid recompiling the RegExp if the flags match
   if (LLVM_LIKELY(
@@ -126,7 +130,7 @@ ExecutionStatus JSRegExp::initialize(
 /// ES11 21.2.3.2.2 RegExpInitialize ( obj, pattern, flags )
 ExecutionStatus JSRegExp::initialize(
     Handle<JSRegExp> selfHandle,
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<StringPrimitive> pattern,
     Handle<StringPrimitive> flags) {
   assert(
@@ -142,7 +146,7 @@ ExecutionStatus JSRegExp::initialize(
   regex::Regex<regex::UTF16RegexTraits> regex(patternText16, flagsText16);
 
   if (!regex.valid()) {
-    return runtime->raiseSyntaxError(
+    return runtime.raiseSyntaxError(
         TwineChar16("Invalid RegExp: ") +
         regex::constants::messageForError(regex.getError()));
   }
@@ -167,13 +171,13 @@ void JSRegExp::initializeBytecode(llvh::ArrayRef<uint8_t> bytecode) {
 
 PseudoHandle<StringPrimitive> JSRegExp::getPattern(
     JSRegExp *self,
-    PointerBase *base) {
+    PointerBase &base) {
   return createPseudoHandle(self->pattern_.get(base));
 }
 
 template <typename CharT, typename Traits>
 CallResult<RegExpMatch> performSearch(
-    Runtime *runtime,
+    Runtime &runtime,
     llvh::ArrayRef<uint8_t> bytecode,
     const CharT *start,
     uint32_t stringLength,
@@ -188,7 +192,7 @@ CallResult<RegExpMatch> performSearch(
       &nativeMatchRanges,
       matchFlags);
   if (matchResult == regex::MatchRuntimeResult::StackOverflow) {
-    return runtime->raiseRangeError("Maximum regex stack depth reached");
+    return runtime.raiseRangeError("Maximum regex stack depth reached");
   } else if (matchResult == regex::MatchRuntimeResult::NoMatch) {
     return RegExpMatch{}; // not found.
   }
@@ -213,7 +217,7 @@ CallResult<RegExpMatch> performSearch(
 
 CallResult<RegExpMatch> JSRegExp::search(
     Handle<JSRegExp> selfHandle,
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<StringPrimitive> strHandle,
     uint32_t searchStartOffset) {
   assert(selfHandle->bytecode_ && "Missing bytecode");
@@ -257,9 +261,9 @@ CallResult<RegExpMatch> JSRegExp::search(
   if (LLVM_UNLIKELY(matchResult == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   } else if (!matchResult->empty()) {
-    runtime->regExpLastInput = strHandle.getHermesValue();
-    runtime->regExpLastRegExp = selfHandle.getHermesValue();
-    runtime->regExpLastMatch = *matchResult;
+    runtime.regExpLastInput = strHandle.getHermesValue();
+    runtime.regExpLastRegExp = selfHandle.getHermesValue();
+    runtime.regExpLastMatch = *matchResult;
   }
   return matchResult;
 }
@@ -268,10 +272,10 @@ JSRegExp::~JSRegExp() {
   free(bytecode_);
 }
 
-void JSRegExp::_finalizeImpl(GCCell *cell, GC *gc) {
+void JSRegExp::_finalizeImpl(GCCell *cell, GC &gc) {
   JSRegExp *self = vmcast<JSRegExp>(cell);
   if (self->bytecode_) {
-    gc->getIDTracker().untrackNative(self->bytecode_);
+    gc.getIDTracker().untrackNative(self->bytecode_);
   }
   self->~JSRegExp();
 }
@@ -281,12 +285,13 @@ size_t JSRegExp::_mallocSizeImpl(GCCell *cell) {
   return self->bytecodeSize_;
 }
 
-std::string JSRegExp::_snapshotNameImpl(GCCell *cell, GC *gc) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+std::string JSRegExp::_snapshotNameImpl(GCCell *cell, GC &gc) {
   auto *const self = vmcast<JSRegExp>(cell);
-  return converter(getPattern(self, gc->getPointerBase()).get());
+  return converter(getPattern(self, gc.getPointerBase()).get());
 }
 
-void JSRegExp::_snapshotAddEdgesImpl(GCCell *cell, GC *gc, HeapSnapshot &snap) {
+void JSRegExp::_snapshotAddEdgesImpl(GCCell *cell, GC &gc, HeapSnapshot &snap) {
   auto *const self = vmcast<JSRegExp>(cell);
   // Call the super type to add any other custom edges.
   JSObject::_snapshotAddEdgesImpl(self, gc, snap);
@@ -294,11 +299,11 @@ void JSRegExp::_snapshotAddEdgesImpl(GCCell *cell, GC *gc, HeapSnapshot &snap) {
     snap.addNamedEdge(
         HeapSnapshot::EdgeType::Internal,
         "bytecode",
-        gc->getNativeID(self->bytecode_));
+        gc.getNativeID(self->bytecode_));
   }
 }
 
-void JSRegExp::_snapshotAddNodesImpl(GCCell *cell, GC *gc, HeapSnapshot &snap) {
+void JSRegExp::_snapshotAddNodesImpl(GCCell *cell, GC &gc, HeapSnapshot &snap) {
   auto *const self = vmcast<JSRegExp>(cell);
   if (self->bytecode_) {
     // Add a native node for regex bytecode, to account for native size
@@ -307,11 +312,12 @@ void JSRegExp::_snapshotAddNodesImpl(GCCell *cell, GC *gc, HeapSnapshot &snap) {
     snap.endNode(
         HeapSnapshot::NodeType::Native,
         "RegExpBytecode",
-        gc->getNativeID(self->bytecode_),
+        gc.getNativeID(self->bytecode_),
         self->bytecodeSize_,
         0);
   }
 }
+#endif
 
 /// \return an escaped string equivalent to \p pattern.
 /// This is used to construct the 'source' property of RegExp. This requires
@@ -323,7 +329,7 @@ void JSRegExp::_snapshotAddNodesImpl(GCCell *cell, GC *gc, HeapSnapshot &snap) {
 /// pattern.
 CallResult<HermesValue> JSRegExp::escapePattern(
     Handle<StringPrimitive> pattern,
-    Runtime *runtime) {
+    Runtime &runtime) {
   SmallU16String<32> result;
   result.reserve(pattern->getStringLength());
   auto patternView = StringPrimitive::createStringView(runtime, pattern);

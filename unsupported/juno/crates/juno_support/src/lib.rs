@@ -13,10 +13,18 @@ mod timer;
 pub use timer::Timer;
 mod scoped_hashmap;
 pub use scoped_hashmap::ScopedHashMap;
+mod deque;
+pub use deque::Deque;
+mod heap_size;
+pub use heap_size::HeapSize;
 
 #[macro_use]
 #[allow(unused_macros)]
 pub mod str_enum;
+
+#[macro_use]
+#[allow(unused_macros)]
+pub mod opaque_id;
 
 pub mod atom_table;
 pub mod case;

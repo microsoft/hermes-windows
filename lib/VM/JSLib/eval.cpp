@@ -18,34 +18,43 @@
 #include "llvh/Support/ConvertUTF.h"
 #include "llvh/Support/raw_ostream.h"
 
+#ifdef HERMESVM_ENABLE_OPTIMIZATION_AT_RUNTIME
+#include "hermes/Optimizer/PassManager/Pipeline.h"
+#endif
+
 namespace hermes {
 namespace vm {
 
 CallResult<HermesValue> evalInEnvironment(
-    Runtime *runtime,
+    Runtime &runtime,
     llvh::StringRef utf8code,
     Handle<Environment> environment,
     const ScopeChain &scopeChain,
     Handle<> thisArg,
     bool singleFunction) {
 #ifdef HERMESVM_LEAN
-  return runtime->raiseEvalUnsupported(utf8code);
+  return runtime.raiseEvalUnsupported(utf8code);
 #else
-  if (!runtime->enableEval) {
-    return runtime->raiseEvalUnsupported(utf8code);
+  if (!runtime.enableEval) {
+    return runtime.raiseEvalUnsupported(utf8code);
   }
 
   hbc::CompileFlags compileFlags;
   compileFlags.strict = false;
   compileFlags.includeLibHermes = false;
-  compileFlags.optimize = runtime->optimizedEval;
-  compileFlags.verifyIR = runtime->verifyEvalIR;
-  compileFlags.emitAsyncBreakCheck = runtime->asyncBreakCheckInEval;
+  compileFlags.verifyIR = runtime.verifyEvalIR;
+  compileFlags.emitAsyncBreakCheck = runtime.asyncBreakCheckInEval;
   compileFlags.lazy =
       utf8code.size() >= compileFlags.preemptiveFileCompilationThreshold;
 #ifdef HERMES_ENABLE_DEBUGGER
   // Required to allow stepping and examining local variables in eval'd code
   compileFlags.debug = true;
+#endif
+
+  std::function<void(Module &)> runOptimizationPasses;
+#ifdef HERMESVM_ENABLE_OPTIMIZATION_AT_RUNTIME
+  if (runtime.optimizedEval)
+    runOptimizationPasses = runFullOptimizationPasses;
 #endif
 
   std::unique_ptr<hbc::BCProviderFromSrc> bytecode;
@@ -60,19 +69,26 @@ CallResult<HermesValue> evalInEnvironment(
     }
 
     auto bytecode_err = hbc::BCProviderFromSrc::createBCProviderFromSrc(
-        std::move(buffer), "JavaScript", nullptr, compileFlags, scopeChain);
+        std::move(buffer),
+        "JavaScript",
+        nullptr,
+        compileFlags,
+        scopeChain,
+        {},
+        nullptr,
+        runOptimizationPasses);
     if (!bytecode_err.first) {
-      return runtime->raiseSyntaxError(TwineChar16(bytecode_err.second));
+      return runtime.raiseSyntaxError(TwineChar16(bytecode_err.second));
     }
     if (singleFunction && !bytecode_err.first->isSingleFunction()) {
-      return runtime->raiseSyntaxError("Invalid function expression");
+      return runtime.raiseSyntaxError("Invalid function expression");
     }
     bytecode = std::move(bytecode_err.first);
   }
 
   // TODO: pass a sourceURL derived from a '//# sourceURL' comment.
   llvh::StringRef sourceURL{};
-  return runtime->runBytecode(
+  return runtime.runBytecode(
       std::move(bytecode),
       RuntimeModuleFlags{},
       sourceURL,
@@ -82,7 +98,7 @@ CallResult<HermesValue> evalInEnvironment(
 }
 
 CallResult<HermesValue> directEval(
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<StringPrimitive> str,
     const ScopeChain &scopeChain,
     bool singleFunction) {
@@ -101,11 +117,11 @@ CallResult<HermesValue> directEval(
       code,
       Runtime::makeNullHandle<Environment>(),
       scopeChain,
-      runtime->getGlobal(),
+      runtime.getGlobal(),
       singleFunction);
 }
 
-CallResult<HermesValue> eval(void *, Runtime *runtime, NativeArgs args) {
+CallResult<HermesValue> eval(void *, Runtime &runtime, NativeArgs args) {
   GCScope gcScope(runtime);
 
   if (!args.getArg(0).isString()) {

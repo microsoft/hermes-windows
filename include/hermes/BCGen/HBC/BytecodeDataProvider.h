@@ -12,6 +12,7 @@
 #include "hermes/BCGen/HBC/DebugInfo.h"
 #include "hermes/Public/Buffer.h"
 #include "hermes/SourceMap/SourceMapGenerator.h"
+#include "hermes/Support/BigIntSupport.h"
 #include "hermes/Support/OSCompat.h"
 #include "hermes/Support/PageAccessTracker.h"
 #include "hermes/Support/RegExpSerialization.h"
@@ -114,6 +115,9 @@ class BCProviderBase {
   llvh::ArrayRef<unsigned char> objKeyBuffer_{};
   llvh::ArrayRef<unsigned char> objValueBuffer_{};
 
+  llvh::ArrayRef<bigint::BigIntTableEntry> bigIntTable_{};
+  llvh::ArrayRef<unsigned char> bigIntStorage_{};
+
   llvh::ArrayRef<RegExpTableEntry> regExpTable_{};
   llvh::ArrayRef<unsigned char> regExpStorage_{};
 
@@ -158,6 +162,9 @@ class BCProviderBase {
   uint32_t getStringCount() const {
     return stringCount_;
   }
+  uint32_t getBigIntCount() const {
+    return bigIntTable_.size();
+  }
   llvh::ArrayRef<StringKind::Entry> getStringKinds() const {
     return stringKinds_;
   }
@@ -175,6 +182,12 @@ class BCProviderBase {
   }
   llvh::ArrayRef<unsigned char> getObjectValueBuffer() const {
     return objValueBuffer_;
+  }
+  llvh::ArrayRef<bigint::BigIntTableEntry> getBigIntTable() const {
+    return bigIntTable_;
+  }
+  llvh::ArrayRef<unsigned char> getBigIntStorage() const {
+    return bigIntStorage_;
   }
   llvh::ArrayRef<RegExpTableEntry> getRegExpTable() const {
     return regExpTable_;
@@ -483,7 +496,7 @@ class BCProviderFromBuffer final : public BCProviderBase {
     return llvh::ArrayRef<uint8_t>(bufferPtr_, buffer_->size());
   }
 
-  ~BCProviderFromBuffer() {
+  ~BCProviderFromBuffer() override {
     stopWarmup();
     delete debugInfo_;
   }

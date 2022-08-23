@@ -28,6 +28,7 @@ struct IsGCObject : public std::false_type {};
   struct IsGCObject<name> : public std::true_type {}
 
 // White-list objects that can be managed by HermesValue.
+HERMES_VM_GCOBJECT(BigIntPrimitive);
 HERMES_VM_GCOBJECT(StringPrimitive);
 HERMES_VM_GCOBJECT(JSObject);
 HERMES_VM_GCOBJECT(Callable);
@@ -51,18 +52,21 @@ HERMES_VM_GCOBJECT(JSArrayBuffer);
 HERMES_VM_GCOBJECT(JSDataView);
 HERMES_VM_GCOBJECT(JSTypedArrayBase);
 HERMES_VM_GCOBJECT(JSString);
+HERMES_VM_GCOBJECT(JSBigInt);
 HERMES_VM_GCOBJECT(JSNumber);
 HERMES_VM_GCOBJECT(JSBoolean);
 HERMES_VM_GCOBJECT(JSSymbol);
 HERMES_VM_GCOBJECT(JSRegExp);
 HERMES_VM_GCOBJECT(JSDate);
 HERMES_VM_GCOBJECT(JSError);
+HERMES_VM_GCOBJECT(JSCallSite);
 HERMES_VM_GCOBJECT(JSGenerator);
 HERMES_VM_GCOBJECT(Domain);
 HERMES_VM_GCOBJECT(RequireContext);
 HERMES_VM_GCOBJECT(HashMapEntry);
 HERMES_VM_GCOBJECT(OrderedHashMap);
 HERMES_VM_GCOBJECT(JSWeakMapImplBase);
+HERMES_VM_GCOBJECT(JSWeakRef);
 HERMES_VM_GCOBJECT(JSArrayIterator);
 HERMES_VM_GCOBJECT(JSStringIterator);
 HERMES_VM_GCOBJECT(JSRegExpStringIterator);
@@ -70,7 +74,7 @@ HERMES_VM_GCOBJECT(JSProxy);
 HERMES_VM_GCOBJECT(JSCallableProxy);
 HERMES_VM_GCOBJECT(DecoratedObject);
 HERMES_VM_GCOBJECT(HostObject);
-HERMES_VM_GCOBJECT(SegmentedArray);
+HERMES_VM_GCOBJECT(NativeState);
 
 namespace testhelpers {
 struct DummyObject;
@@ -122,6 +126,11 @@ template <typename HVType>
 class ArrayStorageBase;
 template <typename HVType>
 struct IsGCObject<ArrayStorageBase<HVType>> : public std::true_type {};
+
+template <typename HVType>
+class SegmentedArrayBase;
+template <typename HVType>
+struct IsGCObject<SegmentedArrayBase<HVType>> : public std::true_type {};
 
 template <typename T, bool isGCObject = IsGCObject<T>::value>
 struct HermesValueTraits;
@@ -179,6 +188,32 @@ struct HermesValueTraits<SymbolID> {
   }
 };
 
+template <>
+struct HermesValueTraits<BigIntPrimitive> {
+  using value_type = BigIntPrimitive *;
+  using arrow_type = value_type;
+  static constexpr bool is_cell = true;
+
+  static constexpr value_type defaultValue() {
+    return value_type{};
+  }
+  static HermesValue encode(value_type value) {
+    return HermesValue::encodeBigIntValueUnsafe(value);
+  }
+  static value_type decode(HermesValue value) {
+    return (value_type)value.getBigInt();
+  }
+  static arrow_type arrow(const HermesValue &value) {
+    auto *res = decode(value);
+    assert(res && "dereferencing null handle");
+    return res;
+  }
+  static arrow_type arrow(value_type ptr) {
+    assert(ptr && "dereferencing null handle");
+    return ptr;
+  }
+};
+
 template <class T>
 struct StringTraitsImpl {
   using value_type = T *;
@@ -189,7 +224,7 @@ struct StringTraitsImpl {
     return value_type{};
   }
   static HermesValue encode(T *value) {
-    return HermesValue::encodeStringValue(value);
+    return HermesValue::encodeStringValueUnsafe(value);
   }
   static T *decode(HermesValue value) {
     return (T *)value.getString();
@@ -225,7 +260,7 @@ struct HermesValueTraits<T, true> {
     return value_type{};
   }
   static HermesValue encode(T *value) {
-    return HermesValue::encodeObjectValue(value);
+    return HermesValue::encodeObjectValueUnsafe(value);
   }
   static T *decode(HermesValue value) {
     return static_cast<T *>(value.getObject());

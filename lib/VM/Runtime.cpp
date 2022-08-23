@@ -23,6 +23,7 @@
 #include "hermes/VM/CodeBlock.h"
 #include "hermes/VM/Domain.h"
 #include "hermes/VM/FillerCell.h"
+#include "hermes/VM/HeapRuntime.h"
 #include "hermes/VM/IdentifierTable.h"
 #include "hermes/VM/JSArray.h"
 #include "hermes/VM/JSError.h"
@@ -30,6 +31,7 @@
 #include "hermes/VM/JSLib/RuntimeCommonStorage.h"
 #include "hermes/VM/MockedEnvironment.h"
 #include "hermes/VM/Operations.h"
+#include "hermes/VM/OrderedHashMap.h"
 #include "hermes/VM/PredefinedStringIDs.h"
 #include "hermes/VM/Profiler/CodeCoverageProfiler.h"
 #include "hermes/VM/Profiler/SamplingProfiler.h"
@@ -42,6 +44,7 @@
 #endif
 
 #include "llvh/ADT/Hashing.h"
+#include "llvh/ADT/ScopeExit.h"
 #include "llvh/Support/Debug.h"
 #include "llvh/Support/raw_ostream.h"
 
@@ -122,7 +125,17 @@ class Runtime::StackRuntime {
 
 /* static */
 std::shared_ptr<Runtime> Runtime::create(const RuntimeConfig &runtimeConfig) {
-#if defined(HERMES_FACEBOOK_BUILD) && !defined(HERMES_FBCODE_BUILD)
+#if defined(HERMESVM_CONTIGUOUS_HEAP)
+  uint64_t maxHeapSize = runtimeConfig.getGCConfig().getMaxHeapSize();
+  // Allow some extra segments for the runtime, and as a buffer for the GC.
+  uint64_t providerSize =
+      std::min<uint64_t>(1ULL << 32, maxHeapSize + AlignedStorage::size() * 4);
+  std::shared_ptr<StorageProvider> sp =
+      StorageProvider::contiguousVAProvider(providerSize);
+  auto rt = HeapRuntime<Runtime>::create(sp);
+  new (rt.get()) Runtime(std::move(sp), runtimeConfig);
+  return rt;
+#elif defined(HERMES_FACEBOOK_BUILD) && !defined(HERMES_FBCODE_BUILD)
   // TODO (T84179835): Disable this once it is no longer useful for debugging.
   return StackRuntime::create(runtimeConfig);
 #else
@@ -140,26 +153,26 @@ CallResult<PseudoHandle<>> Runtime::getNamed(
     // The slot is cached, so it is safe to use the Internal function.
     return createPseudoHandle(
         JSObject::getNamedSlotValueUnsafe<PropStorage::Inline::Yes>(
-            *obj, this, cacheEntry->slot)
-            .unboxToHV(this));
+            *obj, *this, cacheEntry->slot)
+            .unboxToHV(*this));
   }
   auto sym = Predefined::getSymbolID(fixedPropCacheNames[static_cast<int>(id)]);
   NamedPropertyDescriptor desc;
   // Check writable and internalSetter flags since the cache slot is shared for
   // get/put.
   if (LLVM_LIKELY(
-          JSObject::tryGetOwnNamedDescriptorFast(*obj, this, sym, desc)) &&
+          JSObject::tryGetOwnNamedDescriptorFast(*obj, *this, sym, desc)) &&
       !desc.flags.accessor && desc.flags.writable &&
       !desc.flags.internalSetter) {
-    HiddenClass *clazz = vmcast<HiddenClass>(clazzPtr.getNonNull(this));
+    HiddenClass *clazz = vmcast<HiddenClass>(clazzPtr.getNonNull(*this));
     if (LLVM_LIKELY(!clazz->isDictionary())) {
       // Cache the class, id and property slot.
       cacheEntry->clazz = clazzPtr;
       cacheEntry->slot = desc.slot;
     }
-    return JSObject::getNamedSlotValue(createPseudoHandle(*obj), this, desc);
+    return JSObject::getNamedSlotValue(createPseudoHandle(*obj), *this, desc);
   }
-  return JSObject::getNamed_RJS(obj, this, sym);
+  return JSObject::getNamed_RJS(obj, *this, sym);
 }
 
 ExecutionStatus Runtime::putNamedThrowOnError(
@@ -170,27 +183,27 @@ ExecutionStatus Runtime::putNamedThrowOnError(
   auto *cacheEntry = &fixedPropCache_[static_cast<int>(id)];
   if (LLVM_LIKELY(cacheEntry->clazz == clazzPtr)) {
     JSObject::setNamedSlotValueUnsafe<PropStorage::Inline::Yes>(
-        *obj, this, cacheEntry->slot, shv);
+        *obj, *this, cacheEntry->slot, shv);
     return ExecutionStatus::RETURNED;
   }
   auto sym = Predefined::getSymbolID(fixedPropCacheNames[static_cast<int>(id)]);
   NamedPropertyDescriptor desc;
   if (LLVM_LIKELY(
-          JSObject::tryGetOwnNamedDescriptorFast(*obj, this, sym, desc)) &&
+          JSObject::tryGetOwnNamedDescriptorFast(*obj, *this, sym, desc)) &&
       !desc.flags.accessor && desc.flags.writable &&
       !desc.flags.internalSetter) {
-    HiddenClass *clazz = vmcast<HiddenClass>(clazzPtr.getNonNull(this));
+    HiddenClass *clazz = vmcast<HiddenClass>(clazzPtr.getNonNull(*this));
     if (LLVM_LIKELY(!clazz->isDictionary())) {
       // Cache the class and property slot.
       cacheEntry->clazz = clazzPtr;
       cacheEntry->slot = desc.slot;
     }
-    JSObject::setNamedSlotValueUnsafe(*obj, this, desc.slot, shv);
+    JSObject::setNamedSlotValueUnsafe(*obj, *this, desc.slot, shv);
     return ExecutionStatus::RETURNED;
   }
-  Handle<> value = makeHandle(shv.unboxToHV(this));
+  Handle<> value = makeHandle(shv.unboxToHV(*this));
   return JSObject::putNamed_RJS(
-             obj, this, sym, value, PropOpFlags().plusThrowOnError())
+             obj, *this, sym, value, PropOpFlags().plusThrowOnError())
       .getStatus();
 }
 
@@ -203,8 +216,8 @@ Runtime::Runtime(
       optimizedEval(runtimeConfig.getOptimizedEval()),
       asyncBreakCheckInEval(runtimeConfig.getAsyncBreakCheckInEval()),
       heapStorage_(
-          this,
-          this,
+          *this,
+          *this,
           runtimeConfig.getGCConfig(),
           runtimeConfig.getCrashMgr(),
           std::move(provider),
@@ -212,18 +225,19 @@ Runtime::Runtime(
       hasES6Promise_(runtimeConfig.getES6Promise()),
       hasES6Proxy_(runtimeConfig.getES6Proxy()),
       hasIntl_(runtimeConfig.getIntl()),
+      hasArrayBuffer_(runtimeConfig.getArrayBuffer()),
+      hasMicrotaskQueue_(runtimeConfig.getMicrotaskQueue()),
       shouldRandomizeMemoryLayout_(runtimeConfig.getRandomizeMemoryLayout()),
       bytecodeWarmupPercent_(runtimeConfig.getBytecodeWarmupPercent()),
       trackIO_(runtimeConfig.getTrackIO()),
       vmExperimentFlags_(runtimeConfig.getVMExperimentFlags()),
-      runtimeStats_(runtimeConfig.getEnableSampledStats()),
       commonStorage_(
           createRuntimeCommonStorage(runtimeConfig.getTraceEnabled())),
       stackPointer_(),
       crashMgr_(runtimeConfig.getCrashMgr()),
       crashCallbackKey_(
           crashMgr_->registerCallback([this](int fd) { crashCallback(fd); })),
-      codeCoverageProfiler_(std::make_unique<CodeCoverageProfiler>(this)),
+      codeCoverageProfiler_(std::make_unique<CodeCoverageProfiler>(*this)),
       gcEventCallback_(runtimeConfig.getGCConfig().getCallback()) {
   assert(
       (void *)this == (void *)(HandleRootOwner *)this &&
@@ -276,9 +290,9 @@ Runtime::Runtime(
   // specialCodeBlockRuntimeModule_ will be owned by runtimeModuleList_.
   RuntimeModuleFlags flags;
   flags.hidesEpilogue = true;
-  specialCodeBlockDomain_ = Domain::create(this).getHermesValue();
+  specialCodeBlockDomain_ = Domain::create(*this).getHermesValue();
   specialCodeBlockRuntimeModule_ = RuntimeModule::createUninitialized(
-      this, Handle<Domain>::vmcast(&specialCodeBlockDomain_), flags);
+      *this, Handle<Domain>::vmcast(&specialCodeBlockDomain_), flags);
   assert(
       &runtimeModuleList_.back() == specialCodeBlockRuntimeModule_ &&
       "specialCodeBlockRuntimeModule_ not added to runtimeModuleList_");
@@ -288,7 +302,7 @@ Runtime::Runtime(
   // Initialize the pre-allocated character strings.
   initCharacterStrings();
 
-  GCScope scope(this);
+  GCScope scope(*this);
 
   // Explicitly initialize the specialCodeBlockRuntimeModule_ without CJS
   // modules.
@@ -303,12 +317,13 @@ Runtime::Runtime(
   // Initialize the root hidden class and its variants.
   {
     MutableHandle<HiddenClass> clazz(
-        this,
+        *this,
         vmcast<HiddenClass>(
-            ignoreAllocationFailure(HiddenClass::createRoot(this))));
+            ignoreAllocationFailure(HiddenClass::createRoot(*this))));
     rootClazzes_[0] = clazz.getHermesValue();
-    for (unsigned i = 1; i <= InternalProperty::NumInternalProperties; ++i) {
-      auto addResult = HiddenClass::reserveSlot(clazz, this);
+    for (unsigned i = 1; i <= InternalProperty::NumAnonymousInternalProperties;
+         ++i) {
+      auto addResult = HiddenClass::reserveSlot(clazz, *this);
       assert(
           addResult != ExecutionStatus::EXCEPTION &&
           "Could not possibly grow larger than the limit");
@@ -317,13 +332,14 @@ Runtime::Runtime(
     }
   }
 
-  global_ = JSObject::create(this, makeNullHandle<JSObject>()).getHermesValue();
+  global_ =
+      JSObject::create(*this, makeNullHandle<JSObject>()).getHermesValue();
 
   JSLibFlags jsLibFlags{};
   jsLibFlags.enableHermesInternal = runtimeConfig.getEnableHermesInternal();
   jsLibFlags.enableHermesInternalTestMethods =
       runtimeConfig.getEnableHermesInternalTestMethods();
-  initGlobalObject(this, jsLibFlags);
+  initGlobalObject(*this, jsLibFlags);
 
   // Once the global object has been initialized, populate native builtins to
   // the builtins table.
@@ -333,16 +349,16 @@ Runtime::Runtime(
   // which has now been defined.
   ignoreAllocationFailure(JSObject::setParent(
       vmcast<JSObject>(global_),
-      this,
+      *this,
       vmcast<JSObject>(objectPrototype),
       PropOpFlags().plusThrowOnError()));
 
-  symbolRegistry_.init(this);
+  symbolRegistry_.init(*this);
 
   // BB Profiler need to be ready before running internal bytecode.
 #ifdef HERMESVM_PROFILER_BB
   inlineCacheProfiler_.setHiddenClassArray(
-      ignoreAllocationFailure(JSArray::create(this, 4, 4)).get());
+      ignoreAllocationFailure(JSArray::create(*this, 4, 4)).get());
 #endif
 
   codeCoverageProfiler_->disable();
@@ -354,7 +370,7 @@ Runtime::Runtime(
   initJSBuiltins(builtins_, jsBuiltinsObj);
 
   if (runtimeConfig.getEnableSampleProfiling())
-    samplingProfiler = std::make_unique<SamplingProfiler>(this);
+    samplingProfiler = std::make_unique<SamplingProfiler>(*this);
 
   LLVM_DEBUG(llvh::dbgs() << "Runtime initialized\n");
 }
@@ -380,13 +396,17 @@ Runtime::~Runtime() {
     module.prepareForRuntimeShutdown();
   }
 
+  assert(
+      !formattingStackTrace_ &&
+      "Runtime is being destroyed while exception is being formatted");
+
   while (!runtimeModuleList_.empty()) {
     // Calling delete will automatically remove it from the list.
     delete &runtimeModuleList_.back();
   }
 
   for (auto callback : destructionCallbacks_) {
-    callback(this);
+    callback(*this);
   }
 
   crashMgr_->unregisterMemory(this);
@@ -397,11 +417,11 @@ Runtime::~Runtime() {
 /// Runtime::totalMarkRootsTime.
 class Runtime::MarkRootsPhaseTimer {
  public:
-  MarkRootsPhaseTimer(Runtime *rt, RootAcceptor::Section section)
+  MarkRootsPhaseTimer(Runtime &rt, RootAcceptor::Section section)
       : rt_(rt), section_(section), start_(std::chrono::steady_clock::now()) {
     if (static_cast<unsigned>(section) == 0) {
       // The first phase; record the start as the start of markRoots.
-      rt_->startOfMarkRoots_ = start_;
+      rt_.startOfMarkRoots_ = start_;
     }
   }
   ~MarkRootsPhaseTimer() {
@@ -409,17 +429,16 @@ class Runtime::MarkRootsPhaseTimer {
     std::chrono::duration<double> elapsed = (tp - start_);
     start_ = tp;
     unsigned index = static_cast<unsigned>(section_);
-    rt_->markRootsPhaseTimes_[index] += elapsed.count();
+    rt_.markRootsPhaseTimes_[index] += elapsed.count();
     if (index + 1 ==
         static_cast<unsigned>(RootAcceptor::Section::NumSections)) {
-      std::chrono::duration<double> totalElapsed =
-          (tp - rt_->startOfMarkRoots_);
-      rt_->totalMarkRootsTime_ += totalElapsed.count();
+      std::chrono::duration<double> totalElapsed = (tp - rt_.startOfMarkRoots_);
+      rt_.totalMarkRootsTime_ += totalElapsed.count();
     }
   }
 
  private:
-  Runtime *rt_;
+  Runtime &rt_;
   RootAcceptor::Section section_;
   std::chrono::time_point<std::chrono::steady_clock> start_;
 };
@@ -430,7 +449,7 @@ void Runtime::markRoots(
   // The body of markRoots should be sequence of blocks, each of which starts
   // with the declaration of an appropriate RootSection instance.
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::Registers);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::Registers);
     acceptor.beginRootSection(RootAcceptor::Section::Registers);
     for (auto *p = registerStackStart_, *e = stackPointer_; p != e; ++p)
       acceptor.accept(*p);
@@ -438,7 +457,8 @@ void Runtime::markRoots(
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::RuntimeInstanceVars);
+    MarkRootsPhaseTimer timer(
+        *this, RootAcceptor::Section::RuntimeInstanceVars);
     acceptor.beginRootSection(RootAcceptor::Section::RuntimeInstanceVars);
     for (auto &clazz : rootClazzes_)
       acceptor.accept(clazz, "rootClass");
@@ -449,7 +469,7 @@ void Runtime::markRoots(
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::RuntimeModules);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::RuntimeModules);
     acceptor.beginRootSection(RootAcceptor::Section::RuntimeModules);
 #define RUNTIME_HV_FIELD_RUNTIMEMODULE(name) acceptor.accept(name);
 #include "hermes/VM/RuntimeHermesValueFields.def"
@@ -460,7 +480,7 @@ void Runtime::markRoots(
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::CharStrings);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::CharStrings);
     acceptor.beginRootSection(RootAcceptor::Section::CharStrings);
     if (markLongLived) {
       for (auto &hv : charStrings_)
@@ -471,7 +491,7 @@ void Runtime::markRoots(
 
   {
     MarkRootsPhaseTimer timer(
-        this, RootAcceptor::Section::StringCycleCheckVisited);
+        *this, RootAcceptor::Section::StringCycleCheckVisited);
     acceptor.beginRootSection(RootAcceptor::Section::StringCycleCheckVisited);
     for (auto *&ptr : stringCycleCheckVisited_)
       acceptor.acceptPtr(ptr);
@@ -479,7 +499,7 @@ void Runtime::markRoots(
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::Builtins);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::Builtins);
     acceptor.beginRootSection(RootAcceptor::Section::Builtins);
     for (Callable *&f : builtins_)
       acceptor.acceptPtr(f);
@@ -487,7 +507,7 @@ void Runtime::markRoots(
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::Jobs);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::Jobs);
     acceptor.beginRootSection(RootAcceptor::Section::Jobs);
     for (Callable *&f : jobQueue_)
       acceptor.acceptPtr(f);
@@ -499,7 +519,7 @@ void Runtime::markRoots(
 #endif
 #define MARK(field) acceptor.accept((field), #field)
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::Prototypes);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::Prototypes);
     acceptor.beginRootSection(RootAcceptor::Section::Prototypes);
     // Prototypes.
 #define RUNTIME_HV_FIELD_PROTOTYPE(name) MARK(name);
@@ -512,31 +532,35 @@ void Runtime::markRoots(
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::IdentifierTable);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::IdentifierTable);
     if (markLongLived) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
       // Need to add nodes before the root section, and edges during the root
       // section.
       acceptor.provideSnapshot([this](HeapSnapshot &snap) {
         identifierTable_.snapshotAddNodes(snap);
       });
+#endif
       acceptor.beginRootSection(RootAcceptor::Section::IdentifierTable);
-      identifierTable_.markIdentifiers(acceptor, &getHeap());
+      identifierTable_.markIdentifiers(acceptor, getHeap());
+#ifdef HERMES_MEMORY_INSTRUMENTATION
       acceptor.provideSnapshot([this](HeapSnapshot &snap) {
         identifierTable_.snapshotAddEdges(snap);
       });
+#endif
       acceptor.endRootSection();
     }
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::GCScopes);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::GCScopes);
     acceptor.beginRootSection(RootAcceptor::Section::GCScopes);
     markGCScopes(acceptor);
     acceptor.endRootSection();
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::SymbolRegistry);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::SymbolRegistry);
     acceptor.beginRootSection(RootAcceptor::Section::SymbolRegistry);
     symbolRegistry_.markRoots(acceptor);
     acceptor.endRootSection();
@@ -547,7 +571,7 @@ void Runtime::markRoots(
 
   {
     MarkRootsPhaseTimer timer(
-        this, RootAcceptor::Section::CodeCoverageProfiler);
+        *this, RootAcceptor::Section::CodeCoverageProfiler);
     acceptor.beginRootSection(RootAcceptor::Section::CodeCoverageProfiler);
     if (codeCoverageProfiler_) {
       codeCoverageProfiler_->markRoots(acceptor);
@@ -562,7 +586,7 @@ void Runtime::markRoots(
   }
 
   {
-    MarkRootsPhaseTimer timer(this, RootAcceptor::Section::Custom);
+    MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::Custom);
     // Define nodes before the root section starts.
     for (auto &fn : customSnapshotNodeFuncs_) {
       acceptor.provideSnapshot(fn);
@@ -579,15 +603,17 @@ void Runtime::markRoots(
 }
 
 void Runtime::markWeakRoots(WeakRootAcceptor &acceptor, bool markLongLived) {
-  MarkRootsPhaseTimer timer(this, RootAcceptor::Section::WeakRefs);
+  MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::WeakRefs);
   acceptor.beginRootSection(RootAcceptor::Section::WeakRefs);
   if (markLongLived) {
     for (auto &entry : fixedPropCache_) {
       acceptor.acceptWeak(entry.clazz);
     }
     for (auto &rm : runtimeModuleList_)
-      rm.markWeakRoots(acceptor);
+      rm.markLongLivedWeakRoots(acceptor);
   }
+  for (auto &rm : runtimeModuleList_)
+    rm.markDomainRef(acceptor);
   for (auto &fn : customMarkWeakRootFuncs_)
     fn(&getHeap(), acceptor);
   acceptor.endRootSection();
@@ -595,7 +621,7 @@ void Runtime::markWeakRoots(WeakRootAcceptor &acceptor, bool markLongLived) {
 
 void Runtime::markRootsForCompleteMarking(
     RootAndSlotAcceptorWithNames &acceptor) {
-  MarkRootsPhaseTimer timer(this, RootAcceptor::Section::SamplingProfiler);
+  MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::SamplingProfiler);
   acceptor.beginRootSection(RootAcceptor::Section::SamplingProfiler);
   if (samplingProfiler) {
     samplingProfiler->markRoots(acceptor);
@@ -738,14 +764,14 @@ void Runtime::printArrayCensus(llvh::raw_ostream &os) {
 
   os << "Array Census for SegmentedArray:\n";
   arraySizeToCountAndWastedSlots.clear();
-  getHeap().forAllObjs([&arraySizeToCountAndWastedSlots](GCCell *cell) {
+  getHeap().forAllObjs([&arraySizeToCountAndWastedSlots, this](GCCell *cell) {
     if (cell->getKind() == CellKind::SegmentedArrayKind) {
       SegmentedArray *arr = vmcast<SegmentedArray>(cell);
       const auto key =
           std::make_pair(arr->totalCapacityOfSpine(), arr->getAllocatedSize());
       arraySizeToCountAndWastedSlots[key].first++;
       arraySizeToCountAndWastedSlots[key].second +=
-          arr->totalCapacityOfSpine() - arr->size();
+          arr->totalCapacityOfSpine() - arr->size(*this);
     }
   });
   if (arraySizeToCountAndWastedSlots.empty()) {
@@ -774,11 +800,10 @@ void Runtime::printArrayCensus(llvh::raw_ostream &os) {
   os << "Array Census for JSArray:\n";
   arraySizeToCountAndWastedSlots.clear();
   getHeap().forAllObjs([&arraySizeToCountAndWastedSlots, this](GCCell *cell) {
-    if (cell->getKind() == CellKind::ArrayKind) {
-      JSArray *arr = vmcast<JSArray>(cell);
-      JSArray::StorageType *storage = arr->getIndexedStorage(this);
+    if (JSArray *arr = dyn_vmcast<JSArray>(cell)) {
+      JSArray::StorageType *storage = arr->getIndexedStorage(*this);
       const auto capacity = storage ? storage->totalCapacityOfSpine() : 0;
-      const auto sz = storage ? storage->size() : 0;
+      const auto sz = storage ? storage->size(*this) : 0;
       const auto key = std::make_pair(capacity, arr->getAllocatedSize());
       arraySizeToCountAndWastedSlots[key].first++;
       arraySizeToCountAndWastedSlots[key].second += capacity - sz;
@@ -827,7 +852,7 @@ void Runtime::potentiallyMoveHeap() {
   // Do a dummy allocation which could force a heap move if handle sanitization
   // is on.
   FillerCell::create(
-      this,
+      *this,
       std::max<size_t>(
           heapAlignSize(sizeof(FillerCell)), GC::minAllocationSize()));
 }
@@ -844,14 +869,14 @@ void Runtime::setMockedEnvironment(const MockedEnvironment &env) {
 
 LLVM_ATTRIBUTE_NOINLINE
 static CallResult<HermesValue> interpretFunctionWithRandomStack(
-    Runtime *runtime,
+    Runtime &runtime,
     CodeBlock *globalCode) {
   static void *volatile dummy;
   const unsigned amount = std::random_device()() % oscompat::page_size();
   // Prevent compiler from optimizing alloca away by assigning to volatile
   dummy = alloca(amount);
   (void)dummy;
-  return runtime->interpretFunction(globalCode);
+  return runtime.interpretFunction(globalCode);
 }
 
 CallResult<HermesValue> Runtime::run(
@@ -961,12 +986,12 @@ CallResult<HermesValue> Runtime::runBytecode(
     }
   }
 
-  GCScope scope(this);
+  GCScope scope(*this);
 
-  Handle<Domain> domain = makeHandle(Domain::create(this));
+  Handle<Domain> domain = makeHandle(Domain::create(*this));
 
   auto runtimeModuleRes = RuntimeModule::create(
-      this, domain, nextScriptId_++, std::move(bytecode), flags, sourceURL);
+      *this, domain, nextScriptId_++, std::move(bytecode), flags, sourceURL);
   if (LLVM_UNLIKELY(runtimeModuleRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -980,32 +1005,32 @@ CallResult<HermesValue> Runtime::runBytecode(
 
   if (runtimeModule->hasCJSModules()) {
     auto requireContext = RequireContext::create(
-        this, domain, getPredefinedStringHandle(Predefined::dotSlash));
+        *this, domain, getPredefinedStringHandle(Predefined::dotSlash));
     return runRequireCall(
-        this,
+        *this,
         requireContext,
         domain,
-        *domain->getCJSModuleOffset(this, domain->getCJSEntryModuleID()));
+        *domain->getCJSModuleOffset(*this, domain->getCJSEntryModuleID()));
   } else if (runtimeModule->hasCJSModulesStatic()) {
     return runRequireCall(
-        this,
+        *this,
         makeNullHandle<RequireContext>(),
         domain,
-        *domain->getCJSModuleOffset(this, domain->getCJSEntryModuleID()));
+        *domain->getCJSModuleOffset(*this, domain->getCJSEntryModuleID()));
   } else {
     // Create a JSFunction which will reference count the runtime module.
     // Note that its handle gets registered in the scope, so we don't need to
     // save it. Also note that environment will often be null here, except if
     // this is local eval.
     auto func = JSFunction::create(
-        this,
+        *this,
         domain,
         Handle<JSObject>::vmcast(&functionPrototype),
         environment,
         globalCode);
 
     ScopedNativeCallFrame newFrame{
-        this,
+        *this,
         0,
         func.getHermesValue(),
         HermesValue::encodeUndefinedValue(),
@@ -1013,7 +1038,7 @@ CallResult<HermesValue> Runtime::runBytecode(
     if (LLVM_UNLIKELY(newFrame.overflowed()))
       return raiseStackOverflow(StackOverflowKind::NativeStack);
     return shouldRandomizeMemoryLayout_
-        ? interpretFunctionWithRandomStack(this, globalCode)
+        ? interpretFunctionWithRandomStack(*this, globalCode)
         : interpretFunction(globalCode);
   }
 }
@@ -1022,12 +1047,12 @@ ExecutionStatus Runtime::loadSegment(
     std::shared_ptr<hbc::BCProvider> &&bytecode,
     Handle<RequireContext> requireContext,
     RuntimeModuleFlags flags) {
-  GCScopeMarkerRAII marker{this};
-  auto domain = makeHandle(RequireContext::getDomain(this, *requireContext));
+  GCScopeMarkerRAII marker{*this};
+  auto domain = makeHandle(RequireContext::getDomain(*this, *requireContext));
 
   if (LLVM_UNLIKELY(
           RuntimeModule::create(
-              this, domain, nextScriptId_++, std::move(bytecode), flags, "") ==
+              *this, domain, nextScriptId_++, std::move(bytecode), flags, "") ==
           ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1052,7 +1077,7 @@ Handle<JSObject> Runtime::runInternalBytecode() {
   auto res = runBytecode(
       std::move(bcResult.first),
       flags,
-      /*sourceURL*/ "",
+      /*sourceURL*/ "InternalBytecode.js",
       makeNullHandle<Environment>());
   // It is a fatal error for the internal bytecode to throw an exception.
   assert(
@@ -1074,18 +1099,37 @@ void Runtime::printException(llvh::raw_ostream &os, Handle<> valueHandle) {
     if (LLVM_UNLIKELY(
             (propRes = JSObject::getNamed_RJS(
                  objHandle,
-                 this,
+                 *this,
                  Predefined::getSymbolID(Predefined::stack))) ==
             ExecutionStatus::EXCEPTION)) {
-      os << "exception thrown while getting stack trace\n";
-      return;
+      // Suppress prepareStackTrace using the recursion-breaking flag and retry.
+      bool wasFormattingStackTrace = formattingStackTrace();
+      if (LLVM_LIKELY(!wasFormattingStackTrace)) {
+        setFormattingStackTrace(true);
+      }
+      const auto &guard = llvh::make_scope_exit([=]() {
+        if (formattingStackTrace() != wasFormattingStackTrace) {
+          setFormattingStackTrace(wasFormattingStackTrace);
+        }
+      });
+      (void)guard;
+
+      if (LLVM_UNLIKELY(
+              (propRes = JSObject::getNamed_RJS(
+                   objHandle,
+                   *this,
+                   Predefined::getSymbolID(Predefined::stack))) ==
+              ExecutionStatus::EXCEPTION)) {
+        os << "exception thrown while getting stack trace\n";
+        return;
+      }
     }
   }
   SmallU16String<32> tmp;
   if (LLVM_UNLIKELY(
           propRes == ExecutionStatus::EXCEPTION || (*propRes)->isUndefined())) {
     // If stack trace is unavailable, we just print error.toString.
-    auto strRes = toString_RJS(this, valueHandle);
+    auto strRes = toString_RJS(*this, valueHandle);
     if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
       os << "exception thrown in toString of original exception\n";
       return;
@@ -1096,7 +1140,7 @@ void Runtime::printException(llvh::raw_ostream &os, Handle<> valueHandle) {
     return;
   }
   // stack trace is available, try to convert it to string.
-  auto strRes = toString_RJS(this, makeHandle(std::move(*propRes)));
+  auto strRes = toString_RJS(*this, makeHandle(std::move(*propRes)));
   if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
     os << "exception thrown in toString of stack trace\n";
     return;
@@ -1106,7 +1150,7 @@ void Runtime::printException(llvh::raw_ostream &os, Handle<> valueHandle) {
     str.invalidate();
     // If the final value is the empty string,
     // fall back to just printing the error.toString directly.
-    auto errToStringRes = toString_RJS(this, valueHandle);
+    auto errToStringRes = toString_RJS(*this, valueHandle);
     if (LLVM_UNLIKELY(errToStringRes == ExecutionStatus::EXCEPTION)) {
       os << "exception thrown in toString of original exception\n";
       return;
@@ -1166,23 +1210,23 @@ uint32_t Runtime::getCurrentFrameOffset() const {
 #endif
 
 static ExecutionStatus
-raisePlaceholder(Runtime *runtime, Handle<JSError> errorObj, Handle<> message) {
+raisePlaceholder(Runtime &runtime, Handle<JSError> errorObj, Handle<> message) {
   JSError::recordStackTrace(errorObj, runtime);
   JSError::setupStack(errorObj, runtime);
   JSError::setMessage(errorObj, runtime, message);
-  return runtime->setThrownValue(errorObj.getHermesValue());
+  return runtime.setThrownValue(errorObj.getHermesValue());
 }
 
 /// A placeholder used to construct a Error Object that takes in a the specified
 /// message.
 static ExecutionStatus raisePlaceholder(
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<JSObject> prototype,
     Handle<> message) {
   GCScopeMarkerRAII gcScope{runtime};
 
   // Create the error object, initialize stack property and set message.
-  auto errorObj = runtime->makeHandle(JSError::create(runtime, prototype));
+  auto errorObj = runtime.makeHandle(JSError::create(runtime, prototype));
   return raisePlaceholder(runtime, errorObj, message);
 }
 
@@ -1190,7 +1234,7 @@ static ExecutionStatus raisePlaceholder(
 /// message. A new StringPrimitive is created each time.
 // TODO: Predefine each error message.
 static ExecutionStatus raisePlaceholder(
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<JSObject> prototype,
     const TwineChar16 &msg) {
   // Since this happens unexpectedly and rarely, don't rely on the parent
@@ -1204,7 +1248,7 @@ static ExecutionStatus raisePlaceholder(
   if (strRes == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
-  auto str = runtime->makeHandle<StringPrimitive>(*strRes);
+  auto str = runtime.makeHandle<StringPrimitive>(*strRes);
   LLVM_DEBUG(llvh::errs() << buf.arrayRef() << "\n");
   return raisePlaceholder(runtime, prototype, str);
 }
@@ -1212,9 +1256,9 @@ static ExecutionStatus raisePlaceholder(
 ExecutionStatus Runtime::raiseTypeError(Handle<> message) {
   // Since this happens unexpectedly and rarely, don't rely on the parent
   // GCScope.
-  GCScope gcScope{this};
+  GCScope gcScope{*this};
   return raisePlaceholder(
-      this, Handle<JSObject>::vmcast(&TypeErrorPrototype), message);
+      *this, Handle<JSObject>::vmcast(&TypeErrorPrototype), message);
 }
 
 ExecutionStatus Runtime::raiseTypeErrorForValue(
@@ -1222,19 +1266,24 @@ ExecutionStatus Runtime::raiseTypeErrorForValue(
     Handle<> value,
     llvh::StringRef msg2) {
   switch (value->getTag()) {
-    case ObjectTag:
+    case HermesValue::Tag::Object:
       return raiseTypeError(msg1 + TwineChar16("Object") + msg2);
-    case StrTag:
+    case HermesValue::Tag::Str:
       return raiseTypeError(
           msg1 + TwineChar16("'") + vmcast<StringPrimitive>(*value) + "'" +
           msg2);
-    case BoolTag:
-      if (value->getBool()) {
-        return raiseTypeError(msg1 + TwineChar16("true") + msg2);
-      } else {
-        return raiseTypeError(msg1 + TwineChar16("false") + msg2);
+    case HermesValue::Tag::BoolSymbol:
+      if (value->isBool()) {
+        if (value->getBool()) {
+          return raiseTypeError(msg1 + TwineChar16("true") + msg2);
+        } else {
+          return raiseTypeError(msg1 + TwineChar16("false") + msg2);
+        }
       }
-    case UndefinedNullTag:
+      return raiseTypeError(
+          msg1 + TwineChar16("Symbol(") +
+          getStringPrimFromSymbolID(value->getSymbol()) + ")" + msg2);
+    case HermesValue::Tag::UndefinedNull:
       if (value->isUndefined())
         return raiseTypeError(msg1 + TwineChar16("undefined") + msg2);
       else
@@ -1242,38 +1291,38 @@ ExecutionStatus Runtime::raiseTypeErrorForValue(
     default:
       if (value->isNumber()) {
         char buf[hermes::NUMBER_TO_STRING_BUF_SIZE];
-        size_t len = numberToString(
+        size_t len = hermes::numberToString(
             value->getNumber(), buf, hermes::NUMBER_TO_STRING_BUF_SIZE);
         return raiseTypeError(
             msg1 + TwineChar16(llvh::StringRef{buf, len}) + msg2);
       }
-      return raiseTypeError(msg1 + TwineChar16("Value") + msg2);
   }
+  return raiseTypeError(msg1 + TwineChar16("Value") + msg2);
 }
 
 ExecutionStatus Runtime::raiseTypeError(const TwineChar16 &msg) {
   return raisePlaceholder(
-      this, Handle<JSObject>::vmcast(&TypeErrorPrototype), msg);
+      *this, Handle<JSObject>::vmcast(&TypeErrorPrototype), msg);
 }
 
 ExecutionStatus Runtime::raiseSyntaxError(const TwineChar16 &msg) {
   return raisePlaceholder(
-      this, Handle<JSObject>::vmcast(&SyntaxErrorPrototype), msg);
+      *this, Handle<JSObject>::vmcast(&SyntaxErrorPrototype), msg);
 }
 
 ExecutionStatus Runtime::raiseRangeError(const TwineChar16 &msg) {
   return raisePlaceholder(
-      this, Handle<JSObject>::vmcast(&RangeErrorPrototype), msg);
+      *this, Handle<JSObject>::vmcast(&RangeErrorPrototype), msg);
 }
 
 ExecutionStatus Runtime::raiseReferenceError(const TwineChar16 &msg) {
   return raisePlaceholder(
-      this, Handle<JSObject>::vmcast(&ReferenceErrorPrototype), msg);
+      *this, Handle<JSObject>::vmcast(&ReferenceErrorPrototype), msg);
 }
 
 ExecutionStatus Runtime::raiseURIError(const TwineChar16 &msg) {
   return raisePlaceholder(
-      this, Handle<JSObject>::vmcast(&URIErrorPrototype), msg);
+      *this, Handle<JSObject>::vmcast(&URIErrorPrototype), msg);
 }
 
 ExecutionStatus Runtime::raiseStackOverflow(StackOverflowKind kind) {
@@ -1293,7 +1342,7 @@ ExecutionStatus Runtime::raiseStackOverflow(StackOverflowKind kind) {
       break;
   }
   return raisePlaceholder(
-      this, Handle<JSObject>::vmcast(&RangeErrorPrototype), msg);
+      *this, Handle<JSObject>::vmcast(&RangeErrorPrototype), msg);
 }
 
 ExecutionStatus Runtime::raiseQuitError() {
@@ -1310,14 +1359,15 @@ ExecutionStatus Runtime::raiseTimeoutError() {
 ExecutionStatus Runtime::raiseUncatchableError(
     Handle<JSObject> prototype,
     llvh::StringRef errMessage) {
-  Handle<JSError> err = makeHandle(JSError::createUncatchable(this, prototype));
+  Handle<JSError> err =
+      makeHandle(JSError::createUncatchable(*this, prototype));
   auto res = StringPrimitive::create(
-      this, llvh::ASCIIRef{errMessage.begin(), errMessage.end()});
+      *this, llvh::ASCIIRef{errMessage.begin(), errMessage.end()});
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   auto str = makeHandle(*res);
-  return raisePlaceholder(this, err, str);
+  return raisePlaceholder(*this, err, str);
 }
 
 ExecutionStatus Runtime::raiseEvalUnsupported(llvh::StringRef code) {
@@ -1418,7 +1468,7 @@ void Runtime::initPredefinedStrings() {
 }
 
 void Runtime::initCharacterStrings() {
-  GCScope gc(this);
+  GCScope gc(*this);
   auto marker = gc.createMarker();
   charStrings_.reserve(256);
   for (char16_t ch = 0; ch < 256; ++ch) {
@@ -1437,10 +1487,10 @@ Handle<StringPrimitive> Runtime::allocateCharacterString(char16_t ch) {
   PinnedHermesValue strRes;
   if (LLVM_LIKELY(ch < 128)) {
     strRes = ignoreAllocationFailure(
-        StringPrimitive::createLongLived(this, ASCIIRef(ch)));
+        StringPrimitive::createLongLived(*this, ASCIIRef(ch)));
   } else {
     strRes = ignoreAllocationFailure(
-        StringPrimitive::createLongLived(this, UTF16Ref(ch)));
+        StringPrimitive::createLongLived(*this, UTF16Ref(ch)));
   }
   return makeHandle<StringPrimitive>(strRes);
 }
@@ -1450,7 +1500,7 @@ Handle<StringPrimitive> Runtime::getCharacterString(char16_t ch) {
     return Handle<StringPrimitive>::vmcast(&charStrings_[ch]);
 
   return makeHandle<StringPrimitive>(
-      ignoreAllocationFailure(StringPrimitive::create(this, UTF16Ref(ch))));
+      ignoreAllocationFailure(StringPrimitive::create(*this, UTF16Ref(ch))));
 }
 
 // Store all object and symbol ids in a static table to conserve code size.
@@ -1483,18 +1533,18 @@ ExecutionStatus Runtime::forEachPublicNativeBuiltin(
         Predefined::Str objectName,
         Handle<JSObject> &object,
         SymbolID methodID)> &callback) {
-  MutableHandle<JSObject> lastObject{this};
+  MutableHandle<JSObject> lastObject{*this};
   Predefined::Str lastObjectName = Predefined::_STRING_AFTER_LAST;
 
   for (unsigned methodIndex = 0; methodIndex < BuiltinMethod::_firstPrivate;
        ++methodIndex) {
-    GCScopeMarkerRAII marker{this};
+    GCScopeMarkerRAII marker{*this};
     LLVM_DEBUG(llvh::dbgs() << publicNativeBuiltins[methodIndex].name << "\n");
     // Find the object first, if it changed.
     auto objectName = (Predefined::Str)publicNativeBuiltins[methodIndex].object;
     if (objectName != lastObjectName) {
       auto objectID = Predefined::getSymbolID(objectName);
-      auto cr = JSObject::getNamed_RJS(getGlobal(), this, objectID);
+      auto cr = JSObject::getNamed_RJS(getGlobal(), *this, objectID);
       assert(
           cr.getStatus() != ExecutionStatus::EXCEPTION &&
           "getNamed() of builtin object failed");
@@ -1520,7 +1570,7 @@ ExecutionStatus Runtime::forEachPublicNativeBuiltin(
 }
 
 void Runtime::initNativeBuiltins() {
-  GCScopeMarkerRAII gcScope{this};
+  GCScopeMarkerRAII gcScope{*this};
 
   builtins_.resize(BuiltinMethod::_count);
 
@@ -1529,7 +1579,7 @@ void Runtime::initNativeBuiltins() {
                                        Predefined::Str /* objectName */,
                                        Handle<JSObject> &currentObject,
                                        SymbolID methodID) {
-    auto cr = JSObject::getNamed_RJS(currentObject, this, methodID);
+    auto cr = JSObject::getNamed_RJS(currentObject, *this, methodID);
     assert(
         cr.getStatus() != ExecutionStatus::EXCEPTION &&
         "getNamed() of builtin method failed");
@@ -1541,7 +1591,7 @@ void Runtime::initNativeBuiltins() {
   });
 
   // Now add the private native builtins.
-  createHermesBuiltins(this, builtins_);
+  createHermesBuiltins(*this, builtins_);
 #ifndef NDEBUG
   // Make sure native builtins are all defined.
   for (unsigned i = 0; i < BuiltinMethod::_firstJS; ++i) {
@@ -1572,7 +1622,7 @@ void Runtime::initJSBuiltins(
 
     // Try to get the JS function from jsBuiltinsObj.
     auto getRes = JSObject::getNamed_RJS(
-        jsBuiltinsObj, this, Predefined::getSymbolID((Predefined::Str)symID));
+        jsBuiltinsObj, *this, Predefined::getSymbolID((Predefined::Str)symID));
     assert(getRes == ExecutionStatus::RETURNED && "Failed to get JS builtin.");
     JSFunction *jsFunc = vmcast<JSFunction>(getRes->getHermesValue());
 
@@ -1582,14 +1632,14 @@ void Runtime::initJSBuiltins(
 
 ExecutionStatus Runtime::assertBuiltinsUnmodified() {
   assert(!builtinsFrozen_ && "Builtins are already frozen.");
-  GCScope gcScope(this);
+  GCScope gcScope(*this);
 
   return forEachPublicNativeBuiltin([this](
                                         unsigned methodIndex,
                                         Predefined::Str /* objectName */,
                                         Handle<JSObject> &currentObject,
                                         SymbolID methodID) {
-    auto cr = JSObject::getNamed_RJS(currentObject, this, methodID);
+    auto cr = JSObject::getNamed_RJS(currentObject, *this, methodID);
     assert(
         cr.getStatus() != ExecutionStatus::EXCEPTION &&
         "getNamed() of builtin method failed");
@@ -1605,7 +1655,7 @@ ExecutionStatus Runtime::assertBuiltinsUnmodified() {
 
 void Runtime::freezeBuiltins() {
   assert(!builtinsFrozen_ && "Builtins are already frozen.");
-  GCScope gcScope{this};
+  GCScope gcScope{*this};
 
   // A list storing all the object ids that we will freeze on the global object
   // in the end.
@@ -1638,7 +1688,7 @@ void Runtime::freezeBuiltins() {
           // object.
           JSObject::updatePropertyFlagsWithoutTransitions(
               currentObject,
-              this,
+              *this,
               clearFlags,
               setFlags,
               llvh::ArrayRef<SymbolID>(methodList));
@@ -1651,7 +1701,7 @@ void Runtime::freezeBuiltins() {
   // object.
   JSObject::updatePropertyFlagsWithoutTransitions(
       getGlobal(),
-      this,
+      *this,
       clearFlags,
       setFlags,
       llvh::ArrayRef<SymbolID>(objectList));
@@ -1660,8 +1710,8 @@ void Runtime::freezeBuiltins() {
 }
 
 ExecutionStatus Runtime::drainJobs() {
-  GCScope gcScope{this};
-  MutableHandle<Callable> job{this};
+  GCScope gcScope{*this};
+  MutableHandle<Callable> job{*this};
   // Note that new jobs can be enqueued during the draining.
   while (!jobQueue_.empty()) {
     GCScopeMarkerRAII marker{gcScope};
@@ -1671,7 +1721,7 @@ ExecutionStatus Runtime::drainJobs() {
 
     // Jobs are guaranteed to behave as thunks.
     auto callRes =
-        Callable::executeCall0(job, this, Runtime::getUndefinedValue());
+        Callable::executeCall0(job, *this, Runtime::getUndefinedValue());
 
     // Early return to signal the caller. Note that the exceptional job has been
     // popped, so re-invocation would pick up from the next available job.
@@ -1682,18 +1732,40 @@ ExecutionStatus Runtime::drainJobs() {
   return ExecutionStatus::RETURNED;
 }
 
+ExecutionStatus Runtime::addToKeptObjects(Handle<JSObject> obj) {
+  // Lazily create the map for keptObjects_
+  if (keptObjects_.isUndefined()) {
+    auto mapRes = OrderedHashMap::create(*this);
+    if (LLVM_UNLIKELY(mapRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    keptObjects_ = mapRes->getHermesValue();
+  }
+  auto mapHandle = Handle<OrderedHashMap>::vmcast(&keptObjects_);
+  return OrderedHashMap::insert(mapHandle, *this, obj, obj);
+}
+
+void Runtime::clearKeptObjects() {
+  keptObjects_ = HermesValue::encodeUndefinedValue();
+}
+
 uint64_t Runtime::gcStableHashHermesValue(Handle<HermesValue> value) {
   switch (value->getTag()) {
-    case ObjectTag: {
+    case HermesValue::Tag::Object: {
       // For objects, because pointers can move, we need a unique ID
       // that does not change for each object.
-      auto id = JSObject::getObjectID(vmcast<JSObject>(*value), this);
+      auto id = JSObject::getObjectID(vmcast<JSObject>(*value), *this);
       return llvh::hash_value(id);
     }
-    case StrTag: {
+    case HermesValue::Tag::BigInt: {
+      // For bigints, we hash the string content.
+      auto bytes = Handle<BigIntPrimitive>::vmcast(value)->getRawDataCompact();
+      return llvh::hash_combine_range(bytes.begin(), bytes.end());
+    }
+    case HermesValue::Tag::Str: {
       // For strings, we hash the string content.
       auto strView = StringPrimitive::createStringView(
-          this, Handle<StringPrimitive>::vmcast(value));
+          *this, Handle<StringPrimitive>::vmcast(value));
       return llvh::hash_combine_range(strView.begin(), strView.end());
     }
     default:
@@ -1709,7 +1781,7 @@ uint64_t Runtime::gcStableHashHermesValue(Handle<HermesValue> value) {
 }
 
 bool Runtime::symbolEqualsToStringPrim(SymbolID id, StringPrimitive *strPrim) {
-  auto view = identifierTable_.getStringView(this, id);
+  auto view = identifierTable_.getStringView(*this, id);
   return strPrim->equals(view);
 }
 
@@ -1734,7 +1806,7 @@ void Runtime::dumpCallFrames(llvh::raw_ostream &OS) {
     if (auto *closure = dyn_vmcast<Callable>(sf.getCalleeClosureOrCBRef())) {
       OS << cellKindStr(closure->getKind()) << " ";
     }
-    if (auto *cb = sf.getCalleeCodeBlock()) {
+    if (auto *cb = sf.getCalleeCodeBlock(*this)) {
       OS << formatSymbolID(cb->getNameMayAllocate()) << " ";
     }
     dumpStackFrame(sf, OS, next);
@@ -1758,7 +1830,7 @@ llvh::raw_ostream &operator<<(
      << (format.symbolID.isNotUniqued() ? "(External)" : "(Internal)")
      << format.symbolID.unsafeGetIndex() << " \"";
 
-  OS << format.runtime->getIdentifierTable().convertSymbolToUTF8(
+  OS << format.runtime.getIdentifierTable().convertSymbolToUTF8(
       format.symbolID);
   return OS << "\")";
 }
@@ -1852,13 +1924,13 @@ void Runtime::crashWriteCallStack(JSONEmitter &json) {
 }
 
 std::string Runtime::getCallStackNoAlloc(const Inst *ip) {
-  NoAllocScope noAlloc(this);
+  NoAllocScope noAlloc(*this);
   std::string res;
   // Note that the order of iteration is youngest (leaf) frame to oldest.
   for (auto frame : getStackFrames()) {
-    auto codeBlock = frame->getCalleeCodeBlock();
+    auto codeBlock = frame->getCalleeCodeBlock(*this);
     if (codeBlock) {
-      res += codeBlock->getNameString(this);
+      res += codeBlock->getNameString(*this);
       // Default to the function entrypoint, this
       // ensures source location is provided for leaf frame even
       // if ip is not available.
@@ -1888,8 +1960,17 @@ std::string Runtime::getCallStackNoAlloc(const Inst *ip) {
 }
 
 void Runtime::onGCEvent(GCEventKind kind, const std::string &extraInfo) {
-  if (samplingProfiler != nullptr) {
-    samplingProfiler->onGCEvent(kind, extraInfo);
+  if (samplingProfiler) {
+    switch (kind) {
+      case GCEventKind::CollectionStart:
+        samplingProfiler->suspend(extraInfo);
+        break;
+      case GCEventKind::CollectionEnd:
+        samplingProfiler->resume();
+        break;
+      default:
+        llvm_unreachable("unknown GCEventKind");
+    }
   }
   if (gcEventCallback_) {
     gcEventCallback_(kind, extraInfo.c_str());
@@ -1926,7 +2007,7 @@ void Runtime::preventHCGC(HiddenClass *hc) {
   if (ret.second) {
     auto *hiddenClassArray = inlineCacheProfiler_.getHiddenClassArray();
     JSArray::setElementAt(
-        makeHandle(hiddenClassArray), this, hcIdx++, makeHandle(hc));
+        makeHandle(hiddenClassArray), *this, hcIdx++, makeHandle(hc));
   }
 }
 
@@ -1962,7 +2043,7 @@ void Runtime::recordHiddenClass(
 }
 
 void Runtime::getInlineCacheProfilerInfo(llvh::raw_ostream &ostream) {
-  inlineCacheProfiler_.dumpRankedInlineCachingMisses(this, ostream);
+  inlineCacheProfiler_.dumpRankedInlineCachingMisses(*this, ostream);
 }
 
 HiddenClass *Runtime::resolveHiddenClassId(ClassId classId) {
@@ -1971,7 +2052,8 @@ HiddenClass *Runtime::resolveHiddenClassId(ClassId classId) {
   }
   auto &classIdToIdxMap = inlineCacheProfiler_.getClassIdtoIndexMap();
   auto *hiddenClassArray = inlineCacheProfiler_.getHiddenClassArray();
-  auto hcHermesVal = hiddenClassArray->at(this, classIdToIdxMap[classId]);
+  auto hcHermesVal =
+      hiddenClassArray->at(*this, classIdToIdxMap[classId]).unboxToHV(*this);
   return vmcast<HiddenClass>(hcHermesVal);
 }
 
@@ -1982,16 +2064,16 @@ ExecutionStatus Runtime::notifyTimeout() {
   return raiseTimeoutError();
 }
 
-#ifdef HERMES_ENABLE_ALLOCATION_LOCATION_TRACES
+#ifdef HERMES_MEMORY_INSTRUMENTATION
 
 std::pair<const CodeBlock *, const inst::Inst *>
-Runtime::getCurrentInterpreterLocation(const inst::Inst *ip) const {
+Runtime::getCurrentInterpreterLocation(const inst::Inst *ip) {
   assert(ip && "IP being null implies we're not currently in the interpreter.");
   auto callFrames = getStackFrames();
   const CodeBlock *codeBlock = nullptr;
   for (auto frameIt = callFrames.begin(); frameIt != callFrames.end();
        ++frameIt) {
-    codeBlock = frameIt->getCalleeCodeBlock();
+    codeBlock = frameIt->getCalleeCodeBlock(*this);
     if (codeBlock) {
       break;
     } else {
@@ -2014,7 +2096,7 @@ StackTracesTreeNode *Runtime::getCurrentStackTracesTreeNode(
   }
   const CodeBlock *codeBlock;
   std::tie(codeBlock, ip) = getCurrentInterpreterLocation(ip);
-  return stackTracesTree_->getStackTrace(this, codeBlock, ip);
+  return stackTracesTree_->getStackTrace(*this, codeBlock, ip);
 }
 
 void Runtime::enableAllocationLocationTracker(
@@ -2026,7 +2108,7 @@ void Runtime::enableAllocationLocationTracker(
   if (!stackTracesTree_) {
     stackTracesTree_ = std::make_unique<StackTracesTree>();
   }
-  stackTracesTree_->syncWithRuntimeStack(this);
+  stackTracesTree_->syncWithRuntimeStack(*this);
   getHeap().enableHeapProfiler(std::move(fragmentCallback));
 }
 
@@ -2043,7 +2125,7 @@ void Runtime::enableSamplingHeapProfiler(
   if (!stackTracesTree_) {
     stackTracesTree_ = std::make_unique<StackTracesTree>();
   }
-  stackTracesTree_->syncWithRuntimeStack(this);
+  stackTracesTree_->syncWithRuntimeStack(*this);
   getHeap().enableSamplingHeapProfiler(samplingInterval, seed);
 }
 
@@ -2061,38 +2143,10 @@ void Runtime::pushCallStackImpl(
     const CodeBlock *codeBlock,
     const inst::Inst *ip) {
   assert(stackTracesTree_ && "Runtime not configured to track alloc stacks");
-  stackTracesTree_->pushCallStack(this, codeBlock, ip);
+  stackTracesTree_->pushCallStack(*this, codeBlock, ip);
 }
 
-#else // !defined(HERMES_ENABLE_ALLOCATION_LOCATION_TRACES)
-
-std::pair<const CodeBlock *, const inst::Inst *>
-Runtime::getCurrentInterpreterLocation(const inst::Inst *ip) const {
-  return {nullptr, nullptr};
-}
-
-StackTracesTreeNode *Runtime::getCurrentStackTracesTreeNode(
-    const inst::Inst *ip) {
-  return nullptr;
-}
-
-void Runtime::enableAllocationLocationTracker(
-    std::function<void(
-        uint64_t,
-        std::chrono::microseconds,
-        std::vector<GCBase::AllocationLocationTracker::HeapStatsUpdate>)>) {}
-
-void Runtime::disableAllocationLocationTracker(bool) {}
-
-void Runtime::enableSamplingHeapProfiler(size_t, int64_t) {}
-
-void Runtime::disableSamplingHeapProfiler(llvh::raw_ostream &) {}
-
-void Runtime::popCallStackImpl() {}
-
-void Runtime::pushCallStackImpl(const CodeBlock *, const inst::Inst *) {}
-
-#endif // !defined(HERMES_ENABLE_ALLOCATION_LOCATION_TRACES)
+#endif // HERMES_MEMORY_INSTRUMENTATION
 
 } // namespace vm
 } // namespace hermes

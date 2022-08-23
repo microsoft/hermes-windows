@@ -62,10 +62,10 @@ std::string UTF16toUTF8(std::u16string in) {
 // https://tc39.es/ecma402/#sec-canonicalizeunicodelocaleid while doing some
 // minimal tag validation
 vm::CallResult<std::u16string> NormalizeLangugeTag(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::u16string locale) {
   if (locale.length() == 0) {
-    return runtime->raiseRangeError("RangeError: Invalid language tag");
+    return runtime.raiseRangeError("RangeError: Invalid language tag");
   }
   std::string locale8 = UTF16toUTF8(locale);
 
@@ -89,7 +89,7 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(
       &status);
   if (forLangTagResultLength < 0 || parsedLength < locale.length() ||
       status == U_ILLEGAL_ARGUMENT_ERROR) {
-    return runtime->raiseRangeError(
+    return runtime.raiseRangeError(
         vm::TwineChar16("Invalid language tag: ") +
         vm::TwineChar16(locale8.c_str()));
   }
@@ -97,7 +97,7 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(
   int canonicalizeResultLength =
       uloc_canonicalize(localeID, normalize, ULOC_FULLNAME_CAPACITY, &status);
   if (canonicalizeResultLength <= 0) {
-    return runtime->raiseRangeError(
+    return runtime.raiseRangeError(
         vm::TwineChar16("Invalid language tag: ") +
         vm::TwineChar16(locale8.c_str()));
   }
@@ -105,7 +105,7 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(
   int toLangTagResultLength = uloc_toLanguageTag(
       normalize, canonicalize, ULOC_FULLNAME_CAPACITY, true, &status);
   if (forLangTagResultLength <= 0) {
-    return runtime->raiseRangeError(
+    return runtime.raiseRangeError(
         vm::TwineChar16("Invalid language tag: ") +
         vm::TwineChar16(locale8.c_str()));
   }
@@ -115,7 +115,7 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(
 
 // https://tc39.es/ecma402/#sec-canonicalizelocalelist
 vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales) {
   // 1. If locales is undefined, then a. Return a new empty list
   if (locales.empty()) {
@@ -154,19 +154,19 @@ vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(
 
 // https://tc39.es/ecma402/#sec-intl.getcanonicallocales
 vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales) {
   return CanonicalizeLocaleList(runtime, locales);
 }
 
 vm::CallResult<std::u16string> toLocaleLowerCase(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const std::u16string &str) {
   return std::u16string(u"lowered");
 }
 vm::CallResult<std::u16string> toLocaleUpperCase(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const std::u16string &str) {
   return std::u16string(u"uppered");
@@ -180,14 +180,14 @@ Collator::Collator() : impl_(std::make_unique<Impl>()) {}
 Collator::~Collator() {}
 
 vm::CallResult<std::vector<std::u16string>> Collator::supportedLocalesOf(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   return std::vector<std::u16string>{u"en-CA", u"de-DE"};
 }
 
 vm::ExecutionStatus Collator::initialize(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   impl_->locale = u"en-US";
@@ -215,14 +215,14 @@ DateTimeFormat::DateTimeFormat() : impl_(std::make_unique<Impl>()) {}
 DateTimeFormat::~DateTimeFormat() {}
 
 vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   return std::vector<std::u16string>{u"en-CA", u"de-DE"};
 }
 
 vm::ExecutionStatus DateTimeFormat::initialize(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   impl_->locale = u"en-US";
@@ -259,14 +259,14 @@ NumberFormat::NumberFormat() : impl_(std::make_unique<Impl>()) {}
 NumberFormat::~NumberFormat() {}
 
 vm::CallResult<std::vector<std::u16string>> NumberFormat::supportedLocalesOf(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   return std::vector<std::u16string>{u"en-CA", u"de-DE"};
 }
 
 vm::ExecutionStatus NumberFormat::initialize(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   impl_->locale = u"en-US";

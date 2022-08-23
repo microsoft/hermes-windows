@@ -17,7 +17,7 @@ namespace vm {
 // class JSDate
 
 const ObjectVTable JSDate::vt{
-    VTable(CellKind::DateKind, cellSize<JSDate>()),
+    VTable(CellKind::JSDateKind, cellSize<JSDate>()),
     JSDate::_getOwnIndexedRangeImpl,
     JSDate::_haveOwnIndexedImpl,
     JSDate::_getOwnIndexedPropertyFlagsImpl,
@@ -27,19 +27,19 @@ const ObjectVTable JSDate::vt{
     JSDate::_checkAllOwnIndexedImpl,
 };
 
-void DateBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
+void JSDateBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.addJSObjectOverlapSlots(JSObject::numOverlapSlots<JSDate>());
-  ObjectBuildMeta(cell, mb);
-  mb.setVTable(&JSDate::vt.base);
+  JSObjectBuildMeta(cell, mb);
+  mb.setVTable(&JSDate::vt);
 }
 
 PseudoHandle<JSDate>
-JSDate::create(Runtime *runtime, double value, Handle<JSObject> parentHandle) {
-  auto *cell = runtime->makeAFixed<JSDate>(
+JSDate::create(Runtime &runtime, double value, Handle<JSObject> parentHandle) {
+  auto *cell = runtime.makeAFixed<JSDate>(
       runtime,
       value,
       parentHandle,
-      runtime->getHiddenClassForPrototype(
+      runtime.getHiddenClassForPrototype(
           *parentHandle, numOverlapSlots<JSDate>()));
   return JSObjectInit::initToPseudoHandle(runtime, cell);
 }

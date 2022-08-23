@@ -34,10 +34,6 @@
 namespace hermes {
 namespace vm {
 
-class WeakRefBase;
-template <class T>
-class WeakRef;
-
 /// A GC with a young and old generation, that does concurrent marking and
 /// sweeping of the old generation.
 ///
@@ -47,7 +43,7 @@ class WeakRef;
 ///
 /// The old generation is a collection of heap segments, and allocations in the
 /// old gen are done with a freelist (not a bump-pointer). When the old
-/// collection is nearly full, it starts a backthround thread that will mark all
+/// collection is nearly full, it starts a background thread that will mark all
 /// objects in the old gen, and then sweep the dead ones onto freelists.
 ///
 /// Compaction is done in the old gen on a per-segment basis.
@@ -64,14 +60,14 @@ class HadesGC final : public GCBase {
   /// sizes.
   /// \param provider A provider of storage to be used by segments.
   HadesGC(
-      GCCallbacks *gcCallbacks,
-      PointerBase *pointerBase,
+      GCCallbacks &gcCallbacks,
+      PointerBase &pointerBase,
       const GCConfig &gcConfig,
       std::shared_ptr<CrashManager> crashMgr,
       std::shared_ptr<StorageProvider> provider,
       experiments::VMExperimentFlags vmExperimentFlags);
 
-  ~HadesGC();
+  ~HadesGC() override;
 
   static bool classof(const GCBase *gc) {
     return gc->getKind() == HeapKind::HadesGC;
@@ -94,6 +90,7 @@ class HadesGC final : public GCBase {
   void getHeapInfo(HeapInfo &info) override;
   void getHeapInfoWithMallocSize(HeapInfo &info) override;
   void getCrashManagerHeapInfo(CrashManager::HeapInformation &info) override;
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   void createSnapshot(llvh::raw_ostream &os) override;
   void snapshotAddGCNativeNodes(HeapSnapshot &snap) override;
   void snapshotAddGCNativeEdges(HeapSnapshot &snap) override;
@@ -107,6 +104,7 @@ class HadesGC final : public GCBase {
   void enableSamplingHeapProfiler(size_t samplingInterval, int64_t seed)
       override;
   void disableSamplingHeapProfiler(llvh::raw_ostream &os) override;
+#endif // HERMES_MEMORY_INSTRUMENTATION
   void printStats(JSONEmitter &json) override;
   std::string getKindAsStr() const override;
 
@@ -246,7 +244,8 @@ class HadesGC final : public GCBase {
   }
   void snapshotWriteBarrier(const GCPointerBase *loc) {
     if (LLVM_UNLIKELY(!inYoungGen(loc) && ogMarkingBarriers_))
-      snapshotWriteBarrierInternal(*loc);
+      if (CompressedPointer cp = *loc)
+        snapshotWriteBarrierInternal(cp);
   }
   void snapshotWriteBarrier(const GCSymbolID *loc) {
     if (LLVM_UNLIKELY(!inYoungGen(loc) && ogMarkingBarriers_))
@@ -272,7 +271,6 @@ class HadesGC final : public GCBase {
       uint32_t numHVs);
 
   void weakRefReadBarrier(GCCell *value);
-  void weakRefReadBarrier(HermesValue value);
 
   /// \}
 
@@ -283,7 +281,7 @@ class HadesGC final : public GCBase {
   /// succeed.)
   bool canAllocExternalMemory(uint32_t size) override;
 
-  WeakRefSlot *allocWeakSlot(HermesValue init) override;
+  WeakRefSlot *allocWeakSlot(CompressedPointer ptr) override;
 
   /// Iterate over all objects in the heap, and call \p callback on them.
   /// \param callback A function to call on each found object.
@@ -335,9 +333,6 @@ class HadesGC final : public GCBase {
   /// found reachable in a full GC.
   void trackReachable(CellKind kind, unsigned sz) override;
 
-  /// Returns true if \p cell is the most-recently allocated finalizable object.
-  bool isMostRecentFinalizableObj(const GCCell *cell) const override;
-
   /// \}
 #endif
 
@@ -380,12 +375,12 @@ class HadesGC final : public GCBase {
     void forAllObjs(CallbackFunction callback);
     /// Only call the callback on cells without forwarding pointers.
     template <typename CallbackFunction>
-    void forCompactedObjs(CallbackFunction callback, PointerBase *base);
+    void forCompactedObjs(CallbackFunction callback, PointerBase &base);
   };
 
   class OldGen final {
    public:
-    explicit OldGen(HadesGC *gc);
+    explicit OldGen(HadesGC &gc);
 
     std::deque<HeapSegment>::iterator begin();
     std::deque<HeapSegment>::iterator end();
@@ -393,19 +388,15 @@ class HadesGC final : public GCBase {
     std::deque<HeapSegment>::const_iterator end() const;
 
     size_t numSegments() const;
-    size_t maxNumSegments() const;
 
     HeapSegment &operator[](size_t i);
 
     /// Take ownership of the given segment.
     void addSegment(HeapSegment seg);
 
-    /// Remove the segment at \p segmentIdx.
-    /// WARN: This is an expensive operation and should be used sparingly. It
-    /// calls eraseSegmentFreelists, which has a worst case time complexity of
-    /// O(#Freelist buckets * #Segments).
-    /// \return the segment previously at segmentIdx
-    HeapSegment removeSegment(size_t segmentIdx);
+    /// Remove the last segment from the OG.
+    /// \return the segment that was removed.
+    HeapSegment popSegment();
 
     /// Indicate that OG should target having a size of \p targetSizeBytes.
     void setTargetSizeBytes(size_t targetSizeBytes);
@@ -418,49 +409,31 @@ class HadesGC final : public GCBase {
     /// \post This function either successfully allocates, or reports OOM.
     GCCell *alloc(uint32_t sz);
 
-    /// Adds the given region of memory to the free list for this segment.
-    void addCellToFreelist(void *addr, uint32_t sz, size_t segmentIdx);
-
     /// \return the total number of bytes that are in use by the OG section of
-    /// the JS heap, excluding free list entries.
+    /// the JS heap, including any bytes allocated in a pending compactee, and
+    /// excluding free list entries.
     uint64_t allocatedBytes() const;
 
-    /// \return the total number of bytes that are in use by the segment with
-    /// index \p segmentIdx in the OG section of the JS heap, excluding free
-    /// list entries.
-    uint64_t allocatedBytes(uint16_t segmentIdx) const;
-
-    /// Increase the allocated bytes tracker for the segment at index \p
-    /// segmentIdx;
-    void incrementAllocatedBytes(int32_t incr, uint16_t segmentIdx);
-
-    /// Get the peak allocated bytes for the segment at \p segmentIdx.
-    uint64_t peakAllocatedBytes(uint16_t segmentIdx) const;
-
-    /// Trigger an update of the peak allocated bytes. This should be done right
-    /// before sweeping a particular segment so we have the true peak.
-    void updatePeakAllocatedBytes(uint16_t segmentIdx);
+    /// Increase the allocated bytes tracker by \p incr.
+    void incrementAllocatedBytes(int32_t incr);
 
     /// \return the total number of bytes that are held in external memory, kept
     /// alive by objects in the OG.
     uint64_t externalBytes() const;
 
     /// \return the total number of bytes that are in use by the OG section of
-    /// the JS heap, including free list entries.
+    /// the JS heap, including any pending compactee and free list entries.
     uint64_t size() const;
 
     /// \return the total number of bytes that we aim to use in the OG
-    /// section of the JS heap, including free list entries. This may be smaller
-    /// or greater than size(). It is rounded up to the nearest segment to make
-    /// to reflect the fact that in practice, the heap size will be an integer
-    /// multiple of segment size.
+    /// section of the heap, including free list entries and external memory.
+    /// This may be smaller or greater than size() + externalBytes().
     uint64_t targetSizeBytes() const;
 
     /// Add some external memory cost to the OG.
     void creditExternalMemory(uint32_t size) {
       assert(
-          gc_->gcMutex_ &&
-          "OG external bytes must be accessed under gcMutex_.");
+          gc_.gcMutex_ && "OG external bytes must be accessed under gcMutex_.");
       externalBytes_ += size;
     }
 
@@ -469,8 +442,7 @@ class HadesGC final : public GCBase {
       assert(
           externalBytes_ >= size && "Debiting more memory than was credited");
       assert(
-          gc_->gcMutex_ &&
-          "OG external bytes must be accessed under gcMutex_.");
+          gc_.gcMutex_ && "OG external bytes must be accessed under gcMutex_.");
       externalBytes_ -= size;
     }
 
@@ -484,8 +456,6 @@ class HadesGC final : public GCBase {
       // If null, this is the tail of the free list.
       AssignableCompressedPointer next_{nullptr};
 
-      explicit FreelistCell(uint32_t sz) : VariableSizeRuntimeCell{&vt, sz} {}
-
       /// Shrink this cell by carving out a region of size \p sz bytes. Unpoison
       /// the carved out region if necessary and return it (without any
       /// initialisation).
@@ -493,31 +463,13 @@ class HadesGC final : public GCBase {
       /// \pre getAllocatedSize() >= sz + minAllocationSize()
       GCCell *carve(uint32_t sz);
 
+      static constexpr CellKind getCellKind() {
+        return CellKind::FreelistKind;
+      }
       static bool classof(const GCCell *cell) {
         return cell->getKind() == CellKind::FreelistKind;
       }
     };
-
-    /// Adds the given cell to the free list for this segment.
-    /// \pre this->contains(cell) is true.
-    void addCellToFreelist(FreelistCell *cell, size_t segmentIdx);
-
-    /// Remove the cell pointed to by the pointer at \p prevLoc from
-    /// the given \p segmentIdx and \p bucket in the freelist.
-    /// \return a pointer to the removed cell.
-    FreelistCell *removeCellFromFreelist(
-        AssignableCompressedPointer *prevLoc,
-        size_t bucket,
-        size_t segmentIdx);
-
-    /// Remove the first cell from the given \p segmentIdx and \p bucket in the
-    /// freelist.
-    /// \return a pointer to the removed cell.
-    FreelistCell *removeCellFromFreelist(size_t bucket, size_t segmentIdx);
-
-    /// Remove a segment entirely from every freelist. This will shift all bits
-    /// after segmentIdx down by one.
-    void eraseSegmentFreelists(size_t segmentIdx);
 
     /// Sweep the next segment and advance the internal sweep iterator. If there
     /// are no more segments left to sweep, update OG collection stats with
@@ -539,45 +491,6 @@ class HadesGC final : public GCBase {
     size_t getMemorySize() const;
 
    private:
-    /// \return the index of the bucket in freelistBuckets_ corresponding to
-    /// \p size.
-    /// \post The returned index is less than kNumFreelistBuckets.
-    static uint32_t getFreelistBucket(uint32_t size);
-
-    /// Adds the given region of memory to the free list for the segment that is
-    /// currently being swept. This does not update the Freelist bits, those
-    /// should all be updated in a single pass at the end of sweeping.
-    void addCellToFreelistFromSweep(
-        char *freeRangeStart,
-        char *freeRangeEnd,
-        bool setHead);
-
-    HadesGC *gc_;
-
-    /// Use a std::deque instead of a std::vector so that references into it
-    /// remain valid across a push_back.
-    std::deque<HeapSegment> segments_;
-
-    /// This is the target size in bytes for the OG JS heap. It does not
-    /// include external memory and may be larger or smaller than the actual
-    /// capacity of the heap. Should be initialised using setTargetSizeBytes
-    /// before use.
-    ExponentialMovingAverage targetSizeBytes_{0, 0};
-
-    /// This is the sum of all bytes currently allocated in the heap, excluding
-    /// bump-allocated segments. Use \c allocatedBytes() to include
-    /// bump-allocated segments.
-    uint64_t allocatedBytes_{0};
-
-    /// Each element in the vector corresponds to the segment at the same index
-    /// in segments_. The first element in the pair represents the currently
-    /// allocated bytes in this segment, the second element represents the peak
-    /// allocated bytes in this segment, since it was created or compacted.
-    std::vector<std::pair<uint32_t, uint32_t>> segmentAllocatedBytes_;
-
-    /// The amount of bytes of external memory credited to objects in the OG.
-    uint64_t externalBytes_{0};
-
     /// The freelist buckets are split into two sections. In the "small"
     /// section, there is one bucket for each size, in multiples of heapAlign.
     /// In the "large" section, there is a bucket for each power of 2. The
@@ -605,29 +518,107 @@ class HadesGC final : public GCBase {
     static constexpr size_t kNumFreelistBuckets =
         kNumSmallFreelistBuckets + kNumLargeFreelistBuckets;
 
+    /// \return the index of the bucket in freelistBuckets_ corresponding to
+    /// \p size.
+    /// \post The returned index is less than kNumFreelistBuckets.
+    static uint32_t getFreelistBucket(uint32_t size);
+
+    /// A node in the segment level freelist for a given bucket. It is inserted
+    /// into a doubly linked list for a given bucket when the segment contains
+    /// free cells for that bucket, and contains a pointer to a linked list of
+    /// those cells.
+    struct SegmentBucket {
+      /// Pointers for maintaining a doubly linked list.
+      SegmentBucket *next{nullptr};
+      SegmentBucket *prev{nullptr};
+
+      /// The head of the freelist of cells for this segment and bucket. Can be
+      /// null if and only if this SegmentBucket is not in a segment level
+      /// freelist.
+      AssignableCompressedPointer head{nullptr};
+
+      /// Adds this SegmentBucket to the freelist starting with \p dummyHead.
+      void addToFreelist(SegmentBucket *dummyHead);
+
+      /// Removes this SegmentBucket from its freelist, by updating the buckets
+      /// before and after it.
+      void removeFromFreelist() const;
+    };
+
+    /// Array containing the nodes for each bucket in a given segment.
+    using SegmentBuckets = std::array<SegmentBucket, kNumFreelistBuckets>;
+
+    /// Adds the given region of memory to the free list held in \p segBucket.
+    void addCellToFreelist(void *addr, uint32_t sz, SegmentBucket *segBucket);
+
+    /// Adds the given cell to the free list held in \p segBucket.
+    /// \pre this->contains(cell) is true.
+    void addCellToFreelist(FreelistCell *cell, SegmentBucket *segBucket);
+
+    /// Remove the cell pointed to by the pointer at \p prevLoc from
+    /// the given \p segBucket and \p bucket in the freelist.
+    /// \return a pointer to the removed cell.
+    FreelistCell *removeCellFromFreelist(
+        AssignableCompressedPointer *prevLoc,
+        size_t bucket,
+        SegmentBucket *segBucket);
+
+    /// Remove the first cell from the given \p segBucket and \p bucket in the
+    /// freelist.
+    /// \return a pointer to the removed cell.
+    FreelistCell *removeCellFromFreelist(
+        size_t bucket,
+        SegmentBucket *segBucket);
+
+    /// Adds the given region of memory to the free list for the segment that is
+    /// currently being swept. \p buckets is a pointer to the array of
+    /// SegmentBuckets for the segment. This does not update the Freelist bits,
+    /// those should all be updated in a single pass at the end of sweeping.
+    void addCellToFreelistFromSweep(
+        char *freeRangeStart,
+        char *freeRangeEnd,
+        SegmentBuckets &segBuckets,
+        bool setHead);
+
+    HadesGC &gc_;
+
+    /// Use a std::deque instead of a std::vector so that references into it
+    /// remain valid across a push_back.
+    std::deque<HeapSegment> segments_;
+
+    /// See \c targetSizeBytes() above.
+    ExponentialMovingAverage targetSizeBytes_{0, 0};
+
+    /// This is the sum of all bytes currently allocated in the heap, excluding
+    /// bump-allocated segments. Use \c allocatedBytes() to include
+    /// bump-allocated segments.
+    uint64_t allocatedBytes_{0};
+
+    /// The amount of bytes of external memory credited to objects in the OG.
+    uint64_t externalBytes_{0};
+
     /// The below data structures should be used as follows.
     /// 1. When looking for a given size, first find the smallest appropriate
     ///    bucket that has any elements at all, by scanning
     ///    freelistBucketBitArray_.
-    /// 2. Once a bucket is identified, find a segment that contains cells for
-    ///    that bucket using freelistBucketSegmentBitArray_.
-    /// 3. Finally, with the given pair of bucket and segment index, obtain the
-    ///    head of the freelist from freelistSegmentsBuckets_.
-
-    /// Maintain a freelist as described above for every segment. Each element
-    /// is the head of a freelist for the given segment + bucket pair.
-    std::vector<std::array<AssignableCompressedPointer, kNumFreelistBuckets>>
-        freelistSegmentsBuckets_;
+    /// 2. Once a bucket is identified, index into buckets_ to obtain the
+    ///    segment level freelist, which is a linked list of SegmentBuckets
+    ///    containing free cells for that bucket.
+    /// 3. Finally, obtain the cell level freelist from the selected
+    ///    SegmentBucket, and select a cell.
 
     /// Keep track of which freelist buckets have valid elements to make search
     /// fast. This includes all segments.
     BitArray<kNumFreelistBuckets> freelistBucketBitArray_;
 
-    /// Keep track of which segments have a valid element in a particular
-    /// bucket. Combined with the above bit array, this allows us to quickly
-    /// index into a freelist bucket.
-    std::array<llvh::SparseBitVector<>, kNumFreelistBuckets>
-        freelistBucketSegmentBitArray_;
+    /// Contains all of the nodes for the segment level freelists. For each
+    /// segment in the OG, this holds kNumFreelistBuckets SegmentBucket nodes.
+    /// These can be added or removed from the freelists pointed to by buckets_
+    /// as needed.
+    std::deque<SegmentBuckets> segmentBuckets_;
+
+    /// Contains dummy heads for the segment level freelists for each bucket.
+    std::array<SegmentBucket, kNumFreelistBuckets> buckets_{};
 
     /// Tracks the current progress of sweeping.
     struct SweepIterator {
@@ -640,6 +631,11 @@ class HadesGC final : public GCBase {
       /// sweep.
       uint64_t sweptBytes{0};
       uint64_t sweptExternalBytes{0};
+
+#ifndef NDEBUG
+      /// The total number of bytes trimmed from GC-managed cells.
+      uint64_t trimmedBytes{0};
+#endif
     } sweepIterator_;
 
     /// Searches the OG for a space to allocate memory into.
@@ -651,9 +647,7 @@ class HadesGC final : public GCBase {
     /// \param cell The free memory that will soon have an object allocated into
     ///   it.
     /// \param sz The number of bytes associated with the free memory.
-    /// \param segmentIdx An index into segments_ representing which segment the
-    /// allocation is being made in.
-    GCCell *finishAlloc(GCCell *cell, uint32_t sz, uint16_t segmentIdx);
+    GCCell *finishAlloc(GCCell *cell, uint32_t sz);
   };
 
  private:
@@ -688,7 +682,8 @@ class HadesGC final : public GCBase {
   /// Note that we only set the YG size using this at the end of the first real
   /// YG, since doing it for direct promotions would waste OG memory without a
   /// pause time benefit.
-  double ygSizeFactor_{0.5};
+  static constexpr double kYGInitialSizeFactor = 0.5;
+  double ygSizeFactor_{kYGInitialSizeFactor};
 
   /// oldGen_ is a free list space, so it needs a different segment
   /// representation.
@@ -722,7 +717,7 @@ class HadesGC final : public GCBase {
   /// Represents whether the background thread is currently marking. Should only
   /// be accessed by the mutator thread or during a STW pause.
   /// ogMarkingBarriers_ is true from the start of marking the OG heap until the
-  /// start of WeakMap marking but is kept separate from concurrentPhase_ in
+  /// start of the STW pause but is kept separate from concurrentPhase_ in
   /// order to reduce synchronisation requirements for write barriers.
   bool ogMarkingBarriers_{false};
 
@@ -771,8 +766,9 @@ class HadesGC final : public GCBase {
   /// together in a linked list.
   WeakRefSlot *firstFreeWeak_{nullptr};
 
-  /// The weighted average of the YG survival ratio over time.
-  ExponentialMovingAverage ygAverageSurvivalRatio_;
+  /// The weighted average of the number of bytes that are promoted to the OG in
+  /// each YG collection.
+  ExponentialMovingAverage ygAverageSurvivalBytes_;
 
   /// The amount of bytes of external memory credited to objects in the YG.
   /// Only accessible to the mutator.
@@ -840,10 +836,6 @@ class HadesGC final : public GCBase {
     /// after it is identified, and freed entirely once the compaction is
     /// complete.
     std::shared_ptr<HeapSegment> segment;
-
-    /// The number of bytes in the compactee, should be set before the compactee
-    /// is removed from the OG.
-    uint32_t allocatedBytes{0};
   } compactee_;
 
   /// If compaction completes before sweeping, there is a possibility that
@@ -935,12 +927,21 @@ class HadesGC final : public GCBase {
   /// thread, to perform it concurrently with the mutator.
   void collectOGInBackground();
 
+  /// Ensures that work on the background thread to be suspended when
+  /// concurrent GC is enabled.
+  LLVM_NODISCARD std::lock_guard<Mutex> ensureBackgroundTaskPaused() {
+    if constexpr (kConcurrentGC) {
+      return pauseBackgroundTask();
+    }
+    return std::lock_guard(gcMutex_);
+  }
+
   /// Forces work on the background thread to be suspended and returns a lock
   /// holding gcMutex_. This is used to ensure that the mutator receives
   /// priority in acquiring gcMutex_, and does not remain blocked on the
   /// background thread for an extended period of time. The background thread
   /// will resume once the lock is released.
-  std::unique_lock<Mutex> pauseBackgroundTask();
+  LLVM_NODISCARD std::lock_guard<Mutex> pauseBackgroundTask();
 
   /// Perform a single step of an OG collection. \p backgroundThread indicates
   /// whether this call was made from the background thread.
@@ -956,12 +957,15 @@ class HadesGC final : public GCBase {
   /// heap limit. Should be called at the start of completeMarking.
   void updateOldGenThreshold();
 
-  /// Select a segment to compact and initialise any state needed for
-  /// compaction.
+  /// Prepare the last segment in the OG for compaction and initialise any
+  /// necessary state.
   /// \param forceCompaction If true, a compactee will be prepared regardless of
   ///   heap conditions. Note that if there are no OG heap segments, a
   ///   compaction cannot occur no matter what.
   void prepareCompactee(bool forceCompaction);
+
+  /// Run finalizers on the compactee and clear any compaction state.
+  void finalizeCompactee();
 
   /// Search a single segment for pointers that may need to be updated as the
   /// YG/compactee are evacuated.
@@ -999,14 +1003,6 @@ class HadesGC final : public GCBase {
   /// Finalize all objects in YG that have finalizers.
   void finalizeYoungGenObjects();
 
-  /// Run the finalizers for all heap objects, if the gcMutex_ is already
-  /// locked.
-  void finalizeAllLocked();
-
-  /// Update all of the weak references and invalidate the ones that point to
-  /// dead objects.
-  void updateWeakReferencesForYoungGen();
-
   /// Update all of the weak references, invalidate the ones that point to
   /// dead objects, and free the ones that were not marked at all.
   void updateWeakReferencesForOldGen();
@@ -1015,9 +1011,6 @@ class HadesGC final : public GCBase {
   /// by only their values. In between marking and sweeping, this function is
   /// called to handle that special case.
   void completeWeakMapMarking(MarkAcceptor &acceptor);
-
-  /// Sets all weak references to unmarked in preparation for a collection.
-  void resetWeakReferences();
 
   /// Return the total number of bytes that are in use by the JS heap.
   uint64_t allocatedBytes() const;
@@ -1105,12 +1098,15 @@ inline T *HadesGC::makeA(uint32_t size, Args &&...args) {
       "Call to makeA must use a size aligned to HeapAlign");
   assert(noAllocLevel_ == 0 && "No allocs allowed right now.");
   if (longLived == LongLived::Yes) {
-    auto lk = kConcurrentGC ? pauseBackgroundTask() : std::unique_lock<Mutex>();
-    return new (allocLongLived(size)) T(std::forward<Args>(args)...);
+    auto lk = ensureBackgroundTaskPaused();
+    return constructCell<T>(
+        allocLongLived(size), size, std::forward<Args>(args)...);
   }
 
-  return new (allocWork<fixedSize, hasFinalizer>(size))
-      T(std::forward<Args>(args)...);
+  return constructCell<T>(
+      allocWork<fixedSize, hasFinalizer>(size),
+      size,
+      std::forward<Args>(args)...);
 }
 
 template <bool fixedSize, HasFinalizer hasFinalizer>

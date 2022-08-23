@@ -11,6 +11,7 @@
 #include "hermes/VM/SmallHermesValue.h"
 
 #include "hermes/Support/SlowAssert.h"
+#include "hermes/VM/BigIntPrimitive.h"
 #include "hermes/VM/BoxedDouble.h"
 #include "hermes/VM/HermesValue-inline.h"
 #include "hermes/VM/PointerBase.h"
@@ -19,20 +20,23 @@
 namespace hermes {
 namespace vm {
 
-void SmallHermesValueAdaptor::setInGC(SmallHermesValueAdaptor hv, GC *gc) {
+void SmallHermesValueAdaptor::setInGC(SmallHermesValueAdaptor hv, GC &gc) {
   HermesValue::setInGC(hv, gc);
 }
 
-void HermesValue32::setInGC(HermesValue32 hv, GC *gc) {
+void HermesValue32::setInGC(HermesValue32 hv, GC &gc) {
   setNoBarrier(hv);
-  assert(gc->calledByGC());
+  assert(gc.calledByGC());
 }
 
-HermesValue HermesValue32::unboxToHV(PointerBase *pb) const {
+HermesValue HermesValue32::unboxToHV(PointerBase &pb) const {
   switch (getETag()) {
     case ETag::Object1:
     case ETag::Object2:
       return HermesValue::encodeObjectValue(getObject(pb));
+    case ETag::BigInt1:
+    case ETag::BigInt2:
+      return HermesValue::encodeBigIntValue(getBigInt(pb));
     case ETag::String1:
     case ETag::String2:
       return HermesValue::encodeStringValue(getString(pb));
@@ -59,18 +63,23 @@ HermesValue HermesValue32::unboxToHV(PointerBase *pb) const {
   }
 }
 
-HermesValue HermesValue32::toHV(PointerBase *pb) const {
+HermesValue HermesValue32::toHV(PointerBase &pb) const {
   if (getTag() == Tag::BoxedDouble)
     return HermesValue::encodeObjectValue(getPointer(pb));
   return unboxToHV(pb);
 }
 
-StringPrimitive *HermesValue32::getString(PointerBase *pb) const {
+BigIntPrimitive *HermesValue32::getBigInt(PointerBase &pb) const {
+  assert(isBigInt());
+  return vmcast<BigIntPrimitive>(getPointer(pb));
+}
+
+StringPrimitive *HermesValue32::getString(PointerBase &pb) const {
   assert(isString());
   return vmcast<StringPrimitive>(getPointer(pb));
 }
 
-double HermesValue32::getNumber(PointerBase *pb) const {
+double HermesValue32::getNumber(PointerBase &pb) const {
   assert(isNumber());
   if (LLVM_LIKELY(getTag() == Tag::SmallInt))
     return getSmallInt();
@@ -79,7 +88,7 @@ double HermesValue32::getNumber(PointerBase *pb) const {
 
 /* static */ HermesValue32 HermesValue32::encodeHermesValue(
     HermesValue hv,
-    Runtime *runtime) {
+    Runtime &runtime) {
 #ifdef HERMESVM_SANITIZE_HANDLES
   // When Handle-SAN is on, make a double so that this function always
   // allocates. Note we can't do this for pointer values since they would get
@@ -101,6 +110,9 @@ double HermesValue32::getNumber(PointerBase *pb) const {
     case HermesValue::ETag::Str1:
     case HermesValue::ETag::Str2:
       return encodeStringValue(hv.getString(), runtime);
+    case HermesValue::ETag::BigInt1:
+    case HermesValue::ETag::BigInt2:
+      return encodeBigIntValue(hv.getBigInt(), runtime);
     case HermesValue::ETag::Object1:
     case HermesValue::ETag::Object2:
       return encodeObjectValue(static_cast<GCCell *>(hv.getObject()), runtime);
@@ -113,13 +125,11 @@ double HermesValue32::getNumber(PointerBase *pb) const {
 
 /* static */ HermesValue32 HermesValue32::encodeNumberValue(
     double d,
-    Runtime *runtime) {
+    Runtime &runtime) {
   // Always box values when Handle-SAN is on so we can catch any mistakes.
 #ifndef HERMESVM_SANITIZE_HANDLES
   const SmiType i = doubleToSmi(d);
-  if (LLVM_LIKELY(
-          llvh::DoubleToBits(d) == llvh::DoubleToBits(i) &&
-          llvh::isInt<kNumSmiBits>(i)))
+  if (LLVM_LIKELY(llvh::DoubleToBits(d) == llvh::DoubleToBits(i)))
     return fromTagAndValue(Tag::SmallInt, i);
 #endif
   return encodePointerImpl(
@@ -128,10 +138,10 @@ double HermesValue32::getNumber(PointerBase *pb) const {
 
 /* static */ HermesValue32 HermesValue32::encodeObjectValue(
     GCCell *ptr,
-    PointerBase *pb) {
+    PointerBase &pb) {
   assert(
-      (!ptr || !vmisa<StringPrimitive>(ptr)) &&
-      "Strings must use encodeStringValue");
+      (!ptr || !vmisa<StringPrimitive>(ptr) || !vmisa<BigIntPrimitive>(ptr)) &&
+      "Strings must use encodeStringValue; BigInts, encodeBigIntValue");
   return encodePointerImpl(ptr, Tag::Object, pb);
 }
 } // namespace vm

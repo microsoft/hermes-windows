@@ -28,6 +28,7 @@ RUNTIME_HV_FIELD_PROTOTYPE(functionPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(functionConstructor)
 
 RUNTIME_HV_FIELD_PROTOTYPE(stringPrototype)
+RUNTIME_HV_FIELD_PROTOTYPE(bigintPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(numberPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(booleanPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(symbolPrototype)
@@ -51,6 +52,7 @@ RUNTIME_HV_FIELD_PROTOTYPE(mapPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(mapIteratorPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(weakMapPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(weakSetPrototype)
+RUNTIME_HV_FIELD_PROTOTYPE(weakRefPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(regExpPrototype)
 RUNTIME_HV_FIELD_PROTOTYPE(typedArrayBaseConstructor)
 
@@ -72,6 +74,7 @@ RUNTIME_HV_FIELD_PROTOTYPE(parseIntFunction)
 RUNTIME_HV_FIELD_PROTOTYPE(parseFloatFunction)
 RUNTIME_HV_FIELD_PROTOTYPE(requireFunction)
 RUNTIME_HV_FIELD_PROTOTYPE(jsErrorStackAccessor)
+RUNTIME_HV_FIELD_PROTOTYPE(callSitePrototype)
 
 // TODO: for Serialization/Deserialization  after global object initialization
 // we record specialCodeBlockDomain_ and create runtimemodule later need to
@@ -80,6 +83,7 @@ RUNTIME_HV_FIELD_RUNTIMEMODULE(specialCodeBlockDomain_)
 
 RUNTIME_HV_FIELD_INSTANCE(global_)
 RUNTIME_HV_FIELD_INSTANCE(thrownValue_)
+RUNTIME_HV_FIELD_INSTANCE(keptObjects_)
 #ifdef HERMES_ENABLE_DEBUGGER
 RUNTIME_HV_FIELD_INSTANCE(debuggerInternalObject_)
 #endif // HERMES_ENABLE_DEBUGGER

@@ -7,11 +7,12 @@
 
 extern crate juno_support;
 
-use juno::{
-    ast::{self, dump_json, NodeRc},
-    gen_js,
-    hparser::{self, ParserDialect},
-};
+use juno::ast;
+use juno::ast::dump_json;
+use juno::ast::NodeRc;
+use juno::gen_js;
+use juno::hparser;
+use juno::hparser::ParserDialect;
 use juno_pass::PassManager;
 use juno_support::NullTerminatedBuf;
 
@@ -433,7 +434,7 @@ fn assert_strip(input: &str, expected: &str) {
         &mut transformed_js,
         &mut ctx_input,
         &ast_transformed,
-        gen_js::Pretty::Yes,
+        gen_js::Opt::new(),
     )
     .unwrap();
 
@@ -442,7 +443,7 @@ fn assert_strip(input: &str, expected: &str) {
         &mut expected_js,
         &mut ctx_expected,
         &ast_expected,
-        gen_js::Pretty::Yes,
+        gen_js::Opt::new(),
     )
     .unwrap();
 

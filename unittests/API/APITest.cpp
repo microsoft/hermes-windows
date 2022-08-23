@@ -51,8 +51,6 @@ class HermesRuntimeTest : public HermesRuntimeTestBase {
                                   .build()) {}
 };
 
-using HermesRuntimeDeathTest = HermesRuntimeTest;
-
 // In JSC there's a bug where host functions are always ran with a this in
 // nonstrict mode so this must be a hermes only test. See
 // https://es5.github.io/#x10.4.3 for more info.
@@ -212,9 +210,19 @@ TEST_F(HermesRuntimeTest, NoCorruptionOnJSError) {
 // use the ASSERT_DEATH macros when testing that implementation.
 // Asserts are compiled out of opt builds
 #if !defined(NDEBUG) && defined(ASSERT_DEATH)
-TEST_F(HermesRuntimeDeathTest, ValueTest) {
-  ASSERT_DEATH(eval("'slay'").getNumber(), "Assertion.*isNumber");
-  ASSERT_DEATH(eval("123").getString(*rt), "Assertion.*isString");
+TEST(HermesRuntimeDeathTest, ValueTest) {
+  auto eval = [](Runtime &rt, const char *code) {
+    return rt.global().getPropertyAsFunction(rt, "eval").call(rt, code);
+  };
+
+  ASSERT_DEATH(
+      eval(*makeHermesRuntime(), "'slay'").getNumber(), "Assertion.*isNumber");
+  ASSERT_DEATH(
+      {
+        auto rt = makeHermesRuntime();
+        eval(*rt, "123").getString(*rt);
+      },
+      "Assertion.*isString");
 }
 #endif
 
@@ -258,6 +266,37 @@ TEST_F(HermesRuntimeTest, ReferencesCanEscapeScope) {
     v = std::move(o2);
   });
   EXPECT_EQ(rootsDelta, 1);
+}
+
+TEST(HermesWatchTimeLimitTest, WatchTimeLimit) {
+  // Some code that exercies the async break checks.
+  const char *forABit = "var t = Date.now(); while (Date.now() < t + 100) {}";
+  const char *forEver = "for (;;){}";
+  {
+    // Single runtime with ~20 minute limit that will not be reached.
+    auto rt = makeHermesRuntime();
+    rt->watchTimeLimit(1234567);
+    rt->evaluateJavaScript(std::make_unique<StringBuffer>(forABit), "");
+  }
+  {
+    // Multiple runtimes, but neither will time out.
+    auto rt1 = makeHermesRuntime();
+    rt1->watchTimeLimit(1234567);
+    auto rt2 = makeHermesRuntime();
+    rt2->watchTimeLimit(1234567 / 2);
+    rt1->evaluateJavaScript(std::make_unique<StringBuffer>(forABit), "");
+    rt2->evaluateJavaScript(std::make_unique<StringBuffer>(forABit), "");
+  }
+  {
+    // Timeout in one of the runtimes.
+    auto rt1 = makeHermesRuntime();
+    rt1->watchTimeLimit(1234567);
+    auto rt2 = makeHermesRuntime();
+    rt2->watchTimeLimit(123);
+    ASSERT_THROW(
+        rt2->evaluateJavaScript(std::make_unique<StringBuffer>(forEver), ""),
+        JSIException);
+  }
 }
 
 TEST(HermesRuntimeCrashManagerTest, CrashGetStackTrace) {
@@ -576,6 +615,56 @@ TEST_F(HermesRuntimeTestWithDisableGenerator, WithDisableGenerator) {
     FAIL() << "Expected JSIException";
   } catch (const facebook::jsi::JSIException &err) {
   }
+}
+
+TEST_F(HermesRuntimeTest, DiagnosticHandlerTestError) {
+  using DiagnosticHandler = hermes::DiagnosticHandler;
+
+  struct BufferingDiagnosticHandler : DiagnosticHandler {
+    void handle(const DiagnosticHandler::Diagnostic &d) {
+      ds.push_back(d);
+    }
+    std::vector<DiagnosticHandler::Diagnostic> ds;
+  } diagHandler;
+  std::string bytecode;
+  ASSERT_FALSE(
+      hermes::compileJS("x++1", "", bytecode, true, true, &diagHandler));
+  ASSERT_EQ(1, diagHandler.ds.size());
+  EXPECT_EQ(DiagnosticHandler::Error, diagHandler.ds[0].kind);
+  EXPECT_EQ(1, diagHandler.ds[0].line);
+  EXPECT_EQ(4, diagHandler.ds[0].column);
+}
+
+TEST_F(HermesRuntimeTest, DiagnosticHandlerTestWarning) {
+  using DiagnosticHandler = hermes::DiagnosticHandler;
+
+  struct BufferingDiagnosticHandler : DiagnosticHandler {
+    void handle(const DiagnosticHandler::Diagnostic &d) {
+      ds.push_back(d);
+    }
+    std::vector<DiagnosticHandler::Diagnostic> ds;
+  } diagHandler;
+  std::string bytecode;
+  // Succeeds with a warning + associated note.
+  ASSERT_TRUE(
+      hermes::compileJS("({a:1,a:2})", "", bytecode, true, true, &diagHandler));
+  ASSERT_EQ(2, diagHandler.ds.size());
+
+  // warning: the property "a" was set multiple times in the object definition.
+  EXPECT_EQ(DiagnosticHandler::Warning, diagHandler.ds[0].kind);
+  EXPECT_EQ(1, diagHandler.ds[0].line);
+  EXPECT_EQ(7, diagHandler.ds[0].column);
+  ASSERT_EQ(1, diagHandler.ds[0].ranges.size());
+  EXPECT_EQ(6, diagHandler.ds[0].ranges[0].first);
+  EXPECT_EQ(9, diagHandler.ds[0].ranges[0].second);
+
+  // The first definition was here.
+  EXPECT_EQ(DiagnosticHandler::Note, diagHandler.ds[1].kind);
+  EXPECT_EQ(1, diagHandler.ds[1].line);
+  EXPECT_EQ(3, diagHandler.ds[1].column);
+  ASSERT_EQ(1, diagHandler.ds[1].ranges.size());
+  EXPECT_EQ(2, diagHandler.ds[1].ranges[0].first);
+  EXPECT_EQ(5, diagHandler.ds[1].ranges[0].second);
 }
 
 } // namespace

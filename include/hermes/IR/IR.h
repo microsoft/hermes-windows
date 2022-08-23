@@ -55,6 +55,7 @@ class Type {
     Boolean,
     String,
     Number,
+    BigInt,
     Object,
     Closure, // Subtype of Object.
     RegExp, // Subtype of Object.
@@ -80,6 +81,7 @@ class Type {
         "boolean",
         "string",
         "number",
+        "bigint",
         "object",
         "closure",
         "regexp"};
@@ -96,8 +98,8 @@ class Type {
   static constexpr unsigned TYPE_ANY_MASK = (1u << TypeKind::LAST_TYPE) - 1;
 
   static constexpr unsigned PRIMITIVE_BITS = BIT_TO_VAL(Number) |
-      BIT_TO_VAL(String) | BIT_TO_VAL(Null) | BIT_TO_VAL(Undefined) |
-      BIT_TO_VAL(Boolean);
+      BIT_TO_VAL(String) | BIT_TO_VAL(BigInt) | BIT_TO_VAL(Null) |
+      BIT_TO_VAL(Undefined) | BIT_TO_VAL(Boolean);
 
   static constexpr unsigned OBJECT_BITS =
       BIT_TO_VAL(Object) | BIT_TO_VAL(Closure) | BIT_TO_VAL(RegExp);
@@ -172,6 +174,12 @@ class Type {
   static constexpr Type createNumber() {
     return Type(BIT_TO_VAL(Number));
   }
+  static constexpr Type createBigInt() {
+    return Type(BIT_TO_VAL(BigInt));
+  }
+  static constexpr Type createNumeric() {
+    return unionTy(createNumber(), createBigInt());
+  }
   static constexpr Type createClosure() {
     return Type(BIT_TO_VAL(Closure));
   }
@@ -210,6 +218,9 @@ class Type {
   constexpr bool isNumberType() const {
     return IS_VAL(Number);
   }
+  constexpr bool isBigIntType() const {
+    return IS_VAL(BigInt);
+  }
   constexpr bool isClosureType() const {
     return IS_VAL(Closure);
   }
@@ -227,7 +238,7 @@ class Type {
   }
 
   /// \return true if the type is one of the known javascript primitive types:
-  /// Number, Null, Boolean, String, Undefined.
+  /// Number, BigInt, Null, Boolean, String, Undefined.
   constexpr bool isKnownPrimitiveType() const {
     return isPrimitive() && 1 == llvh::countPopulation(bitmask_);
   }
@@ -262,6 +273,11 @@ class Type {
   /// \returns true if this type can represent a string value.
   constexpr bool canBeString() const {
     return canBeType(Type::createString());
+  }
+
+  /// \returns true if this type can represent a bigint value.
+  constexpr bool canBeBigInt() const {
+    return canBeType(Type::createBigInt());
   }
 
   /// \returns true if this type can represent a number value.
@@ -659,6 +675,36 @@ class LiteralUndefined : public Literal {
   }
 };
 
+class LiteralBigInt : public Literal, public llvh::FoldingSetNode {
+  LiteralBigInt(const LiteralBigInt &) = delete;
+  LiteralBigInt &operator=(const LiteralBigInt &) = delete;
+
+  // value holds the BigInt literal string as parsed by the front-end.
+  UniqueString *value;
+
+ public:
+  explicit LiteralBigInt(UniqueString *v)
+      : Literal(ValueKind::LiteralBigIntKind), value(v) {
+    setType(Type::createBigInt());
+  }
+
+  UniqueString *getValue() const {
+    return value;
+  }
+
+  static void Profile(llvh::FoldingSetNodeID &ID, UniqueString *value) {
+    ID.AddPointer(value);
+  }
+
+  void Profile(llvh::FoldingSetNodeID &ID) const {
+    LiteralBigInt::Profile(ID, value);
+  }
+
+  static bool classof(const Value *V) {
+    return V->getKind() == ValueKind::LiteralBigIntKind;
+  }
+};
+
 class LiteralNumber : public Literal, public llvh::FoldingSetNode {
   LiteralNumber(const LiteralNumber &) = delete;
   void operator=(const LiteralNumber &) = delete;
@@ -765,7 +811,7 @@ class LiteralNumber : public Literal, public llvh::FoldingSetNode {
   }
 
   static void Profile(llvh::FoldingSetNodeID &ID, double value) {
-    ID.AddInteger(safeTypeCast<double, int64_t>(value));
+    ID.AddInteger(llvh::DoubleToBits(value));
   }
 
   void Profile(llvh::FoldingSetNodeID &ID) const {
@@ -1836,9 +1882,11 @@ class Module : public Value {
   EmptySentinel emptySentinel_{};
 
   using LiteralNumberFoldingSet = llvh::FoldingSet<LiteralNumber>;
+  using LiteralBigIntFoldingSet = llvh::FoldingSet<LiteralBigInt>;
   using LiteralStringFoldingSet = llvh::FoldingSet<LiteralString>;
 
   LiteralNumberFoldingSet literalNumbers{};
+  LiteralBigIntFoldingSet literalBigInts{};
   LiteralStringFoldingSet literalStrings{};
 
   /// Map from an identifier to a number indicating how many times it has been
@@ -1958,6 +2006,9 @@ class Module : public Value {
 
   /// Create a new literal number of value \p value.
   LiteralNumber *getLiteralNumber(double value);
+
+  /// Create a new literal BigInt of value \p value.
+  LiteralBigInt *getLiteralBigInt(UniqueString *value);
 
   /// Create a new literal string of value \p value.
   LiteralString *getLiteralString(Identifier value);

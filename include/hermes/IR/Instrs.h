@@ -227,6 +227,33 @@ class AsNumberInst : public SingleOperandInst {
   }
 };
 
+class AsNumericInst : public SingleOperandInst {
+  AsNumericInst(const AsNumericInst &) = delete;
+  void operator=(const AsNumericInst &) = delete;
+
+ public:
+  explicit AsNumericInst(Value *value)
+      : SingleOperandInst(ValueKind::AsNumericInstKind, value) {
+    setType(Type::createNumeric());
+  }
+  explicit AsNumericInst(
+      const AsNumericInst *src,
+      llvh::ArrayRef<Value *> operands)
+      : SingleOperandInst(src, operands) {}
+
+  SideEffectKind getSideEffect() {
+    return SideEffectKind::Unknown;
+  }
+
+  WordBitSet<> getChangedOperandsImpl() {
+    return {};
+  }
+
+  static bool classof(const Value *V) {
+    return kindIsA(V->getKind(), ValueKind::AsNumericInstKind);
+  }
+};
+
 class AsInt32Inst : public SingleOperandInst {
   AsInt32Inst(const AsInt32Inst &) = delete;
   void operator=(const AsInt32Inst &) = delete;
@@ -1487,6 +1514,8 @@ class UnaryOperatorInst : public SingleOperandInst {
     MinusKind, // -
     TildeKind, // ~
     BangKind, // !
+    IncKind, // + 1
+    DecKind, // - 1
     LAST_OPCODE
   };
 

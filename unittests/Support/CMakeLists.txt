@@ -6,6 +6,7 @@
 set(SupportSources
   Algorithms.cpp
   AllocatorTest.cpp
+  BigIntSupportTest.cpp
   CheckedMalloc.cpp
   ConversionsTest.cpp
   CtorConfigTest.cpp
@@ -32,5 +33,6 @@ add_hermes_unittest(HermesSupportTests
 target_link_libraries(HermesSupportTests
  hermesPlatform
  hermesSupport
+ hermesPublic
  dtoa
  )

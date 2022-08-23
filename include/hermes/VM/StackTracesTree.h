@@ -16,7 +16,7 @@
 namespace hermes {
 namespace vm {
 
-#ifdef HERMES_ENABLE_ALLOCATION_LOCATION_TRACES
+#ifdef HERMES_MEMORY_INSTRUMENTATION
 
 /// This is the root of a tree encoding stack-traces for use by the allocation
 /// location tracker. The idea is to minimize the amount of storage needed per
@@ -54,21 +54,21 @@ struct StackTracesTree {
   StackTracesTree();
 
   /// Must be called at the start of tracking the current call stack.
-  void syncWithRuntimeStack(Runtime *runtime);
+  void syncWithRuntimeStack(Runtime &runtime);
 
   /// Get the root of the tree.
   StackTracesTreeNode *getRootNode() const;
 
   /// Must be called before or at every entry to a \c CodeBlock .
   void
-  pushCallStack(Runtime *runtime, const CodeBlock *codeBlock, const Inst *ip);
+  pushCallStack(Runtime &runtime, const CodeBlock *codeBlock, const Inst *ip);
   /// Must pair with every call to \c pushCallStack() .
   void popCallStack();
 
   /// Return a leaf-node in the tree which can be used to reconstruct a
   /// stack-trace.
   StackTracesTreeNode *
-  getStackTrace(Runtime *runtime, const CodeBlock *codeBlock, const Inst *ip);
+  getStackTrace(Runtime &runtime, const CodeBlock *codeBlock, const Inst *ip);
 
   /// Get the string table. This is used by heap-snapshot functions as part of
   /// writing out data in Chrome's snapshot format which itself requires a table
@@ -84,7 +84,7 @@ struct StackTracesTree {
 
  private:
   StackTracesTreeNode::SourceLoc computeSourceLoc(
-      Runtime *runtime,
+      Runtime &runtime,
       const CodeBlock *codeBlock,
       uint32_t bytecodeOffset);
 
@@ -118,39 +118,13 @@ struct StackTracesTree {
 
   /// This vector is the root of all data held in the tree. We hold this here,
   /// rather than allowing the data to avoid an excessive call-stack when
-  /// deallocating the tree. Wihtout this, Hermes tests which exercise
+  /// deallocating the tree. Without this, Hermes tests which exercise
   /// JS stack overflow cause C++ stack overflow.
   llvh::SmallVector<std::unique_ptr<StackTracesTreeNode>, 1024> nodes_;
 };
 
-#else // !defined(HERMES_ENABLE_ALLOCATION_LOCATION_TRACES)
-struct StackTracesTree {
-  void syncWithRuntimeStack(Runtime *runtime) {}
-
-  StackTracesTreeNode *getRootNode() const {
-    return nullptr;
-  }
-
-  void
-  pushCallStack(Runtime *runtime, const CodeBlock *codeBlock, const Inst *ip) {}
-
-  void popCallStack() {}
-
-  StackTracesTreeNode *
-  getStackTrace(Runtime *runtime, const CodeBlock *codeBlock, const Inst *ip) {
-    return nullptr;
-  }
-
-  std::shared_ptr<StringSetVector> getStringTable() const {
-    return {};
-  }
-
-  bool isHeadAtRoot() {
-    return false;
-  }
-};
-#endif // HERMES_ENABLE_ALLOCATION_TRACES_OR_ASSERTIONS
+#endif // HERMES_MEMORY_INSTRUMENTATION
 
 } // namespace vm
 } // namespace hermes
-#endif // HERMES_ENABLE_ALLOCATION_LOCATION_TRACES
+#endif // HERMES_STACK_TRACES_TREE_H

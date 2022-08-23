@@ -9,6 +9,7 @@
 #define HERMES_VM_MALLOCGC_H
 
 #include "hermes/Public/GCConfig.h"
+#include "hermes/VM/CompressedPointer.h"
 #include "hermes/VM/GCBase.h"
 #include "hermes/VM/GCCell.h"
 #include "hermes/VM/VMExperiments.h"
@@ -148,14 +149,14 @@ class MallocGC final : public GCBase {
   };
 
   MallocGC(
-      GCCallbacks *gcCallbacks,
-      PointerBase *pointerBase,
+      GCCallbacks &gcCallbacks,
+      PointerBase &pointerBase,
       const GCConfig &gcConfig,
       std::shared_ptr<CrashManager> crashMgr,
       std::shared_ptr<StorageProvider> provider,
       experiments::VMExperimentFlags vmExperimentFlags);
 
-  ~MallocGC();
+  ~MallocGC() override;
 
   /// Checks if a requested \p size can fit in the heap. If it can't, a
   /// collection occurs. If it still can't after the collection, OOM is
@@ -214,13 +215,12 @@ class MallocGC final : public GCBase {
   /// \return true iff the pointer \p p is controlled by this GC.
   bool validPointer(const void *p) const override;
   bool dbgContains(const void *p) const override;
-
-  /// Returns true if \p cell is the most-recently allocated finalizable object.
-  bool isMostRecentFinalizableObj(const GCCell *cell) const override;
 #endif
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   /// Same as in superclass GCBase.
   virtual void createSnapshot(llvh::raw_ostream &os) override;
+#endif
 
   virtual void creditExternalMemory(GCCell *alloc, uint32_t size) override;
   virtual void debitExternalMemory(GCCell *alloc, uint32_t size) override;
@@ -242,7 +242,6 @@ class MallocGC final : public GCBase {
   void snapshotWriteBarrierRange(const GCHermesValue *, uint32_t) {}
   void snapshotWriteBarrierRange(const GCSmallHermesValue *, uint32_t) {}
   void weakRefReadBarrier(GCCell *) {}
-  void weakRefReadBarrier(HermesValue) {}
 
   void getHeapInfo(HeapInfo &info) override;
   void getHeapInfoWithMallocSize(HeapInfo &info) override;
@@ -254,7 +253,7 @@ class MallocGC final : public GCBase {
 
   /// Allocate a weak pointer slot for the value given.
   /// \pre \p init should not be empty or a native value.
-  WeakRefSlot *allocWeakSlot(HermesValue init) override;
+  WeakRefSlot *allocWeakSlot(CompressedPointer ptr) override;
 
   /// The largest the size of this heap could ever grow to.
   size_t maxSize() const {
@@ -372,7 +371,7 @@ inline T *MallocGC::makeA(uint32_t size, Args &&...args) {
   // Since there is no old generation in this collector, always forward to the
   // normal allocation.
   void *mem = alloc<fixedSize, hasFinalizer>(size);
-  return new (mem) T(std::forward<Args>(args)...);
+  return constructCell<T>(mem, size, std::forward<Args>(args)...);
 }
 
 inline void MallocGC::initCell(GCCell *cell, uint32_t size) {
