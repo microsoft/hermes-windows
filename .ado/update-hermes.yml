@@ -8,6 +8,10 @@ schedules:
     branches:
       include:
         - main
+# githubAuthToken
+
+variables:
+  - group: Hermes-Windows Secrets
 
 jobs:
   - job: UpdateMetaMain
@@ -16,14 +20,17 @@ jobs:
       vmImage: ubuntu-latest
     displayName: Update Hermes Branch to latest
     steps:
+      - checkout: self  # self represents the repo where the initial Pipelines YAML file was found
+        persistCredentials: true
+
       - script: git remote add fb https://github.com/facebook/hermes
         displayName: Add facebook/hermes as report
       
       - script: git fetch fb
-        displayName: Fetch latest facebook commit
+        displayName: Fetch all latest facebook/hermes commits
       
       - script: git reset fb/main --hard
-        displayName: Get local state to latest main commit in facebook org
+        displayName: Get local state to match main commit in facebook/hermes
 
       - script: git push origin HEAD:meta_main --force
         displayName: Push latest commit to meta_main by force-pushing
