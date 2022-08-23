@@ -24,9 +24,9 @@ jobs:
         displayName: Add facebook/hermes as report
       
       - script: git remote add authenticated https://rnbot:$(githubAuthToken)@github.com/microsoft/hermes-windows
-        displayName: Add facebook/hermes as report
+        displayName: Add authenticated remote for updates
 
-      - script: git remotes
+      - script: git remote -v
         displayName: Show remotes
 
       - script: git fetch fb
