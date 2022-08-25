@@ -1,8 +1,6 @@
 /*
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT License.
  */
 
 #include "hermes/Platform/Intl/PlatformIntl.h"
@@ -19,12 +17,11 @@ namespace hermes {
 namespace platform_intl {
 
 // convert utf8 string to utf16
-std::u16string UTF8toUTF16(std::string in) {
+vm::CallResult<std::u16string> UTF8toUTF16(vm::Runtime &runtime, std::string_view in) {
   std::u16string out;
   size_t length = in.length();
   out.resize(length);
-  const llvh::UTF8 *sourceStart =
-      reinterpret_cast<const llvh::UTF8 *>(in.c_str());
+  const llvh::UTF8 *sourceStart = reinterpret_cast<const llvh::UTF8 *>(&in[0]);
   const llvh::UTF8 *sourceEnd = sourceStart + length;
   llvh::UTF16 *targetStart = reinterpret_cast<llvh::UTF16 *>(&out[0]);
   llvh::UTF16 *targetEnd = targetStart + out.size();
@@ -34,17 +31,20 @@ std::u16string UTF8toUTF16(std::string in) {
       &targetStart,
       targetEnd,
       llvh::lenientConversion);
+  if (convRes != llvh::ConversionResult::conversionOK)
+  {
+    return runtime.raiseRangeError("utf8 to utf16 conversion failed");
+  }
   out.resize(reinterpret_cast<char16_t *>(targetStart) - &out[0]);
   return out;
 }
 
 // convert utf16 string to utf8
-std::string UTF16toUTF8(std::u16string in) {
+vm::CallResult<std::string> UTF16toUTF8(vm::Runtime &runtime, std::u16string in) {
   std::string out;
   size_t length = in.length();
   out.resize(length);
-  const llvh::UTF16 *sourceStart =
-      reinterpret_cast<const llvh::UTF16 *>(in.c_str());
+  const llvh::UTF16 *sourceStart = reinterpret_cast<const llvh::UTF16 *>(&in[0]);
   const llvh::UTF16 *sourceEnd = sourceStart + length;
   llvh::UTF8 *targetStart = reinterpret_cast<llvh::UTF8 *>(&out[0]);
   llvh::UTF8 *targetEnd = targetStart + out.size();
@@ -54,6 +54,10 @@ std::string UTF16toUTF8(std::u16string in) {
       &targetStart,
       targetEnd,
       llvh::lenientConversion);
+  if (convRes != llvh::ConversionResult::conversionOK)
+  {
+    return runtime.raiseRangeError("utf16 to utf8 conversion failed");
+  }
   out.resize(reinterpret_cast<char *>(targetStart) - &out[0]);
   return out;
 }
@@ -61,13 +65,15 @@ std::string UTF16toUTF8(std::u16string in) {
 // roughly translates to
 // https://tc39.es/ecma402/#sec-canonicalizeunicodelocaleid while doing some
 // minimal tag validation
-vm::CallResult<std::u16string> NormalizeLangugeTag(
+vm::CallResult<std::u16string> NormalizeLanguageTag(
     vm::Runtime &runtime,
     const std::u16string locale) {
   if (locale.length() == 0) {
     return runtime.raiseRangeError("RangeError: Invalid language tag");
   }
-  std::string locale8 = UTF16toUTF8(locale);
+
+  auto localeTest = UTF16toUTF8(runtime, locale);
+  const char * locale8 = localeTest.getValue().c_str();
 
   // [Comment from ChakreCore] ICU doesn't have a full-fledged canonicalization
   // implementation that correctly replaces all preferred values and
@@ -76,13 +82,13 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(
   // us most of the way there by replacing some(?) values, correctly
   // capitalizing the tag, and re-ordering extensions
   UErrorCode status = U_ZERO_ERROR;
-  int parsedLength = 0;
+  int32_t parsedLength = 0;
   char localeID[ULOC_FULLNAME_CAPACITY] = {0};
-  char normalize[ULOC_FULLNAME_CAPACITY] = {0};
-  char canonicalize[ULOC_FULLNAME_CAPACITY] = {0};
+  char fullname[ULOC_FULLNAME_CAPACITY] = {0};
+  char languageTag[ULOC_FULLNAME_CAPACITY] = {0};
 
-  int forLangTagResultLength = uloc_forLanguageTag(
-      locale8.c_str(),
+  int32_t forLangTagResultLength = uloc_forLanguageTag(
+      locale8,
       localeID,
       ULOC_FULLNAME_CAPACITY,
       &parsedLength,
@@ -91,26 +97,26 @@ vm::CallResult<std::u16string> NormalizeLangugeTag(
       status == U_ILLEGAL_ARGUMENT_ERROR) {
     return runtime.raiseRangeError(
         vm::TwineChar16("Invalid language tag: ") +
-        vm::TwineChar16(locale8.c_str()));
+        vm::TwineChar16(locale8));
   }
 
-  int canonicalizeResultLength =
-      uloc_canonicalize(localeID, normalize, ULOC_FULLNAME_CAPACITY, &status);
+  int32_t canonicalizeResultLength =
+      uloc_canonicalize(localeID, fullname, ULOC_FULLNAME_CAPACITY, &status);
   if (canonicalizeResultLength <= 0) {
     return runtime.raiseRangeError(
         vm::TwineChar16("Invalid language tag: ") +
-        vm::TwineChar16(locale8.c_str()));
+        vm::TwineChar16(locale8));
   }
 
-  int toLangTagResultLength = uloc_toLanguageTag(
-      normalize, canonicalize, ULOC_FULLNAME_CAPACITY, true, &status);
+  int32_t toLangTagResultLength = uloc_toLanguageTag(
+      fullname, languageTag, ULOC_FULLNAME_CAPACITY, true, &status);
   if (forLangTagResultLength <= 0) {
     return runtime.raiseRangeError(
         vm::TwineChar16("Invalid language tag: ") +
-        vm::TwineChar16(locale8.c_str()));
+        vm::TwineChar16(locale8));
   }
 
-  return UTF8toUTF16(canonicalize);
+  return UTF8toUTF16(runtime, languageTag);
 }
 
 // https://tc39.es/ecma402/#sec-canonicalizelocalelist
@@ -127,18 +133,18 @@ vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(
   // 3. If Type(locales) is String or Type(locales) is Object and locales has an
   // [[InitializedLocale]] internal slot, then
   // 4. Else
-  //  > TODO: Windows/Apple don't yet support Locale object -
+  //  > Windows/Apple don't support Locale object -
   //  https://tc39.es/ecma402/#locale-objects > As of now, 'locales' can only be
   //  a string list/array. Validation occurs in NormalizeLangugeTag for windows.
   //  > This function just takes a vector of strings.
   // 5-7. Let len be ? ToLength(? Get(O, "length")). Let k be 0. Repeat, while k
   // < len
-  for (int k = 0; k < locales.size(); k++) {
-    // TODO: full tag validation, ChakraCore\V8 does not do tag validation with
+  for (size_t k = 0; k < locales.size(); k++) {
+    // minimal tag validation is done with ICU, ChakraCore\V8 does not do tag validation with
     // ICU, may be missing needed API 7.c.iii.1 Let tag be kValue[[locale]]
     std::u16string tag = locales[k];
     // 7.c.vi Let canonicalizedTag be CanonicalizeUnicodeLocaleID(tag)
-    auto canonicalizedTag = NormalizeLangugeTag(runtime, tag);
+    auto canonicalizedTag = NormalizeLanguageTag(runtime, tag);
     if (LLVM_UNLIKELY(canonicalizedTag == vm::ExecutionStatus::EXCEPTION)) {
       return vm::ExecutionStatus::EXCEPTION;
     }
@@ -159,12 +165,15 @@ vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
   return CanonicalizeLocaleList(runtime, locales);
 }
 
+// Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
 vm::CallResult<std::u16string> toLocaleLowerCase(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const std::u16string &str) {
   return std::u16string(u"lowered");
 }
+
+// Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
 vm::CallResult<std::u16string> toLocaleUpperCase(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
@@ -172,6 +181,7 @@ vm::CallResult<std::u16string> toLocaleUpperCase(
   return std::u16string(u"uppered");
 }
 
+// Collator - Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
 struct Collator::Impl {
   std::u16string locale;
 };
@@ -207,6 +217,7 @@ double Collator::compare(
   return x.compare(y);
 }
 
+// DateTimeFormat - Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
 struct DateTimeFormat::Impl {
   std::u16string locale;
 };
@@ -251,6 +262,7 @@ DateTimeFormat::formatToParts(double jsTimeValue) noexcept {
   return std::vector<std::unordered_map<std::u16string, std::u16string>>{part};
 }
 
+// NumberFormat - Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
 struct NumberFormat::Impl {
   std::u16string locale;
 };

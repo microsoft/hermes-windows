@@ -63,9 +63,9 @@ TEST(getCanonicalLocales, ComplexSingleElement) {
   std::shared_ptr<hermes::vm::Runtime> runtime = hermes::vm::Runtime::create(
       hermes::vm::RuntimeConfig::Builder().withIntl(true).build());
   auto actual = getCanonicalLocales(*runtime.get(), input);
-  auto value = actual.getValue().front();
   auto status = actual.getStatus();
   EXPECT_TRUE(status == vm::ExecutionStatus::RETURNED);
+  auto value = actual.getValue().front();  
   EXPECT_TRUE(u"cmn-Hans-CN-a-blt-t-ca-u-ca-x-t-u" == value);
 
   input = std::vector<std::u16string>{u"en-us-u-asd-a-tbd-0-abc"};
