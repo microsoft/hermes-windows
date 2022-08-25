@@ -67,13 +67,13 @@ vm::CallResult<std::string> UTF16toUTF8(vm::Runtime &runtime, std::u16string in)
 // minimal tag validation
 vm::CallResult<std::u16string> NormalizeLanguageTag(
     vm::Runtime &runtime,
-    const std::u16string locale) {
+    const std::u16string &locale) {
   if (locale.length() == 0) {
     return runtime.raiseRangeError("RangeError: Invalid language tag");
   }
 
-  auto localeTest = UTF16toUTF8(runtime, locale);
-  const char * locale8 = localeTest.getValue().c_str();
+  auto conversion = UTF16toUTF8(runtime, locale);
+  const char * locale8 = conversion.getValue().c_str();
 
   // [Comment from ChakreCore] ICU doesn't have a full-fledged canonicalization
   // implementation that correctly replaces all preferred values and
