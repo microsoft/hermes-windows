@@ -5,7 +5,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::ast::{self, node_isa, GCLock, Node, NodePtr, Path, VariableDeclarationKind, Visitor};
+use crate::ast;
+use crate::ast::node_isa;
+use crate::ast::GCLock;
+use crate::ast::Node;
+use crate::ast::NodePtr;
+use crate::ast::Path;
+use crate::ast::VariableDeclarationKind;
+use crate::ast::Visitor;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -16,6 +24,8 @@ pub type ScopeDecls<'gc> = Vec<&'gc Node<'gc>>;
 /// to be hoisted either to the top of the function or the scope.
 #[derive(Debug)]
 pub(super) struct DeclCollector<'gc> {
+    /// The root function node in which we're collecting decls.
+    root: NodePtr<'gc>,
     /// Associate a [ScopeDecls] struct with nodes.
     /// We need Rc<> to enable the consumer to reference the data without
     /// keeping a reference to DeclCollector.
@@ -33,6 +43,7 @@ impl<'gc> DeclCollector<'gc> {
     /// Collect all declarations in a function.
     pub fn run(ctx: &'gc GCLock, root: &'gc Node<'gc>) -> DeclCollector<'gc> {
         let mut dc = DeclCollector {
+            root: NodePtr::from(root),
             scopes: Default::default(),
             scope_stack: Vec::with_capacity(4),
             scoped_func_decls: Vec::new(),
@@ -44,14 +55,34 @@ impl<'gc> DeclCollector<'gc> {
     }
 
     /// Return the optional ScopeDecls for an AST node.
-    pub fn scope_decls_for_node(&self, node: &Node) -> Option<Rc<ScopeDecls<'gc>>> {
+    pub fn scope_decls_for_node(&self, node: &'gc Node<'gc>) -> Option<Rc<ScopeDecls<'gc>>> {
         self.scopes.get(&NodePtr::from(node)).cloned()
+    }
+    /// Set the ScopeDecls for a given AST node.
+    /// Replaces the ScopeDecls if it already exists.
+    pub fn set_scope_decls_for_node(&mut self, node: &'gc Node<'gc>, decls: Rc<ScopeDecls<'gc>>) {
+        self.scopes.insert(NodePtr::from(node), decls);
+    }
+    /// Add a ScopeDecl for the root AST node of the function.
+    /// Used for promoting a function declaration to the function scope.
+    /// # Panics
+    /// * Will panic if there are any outstanding references to the `ScopeDecls` for the function.
+    ///   All `ScopeDecls` must be dropped prior to calling this function.
+    pub fn add_scope_decl_for_func(&mut self, node: &'gc Node<'gc>) {
+        match self.scopes.entry(self.root) {
+            Entry::Occupied(entry) => {
+                Rc::get_mut(entry.into_mut())
+                    .expect("invalid outstanding reference to DeclCollector scope")
+                    .push(node);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(Rc::new(vec![node]));
+            }
+        }
     }
 
     /// Return a list of all scoped function declarations in the function.
-    /// Not used until we enable scoped function promotion.
-    #[allow(dead_code)]
-    pub fn scope_func_decls(&self) -> &Vec<&'gc Node<'gc>> {
+    pub fn scoped_func_decls(&self) -> &Vec<&'gc Node<'gc>> {
         &self.scoped_func_decls
     }
 
@@ -130,7 +161,7 @@ impl<'gc> Visitor<'gc> for DeclCollector<'gc> {
             Node::FunctionDeclaration { .. } => {
                 self.add_to_cur(node);
                 // If this is not the function scope, record a scoped func decl.
-                if self.scopes.len() > 1 {
+                if self.scope_stack.len() > 1 {
                     self.scoped_func_decls.push(node);
                 }
             }
@@ -139,6 +170,7 @@ impl<'gc> Visitor<'gc> for DeclCollector<'gc> {
             Node::FunctionExpression { .. } | Node::ArrowFunctionExpression { .. } => {}
 
             // Associate a scope with scoped statements.
+            // SwitchStatement needs a scope because it doesn't have a BlockStatement child.
             Node::BlockStatement { .. }
             | Node::ForStatement { .. }
             | Node::ForInStatement { .. }

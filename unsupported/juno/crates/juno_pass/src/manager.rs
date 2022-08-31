@@ -6,7 +6,11 @@
  */
 
 use crate::passes::*;
-use juno::ast::{Context, GCLock, Node, NodeRc, TransformResult};
+use juno::ast::Context;
+use juno::ast::GCLock;
+use juno::ast::Node;
+use juno::ast::NodeRc;
+use juno::ast::TransformResult;
 
 /// Manager to create pipelines of multiple passes over the AST.
 #[derive(Default)]
@@ -35,7 +39,7 @@ impl PassManager {
         }
     }
 
-    /// Pipeline containing a list of standard passes.
+    /// Pipeline containing only the Flow type stripping pass.
     pub fn strip_flow() -> Self {
         Self {
             passes: vec![Box::new(strip_flow::StripFlow::new())],

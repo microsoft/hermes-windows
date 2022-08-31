@@ -8,6 +8,7 @@
 #ifndef HERMES_VM_PRIMITIVEBOX_H
 #define HERMES_VM_PRIMITIVEBOX_H
 
+#include "hermes/VM/BigIntPrimitive.h"
 #include "hermes/VM/JSObject.h"
 
 namespace hermes {
@@ -18,51 +19,54 @@ class JSString final : public JSObject {
  public:
   using Super = JSObject;
 
-  friend void StringObjectBuildMeta(const GCCell *, Metadata::Builder &);
+  friend void JSStringBuildMeta(const GCCell *, Metadata::Builder &);
 
   // We need one more slot for the length property.
   static const PropStorage::size_type NAMED_PROPERTY_SLOTS =
       Super::NAMED_PROPERTY_SLOTS + 1;
   static const ObjectVTable vt;
 
+  static constexpr CellKind getCellKind() {
+    return CellKind::JSStringKind;
+  }
   static bool classof(const GCCell *cell) {
-    return cell->getKind() == CellKind::StringObjectKind;
+    return cell->getKind() == CellKind::JSStringKind;
   }
 
   static CallResult<Handle<JSString>> create(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<StringPrimitive> value,
       Handle<JSObject> prototype);
 
   static CallResult<Handle<JSString>> create(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<JSObject> prototype) {
     return create(
         runtime,
-        runtime->getPredefinedStringHandle(Predefined::emptyString),
+        runtime.getPredefinedStringHandle(Predefined::emptyString),
         prototype);
   }
 
   /// Set the [[PrimitiveValue]] internal property from a string.
   static void setPrimitiveString(
       Handle<JSString> selfHandle,
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<StringPrimitive> string);
 
   /// Return the [[PrimitiveValue]] internal property as a string.
   static StringPrimitive *getPrimitiveString(
       const JSString *self,
-      Runtime *runtime) {
+      Runtime &runtime) {
     return self->primitiveValue_.get(runtime);
   }
 
   JSString(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<StringPrimitive> value,
       Handle<JSObject> parent,
       Handle<HiddenClass> clazz)
-      : JSObject(runtime, &vt.base, *parent, *clazz),
-        primitiveValue_(runtime, *value, &runtime->getHeap()) {
+      : JSObject(runtime, *parent, *clazz),
+        primitiveValue_(runtime, *value, runtime.getHeap()) {
     flags_.indexedStorage = true;
     flags_.fastIndexProperties = true;
   }
@@ -71,7 +75,7 @@ class JSString final : public JSObject {
   /// Check whether property with index \p index exists in indexed storage and
   /// \return true if it does.
   static bool
-  _haveOwnIndexedImpl(JSObject *self, Runtime *runtime, uint32_t index);
+  _haveOwnIndexedImpl(JSObject *self, Runtime &runtime, uint32_t index);
 
   /// Check whether property with index \p index exists in indexed storage and
   /// extract its \c PropertyFlags (if necessary checking whether the object is
@@ -79,19 +83,21 @@ class JSString final : public JSObject {
   /// \return PropertyFlags if the property exists.
   static OptValue<PropertyFlags> _getOwnIndexedPropertyFlagsImpl(
       JSObject *self,
-      Runtime *runtime,
+      Runtime &runtime,
       uint32_t index);
 
   /// \return the range of indexes (end-exclusive) in the array.
   static std::pair<uint32_t, uint32_t> _getOwnIndexedRangeImpl(
       JSObject *selfObj,
-      Runtime *runtime);
+      Runtime &runtime);
 
   /// Obtain an element from the "indexed storage" of this object. The storage
   /// itself is implementation dependent.
   /// \return the value of the element or "empty" if there is no such element.
-  static HermesValue
-  _getOwnIndexedImpl(JSObject *self, Runtime *runtime, uint32_t index);
+  static HermesValue _getOwnIndexedImpl(
+      PseudoHandle<JSObject> self,
+      Runtime &runtime,
+      uint32_t index);
 
   /// Set an element in the "indexed storage" of this object. Depending on the
   /// semantics of the "indexed storage" the storage capacity may need to be
@@ -100,7 +106,7 @@ class JSString final : public JSObject {
   /// \return true if the write succeeded, or false if it was ignored.
   static CallResult<bool> _setOwnIndexedImpl(
       Handle<JSObject> selfHandle,
-      Runtime *runtime,
+      Runtime &runtime,
       uint32_t index,
       Handle<> value);
 
@@ -110,7 +116,7 @@ class JSString final : public JSObject {
   ///     "holes"/deletion (e.g. typed arrays).
   static bool _deleteOwnIndexedImpl(
       Handle<JSObject> selfHandle,
-      Runtime *runtime,
+      Runtime &runtime,
       uint32_t index);
 
  private:
@@ -122,33 +128,36 @@ class JSString final : public JSObject {
 class JSStringIterator : public JSObject {
   using Super = JSObject;
 
-  friend void StringIteratorBuildMeta(
+  friend void JSStringIteratorBuildMeta(
       const GCCell *cell,
       Metadata::Builder &mb);
 
  public:
   static const ObjectVTable vt;
 
+  static constexpr CellKind getCellKind() {
+    return CellKind::JSStringIteratorKind;
+  }
   static bool classof(const GCCell *cell) {
-    return cell->getKind() == CellKind::StringIteratorKind;
+    return cell->getKind() == CellKind::JSStringIteratorKind;
   }
 
   static PseudoHandle<JSStringIterator> create(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<StringPrimitive> string);
 
   /// Iterate to the next element and return.
   static CallResult<HermesValue> nextElement(
       Handle<JSStringIterator> self,
-      Runtime *runtime);
+      Runtime &runtime);
 
   JSStringIterator(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<JSObject> parent,
       Handle<HiddenClass> clazz,
       Handle<StringPrimitive> iteratedString)
-      : JSObject(runtime, &vt.base, *parent, *clazz),
-        iteratedString_(runtime, *iteratedString, &runtime->getHeap()) {}
+      : JSObject(runtime, *parent, *clazz),
+        iteratedString_(runtime, *iteratedString, runtime.getHeap()) {}
 
  private:
   /// [[IteratedString]]
@@ -159,30 +168,92 @@ class JSStringIterator : public JSObject {
   uint32_t nextIndex_{0};
 };
 
+/// BigInt object.
+/// N.B.: users can create boxed bigints with
+///   let o = new Object(1n),
+/// but not with the BigInt constructor, i.e.,
+///   let o = new BigInt(1)
+/// as BigInt() is not a constructor.
+class JSBigInt final : public JSObject {
+ public:
+  using Super = JSObject;
+
+  friend void JSBigIntBuildMeta(const GCCell *, Metadata::Builder &);
+
+  static const PropStorage::size_type NAMED_PROPERTY_SLOTS =
+      Super::NAMED_PROPERTY_SLOTS;
+  static const ObjectVTable vt;
+
+  static constexpr CellKind getCellKind() {
+    return CellKind::JSBigIntKind;
+  }
+  static bool classof(const GCCell *cell) {
+    return cell->getKind() == CellKind::JSBigIntKind;
+  }
+
+  static CallResult<Handle<JSBigInt>> create(
+      Runtime &runtime,
+      Handle<BigIntPrimitive> value,
+      Handle<JSObject> prototype);
+
+  static CallResult<Handle<JSBigInt>> create(
+      Runtime &runtime,
+      Handle<JSObject> prototype) {
+    auto bigIntRes = BigIntPrimitive::fromSigned(runtime, 0);
+    if (LLVM_UNLIKELY(bigIntRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+
+    return create(
+        runtime, runtime.makeHandle(bigIntRes->getBigInt()), prototype);
+  }
+
+  /// Return the [[PrimitiveValue]] internal property as a bigint.
+  static BigIntPrimitive *getPrimitiveBigInt(
+      const JSBigInt *self,
+      Runtime &runtime) {
+    return self->primitiveValue_.get(runtime);
+  }
+
+  JSBigInt(
+      Runtime &runtime,
+      Handle<BigIntPrimitive> value,
+      Handle<JSObject> parent,
+      Handle<HiddenClass> clazz)
+      : JSObject(runtime, *parent, *clazz),
+        primitiveValue_(runtime, *value, runtime.getHeap()) {}
+
+ private:
+  GCPointer<BigIntPrimitive> primitiveValue_;
+};
+
 /// Number object.
 class JSNumber final : public JSObject {
  public:
   static const ObjectVTable vt;
 
+  static constexpr CellKind getCellKind() {
+    return CellKind::JSNumberKind;
+  }
   static bool classof(const GCCell *cell) {
-    return cell->getKind() == CellKind::NumberObjectKind;
+    return cell->getKind() == CellKind::JSNumberKind;
   }
 
   static PseudoHandle<JSNumber>
-  create(Runtime *runtime, double value, Handle<JSObject> prototype);
+  create(Runtime &runtime, double value, Handle<JSObject> prototype);
 
   static PseudoHandle<JSNumber> create(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<JSObject> prototype) {
     return create(runtime, 0.0, prototype);
   }
 
   JSNumber(
-      Runtime *runtime,
+      Runtime &runtime,
       double value,
       Handle<JSObject> parent,
       Handle<HiddenClass> clazz)
-      : JSObject(runtime, &vt.base, *parent, *clazz), primitiveValue_(value) {}
+      : JSObject(runtime, *parent, *clazz), primitiveValue_(value) {}
 
   double getPrimitiveNumber() const {
     return primitiveValue_;
@@ -201,25 +272,28 @@ class JSBoolean final : public JSObject {
  public:
   static const ObjectVTable vt;
 
+  static constexpr CellKind getCellKind() {
+    return CellKind::JSBooleanKind;
+  }
   static bool classof(const GCCell *cell) {
-    return cell->getKind() == CellKind::BooleanObjectKind;
+    return cell->getKind() == CellKind::JSBooleanKind;
   }
 
   static PseudoHandle<JSBoolean>
-  create(Runtime *runtime, bool value, Handle<JSObject> prototype);
+  create(Runtime &runtime, bool value, Handle<JSObject> prototype);
 
   static PseudoHandle<JSBoolean> create(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<JSObject> prototype) {
     return create(runtime, false, prototype);
   }
 
   JSBoolean(
-      Runtime *runtime,
+      Runtime &runtime,
       bool value,
       Handle<JSObject> parent,
       Handle<HiddenClass> clazz)
-      : JSObject(runtime, &vt.base, *parent, *clazz), primitiveValue_(value) {}
+      : JSObject(runtime, *parent, *clazz), primitiveValue_(value) {}
 
   void setPrimitiveBoolean(bool b) {
     primitiveValue_ = b;
@@ -235,20 +309,23 @@ class JSBoolean final : public JSObject {
 
 /// Symbol object.
 class JSSymbol final : public JSObject {
-  friend void SymbolObjectBuildMeta(const GCCell *cell, Metadata::Builder &mb);
+  friend void JSSymbolBuildMeta(const GCCell *cell, Metadata::Builder &mb);
 
  public:
   static const ObjectVTable vt;
 
+  static constexpr CellKind getCellKind() {
+    return CellKind::JSSymbolKind;
+  }
   static bool classof(const GCCell *cell) {
-    return cell->getKind() == CellKind::SymbolObjectKind;
+    return cell->getKind() == CellKind::JSSymbolKind;
   }
 
   static PseudoHandle<JSSymbol>
-  create(Runtime *runtime, SymbolID value, Handle<JSObject> prototype);
+  create(Runtime &runtime, SymbolID value, Handle<JSObject> prototype);
 
   static PseudoHandle<JSSymbol> create(
-      Runtime *runtime,
+      Runtime &runtime,
       Handle<JSObject> prototype) {
     return create(runtime, SymbolID{}, prototype);
   }
@@ -259,11 +336,11 @@ class JSSymbol final : public JSObject {
   }
 
   JSSymbol(
-      Runtime *runtime,
+      Runtime &runtime,
       SymbolID value,
       Handle<JSObject> parent,
       Handle<HiddenClass> clazz)
-      : JSObject(runtime, &vt.base, *parent, *clazz), primitiveValue_(value) {}
+      : JSObject(runtime, *parent, *clazz), primitiveValue_(value) {}
 
  private:
   const GCSymbolID primitiveValue_;

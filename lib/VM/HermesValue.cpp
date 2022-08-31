@@ -7,6 +7,7 @@
 
 #include "hermes/VM/HermesValue.h"
 
+#include "hermes/VM/BigIntPrimitive.h"
 #include "hermes/VM/GC.h"
 #include "hermes/VM/Runtime.h"
 #include "hermes/VM/StringPrimitive.h"
@@ -25,14 +26,16 @@ void HermesValue::dump(llvh::raw_ostream &os) const {
 }
 
 llvh::raw_ostream &operator<<(llvh::raw_ostream &OS, HermesValue hv) {
-  switch (hv.getTag()) {
-    case ObjectTag: {
+  switch (hv.getETag()) {
+    case HermesValue::ETag::Object1:
+    case HermesValue::ETag::Object2: {
       auto *cell = static_cast<GCCell *>(hv.getObject());
       return OS << "[Object " << (cell ? cellKindStr(cell->getKind()) : "")
                 << ":" << (cell ? cell->getDebugAllocationId() : 0) << " "
                 << llvh::format_hex((uintptr_t)cell, 10) << "]";
     }
-    case StrTag: {
+    case HermesValue::ETag::Str1:
+    case HermesValue::ETag::Str2: {
       auto *cell = static_cast<GCCell *>(hv.getPointer());
       OS << "[String "
          << ":" << (cell ? cell->getDebugAllocationId() : 0) << " "
@@ -49,22 +52,40 @@ llvh::raw_ostream &operator<<(llvh::raw_ostream &OS, HermesValue hv) {
       }
       return OS << ']';
     }
-    case NativeValueTag:
+    case HermesValue::ETag::BigInt1:
+    case HermesValue::ETag::BigInt2: {
+      auto *cell = static_cast<GCCell *>(hv.getPointer());
+      OS << "[BigInt "
+         << ":" << (cell ? cell->getDebugAllocationId() : 0) << " "
+         << llvh::format_hex((uintptr_t)cell, 10);
+      // Note contained BigIntPrimitive may be NULL.
+      if (hv.getBigInt()) {
+        llvh::ArrayRef<uint8_t> storage = hv.getBigInt()->getRawDataCompact();
+        for (auto it = storage.rbegin(); it != storage.rend(); ++it) {
+          OS << " " << llvh::format_hex(*it, 2);
+        }
+      }
+      return OS << ']';
+    }
+    case HermesValue::ETag::Native1:
+    case HermesValue::ETag::Native2:
       return OS << "[NativeValue " << hv.getNativeUInt32() << "]";
-    case SymbolTag:
+    case HermesValue::ETag::Symbol:
       return OS << "[Symbol "
                 << (hv.getSymbol().isNotUniqued() ? "(External)" : "(Internal)")
                 << ' ' << hv.getSymbol().unsafeGetIndex() << "]";
-    case BoolTag:
+    case HermesValue::ETag::Bool:
       return OS << (hv.getBool() ? "true" : "false");
-    case UndefinedNullTag:
-      return OS << (hv.isNull() ? "null" : "undefined");
-    case EmptyInvalidTag:
-#ifdef HERMES_SLOW_DEBUG
-      if (hv.isInvalid())
-        return OS << "invalid";
-#endif
+    case HermesValue::ETag::Undefined:
+      return OS << "undefined";
+    case HermesValue::ETag::Null:
+      return OS << "null";
+    case HermesValue::ETag::Empty:
       return OS << "empty";
+#ifdef HERMES_SLOW_DEBUG
+    case HermesValue::ETag::Invalid:
+      return OS << "invalid";
+#endif
     default:
       double num = hv.getDouble();
       // Is it representable as int64_t?

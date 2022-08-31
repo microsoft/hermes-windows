@@ -10,13 +10,15 @@
 
 #include "hermes/VM/Runtime.h"
 
+#include <string_view>
+
 namespace hermes {
 namespace vm {
 
 /// No-op implementation of wall-time based JS sampling profiler.
 class SamplingProfiler {
  public:
-  explicit SamplingProfiler(Runtime *){};
+  explicit SamplingProfiler(Runtime &){};
 
   /// Mark roots that are kept alive by the SamplingProfiler.
   void markRoots(RootAcceptor &acceptor) {}
@@ -28,6 +30,10 @@ class SamplingProfiler {
   /// Dump sampled stack to \p OS in chrome trace format.
   static void dumpChromeTraceGlobal(llvh::raw_ostream &OS) {}
 
+  /// Dump the sampled stack to \p OS in the format consumed by the DevTools
+  /// JavaScript profiler.
+  void serializeInDevToolsFormat(llvh::raw_ostream &OS) {}
+
   /// Enable and start profiling.
   static bool enable() {
     return false;
@@ -38,8 +44,20 @@ class SamplingProfiler {
     return true;
   }
 
-  /// Called for various GC events.
-  void onGCEvent(GCEventKind kind, const std::string &extraInfo) {}
+  /// Suspends the sample profiling. Every call to suspend must be matched by a
+  // call to resume.
+  void suspend(std::string_view) {}
+
+  /// Resumes the sample profiling. There must have been a previous call to
+  /// suspend() that hansn't been resume()d yet.
+  void resume() {}
+};
+
+class SuspendSamplingProfilerRAII {
+ public:
+  explicit SuspendSamplingProfilerRAII(
+      Runtime &runtime,
+      std::string_view reason = "") {}
 };
 
 } // namespace vm

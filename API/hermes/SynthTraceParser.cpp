@@ -142,6 +142,9 @@ NumericType getNumberAs(const JSONValue *val, NumericType dflt) {
   if (auto *intl = rtConfig->get("Intl")) {
     conf.withIntl(llvh::cast<JSONBoolean>(intl)->getValue());
   }
+  if (auto *microtasks = rtConfig->get("MicrotasksQueue")) {
+    conf.withMicrotaskQueue(llvh::cast<JSONBoolean>(microtasks)->getValue());
+  }
   if (auto *enableSampledStats = rtConfig->get("enableSampledStats")) {
     conf.withEnableSampledStats(
         llvh::cast<JSONBoolean>(enableSampledStats)->getValue());
@@ -213,35 +216,10 @@ getListOfStatsTable(JSONArray *array) {
 }
 
 ::hermes::vm::MockedEnvironment getMockedEnvironment(JSONObject *env) {
-  auto getListOfNumbers = [](JSONArray *array) -> std::deque<uint64_t> {
-    std::deque<uint64_t> calls;
-    std::transform(
-        array->begin(),
-        array->end(),
-        std::back_inserter(calls),
-        [](const JSONValue *value) { return getNumberAs<uint64_t>(value); });
-    return calls;
-  };
-
-  if (!llvh::dyn_cast_or_null<JSONNumber>(env->get("mathRandomSeed"))) {
-    throw std::invalid_argument("env.mathRandomSeed is not a number");
-  }
-  std::minstd_rand::result_type mathRandomSeed =
-      llvh::cast<JSONNumber>(env->at("mathRandomSeed"))->getValue();
-  auto callsToDateNow =
-      getListOfNumbers(llvh::cast<JSONArray>(env->at("callsToDateNow")));
-  auto callsToNewDate =
-      getListOfNumbers(llvh::cast<JSONArray>(env->at("callsToNewDate")));
-  auto callsToDateAsFunction = getListOfStrings<std::deque>(
-      llvh::cast<JSONArray>(env->at("callsToDateAsFunction")));
   auto callsToHermesInternalGetInstrumentedStats =
       getListOfStatsTable<std::deque>(llvh::cast_or_null<JSONArray>(
           env->get("callsToHermesInternalGetInstrumentedStats")));
   return ::hermes::vm::MockedEnvironment{
-      mathRandomSeed,
-      callsToDateNow,
-      callsToNewDate,
-      callsToDateAsFunction,
       callsToHermesInternalGetInstrumentedStats};
 }
 
@@ -324,6 +302,12 @@ SynthTrace getTrace(JSONArray *array, SynthTrace::ObjectID globalObjID) {
         trace.emplace_back<SynthTrace::CreateObjectRecord>(
             timeFromStart, objID->getValue());
         break;
+      case RecordType::DrainMicrotasks: {
+        int maxMicrotasksHint = getNumberAs<int>(obj->get("maxMicrotasksHint"));
+        trace.emplace_back<SynthTrace::DrainMicrotasksRecord>(
+            timeFromStart, maxMicrotasksHint);
+        break;
+      }
       case RecordType::CreateString: {
         auto encoding =
             llvh::dyn_cast_or_null<JSONString>(obj->get("encoding"));
@@ -351,27 +335,32 @@ SynthTrace getTrace(JSONArray *array, SynthTrace::ObjectID globalObjID) {
       }
       case RecordType::CreatePropNameID: {
         auto id = llvh::dyn_cast_or_null<JSONNumber>(obj->get("objID"));
-        auto encoding =
-            llvh::dyn_cast_or_null<JSONString>(obj->get("encoding"));
-        bool isAscii = false;
-        if (encoding->str() == "ASCII") {
-          isAscii = true;
-        } else {
-          assert(encoding->str() == "UTF-8");
-        }
-        auto str = llvh::dyn_cast_or_null<JSONString>(obj->get("chars"));
-        if (isAscii) {
+        if (propValue) {
           trace.emplace_back<SynthTrace::CreatePropNameIDRecord>(
-              timeFromStart,
-              id->getValue(),
-              str->str().data(),
-              str->str().size());
+              timeFromStart, id->getValue(), trace.decode(propValue->c_str()));
         } else {
-          trace.emplace_back<SynthTrace::CreatePropNameIDRecord>(
-              timeFromStart,
-              id->getValue(),
-              reinterpret_cast<const uint8_t *>(str->str().data()),
-              str->str().size());
+          auto encoding =
+              llvh::dyn_cast_or_null<JSONString>(obj->get("encoding"));
+          bool isAscii = false;
+          if (encoding->str() == "ASCII") {
+            isAscii = true;
+          } else {
+            assert(encoding->str() == "UTF-8");
+          }
+          auto str = llvh::dyn_cast_or_null<JSONString>(obj->get("chars"));
+          if (isAscii) {
+            trace.emplace_back<SynthTrace::CreatePropNameIDRecord>(
+                timeFromStart,
+                id->getValue(),
+                str->str().data(),
+                str->str().size());
+          } else {
+            trace.emplace_back<SynthTrace::CreatePropNameIDRecord>(
+                timeFromStart,
+                id->getValue(),
+                reinterpret_cast<const uint8_t *>(str->str().data()),
+                str->str().size());
+          }
         }
         break;
       }

@@ -12,6 +12,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <ostream>
 #include <string>
 
 #include <hermes/Public/RuntimeConfig.h>
@@ -32,10 +33,6 @@
 #endif // !defined(HERMES_EXPORT)
 
 struct HermesTestHelper;
-
-namespace llvh {
-class raw_ostream;
-}
 
 namespace hermes {
 namespace vm {
@@ -97,7 +94,11 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
   static void __cdecl dumpSampledTraceToFile(const std::string &fileName);
 
   /// Dump sampled stack trace to the given stream.
-  static void dumpSampledTraceToStream(llvh::raw_ostream &stream);
+  static void dumpSampledTraceToStream(std::ostream &stream);
+
+  /// Serialize the sampled stack to the format expected by DevTools'
+  /// Profiler.stop return type.
+  void sampledTraceToStreamInDevToolsFormat(std::ostream &stream);
 
   /// Return the executed JavaScript function info.
   /// This information holds the segmentID, Virtualoffset and sourceURL.
@@ -136,6 +137,7 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
   uint64_t getUniqueID(const jsi::Object &o) const;
   uint64_t getUniqueID(const jsi::String &s) const;
   uint64_t getUniqueID(const jsi::PropNameID &pni) const;
+  uint64_t getUniqueID(const jsi::Symbol &sym) const;
 
   /// Same as the other \c getUniqueID, except it can return 0 for some values.
   /// 0 means there is no ID associated with the value.
@@ -167,12 +169,12 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
 
 #ifdef HERMESVM_PROFILER_BB
   /// Write the trace to the given stream.
-  void dumpBasicBlockProfileTrace(llvh::raw_ostream &os) const;
+  void dumpBasicBlockProfileTrace(std::ostream &os) const;
 #endif
 
 #ifdef HERMESVM_PROFILER_OPCODE
   /// Write the opcode stats to the given stream.
-  void dumpOpcodeStats(llvh::raw_ostream &os) const;
+  void dumpOpcodeStats(std::ostream &os) const;
 #endif
 
 #ifdef HERMESVM_PROFILER_EXTERN
@@ -224,7 +226,7 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
       const std::shared_ptr<const jsi::Buffer> &sourceMapBuf,
       const std::string &sourceURL);
 
-private:
+ private:
   // Only HermesRuntimeImpl can subclass this.
   HermesRuntime() = default;
   friend class HermesRuntimeImpl;

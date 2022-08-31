@@ -10,6 +10,7 @@
 
 #include "hermes/VM/CellKind.h"
 #include "hermes/VM/Runtime.h"
+#include "hermes/VM/SmallHermesValue-inline.h"
 
 #include "llvh/Support/TrailingObjects.h"
 
@@ -40,9 +41,13 @@ namespace vm {
 ///
 /// Future potential optimizations:
 ///   * Sharing segments with multiple spines (copy-on-write)
-class SegmentedArray final
-    : public VariableSizeRuntimeCell,
-      private llvh::TrailingObjects<SegmentedArray, GCHermesValue> {
+template <typename HVType>
+class SegmentedArrayBase final : public VariableSizeRuntimeCell,
+                                 private llvh::TrailingObjects<
+                                     SegmentedArrayBase<HVType>,
+                                     GCHermesValueBase<HVType>> {
+  using GCHVType = GCHermesValueBase<HVType>;
+
  public:
   /// A segment is just a blob of raw memory with a fixed size.
   class Segment final : public GCCell {
@@ -51,13 +56,22 @@ class SegmentedArray final
     static constexpr uint32_t kMaxLength = 1024;
 
     /// Creates an empty segment with zero length
-    static PseudoHandle<Segment> create(Runtime *runtime);
+    static PseudoHandle<Segment> create(Runtime &runtime);
 
+    static constexpr CellKind getCellKind() {
+      static_assert(
+          std::is_same<HVType, HermesValue>::value ||
+              std::is_same<HVType, SmallHermesValue>::value,
+          "Illegal HVType.");
+      return std::is_same<HVType, HermesValue>::value
+          ? CellKind::SegmentKind
+          : CellKind::SegmentSmallKind;
+    }
     static bool classof(const GCCell *cell) {
-      return cell->getKind() == CellKind::SegmentKind;
+      return cell->getKind() == getCellKind();
     }
 
-    GCHermesValue &at(uint32_t index) {
+    GCHVType &at(uint32_t index) {
       assert(
           index < length() &&
           "Cannot get an index outside of the length of a segment");
@@ -65,7 +79,7 @@ class SegmentedArray final
     }
 
     /// \p const version of \p at.
-    const GCHermesValue &at(uint32_t index) const {
+    const GCHVType &at(uint32_t index) const {
       assert(
           index < length() &&
           "Cannot get an index outside of the length of a segment");
@@ -79,19 +93,18 @@ class SegmentedArray final
     /// Increases or decreases the length of the segment, up to a max of
     /// kMaxLength. If the length increases, it fills the newly used portion of
     /// the segment with empty values.
-    void setLength(Runtime *runtime, uint32_t newLength);
+    void setLength(Runtime &runtime, uint32_t newLength);
 
     friend void SegmentBuildMeta(const GCCell *cell, Metadata::Builder &mb);
+    friend void SegmentSmallBuildMeta(
+        const GCCell *cell,
+        Metadata::Builder &mb);
 
    private:
     static const VTable vt;
 
-    AtomicIfConcurrentGC<uint32_t> length_;
-    GCHermesValue data_[kMaxLength];
-
-   public:
-    explicit Segment(Runtime *runtime)
-        : GCCell(&runtime->getHeap(), &vt), length_(0) {}
+    AtomicIfConcurrentGC<uint32_t> length_{0};
+    GCHVType data_[kMaxLength];
   };
 
   using size_type = uint32_t;
@@ -128,7 +141,7 @@ class SegmentedArray final
   /// The number of slots a SegmentedArray with allocation size \p allocSize can
   /// hold.
   static constexpr size_type slotCapacityForAllocationSize(uint32_t allocSize) {
-    return (allocSize - allocationSizeForSlots(0)) / sizeof(GCHermesValue);
+    return (allocSize - allocationSizeForSlots(0)) / sizeof(HVType);
   }
 
   /// The number of slots for either inline storage or segments that this
@@ -140,26 +153,30 @@ class SegmentedArray final
 
   /// The number of slots that are currently valid. The \c size() is a derived
   /// field from this value.
-  AtomicIfConcurrentGC<size_type> numSlotsUsed_;
+  AtomicIfConcurrentGC<size_type> numSlotsUsed_{0};
 
   struct iterator {
     using iterator_category = std::bidirectional_iterator_tag;
-    using value_type = GCHermesValue;
+    using value_type = GCHVType;
     using difference_type = ptrdiff_t;
-    using pointer = GCHermesValue *;
-    using reference = GCHermesValue &;
+    using pointer = GCHVType *;
+    using reference = GCHVType &;
 
     /// The SegmentedArray which owns this iterator. This iterator should never
     /// be compared against an iterator with a different owner. This is used to
     /// access APIs from SegmentedArray.
-    SegmentedArray *const owner_;
+    SegmentedArrayBase *const owner_;
     /// The current index that the iterator points at.
     TotalIndex index_;
+    PointerBase &base_;
 
-    explicit iterator(SegmentedArray *owner, TotalIndex index)
-        : owner_(owner), index_(index) {
+    explicit iterator(
+        SegmentedArrayBase *owner,
+        TotalIndex index,
+        PointerBase &base)
+        : owner_(owner), index_(index), base_(base) {
       assert(
-          index_ <= owner_->size() &&
+          index_ <= owner_->size(base_) &&
           "Cannot make an iterator that points outside of the storage");
     }
 
@@ -171,7 +188,7 @@ class SegmentedArray final
           "Cannot assign to an iterator from a different SegmentedArray");
       index_ = that.index_;
       assert(
-          index_ <= owner_->size() &&
+          index_ <= owner_->size(base_) &&
           "Cannot make an iterator that points outside of the storage");
       return *this;
     }
@@ -189,11 +206,11 @@ class SegmentedArray final
       assert(
           index_ <= std::numeric_limits<TotalIndex>::max() - index &&
           "Overflow in addition");
-      return iterator(owner_, index_ + index);
+      return iterator(owner_, index_ + index, base_);
     }
     iterator operator-(TotalIndex index) const {
       assert(index_ >= index && "Overflow in subtraction");
-      return iterator(owner_, index_ - index);
+      return iterator(owner_, index_ - index, base_);
     }
     iterator &operator+=(TotalIndex index) {
       return *this = *this + index;
@@ -210,13 +227,14 @@ class SegmentedArray final
 
     reference operator*() {
       assert(
-          index_ < owner_->size() &&
+          index_ < owner_->size(base_) &&
           "Trying to read from an index outside the size");
       // Almost all arrays fit entirely in the inline storage.
       if (LLVM_LIKELY(index_ < kValueToSegmentThreshold)) {
         return owner_->inlineStorage()[index_];
       } else {
-        return owner_->segmentAt(toSegment(index_))->at(toInterior(index_));
+        return owner_->segmentAt(base_, toSegment(index_))
+            ->at(toInterior(index_));
       }
     }
 
@@ -230,56 +248,56 @@ class SegmentedArray final
 
   /// Creates a new SegmentedArray that has space for at least the requested \p
   /// capacity number of elements, and has size 0.
-  static CallResult<PseudoHandle<SegmentedArray>> create(
-      Runtime *runtime,
+  static CallResult<PseudoHandle<SegmentedArrayBase>> create(
+      Runtime &runtime,
       size_type capacity);
-  static CallResult<PseudoHandle<SegmentedArray>> createLongLived(
-      Runtime *runtime,
+  static CallResult<PseudoHandle<SegmentedArrayBase>> createLongLived(
+      Runtime &runtime,
       size_type capacity);
   /// Same as \c create(runtime, capacity) except fills in the first \p size
   /// elements with \p fill, and sets the size to \p size.
-  static CallResult<PseudoHandle<SegmentedArray>>
-  create(Runtime *runtime, size_type capacity, size_type size);
+  static CallResult<PseudoHandle<SegmentedArrayBase>>
+  create(Runtime &runtime, size_type capacity, size_type size);
 
   /// Returns a reference to an element. Strongly prefer using at and set
   /// instead.
   template <Inline inl = Inline::No>
-  GCHermesValue &atRef(TotalIndex index) {
+  GCHVType &atRef(PointerBase &base, TotalIndex index) {
     if (inl == Inline::Yes) {
       assert(
-          index < kValueToSegmentThreshold && index < size() &&
+          index < kValueToSegmentThreshold && index < size(base) &&
           "Using the inline storage accessor when the index is larger than the "
           "inline storage");
       return inlineStorage()[index];
     } else {
-      return *(begin() + index);
+      return *(begin(base) + index);
     }
   }
 
   /// Gets the element located at \p index.
   template <Inline inl = Inline::No>
-  HermesValue at(size_type index) const {
-    assert(index < size() && "Invalid index.");
+  HVType at(PointerBase &base, size_type index) const {
+    assert(index < size(base) && "Invalid index.");
     if (inl == Inline::Yes || index < kValueToSegmentThreshold) {
       return inlineStorage()[index];
     } else {
-      return segmentAt(toSegment(index))->at(toInterior(index));
+      return segmentAt(base, toSegment(index))->at(toInterior(index));
     }
   }
 
   /// Sets the element located at \p index to \p val.
   template <Inline inl = Inline::No>
-  void set(TotalIndex index, HermesValue val, GC *gc) {
-    atRef<inl>(index).set(val, gc);
+  void set(Runtime &runtime, TotalIndex index, HVType val) {
+    atRef<inl>(runtime, index).set(val, runtime.getHeap());
   }
   template <Inline inl = Inline::No>
-  void setNonPtr(TotalIndex index, HermesValue val, GC *gc) {
-    atRef<inl>(index).setNonPtr(val, gc);
+  void setNonPtr(Runtime &runtime, TotalIndex index, HVType val) {
+    atRef<inl>(runtime, index).setNonPtr(val, runtime.getHeap());
   }
 
   /// Gets the size of the SegmentedArray. The size is the number of elements
   /// currently active in the array.
-  size_type size() const {
+  size_type size(PointerBase &base) const {
     const auto numSlotsUsed = numSlotsUsed_.load(std::memory_order_relaxed);
     if (LLVM_LIKELY(numSlotsUsed <= kValueToSegmentThreshold)) {
       return numSlotsUsed;
@@ -287,7 +305,8 @@ class SegmentedArray final
       const SegmentNumber numSegments = numSlotsUsed - kValueToSegmentThreshold;
       const size_type numBeforeLastSegment =
           kValueToSegmentThreshold + (numSegments - 1) * Segment::kMaxLength;
-      const uint32_t numInLastSegment = segmentAt(numSegments - 1)->length();
+      const uint32_t numInLastSegment =
+          segmentAt(base, numSegments - 1)->length();
       return numBeforeLastSegment + numInLastSegment;
     }
   }
@@ -308,16 +327,16 @@ class SegmentedArray final
 
   /// Increase the size by one and set the new element to \p value.
   static ExecutionStatus push_back(
-      MutableHandle<SegmentedArray> &self,
-      Runtime *runtime,
+      MutableHandle<SegmentedArrayBase> &self,
+      Runtime &runtime,
       Handle<> value);
 
   /// Change the size of the storage to \p newSize. This can increase the size
   /// (in which case the new elements will be initialized to empty), or decrease
   /// the size.
   static ExecutionStatus resize(
-      MutableHandle<SegmentedArray> &self,
-      Runtime *runtime,
+      MutableHandle<SegmentedArrayBase> &self,
+      Runtime &runtime,
       size_type newSize);
 
   /// The same as resize, but add elements to the left instead of the right.
@@ -327,57 +346,67 @@ class SegmentedArray final
   /// If the capacity is not sufficient, then the performance will be the same
   /// as \c resize.
   static ExecutionStatus resizeLeft(
-      MutableHandle<SegmentedArray> &self,
-      Runtime *runtime,
+      MutableHandle<SegmentedArrayBase> &self,
+      Runtime &runtime,
       size_type newSize);
 
   /// Set the size to a value <= the capacity. This is a special
   /// case of resize() but has a simpler interface since we know that it doesn't
   /// need to reallocate.
   static void resizeWithinCapacity(
-      SegmentedArray *self,
-      Runtime *runtime,
+      SegmentedArrayBase *self,
+      Runtime &runtime,
       size_type newSize);
 
   /// Decrease the size to zero.
-  void clear(Runtime *runtime) {
-    shrinkRight(runtime, size());
+  void clear(Runtime &runtime) {
+    shrinkRight(runtime, size(runtime));
   }
 
+  static constexpr CellKind getCellKind() {
+    static_assert(
+        std::is_same<HVType, HermesValue>::value ||
+            std::is_same<HVType, SmallHermesValue>::value,
+        "Illegal HVType.");
+    return std::is_same<HVType, HermesValue>::value
+        ? CellKind::SegmentedArrayKind
+        : CellKind::SegmentedArraySmallKind;
+  }
   static bool classof(const GCCell *cell) {
-    return cell->getKind() == CellKind::SegmentedArrayKind;
+    return cell->getKind() == getCellKind();
   }
 
  private:
   static const VTable vt;
 
-  friend TrailingObjects;
+  friend llvh::
+      TrailingObjects<SegmentedArrayBase<HVType>, GCHermesValueBase<HVType>>;
   friend void SegmentBuildMeta(const GCCell *cell, Metadata::Builder &mb);
   friend void SegmentedArrayBuildMeta(
       const GCCell *cell,
       Metadata::Builder &mb);
-
- public:
-  SegmentedArray(Runtime *runtime, uint32_t allocSize)
-      : VariableSizeRuntimeCell(&runtime->getHeap(), &vt, allocSize),
-        numSlotsUsed_(0) {}
+  friend void SegmentSmallBuildMeta(const GCCell *cell, Metadata::Builder &mb);
+  friend void SegmentedArraySmallBuildMeta(
+      const GCCell *cell,
+      Metadata::Builder &mb);
 
  private:
   /// Throws a RangeError with a descriptive message describing the attempted
   /// capacity allocated, and the max that is allowed.
   /// \returns ExecutionStatus::EXCEPTION always.
   static ExecutionStatus throwExcessiveCapacityError(
-      Runtime *runtime,
+      Runtime &runtime,
       size_type capacity);
 
-  iterator begin() {
-    return iterator(this, 0);
+  iterator begin(PointerBase &base) {
+    return iterator(this, 0, base);
   }
-  iterator end() {
-    return iterator(this, size());
+  iterator end(PointerBase &base) {
+    return iterator(this, size(base), base);
   }
-  iterator inlineStorageEnd() {
-    return iterator(this, std::min(size(), toRValue(kValueToSegmentThreshold)));
+  iterator inlineStorageEnd(PointerBase &base) {
+    return iterator(
+        this, std::min(size(base), toRValue(kValueToSegmentThreshold)), base);
   }
 
   /// \return the capacity that should be used for a new SegmentedArray based on
@@ -430,14 +459,14 @@ class SegmentedArray final
 
   /// Turns an unallocated segment into an allocated one.
   static void allocateSegment(
-      Runtime *runtime,
-      Handle<SegmentedArray> self,
+      Runtime &runtime,
+      Handle<SegmentedArrayBase> self,
       SegmentNumber segment);
 
   /// Gets the amount of memory used by this object's spine for a given number
   /// of spine slots.
   static constexpr uint32_t allocationSizeForSlots(SegmentNumber numSlots) {
-    return totalSizeToAlloc<GCHermesValue>(numSlots);
+    return SegmentedArrayBase::template totalSizeToAlloc<GCHVType>(numSlots);
   }
 
   /// \return a pointer to the segment from the given \p index in the spine. The
@@ -445,28 +474,28 @@ class SegmentedArray final
   /// any collections.
   /// \pre The \p segment is within the numSlotsUsed_ in the spine, and it has
   /// been allocated.
-  Segment *segmentAt(SegmentNumber segment) {
+  Segment *segmentAt(PointerBase &base, SegmentNumber segment) {
     return const_cast<Segment *>(
-        static_cast<const SegmentedArray *>(this)->segmentAt(segment));
+        static_cast<const SegmentedArrayBase *>(this)->segmentAt(
+            base, segment));
   }
   /// const version of \c segmentAt.
-  const Segment *segmentAt(SegmentNumber segment) const {
+  const Segment *segmentAt(PointerBase &base, SegmentNumber segment) const {
     assert(
         segment < numUsedSegments() &&
         "Trying to get a segment that does not exist");
-    return vmcast<Segment>(*segmentAtPossiblyUnallocated(segment));
+    return vmcast<Segment>(
+        segmentAtPossiblyUnallocated(segment)->getObject(base));
   }
 
   /// Same as \c segmentAt, except for any segment, including ones between
   /// numSlotsUsed_ and slotCapacity().
-  GCHermesValue *segmentAtPossiblyUnallocated(SegmentNumber segment) {
-    return const_cast<GCHermesValue *>(
-        static_cast<const SegmentedArray *>(this)->segmentAtPossiblyUnallocated(
-            segment));
+  GCHVType *segmentAtPossiblyUnallocated(SegmentNumber segment) {
+    return const_cast<GCHVType *>(static_cast<const SegmentedArrayBase *>(this)
+                                      ->segmentAtPossiblyUnallocated(segment));
   }
   /// const version of \c segmentAtPossiblyUnallocated.
-  const GCHermesValue *segmentAtPossiblyUnallocated(
-      SegmentNumber segment) const {
+  const GCHVType *segmentAtPossiblyUnallocated(SegmentNumber segment) const {
     assert(
         segment < numSegments() &&
         "Trying to get a segment that does not exist");
@@ -474,23 +503,25 @@ class SegmentedArray final
   }
 
   /// \return a raw pointer into the inline storage. Can be used like a C array.
-  GCHermesValue *inlineStorage() {
-    return getTrailingObjects<GCHermesValue>();
+  GCHVType *inlineStorage() {
+    return SegmentedArrayBase::template getTrailingObjects<GCHVType>();
   }
 
   /// Const version of above.
-  const GCHermesValue *inlineStorage() const {
-    return getTrailingObjects<GCHermesValue>();
+  const GCHVType *inlineStorage() const {
+    return SegmentedArrayBase::template getTrailingObjects<GCHVType>();
   }
 
   /// \return a raw pointer into the segment slots. Can be used like a C array.
-  GCHermesValue *segments() {
-    return getTrailingObjects<GCHermesValue>() + kValueToSegmentThreshold;
+  GCHVType *segments() {
+    return SegmentedArrayBase::template getTrailingObjects<GCHVType>() +
+        kValueToSegmentThreshold;
   }
 
   /// Const version of above.
-  const GCHermesValue *segments() const {
-    return getTrailingObjects<GCHermesValue>() + kValueToSegmentThreshold;
+  const GCHVType *segments() const {
+    return SegmentedArrayBase::template getTrailingObjects<GCHVType>() +
+        kValueToSegmentThreshold;
   }
 
   /// \return the number of segments that could be held by this SegmentedArray.
@@ -518,8 +549,8 @@ class SegmentedArray final
   /// adding empty values. If size + \p amount is more than capacity can hold, a
   /// re-allocation will occur.
   static ExecutionStatus growRight(
-      MutableHandle<SegmentedArray> &self,
-      Runtime *runtime,
+      MutableHandle<SegmentedArrayBase> &self,
+      Runtime &runtime,
       size_type amount);
 
   /// Same as \c growRight, except the empty values are filled to the left.
@@ -527,39 +558,39 @@ class SegmentedArray final
   /// existing elements \p amount spaces to the right to make room for the new
   /// empty values.
   static ExecutionStatus growLeft(
-      MutableHandle<SegmentedArray> &self,
-      Runtime *runtime,
+      MutableHandle<SegmentedArrayBase> &self,
+      Runtime &runtime,
       size_type amount);
 
   /// Same as \c growRightWithinCapacity except it fills from the left.
   static void growLeftWithinCapacity(
-      Runtime *runtime,
-      PseudoHandle<SegmentedArray> self,
+      Runtime &runtime,
+      PseudoHandle<SegmentedArrayBase> self,
       size_type amount);
 
   /// Shrink the array on the right hand side, removing the existing elements.
   /// \p pre amount <= size().
-  void shrinkRight(Runtime *runtime, size_type amount);
+  void shrinkRight(Runtime &runtime, size_type amount);
 
   /// Shrink the array on the left hand side, removing the existing elements
   /// from the left.
   /// \p pre amount <= size().
-  void shrinkLeft(Runtime *runtime, size_type amount);
+  void shrinkLeft(Runtime &runtime, size_type amount);
 
   /// Increases the size by \p amount, without doing any allocation.
-  void increaseSizeWithinCapacity(Runtime *runtime, size_type amount);
+  void increaseSizeWithinCapacity(Runtime &runtime, size_type amount);
 
   /// Increases the size by \p amount, and adjusts segment sizes
   /// accordingly.
   /// NOTE: increasing size can potentially allocate new segments.
-  static PseudoHandle<SegmentedArray> increaseSize(
-      Runtime *runtime,
-      PseudoHandle<SegmentedArray> self,
+  static PseudoHandle<SegmentedArrayBase> increaseSize(
+      Runtime &runtime,
+      PseudoHandle<SegmentedArrayBase> self,
       size_type amount);
 
   /// Decreases the size by \p amount, and no longer tracks the elements past
   /// the new size limit.
-  void decreaseSize(Runtime *runtime, size_type amount);
+  void decreaseSize(Runtime &runtime, size_type amount);
 
   /// @}
 
@@ -573,31 +604,45 @@ class SegmentedArray final
   static gcheapsize_t _trimSizeCallback(const GCCell *self);
 };
 
-constexpr SegmentedArray::size_type SegmentedArray::maxElements() {
+template <typename HVType>
+constexpr typename SegmentedArrayBase<HVType>::size_type
+SegmentedArrayBase<HVType>::maxElements() {
   return maxNumSegments() * Segment::kMaxLength + kValueToSegmentThreshold;
 }
 
-constexpr SegmentedArray::SegmentNumber SegmentedArray::maxNumSegments() {
-  const SegmentedArray::SegmentNumber maxAllocSlots =
+template <typename HVType>
+constexpr typename SegmentedArrayBase<HVType>::SegmentNumber
+SegmentedArrayBase<HVType>::maxNumSegments() {
+  const SegmentedArrayBase::SegmentNumber maxAllocSlots =
       slotCapacityForAllocationSize(GC::maxAllocationSize());
-  const SegmentedArray::SegmentNumber maxAllocSegments =
+  const SegmentedArrayBase::SegmentNumber maxAllocSegments =
       maxAllocSlots - kValueToSegmentThreshold;
   return std::min(maxAllocSegments, maxNumSegmentsWithoutOverflow());
 }
 
-constexpr SegmentedArray::SegmentNumber
-SegmentedArray::maxNumSegmentsWithoutOverflow() {
+template <typename HVType>
+constexpr typename SegmentedArrayBase<HVType>::SegmentNumber
+SegmentedArrayBase<HVType>::maxNumSegmentsWithoutOverflow() {
   return (
       (std::numeric_limits<uint32_t>::max() - kValueToSegmentThreshold) /
       Segment::kMaxLength);
 }
 
+using SegmentedArray = SegmentedArrayBase<HermesValue>;
+using SegmentedArraySmall = SegmentedArrayBase<SmallHermesValue>;
+
 template <>
 struct IsGCObject<SegmentedArray::Segment> : public std::true_type {};
+template <>
+struct IsGCObject<SegmentedArraySmall::Segment> : public std::true_type {};
 
 static_assert(
     SegmentedArray::allocationSizeForCapacity(SegmentedArray::maxElements()) <=
         GC::maxAllocationSize(),
+    "maxElements() is too big");
+static_assert(
+    SegmentedArraySmall::allocationSizeForCapacity(
+        SegmentedArraySmall::maxElements()) <= GC::maxAllocationSize(),
     "maxElements() is too big");
 
 } // namespace vm

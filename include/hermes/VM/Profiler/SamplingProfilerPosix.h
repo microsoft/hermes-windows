@@ -67,8 +67,8 @@ class SamplingProfiler {
   using NativeFunctionFrameInfo = NativeFunctionPtr;
   /// Captured FinalizableNativeFunction frame information for symbolication.
   using FinalizableNativeFunctionFrameInfo = NativeFunctionPtr;
-  /// GC frame info. Pointing to string in gcEventExtraInfoSet_.
-  using GCFrameInfo = const std::string *;
+  /// GC frame info. Pointing to string in suspendEventExtraInfoSet_.
+  using SuspendFrameInfo = const std::string *;
 
   // This will break with more than one RuntimeModule(like FB4a, eval() call or
   // lazy compilation etc...). It is simply a temporary thing to get started.
@@ -79,7 +79,7 @@ class SamplingProfiler {
       JSFunction,
       NativeFunction,
       FinalizableNativeFunction,
-      GCFrame,
+      SuspendFrame,
     };
 
     // TODO: figure out how to store BoundFunction.
@@ -91,12 +91,12 @@ class SamplingProfiler {
       NativeFunctionFrameInfo nativeFrame;
       /// Host function frame info.
       FinalizableNativeFunctionFrameInfo finalizableNativeFrame;
-      /// GC frame info. Pointing to string
-      /// in gcEventExtraInfoSet_; it is optionally and
+      /// Suspend frame info. Pointing to string
+      /// in suspendExtraInfoSet_; it is optional and
       /// can be null to indicate no extra info.
       /// We can't directly use std::string here because it is
       /// inside a union.
-      GCFrameInfo gcFrame;
+      SuspendFrameInfo suspendFrame;
     };
     FrameKind kind;
   };
@@ -119,6 +119,12 @@ class SamplingProfiler {
         : tid(tid), timeStamp(ts), stack(stackStart, stackEnd) {}
   };
 
+#if defined(UNIT_TEST) && !defined(_MSC_VER)
+  pthread_t getCurrentThread() const {
+    return currentThread_;
+  }
+#endif // UNIT_TEST
+
  private:
   /// Max size of sampleStorage_.
   static const int kMaxStackDepth = 500;
@@ -130,8 +136,9 @@ class SamplingProfiler {
     static std::atomic<GlobalProfiler *> instance_;
 
     /// Used to synchronise data writes between the timer thread and the signal
-    /// handler in the runtime thread.
-    static std::atomic<bool> handlerSyncFlag_;
+    /// handler in the runtime thread. Also used to send the target
+    /// SamplingProfiler to be used during the stack walk.
+    static std::atomic<SamplingProfiler *> profilerForSig_;
 
     /// Lock for profiler operations and access to member fields.
     std::mutex profilerLock_;
@@ -140,13 +147,10 @@ class SamplingProfiler {
     /// registered.
     std::unordered_set<SamplingProfiler *> profilers_;
 
-    /// Per-thread profiler instance for loom/local profiling.
+#if defined(__ANDROID__) && defined(HERMES_FACEBOOK_BUILD)
+    /// Per-thread profiler instance for loom profiling.
     /// Limitations: No recursive runtimes in one thread.
-    //  WINDOWS: We don't keep the profiler instance in the TLS, as we don't run the sampling in the runtime thread.
-    //  POSIX runtime uses TLS to get hold of the profiler instance in the signal handler.
-    //  In Windows, we directly pass the profiler instance as a function parameter.
-#ifndef _MSC_VER
-    ThreadLocal<SamplingProfiler> threadLocalProfiler_;
+    ThreadLocal<SamplingProfiler> threadLocalProfilerForLoom_;
 #endif
 
     /// Whether profiler is enabled or not. Protected by profilerLock_.
@@ -233,14 +237,16 @@ class SamplingProfiler {
   /// Sampled stack traces overtime. Protected by runtimeDataLock_.
   std::vector<StackTrace> sampledStacks_;
 
-  /// Threading: preGCStackDepth_/preGCStackStorage_ are only accessed from
-  /// interpreter thread.
-  /// The actual sampled stack depth in \p preGCStackStorage_.
-  /// It resets to zero at the end of young and full GCs so that we can verify
-  /// that there aren't two nesting preGC stack walking.
-  uint32_t preGCStackDepth_{0};
+  // Threading: the suspendCount/preSuspendStack are accessed by both the VM
+  // thread as well as the sampling profiler timer thread, hence they are all
+  // protected by runtimeDataLock_.
+  /// The counter of how many suspend calls are pending -- i.e., need to be
+  /// resume()d.
+  volatile uint32_t suspendCount_{0};
+  /// The actual sampled stack depth in preSuspendStackStorage_.
+  volatile uint32_t preSuspendStackDepth_{0};
   /// JS stack captured at time of GC.
-  StackTrace preGCStackStorage_{kMaxStackDepth};
+  StackTrace preSuspendStackStorage_{kMaxStackDepth};
 
   /// Prellocated map that contains thread names mapping.
   ThreadNamesMap threadNames_;
@@ -260,13 +266,13 @@ class SamplingProfiler {
 #endif
 
   /// Unique GC event extra info strings container.
-  std::unordered_set<std::string> gcEventExtraInfoSet_;
+  std::unordered_set<std::string> suspendEventExtraInfoSet_;
 
   /// Domains to be kept alive for sampled RuntimeModules. Protected by
   /// runtimeDataLock_.
   std::vector<Domain *> domains_;
 
-  Runtime *runtime_;
+  Runtime &runtime_;
 
  private:
   /// Hold \p domain so that the RuntimeModule(s) used by profiler are not
@@ -289,8 +295,9 @@ class SamplingProfiler {
       SaveDomains saveDomains,
       uint32_t startIndex = 0);
 
-  /// Record JS stack at time of the GC.
-  void recordPreGCStack(const std::string &extraInfo);
+  /// Record JS stack at time of suspension, , caller must hold
+  /// runtimeDataLock_.
+  void recordPreSuspendStack(std::string_view extraInfo);
 
 #if defined(__ANDROID__) && defined(HERMES_FACEBOOK_BUILD)
   /// Registered loom callback for collecting stack frames.
@@ -306,7 +313,7 @@ class SamplingProfiler {
   void clear();
 
  public:
-  explicit SamplingProfiler(Runtime *runtime);
+  explicit SamplingProfiler(Runtime &runtime);
   ~SamplingProfiler();
 
   /// Mark roots that are kept alive by the SamplingProfiler.
@@ -318,6 +325,14 @@ class SamplingProfiler {
 
   /// Dump sampled stack to \p OS in chrome trace format.
   void dumpChromeTrace(llvh::raw_ostream &OS);
+
+  /// Dump the sampled stack to \p OS in the format expected by the
+  /// Profiler.stop return type. See
+  ///
+  /// https://chromedevtools.github.io/devtools-protocol/tot/Profiler/#type-Profile
+  ///
+  /// for a description.
+  void serializeInDevToolsFormat(llvh::raw_ostream &OS);
 
   /// Static wrapper for dumpSampledStack.
   static void dumpSampledStackGlobal(llvh::raw_ostream &OS);
@@ -331,8 +346,36 @@ class SamplingProfiler {
   /// Disable and stop profiling.
   static bool disable();
 
-  /// Called for various GC events.
-  void onGCEvent(GCEventKind kind, const std::string &extraInfo);
+  /// Suspends the sample profiling. Every call to suspend must be matched by a
+  /// call to resume.
+  void suspend(std::string_view reason);
+
+  /// Resumes the sample profiling. There must have been a previous call to
+  /// suspend() that hansn't been resume()d yet.
+  void resume();
+};
+
+/// An RAII class for temporarily suspending (and auto-resuming) the sampling
+/// profiler.
+class SuspendSamplingProfilerRAII {
+ public:
+  explicit SuspendSamplingProfilerRAII(
+      Runtime &runtime,
+      std::string_view reason = "")
+      : profiler_(runtime.samplingProfiler.get()) {
+    if (profiler_) {
+      profiler_->suspend(reason);
+    }
+  }
+
+  ~SuspendSamplingProfilerRAII() {
+    if (profiler_) {
+      profiler_->resume();
+    }
+  }
+
+ private:
+  SamplingProfiler *profiler_;
 };
 
 bool operator==(

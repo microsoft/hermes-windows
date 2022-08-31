@@ -14,31 +14,115 @@ import {getVisitorKeys, isNode} from './getVisitorKeys';
 import {SimpleTraverser} from './traverse/SimpleTraverser';
 
 export opaque type DetachedNode<+T> = T;
+export type MaybeDetachedNode<+T> = T | DetachedNode<T>;
+
+type DetachConfig = $ReadOnly<{
+  preserveLocation?: boolean,
+  originalNode?: ESNode,
+}>;
+
+const DETACHED_MARKER = Symbol.for('hermes-transform - Detached AST Node');
+const ORIGINAL_NODE = Symbol.for('hermes-transform - Original Node');
+
+export function isDetachedNode(node: MaybeDetachedNode<ESNode>): boolean {
+  // $FlowExpectedError[invalid-in-lhs] flow doesn't support symbols as keys
+  return DETACHED_MARKER in node;
+}
+export function getOriginalNode(node: MaybeDetachedNode<ESNode>): ?ESNode {
+  // $FlowExpectedError[prop-missing]
+  return node[ORIGINAL_NODE];
+}
+
+export const asDetachedNode: {
+  <T: ESNode>(
+    node: MaybeDetachedNode<T>,
+    config?: {useDeepClone: boolean},
+  ): DetachedNode<T>,
+  <T: ESNode>(
+    node: ?MaybeDetachedNode<T>,
+    config?: {useDeepClone: boolean},
+  ): ?DetachedNode<T>,
+} = <T: ESNode>(
+  node: ?MaybeDetachedNode<T>,
+  {useDeepClone}: {useDeepClone: boolean} = {useDeepClone: false},
+): // $FlowExpectedError[incompatible-type]
+?DetachedNode<T> => {
+  if (node == null) {
+    return null;
+  }
+
+  if (isDetachedNode(node)) {
+    return node;
+  }
+
+  return useDeepClone
+    ? deepCloneNode<T>(node, {})
+    : shallowCloneNode<T>(node, {});
+};
 
 // used by the node type function codegen
 export function detachedProps<T: BaseNode>(
   parent: ?ESNode,
-  props: {...},
+  props: $ReadOnly<$Partial<{...}>>,
+  config: DetachConfig = {...null},
 ): DetachedNode<T> {
-  // $FlowExpectedError[incompatible-return]
-  return {
+  // $FlowExpectedError[incompatible-type]
+  const detachedNode: DetachedNode<T> = {
     ...props,
+    ...(config?.preserveLocation !== true
+      ? {
+          // if this is [0,0] AND the file has a docblock then prettier will insert newlines between
+          // certain detached nodes. Because of "intended" formatting behaviour (https://github.com/prettier/prettier/issues/12078)
+          // this can cause us to output weirdly formatted code that should have been collapsed.
+          //
+          // prettier works backwards from the position you give it to find newlines or non whitespace
+          // tokens and uses this to determine if newlines should be inserted between nodes.
+          // By placing the range at [1, 1] we can ensure a token is always found before a newline
+          // and therefore no newlines will be placed between nodes.
+          //
+          // NOTE: we will still run into the bug if there is weird code like a docblock with whitespace
+          //       characters before it. However we assume this isn't going to happen because any file
+          //       already formatted by prettier will have that whitespace removed.
+          // We considered a more complex solution involving traversing the AST and manually updating
+          // detached node ranges after mutations are applied - however this is a lot heavier and will
+          // probably never be needed.
+          range: [1, 1],
+          loc: {
+            start: {
+              line: 1,
+              column: 0,
+            },
+            end: {
+              line: 1,
+              column: 0,
+            },
+          },
+        }
+      : {}),
     // if not provided, then we purposely don't set this here
     // and will rely on the tooling to update it as appropriate.
     // nothing should be reading from this before it's set anyway.
     parent: (parent: $FlowFixMe),
-    range: [0, 0],
-    loc: {
-      start: {
-        line: 1,
-        column: 0,
-      },
-      end: {
-        line: 1,
-        column: 0,
-      },
-    },
   };
+
+  // mark the node as detached
+  Object.defineProperty(detachedNode, DETACHED_MARKER, {
+    configurable: false,
+    enumerable: false,
+    value: true,
+    writable: false,
+  });
+
+  if (config.originalNode) {
+    Object.defineProperty(detachedNode, ORIGINAL_NODE, {
+      configurable: false,
+      enumerable: false,
+      value: config.originalNode,
+      writable: false,
+    });
+  }
+
+  return detachedNode;
 }
 
 /**
@@ -46,9 +130,13 @@ export function detachedProps<T: BaseNode>(
  */
 export function shallowCloneNode<T: ESNode>(
   node: T,
-  newProps: $Partial<{...}> = {},
+  newProps: $ReadOnly<$Partial<{...}>>,
+  config?: DetachConfig = {...null},
 ): DetachedNode<T> {
-  return detachedProps(null, (Object.assign({}, node, newProps): $FlowFixMe));
+  return detachedProps(null, (Object.assign({}, node, newProps): $FlowFixMe), {
+    preserveLocation: config.preserveLocation ?? true,
+    originalNode: config.originalNode ?? node,
+  });
 }
 
 /**
@@ -56,7 +144,7 @@ export function shallowCloneNode<T: ESNode>(
  */
 export function deepCloneNode<T: ESNode>(
   node: T,
-  newProps: $Partial<{...}> = {},
+  newProps: $ReadOnly<$Partial<{...}>>,
 ): DetachedNode<T> {
   const clone: DetachedNode<T> = Object.assign(
     JSON.parse(

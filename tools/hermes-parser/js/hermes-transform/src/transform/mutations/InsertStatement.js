@@ -46,6 +46,11 @@ export function performInsertStatementMutation(
   mutationContext: MutationContext,
   mutation: InsertStatementMutation,
 ): ESNode {
+  mutationContext.assertNotDeleted(
+    mutation.target,
+    `Attempted to insert ${mutation.side} a deleted ${mutation.target.type} node. This likely means that you attempted to mutate around the target after it was deleted/replaced.`,
+  );
+
   const insertionParent = getStatementParent(mutation.target);
 
   // enforce that if we are inserting module declarations - they are being inserted in a valid location
@@ -70,7 +75,7 @@ export function performInsertStatementMutation(
       case 'before': {
         parent[insertionParent.key] = insertInArray(
           parent[insertionParent.key],
-          insertionParent.targetIndex - 1,
+          insertionParent.targetIndex,
           mutation.nodesToInsert,
         );
         break;
@@ -108,6 +113,7 @@ export function performInsertStatementMutation(
 
   (insertionParent.parent: interface {[string]: mixed})[insertionParent.key] =
     blockStatement;
+  statementToWrap.parent = blockStatement;
 
   return insertionParent.parent;
 }

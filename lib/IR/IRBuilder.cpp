@@ -14,10 +14,6 @@
 
 using namespace hermes;
 
-using llvh::cast;
-using llvh::dyn_cast;
-using llvh::isa;
-
 BasicBlock *IRBuilder::createBasicBlock(Function *Parent) {
   assert(Parent && "Invalid insertion point");
   return new BasicBlock(Parent);
@@ -207,6 +203,10 @@ LiteralNumber *IRBuilder::getLiteralNaN() {
   return M->getLiteralNumber(std::numeric_limits<double>::quiet_NaN());
 }
 
+LiteralBigInt *IRBuilder::getLiteralBigInt(UniqueString *value) {
+  return M->getLiteralBigInt(value);
+}
+
 LiteralString *IRBuilder::getLiteralString(StringRef value) {
   Identifier Iden = createIdentifier(value);
   return getLiteralString(Iden);
@@ -313,6 +313,12 @@ AllocStackInst *IRBuilder::createAllocStackInst(Identifier varName) {
 
 AsNumberInst *IRBuilder::createAsNumberInst(Value *val) {
   auto *ANI = new AsNumberInst(val);
+  insert(ANI);
+  return ANI;
+}
+
+AsNumericInst *IRBuilder::createAsNumericInst(Value *val) {
+  auto *ANI = new AsNumericInst(val);
   insert(ANI);
   return ANI;
 }

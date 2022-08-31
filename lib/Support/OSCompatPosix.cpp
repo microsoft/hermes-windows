@@ -109,17 +109,19 @@ void unset_test_vm_allocate_limit() {
 }
 #endif // !NDEBUG
 
-static llvh::ErrorOr<void *> vm_allocate_impl(size_t sz) {
+static llvh::ErrorOr<void *>
+vm_mmap(void *addr, size_t sz, int prot, int flags, bool checkDebugLimit) {
+  assert(sz % page_size_real() == 0);
 #ifndef NDEBUG
-  if (LLVM_UNLIKELY(sz > totalVMAllocLimit)) {
-    return make_error_code(OOMError::TestVMLimitReached);
-  } else if (LLVM_UNLIKELY(totalVMAllocLimit != unsetVMAllocLimit)) {
-    totalVMAllocLimit -= sz;
+  if (checkDebugLimit) {
+    if (LLVM_UNLIKELY(sz > totalVMAllocLimit)) {
+      return make_error_code(OOMError::TestVMLimitReached);
+    } else if (LLVM_UNLIKELY(totalVMAllocLimit != unsetVMAllocLimit)) {
+      totalVMAllocLimit -= sz;
+    }
   }
 #endif // !NDEBUG
-
-  void *result = mmap(
-      nullptr, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  void *result = mmap(addr, sz, prot, flags, -1, 0);
   if (result == MAP_FAILED) {
     // Since mmap is a POSIX API, even on MacOS, errno should use the POSIX
     // generic_category.
@@ -128,46 +130,33 @@ static llvh::ErrorOr<void *> vm_allocate_impl(size_t sz) {
   return result;
 }
 
+static void vm_munmap(void *addr, size_t sz) {
+  auto ret = munmap(addr, sz);
+  assert(!ret && "Failed to free memory region.");
+  (void)ret;
+
+#ifndef NDEBUG
+  if (LLVM_UNLIKELY(totalVMAllocLimit != unsetVMAllocLimit) && addr) {
+    totalVMAllocLimit += sz;
+  }
+#endif
+}
+
 static char *alignAlloc(void *p, size_t alignment) {
   return reinterpret_cast<char *>(
       llvh::alignTo(reinterpret_cast<uintptr_t>(p), alignment));
 }
 
-llvh::ErrorOr<void *> vm_allocate(size_t sz) {
-  assert(sz % page_size() == 0);
-#ifndef NDEBUG
-  if (testPgSz != 0 && testPgSz > static_cast<size_t>(page_size_real())) {
-    return vm_allocate_aligned(sz, testPgSz);
-  }
-#endif // !NDEBUG
-  return vm_allocate_impl(sz);
-}
-
-llvh::ErrorOr<void *> vm_allocate_aligned(size_t sz, size_t alignment) {
+static llvh::ErrorOr<void *>
+vm_mmap_aligned(void *addr, size_t sz, size_t alignment, int prot, int flags) {
   assert(sz > 0 && sz % page_size() == 0);
   assert(alignment > 0 && alignment % page_size() == 0);
 
-  // Opportunistically allocate without alignment constraint,
-  // and see if the memory happens to be aligned.
-  // While this may be unlikely on the first allocation request,
-  // subsequent allocation requests have a good chance.
-  auto result = vm_allocate_impl(sz);
-  if (!result) {
-    return result;
-  }
-  void *mem = *result;
-  if (mem == alignAlloc(mem, alignment)) {
-    return mem;
-  }
-
-  // Free the oppotunistic allocation.
-  oscompat::vm_free(mem, sz);
-
-  // This time, allocate a larger section to ensure that it contains
-  // a subsection that satisfies the request.
-  // Use *real* page size here since that's what vm_allocate_impl guarantees.
+  // Allocate a larger section to ensure that it contains  a subsection that
+  // satisfies the request. Use *real* page size here since that's what vm_mmap
+  // guarantees.
   const size_t excessSize = sz + alignment - page_size_real();
-  result = vm_allocate_impl(excessSize);
+  auto result = vm_mmap(addr, excessSize, prot, flags, true);
   if (!result)
     return result;
 
@@ -177,28 +166,80 @@ llvh::ErrorOr<void *> vm_allocate_aligned(size_t sz, size_t alignment) {
   size_t excessAtBack = excessSize - excessAtFront - sz;
 
   if (excessAtFront)
-    oscompat::vm_free(raw, excessAtFront);
+    vm_munmap(raw, excessAtFront);
   if (excessAtBack)
-    oscompat::vm_free(aligned + sz, excessAtBack);
+    vm_munmap(aligned + sz, excessAtBack);
 
   return aligned;
 }
 
-void vm_free(void *p, size_t sz) {
-  auto ret = munmap(p, sz);
+static constexpr int kVMAllocateFlags = MAP_PRIVATE | MAP_ANONYMOUS;
+static constexpr int kVMAllocateProt = PROT_READ | PROT_WRITE;
 
-  assert(!ret && "Failed to free memory region.");
-  (void)ret;
-
+llvh::ErrorOr<void *> vm_allocate(size_t sz, void *hint) {
+  assert(sz % page_size() == 0);
 #ifndef NDEBUG
-  if (LLVM_UNLIKELY(totalVMAllocLimit != unsetVMAllocLimit) && p) {
-    totalVMAllocLimit += sz;
+  if (testPgSz != 0 && testPgSz > static_cast<size_t>(page_size_real())) {
+    return vm_allocate_aligned(sz, testPgSz);
   }
-#endif
+#endif // !NDEBUG
+  return vm_mmap(hint, sz, kVMAllocateProt, kVMAllocateFlags, true);
+}
+
+llvh::ErrorOr<void *>
+vm_allocate_aligned(size_t sz, size_t alignment, void *hint) {
+  assert(sz > 0 && sz % page_size() == 0);
+  assert(alignment > 0 && alignment % page_size() == 0);
+
+  // Opportunistically allocate without alignment constraint,
+  // and see if the memory happens to be aligned.
+  // While this may be unlikely on the first allocation request,
+  // subsequent allocation requests have a good chance.
+  auto result = vm_mmap(hint, sz, kVMAllocateProt, kVMAllocateFlags, true);
+  if (!result) {
+    return result;
+  }
+  void *mem = *result;
+  if (mem == alignAlloc(mem, alignment)) {
+    return mem;
+  }
+
+  // Free the opportunistic allocation.
+  vm_munmap(mem, sz);
+
+  return vm_mmap_aligned(
+      hint, sz, alignment, kVMAllocateProt, kVMAllocateFlags);
+}
+
+void vm_free(void *p, size_t sz) {
+  vm_munmap(p, sz);
 }
 
 void vm_free_aligned(void *p, size_t sz) {
   vm_free(p, sz);
+}
+
+static constexpr int kVMReserveProt = PROT_NONE;
+static constexpr int kVMReserveFlags =
+    MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+
+llvh::ErrorOr<void *>
+vm_reserve_aligned(size_t sz, size_t alignment, void *hint) {
+  return vm_mmap_aligned(hint, sz, alignment, kVMReserveProt, kVMReserveFlags);
+}
+
+void vm_release_aligned(void *p, size_t sz) {
+  vm_munmap(p, sz);
+}
+
+llvh::ErrorOr<void *> vm_commit(void *p, size_t sz) {
+  return vm_mmap(p, sz, kVMAllocateProt, kVMAllocateFlags | MAP_FIXED, false);
+}
+
+void vm_uncommit(void *p, size_t sz) {
+  auto res = vm_mmap(p, sz, kVMReserveProt, kVMReserveFlags | MAP_FIXED, false);
+  (void)res;
+  assert(res && "uncommit failed");
 }
 
 void vm_hugepage(void *p, size_t sz) {
@@ -703,6 +744,21 @@ int sched_getcpu() {
   return -1;
 }
 #endif
+
+uint64_t cpu_cycle_counter() {
+#if defined(__aarch64__)
+  // Clang's builtin causes SIGILL on some 64-bit ARM environments.
+  uint64_t cnt;
+  __asm __volatile("mrs %0, cntvct_el0" : "=&r"(cnt));
+  return cnt;
+#elif __has_builtin(__builtin_readcyclecounter)
+  return __builtin_readcyclecounter();
+#else
+  timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return t.tv_sec * 1000LL * 1000LL * 1000LL + t.tv_nsec;
+#endif
+}
 
 bool set_env(const char *name, const char *value) {
   // Enforce the contract of this function that value must not be empty

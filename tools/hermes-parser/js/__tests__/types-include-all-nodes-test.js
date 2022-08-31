@@ -36,15 +36,14 @@ function getInterfaces(): $ReadOnlyMap<
     properties: $ReadOnlyMap<string, PropertyEntry>,
   }>,
 > {
-  const {ast, scopeManager} = parseForESLint(
-    fs.readFileSync(
-      path.resolve(__dirname, '..', 'hermes-estree', 'src', 'types.js'),
-      'utf8',
-    ),
+  const code = fs.readFileSync(
+    path.resolve(__dirname, '..', 'hermes-estree', 'src', 'types.js'),
+    'utf8',
   );
+  const {ast, scopeManager} = parseForESLint(code);
 
   const interfaces = new Map<string, InterfaceEntry>();
-  traverse(ast, scopeManager, () => {
+  traverse(code, ast, scopeManager, () => {
     return {
       InterfaceDeclaration(node) {
         // the granular flow-types are a generated artefact that we don't have access to
@@ -102,10 +101,11 @@ function getInterfaces(): $ReadOnlyMap<
 
 const typesThatShouldBeSkipped = new Set([
   // These types have a special union type declared to allow consumers to refine on `.computed`
-  'ClassProperty',
+  'PropertyDefinition',
   'MethodDefinition',
   'MemberExpression',
-  'OptionalMemberExpression',
+  'Property',
+  'BinaryExpression',
 ]);
 const propertiesThatShouldBeSkipped = new Map([
   [

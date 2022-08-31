@@ -29,12 +29,13 @@ class GCCell;
 /// methods to "mark" (really, to invoke a GC callback on JS values in
 /// the block) and (optionally) finalize the cell.
 struct VTable {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   class HeapSnapshotMetadata final {
    private:
-    using NameCallback = std::string(GCCell *, GC *);
-    using AddEdgesCallback = void(GCCell *, GC *, HeapSnapshot &);
-    using AddNodesCallback = void(GCCell *, GC *, HeapSnapshot &);
-    using AddLocationsCallback = void(GCCell *, GC *, HeapSnapshot &);
+    using NameCallback = std::string(GCCell *, GC &);
+    using AddEdgesCallback = void(GCCell *, GC &, HeapSnapshot &);
+    using AddNodesCallback = void(GCCell *, GC &, HeapSnapshot &);
+    using AddLocationsCallback = void(GCCell *, GC &, HeapSnapshot &);
 
    public:
     /// Construct a HeapSnapshotMetadata, that is used by the GC to decide how
@@ -67,12 +68,12 @@ struct VTable {
     HeapSnapshot::NodeType nodeType() const {
       return nodeType_;
     }
-    std::string nameForNode(GCCell *cell, GC *gc) const;
+    std::string nameForNode(GCCell *cell, GC &gc) const;
     /// Get the default name for the node, without any custom behavior.
     std::string defaultNameForNode(GCCell *cell) const;
-    void addEdges(GCCell *cell, GC *gc, HeapSnapshot &snap) const;
-    void addNodes(GCCell *cell, GC *gc, HeapSnapshot &snap) const;
-    void addLocations(GCCell *cell, GC *gc, HeapSnapshot &snap) const;
+    void addEdges(GCCell *cell, GC &gc, HeapSnapshot &snap) const;
+    void addNodes(GCCell *cell, GC &gc, HeapSnapshot &snap) const;
+    void addLocations(GCCell *cell, GC &gc, HeapSnapshot &snap) const;
 
    private:
     const HeapSnapshot::NodeType nodeType_;
@@ -81,6 +82,7 @@ struct VTable {
     AddNodesCallback *const addNodes_;
     AddLocationsCallback *const addLocations_;
   };
+#endif // !defined(HERMES_MEMORY_INSTRUMENTATION)
 
   // Value is 64 bits to make sure it can be used as a pointer in both 32 and
   // 64-bit builds.
@@ -108,7 +110,7 @@ struct VTable {
   /// allocations or access any garbage-collectable objects.  Unless an
   /// operation is documented to be safe to call from a finalizer, it probably
   /// isn't.
-  using FinalizeCallback = void(GCCell *, GC *gc);
+  using FinalizeCallback = void(GCCell *, GC &gc);
   FinalizeCallback *const finalize_;
   /// Call GC functions on weak-reference-holding objects. In a concurrent GC,
   /// guaranteed to be called while the weak ref mutex is held.
@@ -123,12 +125,18 @@ struct VTable {
   using TrimSizeCallback = gcheapsize_t(const GCCell *);
   TrimSizeCallback *const trimSize_;
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   /// Any metadata associated with heap snapshots.
   const HeapSnapshotMetadata snapshotMetaData;
+#endif
 
   /// Static array storing the VTable corresponding to each CellKind. This is
   /// initialized by buildMetadataTable.
   static std::array<const VTable *, kNumCellKinds> vtableArray;
+
+  static const VTable *getVTable(CellKind c) {
+    return vtableArray[static_cast<size_t>(c)];
+  }
 
   constexpr explicit VTable(
       CellKind kind,
@@ -136,34 +144,40 @@ struct VTable {
       FinalizeCallback *finalize = nullptr,
       MarkWeakCallback *markWeak = nullptr,
       MallocSizeCallback *mallocSize = nullptr,
-      TrimSizeCallback *trimSize = nullptr,
+      TrimSizeCallback *trimSize = nullptr
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+      ,
       HeapSnapshotMetadata snapshotMetaData =
-          HeapSnapshotMetadata{
-              HeapSnapshot::NodeType::Object,
-              nullptr,
-              nullptr,
-              nullptr,
-              nullptr})
+          HeapSnapshotMetadata {
+            HeapSnapshot::NodeType::Object, nullptr, nullptr, nullptr, nullptr
+          }
+#endif
+      )
       : kind(kind),
         size(heapAlignSize(size)),
         finalize_(finalize),
         markWeak_(markWeak),
         mallocSize_(mallocSize),
-        trimSize_(trimSize),
-        snapshotMetaData(snapshotMetaData) {}
+        trimSize_(trimSize)
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+        ,
+        snapshotMetaData(snapshotMetaData)
+#endif
+  {
+  }
 
   bool isVariableSize() const {
     return size == 0;
   }
 
-  void finalizeIfExists(GCCell *cell, GC *gc) const {
+  void finalizeIfExists(GCCell *cell, GC &gc) const {
     assert(isValid());
     if (finalize_) {
       finalize_(cell, gc);
     }
   }
 
-  void finalize(GCCell *cell, GC *gc) const {
+  void finalize(GCCell *cell, GC &gc) const {
     assert(isValid());
     assert(
         finalize_ &&

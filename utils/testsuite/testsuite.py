@@ -8,6 +8,7 @@ import argparse
 import enum
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,32 +16,32 @@ import textwrap
 import time
 from collections import namedtuple
 from multiprocessing import Pool, Value
-from os.path import basename, isdir, isfile, join, splitext
+from os import path
 
 
 try:
     import testsuite.esprima_test_runner as esprima
     from testsuite.testsuite_skiplist import (
-        SKIP_LIST,
         HANDLESAN_SKIP_LIST,
+        INTL_TESTS,
         LAZY_SKIP_LIST,
         PERMANENT_SKIP_LIST,
-        UNSUPPORTED_FEATURES,
         PERMANENT_UNSUPPORTED_FEATURES,
-        INTL_TESTS,
+        SKIP_LIST,
+        UNSUPPORTED_FEATURES,
     )
 except ImportError:
     import esprima_test_runner as esprima
 
     # Hacky way to handle non-buck builds that call the file immediately.
     from testsuite_skiplist import (
-        SKIP_LIST,
         HANDLESAN_SKIP_LIST,
+        INTL_TESTS,
         LAZY_SKIP_LIST,
         PERMANENT_SKIP_LIST,
-        UNSUPPORTED_FEATURES,
         PERMANENT_UNSUPPORTED_FEATURES,
-        INTL_TESTS,
+        SKIP_LIST,
+        UNSUPPORTED_FEATURES,
     )
 
 
@@ -275,11 +276,11 @@ def generateSource(content, strict, suite, flags):
             if match:
                 includes.append(match.group(1))
             for i in includes:
-                filepath = join(suite, "harness", i)
+                filepath = path.join(suite, "harness", i)
                 with open(filepath, "rb") as f:
                     source += f.read().decode("utf-8") + "\n"
         if "mjsunit" in suite:
-            filepath = join(suite, "mjsunit.js")
+            filepath = path.join(suite, "mjsunit.js")
             with open(filepath, "rb") as f:
                 source += f.read().decode("utf-8") + "\n"
 
@@ -362,6 +363,7 @@ def showStatus(filename):
 
 es6_args = ["-Xes6-promise", "-Xes6-proxy"]
 extra_run_args = ["-Xhermes-internal-test-methods"]
+useMicrotasksFlag = ["-Xmicrotask-queue"]
 
 extra_compile_flags = ["-fno-static-builtins"]
 
@@ -494,12 +496,21 @@ ESPRIMA_TEST_STATUS_MAP = {
 
 
 def runTest(
-    filename, test_skiplist, keep_tmp, binary_path, hvm, esprima_runner, lazy, test_intl
+    filename,
+    tests_home,
+    test_skiplist,
+    generate_only,
+    workdir,
+    binary_path,
+    hvm,
+    esprima_runner,
+    lazy,
+    test_intl,
 ):
     """
     Runs a single js test pointed by filename
     """
-    baseFileName = basename(filename)
+    baseFileName = path.basename(filename)
     suite = getSuite(filename)
     skiplisted = fileInSkiplist(filename, SKIP_LIST + PERMANENT_SKIP_LIST)
 
@@ -529,7 +540,7 @@ def runTest(
     showStatus(filename)
 
     if "esprima" in suite or "flow" in suite:
-        hermes_path = os.path.join(binary_path, "hermes")
+        hermes_path = path.join(binary_path, "hermes")
         test_res = esprima_runner.run_test(suite, filename, hermes_path)
         if test_res[0] == esprima.TestStatus.TEST_PASSED and skiplisted:
             printVerbose("FAIL: A skiplisted test completed successfully")
@@ -545,7 +556,36 @@ def runTest(
     shouldRun, skipReason, permanent, flags, strictModes = testShouldRun(
         filename, content
     )
-    if not shouldRun:
+
+    js_sources = []
+    for strictEnabled in strictModes:
+        tempdir = path.join(workdir, path.dirname(path.relpath(filename, tests_home)))
+        os.makedirs(tempdir, exist_ok=True)
+
+        js_source = path.join(
+            tempdir,
+            "{basename}{strict}{flags}.js".format(
+                basename=path.splitext(baseFileName)[0],
+                strict=".strict" if strictEnabled else "",
+                flags=("." + ("_".join(sorted(flags)))) if flags else "",
+            ),
+        )
+
+        source, includes = generateSource(content, strictEnabled, suite, flags)
+        source = source.encode("utf-8")
+        if "testIntl.js" in includes:
+            # No support for multiple Intl constructors in that file.
+            return (TestFlag.TEST_SKIPPED, "", 0)
+
+        with open(js_source, "wb") as f:
+            f.write(source)
+            js_sources.append(js_source)
+
+        printVerbose("\n==============")
+        printVerbose("Strict Mode: {}".format(str(strictEnabled)))
+        printVerbose("Temp js file name: " + js_source)
+
+    if generate_only or not shouldRun:
         skippedType = (
             TestFlag.TEST_SKIPPED
             if not permanent
@@ -572,33 +612,14 @@ def runTest(
     # Report the max duration of any successful run for the variants of a test.
     # Unsuccessful runs are ignored for simplicity.
     max_duration = 0
-    for strictEnabled in strictModes:
-        temp = tempfile.NamedTemporaryFile(
-            prefix=splitext(baseFileName)[0] + "-", suffix=".js", delete=False
-        )
-        source, includes = generateSource(content, strictEnabled, suite, flags)
-        source = source.encode("utf-8")
-        if "testIntl.js" in includes:
-            # No support for multiple Intl constructors in that file.
-            return (TestFlag.TEST_SKIPPED, "", 0)
-        temp.write(source)
-        temp.close()
-
-        printVerbose("\n==============")
-        printVerbose("Strict Mode: {}".format(str(strictEnabled)))
-        printVerbose("Temp js file name: " + temp.name)
-
+    for js_source in js_sources:
         if lazy:
             run_vm = True
-            fileToRun = temp.name
+            fileToRun = js_source
             start = time.time()
         else:
             errString = ""
-            binfile = tempfile.NamedTemporaryFile(
-                prefix=splitext(baseFileName)[0] + "-", suffix=".hbc", delete=False
-            )
-            binfile.close()
-            fileToRun = binfile.name
+            fileToRun = js_source + ".hbc"
             for optEnabled in (True, False):
                 printVerbose("\nRunning with Hermes...")
                 printVerbose("Optimization: {}".format(str(optEnabled)))
@@ -607,14 +628,14 @@ def runTest(
 
                 # Compile to bytecode with Hermes.
                 try:
-                    printVerbose("Compiling: {} to {}".format(filename, binfile.name))
+                    printVerbose(f"Compiling: {js_source} to {fileToRun}")
                     args = [
-                        os.path.join(binary_path, "hermesc"),
-                        temp.name,
+                        path.join(binary_path, "hermesc"),
+                        js_source,
                         "-hermes-parser",
                         "-emit-binary",
                         "-out",
-                        binfile.name,
+                        fileToRun,
                     ] + extra_compile_flags
                     if optEnabled:
                         args.append("-O")
@@ -675,9 +696,9 @@ def runTest(
                 printVerbose("Running with HBC VM: {}".format(filename))
                 # Run the hermes vm.
                 if lazy:
-                    binary = os.path.join(binary_path, "hermes")
+                    binary = path.join(binary_path, "hermes")
                 else:
-                    binary = os.path.join(binary_path, hvm)
+                    binary = path.join(binary_path, hvm)
                 disableHandleSanFlag = (
                     ["-gc-sanitize-handles=0"]
                     if fileInSkiplist(filename, HANDLESAN_SKIP_LIST)
@@ -688,6 +709,7 @@ def runTest(
                     + es6_args
                     + extra_run_args
                     + disableHandleSanFlag
+                    + useMicrotasksFlag
                 )
                 if lazy:
                     args.append("-lazy")
@@ -743,11 +765,6 @@ def runTest(
                     else (TestFlag.EXECUTE_TIMEOUT, "", 0)
                 )
         max_duration = max(max_duration, time.time() - start)
-
-    if not keep_tmp:
-        os.unlink(temp.name)
-        if not lazy:
-            os.unlink(binfile.name)
 
     if skiplisted:
         # If the test was skiplisted, but it passed successfully, consider that
@@ -843,6 +860,13 @@ def get_arg_parser():
         help="Chunk ID (0, 1, 2), to only process 1/3 of all tests",
     )
     parser.add_argument(
+        "--nuke-workdir",
+        dest="nuke_workdir",
+        default=False,
+        action="store_true",
+        help="Removes the work directory specified with --workdir if it exists.",
+    )
+    parser.add_argument(
         "-f",
         "--fast-fail",
         dest="fail_fast",
@@ -850,11 +874,14 @@ def get_arg_parser():
         help="Exit script immediately when a test failed.",
     )
     parser.add_argument(
-        "-k",
-        "--keep-tmp",
-        dest="keep_tmp",
-        action="store_true",
-        help="Keep temporary files of successful tests.",
+        "-wd",
+        "--workdir",
+        dest="workdir",
+        default=None,
+        help=(
+            "Specifies work directory where the test files will be generated. "
+            "The work directory must not exist, unless -f is specified."
+        ),
     )
     parser.add_argument(
         "--test-skiplist",
@@ -934,7 +961,53 @@ def get_arg_parser():
         action="store_true",
         help="Run supported Intl tests.",
     )
+    parser.add_argument(
+        "--generate-test-only",
+        "-g",
+        dest="generate_test_only",
+        default=False,
+        action="store_true",
+        help="Generate/pre-process test sources only",
+    )
     return parser
+
+
+class _PersistentTemporaryDirectory:
+    """Creates a work directory that's not automativally deleted.
+
+    This is a drop in replacement for tempfile.TemporaryDirectory that does not
+    clean itself up automatically. Used when the user specifies the work
+    directory, which must not exist.
+    """
+
+    def __init__(self, workdir):
+        try:
+            os.makedirs(workdir, exist_ok=False)
+        except FileExistsError:
+            raise FileExistsError(
+                "Work directory {} exists. Please remove it and try again".format(
+                    workdir
+                )
+            )
+        self.name = workdir
+
+    def __enter__(self):
+        return self.name
+
+    def __exit__(self, ex_type, ex_value, ex_traceback):
+        # re-raise exception.
+        return ex_value is None
+
+
+def test_workdir(workdir, nuke_workdir, **kwargs):
+    if nuke_workdir and os.path.exists(workdir):
+        shutil.rmtree(workdir)
+
+    return (
+        tempfile.TemporaryDirectory(**kwargs)
+        if not workdir
+        else (_PersistentTemporaryDirectory(workdir))
+    )
 
 
 def run(
@@ -949,7 +1022,9 @@ def run(
     source,
     test_skiplist,
     num_slowest_tests,
-    keep_tmp,
+    workdir,
+    nuke_workdir,
+    generate_test_only,
     show_all,
     lazy,
     test_intl,
@@ -960,15 +1035,18 @@ def run(
     verbose = is_verbose
 
     onlyfiles = []
-    for path in paths:
-        if isdir(path):
-            for root, _dirnames, filenames in os.walk(path):
+    tests_home = None
+    for p in paths:
+        if path.isdir(p):
+            for root, _dirnames, filenames in os.walk(p):
                 for filename in filenames:
-                    onlyfiles.append(os.path.join(root, filename))
-        elif isfile(path):
-            onlyfiles.append(path)
+                    onlyfiles.append(path.join(root, filename))
+            tests_home = p
+        elif path.isfile(p):
+            tests_home = path.dirname(p)
+            onlyfiles.append(p)
         else:
-            print("Invalid path: " + path)
+            print("Invalid path: " + p)
             sys.exit(1)
 
     def isTest(f):
@@ -1013,25 +1091,37 @@ def run(
             print("Invalid chunk ID")
             sys.exit(1)
 
-    if not os.path.isfile(join(binary_path, "hermes")):
-        print("{} not found.".format(join(binary_path, "hermes")))
+    if not path.isfile(path.join(binary_path, "hermes")):
+        print("{} not found.".format(path.join(binary_path, "hermes")))
         sys.exit(1)
 
-    if not os.path.isfile(join(binary_path, hvm)):
-        print("{} not found.".format(join(binary_path, hvm)))
+    if not path.isfile(path.join(binary_path, hvm)):
+        print("{} not found.".format(path.join(binary_path, hvm)))
         sys.exit(1)
 
     esprima_runner = esprima.EsprimaTestRunner(verbose)
 
-    calls = makeCalls(
-        (test_skiplist, keep_tmp, binary_path, hvm, esprima_runner, lazy, test_intl),
-        onlyfiles,
-        rangeLeft,
-        rangeRight,
-    )
-    results, resultsHist, slowest_tests = testLoop(
-        calls, jobs, fail_fast, num_slowest_tests
-    )
+    with test_workdir(workdir, nuke_workdir) as workdir:
+        calls = makeCalls(
+            (
+                tests_home,
+                test_skiplist,
+                generate_test_only,
+                workdir,
+                binary_path,
+                hvm,
+                esprima_runner,
+                lazy,
+                test_intl,
+            ),
+            onlyfiles,
+            rangeLeft,
+            rangeRight,
+        )
+
+        results, resultsHist, slowest_tests = testLoop(
+            calls, jobs, fail_fast, num_slowest_tests
+        )
 
     # Sort the results for easier reading of failed tests.
     results.sort(key=lambda f: f[1][0].value)

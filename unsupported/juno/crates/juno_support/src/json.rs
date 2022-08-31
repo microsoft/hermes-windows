@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::{
-    fmt,
-    io::{self, BufWriter, Write},
-};
+use std::fmt;
+use std::io;
+use std::io::BufWriter;
+use std::io::Write;
 
 /// Whether to pretty-print the JSON.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -264,7 +264,6 @@ impl<W: Write> JSONEmitter<W> {
         }
         out!(self, "\"");
     }
-
 
     /// Signal that we're about to emit a dict or array value and handle
     /// any necessary `,` and newlines.

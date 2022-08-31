@@ -9,7 +9,6 @@
 
 #include "llvh/Support/SaveAndRestore.h"
 
-using llvh::cast;
 using llvh::dyn_cast;
 using llvh::isa;
 
@@ -1360,9 +1359,10 @@ JSParserImpl::parseFunctionOrGroupTypeAnnotationFlow() {
   ESTree::Node *thisConstraint = nullptr;
 
   if (check(TokenKind::rw_this)) {
-    isFunction = true;
-    SMLoc thisStart = advance(JSLexer::GrammarContext::Type).Start;
-    if (checkAndEat(TokenKind::colon, JSLexer::GrammarContext::Type)) {
+    OptValue<TokenKind> optNext = lexer_.lookahead1(None);
+    if (optNext.hasValue() && *optNext == TokenKind::colon) {
+      SMLoc thisStart = advance(JSLexer::GrammarContext::Type).Start;
+      advance(JSLexer::GrammarContext::Type);
       auto optType = parseTypeAnnotationFlow();
       if (!optType)
         return None;
@@ -1373,25 +1373,10 @@ JSParserImpl::parseFunctionOrGroupTypeAnnotationFlow() {
           getPrevTokenEndLoc(),
           new (context_) ESTree::FunctionTypeParamNode(
               /* name */ nullptr, typeAnnotation, /* optional */ false));
-    } else {
-      params.push_back(*setLocation(
-          thisStart,
-          getPrevTokenEndLoc(),
-          new (context_) ESTree::FunctionTypeParamNode(
-              nullptr,
-              setLocation(
-                  thisStart,
-                  getPrevTokenEndLoc(),
-                  new (context_) ESTree::GenericTypeAnnotationNode(
-                      setLocation(
-                          thisStart,
-                          getPrevTokenEndLoc(),
-                          new (context_) ESTree::IdentifierNode(
-                              thisIdent_, nullptr, false)),
-                      {})),
-              false)));
+      checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type);
+    } else if (optNext.hasValue() && *optNext == TokenKind::question) {
+      error(tok_->getSourceRange(), "'this' constraint may not be optional");
     }
-    checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type);
   }
 
   if (allowAnonFunctionType_ &&
@@ -2205,8 +2190,10 @@ JSParserImpl::parseFunctionTypeAnnotationParamsFlow(
   thisConstraint = nullptr;
 
   if (check(TokenKind::rw_this)) {
-    SMLoc thisStart = advance(JSLexer::GrammarContext::Type).Start;
-    if (checkAndEat(TokenKind::colon, JSLexer::GrammarContext::Type)) {
+    OptValue<TokenKind> optNext = lexer_.lookahead1(None);
+    if (optNext.hasValue() && *optNext == TokenKind::colon) {
+      SMLoc thisStart = advance(JSLexer::GrammarContext::Type).Start;
+      advance(JSLexer::GrammarContext::Type);
       auto optType = parseTypeAnnotationFlow();
       if (!optType)
         return None;
@@ -2217,25 +2204,10 @@ JSParserImpl::parseFunctionTypeAnnotationParamsFlow(
           getPrevTokenEndLoc(),
           new (context_) ESTree::FunctionTypeParamNode(
               /* name */ nullptr, typeAnnotation, /* optional */ false));
-    } else {
-      params.push_back(*setLocation(
-          thisStart,
-          getPrevTokenEndLoc(),
-          new (context_) ESTree::FunctionTypeParamNode(
-              nullptr,
-              setLocation(
-                  thisStart,
-                  getPrevTokenEndLoc(),
-                  new (context_) ESTree::GenericTypeAnnotationNode(
-                      setLocation(
-                          thisStart,
-                          getPrevTokenEndLoc(),
-                          new (context_) ESTree::IdentifierNode(
-                              thisIdent_, nullptr, false)),
-                      {})),
-              false)));
+      checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type);
+    } else if (optNext.hasValue() && *optNext == TokenKind::question) {
+      error(tok_->getSourceRange(), "'this' constraint may not be optional");
     }
-    checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type);
   }
 
   while (!check(TokenKind::r_paren)) {
@@ -2275,9 +2247,12 @@ JSParserImpl::parseFunctionTypeAnnotationParamFlow() {
   SMLoc start = tok_->getStartLoc();
 
   if (check(TokenKind::rw_this)) {
-    error(
-        tok_->getSourceRange(),
-        "'this' constraint must be the first parameter");
+    OptValue<TokenKind> optNext = lexer_.lookahead1(None);
+    if (optNext.hasValue() && *optNext == TokenKind::colon) {
+      error(
+          tok_->getSourceRange(),
+          "'this' constraint must be the first parameter");
+    }
   }
 
   auto optLeft = parseTypeAnnotationFlow();
@@ -2450,8 +2425,7 @@ Optional<ESTree::Node *> JSParserImpl::parseEnumDeclarationFlow() {
   assert(check(TokenKind::rw_enum));
   SMLoc start = advance().Start;
 
-  auto optIdent = parseBindingIdentifier(Param{});
-  if (!optIdent) {
+  if (!check(TokenKind::identifier)) {
     errorExpected(
         TokenKind::identifier,
         "in enum declaration",
@@ -2459,7 +2433,12 @@ Optional<ESTree::Node *> JSParserImpl::parseEnumDeclarationFlow() {
         start);
     return None;
   }
-  ESTree::Node *id = *optIdent;
+  ESTree::Node *id = setLocation(
+      tok_,
+      tok_,
+      new (context_)
+          ESTree::IdentifierNode(tok_->getIdentifier(), nullptr, false));
+  advance(JSLexer::GrammarContext::Type);
 
   OptValue<EnumKind> optKind = llvh::None;
   Optional<SMLoc> explicitTypeStart = None;

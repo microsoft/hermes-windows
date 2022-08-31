@@ -61,6 +61,14 @@ Value *ESTreeIRGen::genExpression(ESTree::Node *expr, Identifier nameHint) {
     return Builder.getLiteralNumber(Lit->_value);
   }
 
+  // Handle BigInt Literals.
+  // https://262.ecma-international.org/#sec-ecmascript-language-types-bigint-type
+  if (auto *Lit = llvh::dyn_cast<ESTree::BigIntLiteralNode>(expr)) {
+    LLVM_DEBUG(
+        dbgs() << "Loading BitInt Literal \"" << Lit->_bigint->str() << "\"\n");
+    return Builder.getLiteralBigInt(Lit->_bigint);
+  }
+
   // Handle the assignment expression.
   if (auto Assign = llvh::dyn_cast<ESTree::AssignmentExpressionNode>(expr)) {
     return genAssignmentExpr(Assign);
@@ -339,11 +347,16 @@ Value *ESTreeIRGen::genArrayFromElements(ESTree::NodeList &list) {
         "variable length arrays must allocate their own arrays");
     allocArrayInst = Builder.createAllocArrayInst(elements, list.size());
   }
-  if (count > 0 && llvh::isa<ESTree::EmptyNode>(&list.back())) {
+  if (!list.empty() && llvh::isa<ESTree::EmptyNode>(&list.back())) {
     // Last element is an elision, VM cannot derive the length properly.
     // We have to explicitly set it.
+    Value *newLength;
+    if (variableLength)
+      newLength = Builder.createLoadStackInst(nextIndex);
+    else
+      newLength = Builder.getLiteralNumber(count);
     Builder.createStorePropertyInst(
-        Builder.getLiteralNumber(count), allocArrayInst, StringRef("length"));
+        newLength, allocArrayInst, StringRef("length"));
   }
   return allocArrayInst;
 }
@@ -1444,30 +1457,24 @@ Value *ESTreeIRGen::genUpdateExpr(ESTree::UpdateExpressionNode *updateExpr) {
   LLVM_DEBUG(dbgs() << "IRGen update expression.\n");
   bool isPrefix = updateExpr->_prefix;
 
-  // The operands ++ and -- are equivalent to adding or subtracting the
-  // literal 1.
-  // See section 12.4.4.1.
-  BinaryOperatorInst::OpKind opKind;
+  UnaryOperatorInst::OpKind opKind;
   if (updateExpr->_operator->str() == "++") {
-    opKind = BinaryOperatorInst::OpKind::AddKind;
+    opKind = UnaryOperatorInst::OpKind::IncKind;
   } else if (updateExpr->_operator->str() == "--") {
-    opKind = BinaryOperatorInst::OpKind::SubtractKind;
+    opKind = UnaryOperatorInst::OpKind::DecKind;
   } else {
     llvm_unreachable("Invalid update operator");
   }
 
   LReference lref = createLRef(updateExpr->_argument, false);
 
-  // Load the original value.
-  Value *original = lref.emitLoad();
+  // Load the original value. Postfix updates need to convert it toNumeric
+  // before Inc/Dec to ensure the updateExpr has the proper result value.
+  Value *original =
+      isPrefix ? lref.emitLoad() : Builder.createAsNumericInst(lref.emitLoad());
 
-  // Convert the original value to number. Even on suffix operators we return
-  // the converted value.
-  original = Builder.createAsNumberInst(original);
-
-  // Create the +1 or -1.
-  Value *result = Builder.createBinaryOperatorInst(
-      original, Builder.getLiteralNumber(1), opKind);
+  // Create the inc or dec.
+  Value *result = Builder.createUnaryOperatorInst(original, opKind);
 
   // Store the result.
   lref.emitStore(result);

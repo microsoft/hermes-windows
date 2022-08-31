@@ -23,6 +23,7 @@
 namespace hermes {
 namespace vm {
 
+class BigIntPrimitive;
 class StringPrimitive;
 class GCCell;
 class Runtime;
@@ -49,6 +50,7 @@ class SmallHermesValueAdaptor : protected HermesValue {
 
   using HermesValue::getBool;
   using HermesValue::getSymbol;
+  using HermesValue::isBigInt;
   using HermesValue::isBool;
   using HermesValue::isEmpty;
   using HermesValue::isNull;
@@ -59,14 +61,14 @@ class SmallHermesValueAdaptor : protected HermesValue {
   using HermesValue::isSymbol;
   using HermesValue::isUndefined;
 
-  HermesValue toHV(PointerBase *) const {
+  HermesValue toHV(PointerBase &) const {
     return *this;
   }
-  HermesValue unboxToHV(PointerBase *) const {
+  HermesValue unboxToHV(PointerBase &) const {
     return *this;
   }
 
-  GCCell *getPointer(PointerBase *) const {
+  GCCell *getPointer(PointerBase &) const {
     return static_cast<GCCell *>(HermesValue::getPointer());
   }
   CompressedPointer getPointer() const {
@@ -76,22 +78,25 @@ class SmallHermesValueAdaptor : protected HermesValue {
     uintptr_t rawPtr = reinterpret_cast<uintptr_t>(HermesValue::getPointer());
     return CompressedPointer::fromRaw(rawPtr);
   }
-  GCCell *getObject(PointerBase *) const {
+  GCCell *getObject(PointerBase &) const {
     return static_cast<GCCell *>(HermesValue::getObject());
   }
-  StringPrimitive *getString(PointerBase *) const {
+  StringPrimitive *getString(PointerBase &) const {
     return HermesValue::getString();
   }
-  double getNumber(PointerBase *) const {
+  BigIntPrimitive *getBigInt(PointerBase &) const {
+    return HermesValue::getBigInt();
+  }
+  double getNumber(PointerBase &) const {
     return HermesValue::getNumber();
   }
   uint32_t getRelocationID() const {
     return reinterpret_cast<uintptr_t>(HermesValue::getPointer());
   }
 
-  inline void setInGC(SmallHermesValueAdaptor hv, GC *gc);
+  inline void setInGC(SmallHermesValueAdaptor hv, GC &gc);
 
-  SmallHermesValueAdaptor updatePointer(GCCell *ptr, PointerBase *) const {
+  SmallHermesValueAdaptor updatePointer(GCCell *ptr, PointerBase &) const {
     return SmallHermesValueAdaptor{HermesValue::updatePointer(ptr)};
   }
   SmallHermesValueAdaptor updatePointer(CompressedPointer ptr) const {
@@ -105,27 +110,32 @@ class SmallHermesValueAdaptor : protected HermesValue {
     HermesValue::unsafeUpdatePointer(
         reinterpret_cast<void *>(static_cast<uintptr_t>(id)));
   }
-  void unsafeUpdatePointer(GCCell *ptr, PointerBase *) {
+  void unsafeUpdatePointer(GCCell *ptr, PointerBase &) {
     HermesValue::unsafeUpdatePointer(ptr);
   }
 
   static constexpr SmallHermesValueAdaptor
-  encodeHermesValue(HermesValue hv, GC *, PointerBase *) {
+  encodeHermesValue(HermesValue hv, GC &, PointerBase &) {
     return SmallHermesValueAdaptor{hv};
   }
   static constexpr SmallHermesValueAdaptor encodeHermesValue(
       HermesValue hv,
-      Runtime *) {
+      Runtime &) {
     return SmallHermesValueAdaptor{hv};
   }
+  static SmallHermesValueAdaptor encodeBigIntValue(
+      BigIntPrimitive *ptr,
+      PointerBase *) {
+    return SmallHermesValueAdaptor{HermesValue::encodeBigIntValue(ptr)};
+  }
   static SmallHermesValueAdaptor
-  encodeNumberValue(double d, GC *, PointerBase *) {
+  encodeNumberValue(double d, GC &, PointerBase &) {
     return SmallHermesValueAdaptor{HermesValue::encodeNumberValue(d)};
   }
-  static SmallHermesValueAdaptor encodeNumberValue(double d, Runtime *) {
+  static SmallHermesValueAdaptor encodeNumberValue(double d, Runtime &) {
     return SmallHermesValueAdaptor{HermesValue::encodeNumberValue(d)};
   }
-  static SmallHermesValueAdaptor encodeObjectValue(GCCell *ptr, PointerBase *) {
+  static SmallHermesValueAdaptor encodeObjectValue(GCCell *ptr, PointerBase &) {
     return SmallHermesValueAdaptor{HermesValue::encodeObjectValue(ptr)};
   }
   static SmallHermesValueAdaptor encodeObjectValue(CompressedPointer cp) {
@@ -134,7 +144,7 @@ class SmallHermesValueAdaptor : protected HermesValue {
   }
   static SmallHermesValueAdaptor encodeStringValue(
       StringPrimitive *ptr,
-      PointerBase *) {
+      PointerBase &) {
     return SmallHermesValueAdaptor{HermesValue::encodeStringValue(ptr)};
   }
   static SmallHermesValueAdaptor encodeSymbolValue(SymbolID s) {
@@ -178,6 +188,7 @@ class HermesValue32 {
   /// types are distinguished using an additional bit found in the "ETag".
   enum class Tag : uint8_t {
     Object,
+    BigInt,
     String,
     BoxedDouble,
     SmallInt,
@@ -206,6 +217,8 @@ class HermesValue32 {
   enum class ETag : uint8_t {
     Object1 = static_cast<uint8_t>(Tag::Object),
     Object2 = static_cast<uint8_t>(Tag::Object) + kETagOffset,
+    BigInt1 = static_cast<uint8_t>(Tag::BigInt),
+    BigInt2 = static_cast<uint8_t>(Tag::BigInt) + kETagOffset,
     String1 = static_cast<uint8_t>(Tag::String),
     String2 = static_cast<uint8_t>(Tag::String) + kETagOffset,
     BoxedDouble1 = static_cast<uint8_t>(Tag::BoxedDouble),
@@ -277,8 +290,8 @@ class HermesValue32 {
   constexpr explicit HermesValue32(RawType raw) : raw_(raw) {}
 
   static HermesValue32
-  encodePointerImpl(GCCell *ptr, Tag tag, PointerBase *pb) {
-    return encodePointerImpl(CompressedPointer::encode(ptr, pb), tag);
+  encodePointerImpl(GCCell *ptr, Tag tag, PointerBase &pb) {
+    return encodePointerImpl(CompressedPointer::encodeNonNull(ptr, pb), tag);
   }
 
   static HermesValue32 encodePointerImpl(CompressedPointer ptr, Tag tag) {
@@ -287,9 +300,21 @@ class HermesValue32 {
     return fromRaw(p | static_cast<RawType>(tag));
   }
 
-  static constexpr SmiType doubleToSmi(double d)
+  static SmiType truncateDouble(double d)
       LLVM_NO_SANITIZE("float-cast-overflow") {
     return d;
+  }
+
+  /// Truncate \p d to an integer that fits in kNumSmiBits.
+  static SmiType doubleToSmi(double d) {
+    // Use a generic lambda here so the inactive case of the if constexpr does
+    // not need to compile.
+    return [](auto d) {
+      if constexpr (kNumSmiBits <= 32)
+        return llvh::SignExtend32<kNumSmiBits>(truncateDouble(d));
+      else
+        return llvh::SignExtend64<kNumSmiBits>(truncateDouble(d));
+    }(d);
   }
 
  public:
@@ -309,6 +334,9 @@ class HermesValue32 {
   }
   bool isObject() const {
     return getTag() == Tag::Object;
+  }
+  bool isBigInt() const {
+    return getTag() == Tag::BigInt;
   }
   bool isString() const {
     return getTag() == Tag::String;
@@ -335,19 +363,19 @@ class HermesValue32 {
 
   /// Convert this to a full HermesValue, but do not unbox a BoxedDouble.
   /// This is only intended for diagnostics or for code reuse in the GC.
-  inline HermesValue toHV(PointerBase *pb) const;
+  inline HermesValue toHV(PointerBase &pb) const;
 
   /// Convert this to a full HermesValue, and unbox it if it is currently boxed.
   /// This is more commonly useful, and is essentially the reverse process of
   /// encodeHermesValue.
-  inline HermesValue unboxToHV(PointerBase *pb) const;
+  inline HermesValue unboxToHV(PointerBase &pb) const;
 
   /// Methods to access pointer values.
-  GCCell *getPointer(PointerBase *pb) const {
+  GCCell *getPointer(PointerBase &pb) const {
     assert(isPointer());
-    return getPointer().get(pb);
+    return getPointer().getNonNull(pb);
   }
-  GCCell *getObject(PointerBase *pb) const {
+  GCCell *getObject(PointerBase &pb) const {
     assert(isObject());
     // Since object pointers are the most common type, we have them as the
     // zero-tag and can decode them without needing to remove the tag.
@@ -357,8 +385,9 @@ class HermesValue32 {
     return CompressedPointer::fromRaw(raw_).get(pb);
   }
 
-  inline StringPrimitive *getString(PointerBase *pb) const;
-  inline double getNumber(PointerBase *pb) const;
+  inline BigIntPrimitive *getBigInt(PointerBase &pb) const;
+  inline StringPrimitive *getString(PointerBase &pb) const;
+  inline double getNumber(PointerBase &pb) const;
 
   CompressedPointer getPointer() const {
     assert(isPointer());
@@ -375,26 +404,17 @@ class HermesValue32 {
     return getETagValue();
   }
 
-  inline void setInGC(HermesValue32 hv, GC *gc);
+  inline void setInGC(HermesValue32 hv, GC &gc);
 
-  HermesValue32 updatePointer(GCCell *ptr, PointerBase *pb) const {
+  HermesValue32 updatePointer(GCCell *ptr, PointerBase &pb) const {
     return encodePointerImpl(ptr, getTag(), pb);
   }
-  void unsafeUpdatePointer(GCCell *ptr, PointerBase *pb) {
+  void unsafeUpdatePointer(GCCell *ptr, PointerBase &pb) {
     setNoBarrier(encodePointerImpl(ptr, getTag(), pb));
   }
   HermesValue32 updatePointer(CompressedPointer ptr) const {
     assert(isPointer());
     return encodePointerImpl(ptr, getTag());
-  }
-
-  /// Serializer/Deserializer helpers.
-  inline uint32_t getRelocationID() const {
-    assert(isPointer());
-    return getValue();
-  }
-  void unsafeUpdateRelocationID(uint32_t id) {
-    setNoBarrier(fromTagAndValue(getTag(), id));
   }
 
   /// Convert a normal HermesValue to a HermesValue32. If \p hv is a pointer,
@@ -403,21 +423,27 @@ class HermesValue32 {
   /// treat this function as though it may allocate.
   inline static HermesValue32 encodeHermesValue(
       HermesValue hv,
-      Runtime *runtime);
+      Runtime &runtime);
 
   /// Encode a double as a HermesValue32. Small integer values will be stored
   /// inline and doubles will be allocated on the heap. Always treat this
   /// function as though it may allocate.
-  inline static HermesValue32 encodeNumberValue(double d, Runtime *runtime);
+  inline static HermesValue32 encodeNumberValue(double d, Runtime &runtime);
 
-  inline static HermesValue32 encodeObjectValue(GCCell *ptr, PointerBase *pb);
+  inline static HermesValue32 encodeObjectValue(GCCell *ptr, PointerBase &pb);
   static HermesValue32 encodeObjectValue(CompressedPointer cp) {
     return encodePointerImpl(cp, Tag::Object);
   }
 
+  static HermesValue32 encodeBigIntValue(
+      BigIntPrimitive *ptr,
+      PointerBase &pb) {
+    return encodePointerImpl(reinterpret_cast<GCCell *>(ptr), Tag::BigInt, pb);
+  }
+
   static HermesValue32 encodeStringValue(
       StringPrimitive *ptr,
-      PointerBase *pb) {
+      PointerBase &pb) {
     return encodePointerImpl(reinterpret_cast<GCCell *>(ptr), Tag::String, pb);
   }
 

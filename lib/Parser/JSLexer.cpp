@@ -13,8 +13,6 @@
 #include "llvh/ADT/ScopeExit.h"
 #include "llvh/ADT/StringSwitch.h"
 
-using llvh::Twine;
-
 namespace hermes {
 namespace parser {
 
@@ -1463,11 +1461,22 @@ end:
 
     llvh::StringRef raw{rawStart, (size_t)(curCharPtr_ - rawStart)};
     if (ok && !real && (!legacyOctal || raw == "0n") && tmpStorage_ == "n") {
-      // This is a BigInt.
-      rawStorage_.clear();
-      rawStorage_.append(raw);
-      token_.setBigIntLiteral(getStringLiteral(rawStorage_));
-      return;
+      assert(curCharPtr_ > start && "Must consume at least the trailing n.");
+      llvh::ArrayRef<char> digits{start, curCharPtr_ - 1};
+      // Use parseIntWithRadixDigits to validate the bigint literal's digits.
+      // The digits themselves can be ignored, since we're only interested in
+      // whether the string was parsed correctly.
+      if (digits.size() &&
+          parseIntWithRadixDigits</* AllowNumericSeparator */ true>(
+              digits, radix, [](uint8_t) {})) {
+        // This is a BigInt.
+        rawStorage_.clear();
+        rawStorage_.append(raw);
+        token_.setBigIntLiteral(getStringLiteral(rawStorage_));
+        return;
+      }
+
+      // This is a BigInt with invalid digits; fail.
     }
 
     ok = false;

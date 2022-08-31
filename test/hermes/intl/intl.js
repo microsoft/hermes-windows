@@ -19,7 +19,6 @@ function testServiceTypes(service) {
   assert(service !== undefined);
   assert(service.prototype.constructor === service);
   assert(service.__proto__ === Function.prototype);
-  assert(service.prototype[Symbol.toStringTag] === 'Object');
   assert(service.supportedLocalesOf.__proto__ === Function.prototype);
 
   var s = service();
@@ -29,6 +28,9 @@ function testServiceTypes(service) {
   var snew = new service();
   assert(s.constructor === service);
   assert(s.__proto__ === service.prototype);
+
+  // Verify that the type tag is not visible to JS.
+  assert(Object.getOwnPropertySymbols(snew).length === 0);
 }
 
 function testServiceGetterTypes(service, getter) {
@@ -88,7 +90,10 @@ testServiceGetterTypes(Intl.NumberFormat, 'format');
 testServiceMethodTypes(Intl.NumberFormat, 'formatToParts');
 testServiceMethodTypes(Intl.NumberFormat, 'resolvedOptions');
 assert(typeof Intl.NumberFormat(12345.67).format() === 'string');
-testParts(Intl.NumberFormat(12345.67).formatToParts());
+// TODO: Apple Intl currently does not implement NumberFormat.formatToParts.
+if(Intl.NumberFormat.prototype.formatToParts){
+  testParts(Intl.NumberFormat(12345.67).formatToParts());
+}
 
 // Verify the shared logic around style.
 

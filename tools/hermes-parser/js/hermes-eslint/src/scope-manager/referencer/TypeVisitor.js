@@ -17,6 +17,7 @@ import type {
   DeclareFunction,
   DeclareInterface,
   DeclareModule,
+  DeclareModuleExports,
   DeclareOpaqueType,
   DeclareTypeAlias,
   DeclareVariable,
@@ -45,6 +46,7 @@ import {
   TypeParameterDefinition,
   VariableDefinition,
 } from '../definition';
+import type {TypeAnnotationType} from 'hermes-estree';
 
 class TypeVisitor extends Visitor {
   +_referencer: Referencer;
@@ -174,7 +176,17 @@ class TypeVisitor extends Visitor {
 
   DeclareExportDeclaration(node: DeclareExportDeclaration): void {
     if (node.declaration) {
-      this.visit(node.declaration);
+      const declaration = node.declaration;
+      this.visit(declaration);
+
+      // `declare export` variables are to be considered used by default
+      // non-`declare` exported names are handled natively by ESLint's rule
+      // as this is flow-specific syntax, we just handle it here for portability
+      for (const variable of this._referencer.scopeManager.getDeclaredVariables(
+        declaration,
+      )) {
+        variable.eslintUsed = true;
+      }
     } else {
       for (const specifier of node.specifiers) {
         // can only reference values
@@ -182,6 +194,10 @@ class TypeVisitor extends Visitor {
         // also ignore the exported name
       }
     }
+  }
+
+  DeclareModuleExports(node: DeclareModuleExports): void {
+    this.visit(node.typeAnnotation);
   }
 
   DeclareFunction(node: DeclareFunction): void {
@@ -228,6 +244,7 @@ class TypeVisitor extends Visitor {
     const hasTypeScope = this.maybeCreateTypeScope(node);
 
     this.visit(node.typeParameters);
+    this.visit(node.this);
     this.visitArray(node.params);
     this.visit(node.returnType);
     this.visit(node.rest);
@@ -295,8 +312,16 @@ class TypeVisitor extends Visitor {
       currentNode = currentNode.qualification;
     }
 
-    // qualified names can only reference values!
-    this._referencer.currentScope().referenceValue(currentNode);
+    // qualified names *usually* only reference values like
+    //     import * as Foo from 'foo';
+    //     type T = Foo.Bar;
+    // however, it is possible for a module to do something like
+    //     class Class { ... }
+    //     export default { Class }
+    // meaning this is also valid
+    //     import type Foo from 'foo';
+    //     type T = Foo.Class;
+    this._referencer.currentScope().referenceDualValueType(currentNode);
   }
 
   TypeAlias(node: TypeAlias): void {
@@ -305,7 +330,7 @@ class TypeVisitor extends Visitor {
 
   TypeofTypeAnnotation(node: TypeofTypeAnnotation): void {
     const identifier = (() => {
-      let currentNode = node.argument;
+      let currentNode: TypeAnnotationType | Identifier = node.argument;
       while (currentNode.type !== 'Identifier') {
         switch (currentNode.type) {
           case 'GenericTypeAnnotation':

@@ -22,13 +22,15 @@ const nodePropTypes: Array<string> = [];
 // these nodes are listed in ./hermes-transform/src/generated/special-case-node-types.js
 const NODES_WITH_SPECIAL_HANDLING = new Set([
   'ArrowFunctionExpression',
-  'RegExpLiteral',
-  'TemplateElement',
-  'Identifier',
+  'BigIntLiteral',
   'BooleanLiteral',
-  'NumericLiteral',
+  'ClassDeclaration',
+  'Identifier',
   'NullLiteral',
+  'NumericLiteral',
+  'RegExpLiteral',
   'StringLiteral',
+  'TemplateElement',
 ]);
 
 for (const node of HermesESTreeJSON) {
@@ -49,12 +51,10 @@ export type ${node.name}Props = {};
 `);
     nodeTypeFunctions.push(
       `\
-export function ${node.name}({
-  parent,
-}: {
+export function ${node.name}(props: {
   +parent?: ESNode,
-} = {}): DetachedNode<${node.name}Type> {
-  return detachedProps<${node.name}Type>(parent, {
+} = {...null}): DetachedNode<${node.name}Type> {
+  return detachedProps<${node.name}Type>(props.parent, {
     type: '${type}',
   });
 }
@@ -69,9 +69,9 @@ export type ${node.name}Props = {
       const baseType = `${node.name}Type['${arg.name}']`;
       let type = baseType;
       if (arg.type === 'NodePtr') {
-        type = `DetachedNode<${type}>`;
+        type = `MaybeDetachedNode<${type}>`;
       } else if (arg.type === 'NodeList') {
-        type = `$ReadOnlyArray<DetachedNode<${type}[number]>>`;
+        type = `$ReadOnlyArray<MaybeDetachedNode<${type}[number]>>`;
       }
 
       if (arg.optional) {
@@ -85,13 +85,26 @@ export type ${node.name}Props = {
     );
     nodeTypeFunctions.push(
       `\
-export function ${node.name}({parent, ...props}: {
+export function ${node.name}(props: {
   ...$ReadOnly<${node.name}Props>,
   +parent?: ESNode,
 }): DetachedNode<${node.name}Type> {
-  const node = detachedProps<${node.name}Type>(parent, {
+  const node = detachedProps<${node.name}Type>(props.parent, {
     type: '${type}',
-    ...props,
+    ${node.arguments
+      .map(arg => {
+        switch (arg.type) {
+          case 'NodePtr':
+            return `${arg.name}: asDetachedNode(props.${arg.name})`;
+          case 'NodeList':
+            return `${arg.name}: props.${arg.name}${
+              arg.optional ? '?.' : '.'
+            }map(n => asDetachedNode(n))`;
+          default:
+            return `${arg.name}: props.${arg.name}`;
+        }
+      })
+      .join(',\n')},
   });
   setParentPointersInDirectChildren(node);
   return node;
@@ -106,9 +119,10 @@ import type {
 ESNode,
 ${imports.map(imp => `${imp} as ${imp}Type`).join(',\n')}
 } from 'hermes-estree';
-import type {DetachedNode} from '../detachedNode';
+import type {DetachedNode, MaybeDetachedNode} from '../detachedNode';
 
 import {
+  asDetachedNode,
   detachedProps,
   setParentPointersInDirectChildren,
 } from '../detachedNode';

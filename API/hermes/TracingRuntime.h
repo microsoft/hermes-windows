@@ -31,6 +31,7 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
   virtual SynthTrace::ObjectID getUniqueID(const jsi::Object &o) = 0;
   virtual SynthTrace::ObjectID getUniqueID(const jsi::String &s) = 0;
   virtual SynthTrace::ObjectID getUniqueID(const jsi::PropNameID &pni) = 0;
+  virtual SynthTrace::ObjectID getUniqueID(const jsi::Symbol &sym) = 0;
 
   virtual void flushAndDisableTrace() = 0;
 
@@ -40,6 +41,8 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
   jsi::Value evaluateJavaScript(
       const std::shared_ptr<const jsi::Buffer> &buffer,
       const std::string &sourceURL) override;
+
+  bool drainMicrotasks(int maxMicrotasksHint = -1) override;
 
   jsi::Object createObject() override;
   jsi::Object createObject(std::shared_ptr<jsi::HostObject> ho) override;
@@ -52,6 +55,7 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
   jsi::PropNameID createPropNameIDFromUtf8(const uint8_t *utf8, size_t length)
       override;
   jsi::PropNameID createPropNameIDFromString(const jsi::String &str) override;
+  jsi::PropNameID createPropNameIDFromSymbol(const jsi::Symbol &sym) override;
 
   jsi::Value getProperty(const jsi::Object &obj, const jsi::String &name)
       override;
@@ -117,6 +121,18 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
     return trace_;
   }
 
+  void replaceNondeterministicFuncs();
+
+  // This is the number of records recorded as part of the 'preamble' of a synth
+  // trace. This means all the records after this amount are from the actual
+  // execution of the trace.
+  uint32_t getNumPreambleRecordsForTest() const {
+    assert(
+        numPreambleRecords_ > 0 &&
+        "Only call this method if the preamble has been executed");
+    return numPreambleRecords_;
+  }
+
  private:
   SynthTrace::TraceValue toTraceValue(const jsi::Value &value);
 
@@ -126,9 +142,27 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
 
   SynthTrace::TimeSinceStart getTimeSinceStart() const;
 
+  void insertHostForwarder(const std::vector<const char *> &propertyPath);
+
+  jsi::Function *saveFunction(const std::vector<const char *> &propertyChain);
+
+  void setUpWeakRef();
+
+  void setupDate();
+
+  // This function will traverse the properties defined in propertyPath,
+  // starting from the global object in the given runtime. This function can
+  // optionally skip the last \p skipLastAmt of properties in the given path.
+  static jsi::Object walkPropertyPath(
+      jsi::Runtime &runtime,
+      const std::vector<const char *> &propertyPath,
+      size_t skipLastAmt = 0);
+
   std::unique_ptr<jsi::Runtime> runtime_;
   SynthTrace trace_;
+  std::deque<jsi::Function> savedFunctions;
   const SynthTrace::TimePoint startTime_{std::chrono::steady_clock::now()};
+  uint32_t numPreambleRecords_;
 };
 
 // TracingRuntime is *almost* vm independent.  This provides the
@@ -153,7 +187,7 @@ class TracingHermesRuntime final : public TracingRuntime {
       std::function<std::string()> commitAction,
       std::function<void()> rollbackAction);
 
-  ~TracingHermesRuntime();
+  ~TracingHermesRuntime() override;
 
   SynthTrace::ObjectID getUniqueID(const jsi::Object &o) override {
     return static_cast<SynthTrace::ObjectID>(hermesRuntime().getUniqueID(o));
@@ -163,6 +197,9 @@ class TracingHermesRuntime final : public TracingRuntime {
   }
   SynthTrace::ObjectID getUniqueID(const jsi::PropNameID &pni) override {
     return static_cast<SynthTrace::ObjectID>(hermesRuntime().getUniqueID(pni));
+  }
+  SynthTrace::ObjectID getUniqueID(const jsi::Symbol &sym) override {
+    return static_cast<SynthTrace::ObjectID>(hermesRuntime().getUniqueID(sym));
   }
 
   void flushAndDisableTrace() override;

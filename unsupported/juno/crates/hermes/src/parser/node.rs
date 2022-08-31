@@ -39,6 +39,12 @@ pub struct SMRange {
     pub end: SMLoc,
 }
 
+impl SMRange {
+    pub fn is_empty(self) -> bool {
+        self.start.ptr == self.end.ptr
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct StringRef {
@@ -76,7 +82,7 @@ pub struct NodeLabelOpt {
 }
 
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct NodeString {
     ptr: *const UniqueString,
 }

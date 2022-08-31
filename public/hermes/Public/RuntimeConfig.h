@@ -61,6 +61,12 @@ class PinnedHermesValue;
   /* Support for ECMA-402 Intl APIs. */                                \
   F(constexpr, bool, Intl, true)                                       \
                                                                        \
+  /* Support for ArrayBuffer, DataView and typed arrays. */            \
+  F(constexpr, bool, ArrayBuffer, true)                                \
+                                                                       \
+  /* Support for using microtasks. */                                  \
+  F(constexpr, bool, MicrotaskQueue, false)                            \
+                                                                       \
   /* Enable synth trace. */                                            \
   F(constexpr, bool, TraceEnabled, false)                              \
                                                                        \
@@ -80,8 +86,8 @@ class PinnedHermesValue;
   /* Enable sampling certain statistics. */                            \
   F(constexpr, bool, EnableSampledStats, false)                        \
                                                                        \
-  /* Whether to enable sampling profiler */                            \
-  F(constexpr, bool, EnableSampleProfiling, true)                      \
+  /* Whether to enable automatic sampling profiler registration */     \
+  F(constexpr, bool, EnableSampleProfiling, false)                     \
                                                                        \
   /* Whether to randomize stack placement etc. */                      \
   F(constexpr, bool, RandomizeMemoryLayout, false)                     \

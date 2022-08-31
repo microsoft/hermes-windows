@@ -14,6 +14,7 @@
  * consumer for that file.
  */
 
+#include "hermes/Parser/FlowHelpers.h"
 #include "hermes/Parser/JSParser.h"
 #include "hermes/Support/SimpleDiagHandler.h"
 
@@ -23,10 +24,6 @@
 #elif defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Wmissing-prototypes"
 #endif
-
-using llvh::cast;
-using llvh::dyn_cast;
-using llvh::isa;
 
 using namespace hermes;
 using namespace hermes::ESTree;
@@ -348,6 +345,10 @@ enum class ParserDialect : uint8_t {
   /// containing two comparisons, even though it could otherwise be interpreted
   /// as a call expression with Flow type arguments.
   FlowUnambiguous,
+  /// Look for the '@flow' pragma in the first comment in the JS file.
+  /// If it exists, then parse all Flow type syntax, otherwise only parse
+  /// Flow type syntax according to the FlowUnambiguous mode.
+  FlowDetect,
   /// Parse TypeScript.
   TypeScript,
 };
@@ -360,6 +361,8 @@ struct ParserFlags {
   bool enableJSX = false;
   /// Dialect control.
   ParserDialect dialect = ParserDialect::JavaScript;
+  /// Store doc-comment block at the top of the file.
+  bool storeDocBlock = false;
 };
 
 enum class DiagKind : uint32_t {
@@ -460,6 +463,9 @@ struct ParserContext {
   /// AST.
   ESTree::ProgramNode *ast_ = nullptr;
 
+  /// Doc block at the top of the file.
+  std::string docBlock_{};
+
   explicit ParserContext() {
     context_.getSourceErrorManager().setDiagHandler(
         [](const llvh::SMDiagnostic &diag, void *ctx) {
@@ -507,8 +513,22 @@ hermes_parser_parse(ParserFlags flags, const char *source, size_t len) {
   parserCtx->context_.setStrictMode(flags.strictMode);
   parserCtx->context_.setParseJSX(flags.enableJSX);
 
+  if (len == 0 || source[len - 1] != 0) {
+    parserCtx->addError("Input is not zero terminated");
+    return parserCtx.release();
+  }
+
+  parserCtx->setInputBuffer(StringRef(source, len));
+
   parserCtx->context_.setParseTS(false);
   parserCtx->context_.setParseFlow(hermes::ParseFlowSetting::NONE);
+
+  std::vector<parser::StoredComment> comments;
+  if (flags.dialect == ParserDialect::FlowDetect || flags.storeDocBlock) {
+    comments = parser::getCommentsInDocBlock(
+        parserCtx->context_, parserCtx->getBufferId());
+  }
+
   switch (flags.dialect) {
     case ParserDialect::JavaScript:
       break;
@@ -518,17 +538,20 @@ hermes_parser_parse(ParserFlags flags, const char *source, size_t len) {
     case ParserDialect::FlowUnambiguous:
       parserCtx->context_.setParseFlow(hermes::ParseFlowSetting::UNAMBIGUOUS);
       break;
+    case ParserDialect::FlowDetect:
+      parserCtx->context_.setParseFlow(
+          parser::hasFlowPragma(comments) ? ParseFlowSetting::ALL
+                                          : ParseFlowSetting::UNAMBIGUOUS);
+      break;
     case ParserDialect::TypeScript:
       parserCtx->context_.setParseTS(true);
       break;
   }
 
-  if (len == 0 || source[len - 1] != 0) {
-    parserCtx->addError("Input is not zero terminated");
-    return parserCtx.release();
+  if (flags.storeDocBlock) {
+    parserCtx->docBlock_ = parser::getDocBlock(comments);
   }
 
-  parserCtx->setInputBuffer(StringRef(source, len));
   parser::JSParser parser(
       parserCtx->context_, parserCtx->bufId_, hermes::parser::FullParse);
   auto ast = parser.parse();
@@ -632,4 +655,10 @@ extern "C" DataRef hermes_parser_get_magic_comment(
 
 extern "C" DataRef hermes_get_node_name(ESTree::Node *n) {
   return toDataRef(n->getNodeName());
+}
+
+/// \return the doc block for the file if storeDocBlock was provided at
+/// parse time.
+extern "C" DataRef hermes_parser_get_doc_block(ParserContext *parserCtx) {
+  return toDataRef(parserCtx->docBlock_);
 }

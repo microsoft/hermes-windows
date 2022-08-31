@@ -22,8 +22,8 @@ android {
         arguments "-DHERMES_FACEBOOK_BUILD=${rootProject.ext.facebookBuild}"
         arguments "-DANDROID_STL=c++_shared"
         arguments "-DANDROID_PIE=True"
+        arguments "-DANDROID_LD=lld"
         arguments "-DIMPORT_HERMESC=${rootProject.ext.hermesC}"
-        arguments "-DFBSOURCE_DIR=${rootProject.ext.fbsource}"
         arguments "-DHERMES_SLOW_DEBUG=False"
         arguments "-DHERMES_BUILD_SHARED_JSI=True"
         targets "libhermes"
@@ -36,7 +36,7 @@ android {
 
   externalNativeBuild {
     cmake {
-      version "3.10.2"
+      version "3.18.1"
       path "../../CMakeLists.txt"
       buildStagingDirectory = "${rootProject.ext.hermes_ws}/staging/hermes"
       buildStagingDirectory.mkdirs()
@@ -47,7 +47,6 @@ android {
     debug {
       externalNativeBuild {
         cmake {
-          arguments "-DHERMES_ENABLE_DEBUGGER=True"
           // JS developers aren't VM developers. Give them a faster build.
           arguments "-DCMAKE_BUILD_TYPE=Release"
         }
@@ -56,6 +55,7 @@ android {
     release {
       externalNativeBuild {
         cmake {
+          arguments "-DHERMES_ENABLE_DEBUGGER=False"
           arguments "-DCMAKE_BUILD_TYPE=MinSizeRel"
         }
       }
@@ -100,9 +100,9 @@ android {
 
   dependencies {
     implementation 'com.facebook.fbjni:fbjni:0.2.2'
-    intlImplementation 'com.facebook.soloader:soloader:0.9.0'
-    intlImplementation 'com.facebook.yoga:proguard-annotations:1.14.1'
-    intlImplementation "androidx.annotation:annotation:1.1.0"
+    intlImplementation 'com.facebook.soloader:soloader:0.10.3'
+    intlImplementation 'com.facebook.yoga:proguard-annotations:1.19.0'
+    intlImplementation "androidx.annotation:annotation:1.3.0"
   }
 
   packagingOptions {

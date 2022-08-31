@@ -10,6 +10,7 @@
 #define HERMES_VM_WEAKVALUEMAP_H
 
 #include "hermes/VM/HandleRootOwner.h"
+#include "hermes/VM/Runtime.h"
 #include "hermes/VM/WeakRef.h"
 
 #include "llvh/ADT/DenseMap.h"
@@ -43,7 +44,8 @@ class WeakValueMap {
   /// \return true if the hash table is known to be empty.
   /// It can report false negatives because it doesn't prune invalid references
   /// - that would be too slow. In other words, if the table contains only
-  /// invalid weak refs, it is not knownto be empty, and this will return false.
+  /// invalid weak refs, it is not known to be empty, and this will return
+  /// false.
   bool isKnownEmpty() const {
     return map_.empty();
   }
@@ -61,22 +63,20 @@ class WeakValueMap {
     return internalFind(key) != map_.end();
   }
 
-  /// Look for a key and return the value as Handle<T> if found or llvh::None if
-  /// not found.
-  llvh::Optional<Handle<ValueT>>
-  lookup(HandleRootOwner *runtime, GC *gc, const KeyT &key) {
+  /// Look for \p key and return the value if found or nullptr otherwise.
+  ValueT *lookup(Runtime &runtime, const KeyT &key) {
     auto it = internalFind(key);
     if (it == map_.end())
-      return llvh::None;
-    return it->second.get(runtime, gc);
+      return nullptr;
+    return it->second.get(runtime);
   }
 
   /// Remove the element with key \p key and return true if it was found.
-  bool erase(const KeyT &key, GC *gc) {
+  bool erase(const KeyT &key, GC &gc) {
     auto it = internalFind(key);
     if (it == map_.end())
       return false;
-    WeakRefLock lk{gc->weakRefMutex()};
+    WeakRefLock lk{gc.weakRefMutex()};
     map_.erase(it);
     recalcPruneLimit();
     return true;
@@ -84,21 +84,22 @@ class WeakValueMap {
 
   /// Insert a key/value into the map if the key is not already there.
   /// \return true if the pair was inserted, false if the key was already there.
-  bool insertNew(GC *gc, const KeyT &key, Handle<ValueT> value) {
-    WeakRefLock lk{gc->weakRefMutex()};
-    return insertNewLocked(gc, key, value);
+  bool insertNew(Runtime &runtime, const KeyT &key, Handle<ValueT> value) {
+    WeakRefLock lk{runtime.getHeap().weakRefMutex()};
+    return insertNewLocked(runtime, key, value);
   }
 
-  bool insertNewLocked(GC *gc, const KeyT &key, Handle<ValueT> value) {
-    auto itAndInserted = map_.try_emplace(key, WeakRef<ValueT>(gc, value));
+  bool
+  insertNewLocked(Runtime &runtime, const KeyT &key, Handle<ValueT> value) {
+    auto itAndInserted = map_.try_emplace(key, WeakRef<ValueT>(runtime, value));
     if (!itAndInserted.second) {
       // The key already exists and the value is valid, this isn't a new entry.
       if (itAndInserted.first->second.isValid()) {
         return false;
       }
-      itAndInserted.first->second = WeakRef<ValueT>(gc, value);
+      itAndInserted.first->second = WeakRef<ValueT>(runtime, value);
     }
-    pruneInvalid(gc);
+    pruneInvalid(runtime.getHeap());
     return true;
   }
 
@@ -151,9 +152,9 @@ class WeakValueMap {
 
   /// If the size of the map has exceeded the prune limit, scan the map and
   /// delete the invalid WeakRef-s. Then recalculate the prune limit.
-  void pruneInvalid(GC *gc) {
+  void pruneInvalid(GC &gc) {
     assert(
-        gc->weakRefMutex() &&
+        gc.weakRefMutex() &&
         "Weak ref mutex must be held before calling this function");
     if (map_.size() <= pruneLimit_)
       return;
