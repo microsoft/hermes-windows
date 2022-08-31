@@ -21,7 +21,7 @@ jobs:
     displayName: Update Hermes Branch to latest
     steps:
       - script: git remote add fb https://github.com/facebook/hermes
-        displayName: Add facebook/hermes as report
+        displayName: Add facebook/hermes as remote
       
       - script: git remote add authenticated https://rnbot:$(githubAuthToken)@github.com/microsoft/hermes-windows
         displayName: Add authenticated remote for updates
