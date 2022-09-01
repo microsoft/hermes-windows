@@ -8,12 +8,14 @@
  * @format
  */
 
+import type {TransformVisitor} from '../../src/transform/transform';
+
 import {transform as transformOriginal} from '../../src/transform/transform';
 import * as t from '../../src/generated/node-types';
 // $FlowExpectedError[cannot-resolve-module]
 import prettierConfig from '../../../.prettierrc.json';
 
-function transform(code, visitors) {
+function transform(code: string, visitors: TransformVisitor) {
   return transformOriginal(code, visitors, prettierConfig);
 }
 
@@ -50,38 +52,179 @@ const y = null;
   });
 
   describe('insert', () => {
-    it('works with the insertBeforeStatement mutation', () => {
-      const code = 'const x = 1;';
-      const result = transform(code, context => ({
-        VariableDeclaration(node) {
-          context.insertBeforeStatement(
-            node,
-            t.VariableDeclaration({
-              kind: 'const',
-              declarations: [
-                t.VariableDeclarator({
-                  id: t.Identifier({
-                    name: 'y',
+    describe('insertBeforeStatement mutation', () => {
+      it('Insert before only statement', () => {
+        const code = `\
+const x = 1;
+`;
+        const result = transform(code, context => ({
+          VariableDeclaration(node) {
+            context.insertBeforeStatement(
+              node,
+              t.VariableDeclaration({
+                kind: 'const',
+                declarations: [
+                  t.VariableDeclarator({
+                    id: t.Identifier({
+                      name: 'y',
+                    }),
+                    init: t.NumericLiteral({
+                      value: 1,
+                      raw: '1',
+                    }),
                   }),
-                  init: t.NumericLiteral({
-                    value: 1,
-                    raw: '1',
-                  }),
-                }),
-              ],
-            }),
-          );
-        },
-      }));
+                ],
+              }),
+            );
+          },
+        }));
 
-      expect(result).toBe(`\
+        expect(result).toBe(`\
 const y = 1;
 const x = 1;
 `);
-    });
+      });
+      it('Insert before first statement', () => {
+        const code = `\
+const x = 1;
+lastStatement;
+`;
+        const result = transform(code, context => ({
+          VariableDeclaration(node) {
+            context.insertBeforeStatement(
+              node,
+              t.VariableDeclaration({
+                kind: 'const',
+                declarations: [
+                  t.VariableDeclarator({
+                    id: t.Identifier({
+                      name: 'y',
+                    }),
+                    init: t.NumericLiteral({
+                      value: 1,
+                      raw: '1',
+                    }),
+                  }),
+                ],
+              }),
+            );
+          },
+        }));
 
-    it('works with the insertAfterStatement mutation', () => {
-      const code = 'const x = 1;';
+        expect(result).toBe(`\
+const y = 1;
+const x = 1;
+lastStatement;
+`);
+      });
+
+      it('Insert before middle statement', () => {
+        const code = `\
+firstStatement;
+const x = 1;
+lastStatement;
+`;
+        const result = transform(code, context => ({
+          VariableDeclaration(node) {
+            context.insertBeforeStatement(
+              node,
+              t.VariableDeclaration({
+                kind: 'const',
+                declarations: [
+                  t.VariableDeclarator({
+                    id: t.Identifier({
+                      name: 'y',
+                    }),
+                    init: t.NumericLiteral({
+                      value: 1,
+                      raw: '1',
+                    }),
+                  }),
+                ],
+              }),
+            );
+          },
+        }));
+
+        expect(result).toBe(`\
+firstStatement;
+const y = 1;
+const x = 1;
+lastStatement;
+`);
+      });
+
+      it('Insert before last statement', () => {
+        const code = `\
+firstStatement;
+const x = 1;
+`;
+        const result = transform(code, context => ({
+          VariableDeclaration(node) {
+            context.insertBeforeStatement(
+              node,
+              t.VariableDeclaration({
+                kind: 'const',
+                declarations: [
+                  t.VariableDeclarator({
+                    id: t.Identifier({
+                      name: 'y',
+                    }),
+                    init: t.NumericLiteral({
+                      value: 1,
+                      raw: '1',
+                    }),
+                  }),
+                ],
+              }),
+            );
+          },
+        }));
+
+        expect(result).toBe(`\
+firstStatement;
+const y = 1;
+const x = 1;
+`);
+      });
+
+      it('wraps statements in a BlockStatement if they were in a bodyless parent', () => {
+        const code = 'if (condition) return true;';
+        const result = transform(code, context => ({
+          ReturnStatement(node) {
+            context.insertBeforeStatement(
+              node,
+              t.VariableDeclaration({
+                kind: 'const',
+                declarations: [
+                  t.VariableDeclarator({
+                    id: t.Identifier({
+                      name: 'y',
+                    }),
+                    init: t.NumericLiteral({
+                      value: 1,
+                    }),
+                  }),
+                ],
+              }),
+            );
+          },
+        }));
+
+        expect(result).toBe(`\
+if (condition) {
+  const y = 1;
+  return true;
+}
+`);
+      });
+    });
+  });
+  describe('insertAfterStatement mutation', () => {
+    it('Insert after only statement', () => {
+      const code = `\
+const x = 1;
+`;
       const result = transform(code, context => ({
         VariableDeclaration(node) {
           context.insertAfterStatement(
@@ -109,12 +252,14 @@ const x = 1;
 const y = 1;
 `);
     });
-
-    it('wraps statements in a BlockStatement if they were in a bodyless parent', () => {
-      const code = 'if (condition) return true;';
+    it('Insert after first statement', () => {
+      const code = `\
+const x = 1;
+lastStatement;
+`;
       const result = transform(code, context => ({
-        ReturnStatement(node) {
-          context.insertBeforeStatement(
+        VariableDeclaration(node) {
+          context.insertAfterStatement(
             node,
             t.VariableDeclaration({
               kind: 'const',
@@ -125,6 +270,7 @@ const y = 1;
                   }),
                   init: t.NumericLiteral({
                     value: 1,
+                    raw: '1',
                   }),
                 }),
               ],
@@ -134,10 +280,79 @@ const y = 1;
       }));
 
       expect(result).toBe(`\
-if (condition) {
-  const y = 1;
-  return true;
-}
+const x = 1;
+const y = 1;
+lastStatement;
+`);
+    });
+
+    it('Insert after middle statement', () => {
+      const code = `\
+firstStatement;
+const x = 1;
+lastStatement;
+`;
+      const result = transform(code, context => ({
+        VariableDeclaration(node) {
+          context.insertAfterStatement(
+            node,
+            t.VariableDeclaration({
+              kind: 'const',
+              declarations: [
+                t.VariableDeclarator({
+                  id: t.Identifier({
+                    name: 'y',
+                  }),
+                  init: t.NumericLiteral({
+                    value: 1,
+                    raw: '1',
+                  }),
+                }),
+              ],
+            }),
+          );
+        },
+      }));
+
+      expect(result).toBe(`\
+firstStatement;
+const x = 1;
+const y = 1;
+lastStatement;
+`);
+    });
+
+    it('Insert after last statement', () => {
+      const code = `\
+firstStatement;
+const x = 1;
+`;
+      const result = transform(code, context => ({
+        VariableDeclaration(node) {
+          context.insertAfterStatement(
+            node,
+            t.VariableDeclaration({
+              kind: 'const',
+              declarations: [
+                t.VariableDeclarator({
+                  id: t.Identifier({
+                    name: 'y',
+                  }),
+                  init: t.NumericLiteral({
+                    value: 1,
+                    raw: '1',
+                  }),
+                }),
+              ],
+            }),
+          );
+        },
+      }));
+
+      expect(result).toBe(`\
+firstStatement;
+const x = 1;
+const y = 1;
 `);
     });
   });
@@ -328,16 +543,14 @@ class Foo {
               kind: 'const',
               declarations: [
                 t.VariableDeclarator({
-                  id: context.shallowCloneNode(node.id),
+                  id: node.id,
                   init: t.ArrowFunctionExpression({
                     async: node.async,
-                    body: context.shallowCloneNode(node.body),
-                    params: context.shallowCloneArray(node.params),
-                    predicate: context.shallowCloneNode(node.predicate),
-                    returnType: context.shallowCloneNode(node.returnType),
-                    typeParameters: context.shallowCloneNode(
-                      node.typeParameters,
-                    ),
+                    body: node.body,
+                    params: node.params,
+                    predicate: node.predicate,
+                    returnType: node.returnType,
+                    typeParameters: node.typeParameters,
                   }),
                 }),
               ],
@@ -389,7 +602,7 @@ if (true) call();
           },
         })),
       ).toThrowErrorMatchingInlineSnapshot(
-        `"Expected to find the target \\"ExpressionStatement\\" on the \\"IfStatement.alternate\\", but found a different node. This likely means that you attempted to mutate around the target after it was deleted/replaced."`,
+        `"Attempted to insert before a deleted ExpressionStatement node. This likely means that you attempted to mutate around the target after it was deleted/replaced."`,
       );
     });
 
@@ -498,7 +711,7 @@ statement(); // inline comment to be duplicated
 
         const result = transform(code, context => ({
           ExpressionStatement(node) {
-            context.insertBeforeStatement(node, context.shallowCloneNode(node));
+            context.insertBeforeStatement(node, node);
           },
         }));
 
@@ -626,6 +839,193 @@ const y = 1; // this should remain inline #2
     });
 
     describe('addition', () => {
+      it('should attach leading block comments on line before node', () => {
+        const code = `\
+statement();
+`;
+
+        const result = transform(code, context => ({
+          ExpressionStatement(node) {
+            context.addLeadingComments(node, [
+              t.BlockComment({
+                value: `*
+ * Line preceeding comment 1
+ `,
+              }),
+              t.BlockComment({
+                value: `*
+ * Line preceeding comment 2
+ `,
+              }),
+            ]);
+          },
+        }));
+
+        expect(result).toBe(`\
+/**
+ * Line preceeding comment 1
+ */
+/**
+ * Line preceeding comment 2
+ */
+statement();
+`);
+      });
+
+      it('should attach leading inline block comments on node line', () => {
+        const code = `
+statement();
+`;
+
+        const result = transform(code, context => ({
+          ExpressionStatement(node) {
+            context.addLeadingInlineComments(node, [
+              t.BlockComment({
+                value: `Inline comment 1`,
+              }),
+              t.BlockComment({
+                value: `Inline comment 2`,
+              }),
+            ]);
+          },
+        }));
+
+        expect(result).toBe(`\
+/*Inline comment 1*/ /*Inline comment 2*/ statement();
+`);
+      });
+
+      it('should attach leading line comments on line before node', () => {
+        const code = `\
+statement();
+`;
+
+        const result = transform(code, context => ({
+          ExpressionStatement(node) {
+            context.addLeadingComments(node, [
+              t.LineComment({
+                value: `Line preceeding comment 1`,
+              }),
+            ]);
+          },
+        }));
+
+        expect(result).toBe(`\
+//Line preceeding comment 1
+statement();
+`);
+      });
+
+      it('should attach leading inline line comments on line before node', () => {
+        const code = `\
+statement();
+`;
+
+        const result = transform(code, context => ({
+          ExpressionStatement(node) {
+            context.addLeadingInlineComments(node, [
+              t.LineComment({
+                value: `Line preceeding comment 1`,
+              }),
+            ]);
+          },
+        }));
+
+        expect(result).toBe(`\
+//Line preceeding comment 1
+statement();
+`);
+      });
+
+      it('should attach trailing block comments on line after node', () => {
+        const code = `\
+statement();
+`;
+
+        const result = transform(code, context => ({
+          ExpressionStatement(node) {
+            context.addTrailingComments(node, [
+              t.BlockComment({
+                value: `Inline comment 1`,
+              }),
+              t.BlockComment({
+                value: `Inline comment 2`,
+              }),
+            ]);
+          },
+        }));
+
+        expect(result).toBe(`\
+statement();
+/*Inline comment 1*/
+/*Inline comment 2*/
+`);
+      });
+
+      it('should attach trailing inline block comments on node line', () => {
+        const code = `
+statement();
+`;
+
+        const result = transform(code, context => ({
+          ExpressionStatement(node) {
+            context.addTrailingInlineComments(node, [
+              t.BlockComment({
+                value: `Inline comment 1`,
+              }),
+              t.BlockComment({
+                value: `Inline comment 2`,
+              }),
+            ]);
+          },
+        }));
+
+        expect(result).toBe(`\
+statement(); /*Inline comment 1*/ /*Inline comment 2*/
+`);
+      });
+
+      it('should attach trailing line comments on line after node', () => {
+        const code = `\
+statement();
+`;
+
+        const result = transform(code, context => ({
+          ExpressionStatement(node) {
+            context.addTrailingComments(node, [
+              t.LineComment({
+                value: `Line trailing comment 1`,
+              }),
+            ]);
+          },
+        }));
+
+        expect(result).toBe(`\
+statement();
+//Line trailing comment 1
+`);
+      });
+
+      it('should attach trailing inline line comments on line after node', () => {
+        const code = `\
+statement();
+`;
+
+        const result = transform(code, context => ({
+          ExpressionStatement(node) {
+            context.addTrailingInlineComments(node, [
+              t.LineComment({
+                value: `Line trailing comment 1`,
+              }),
+            ]);
+          },
+        }));
+
+        expect(result).toBe(`\
+statement(); //Line trailing comment 1
+`);
+      });
+
       it('should allow leading comment addition', () => {
         const code = `\
 const x = 1;
@@ -647,7 +1047,8 @@ const y = 2;`;
         expect(result).toBe(`\
 //line
 const x = 1;
-/*block*/ const y = 2;
+/*block*/
+const y = 2;
 `);
       });
 
@@ -691,8 +1092,9 @@ const y = 2;
               t.BlockComment({value: 'leading block'}),
             ]);
             context.addTrailingComments(newNode, [
+              t.BlockComment({value: 'trailing block 1'}),
               t.LineComment({value: 'trailing line'}),
-              t.BlockComment({value: 'trailing block'}),
+              t.BlockComment({value: 'trailing block 2'}),
             ]);
           },
         }));
@@ -701,8 +1103,9 @@ const y = 2;
 //leading line
 /*leading block*/
 ('inserted');
+/*trailing block 1*/
 //trailing line
-/*trailing block*/
+/*trailing block 2*/
 const x = 1;
 `);
       });
@@ -745,5 +1148,106 @@ const y = 2;
 `);
       });
     });
+
+    describe('clone', () => {
+      it('should clone line comments to new nodes', () => {
+        const code = `\
+// Leading comment
+x; // EOL comment
+y;`;
+        const result = transform(code, context => ({
+          Program(node) {
+            context.cloneCommentsTo(node.body[0], node.body[1]);
+          },
+        }));
+
+        expect(result).toBe(`\
+// Leading comment
+x; // EOL comment
+// Leading comment
+y; // EOL comment
+`);
+      });
+      it('should clone block comments to new nodes', () => {
+        const code = `\
+/* Leading comment 1 */
+/* Leading comment 2 */
+x; /* EOL comment */
+y;`;
+        const result = transform(code, context => ({
+          Program(node) {
+            context.cloneCommentsTo(node.body[0], node.body[1]);
+          },
+        }));
+
+        expect(result).toBe(`\
+/* Leading comment 1 */
+/* Leading comment 2 */
+x; /* EOL comment */
+/* Leading comment 1 */
+/* Leading comment 2 */
+y; /* EOL comment */
+`);
+      });
+      it('should clone comments to newly created nodes', () => {
+        const code = `\
+x; // EOL comment`;
+        const result = transform(code, context => ({
+          Program(node) {
+            const x = node.body[0];
+            const y = t.ExpressionStatement({
+              expression: t.Identifier({name: 'y'}),
+            });
+            context.cloneCommentsTo(x, y);
+            context.insertAfterStatement(x, y);
+          },
+        }));
+
+        expect(result).toBe(`\
+x; // EOL comment
+y; // EOL comment
+`);
+      });
+      it('should clone newly created comments to nodes', () => {
+        const code = `\
+x;
+y;`;
+        const result = transform(code, context => ({
+          Program(node) {
+            const x = node.body[0];
+            const y = node.body[1];
+            context.addTrailingInlineComments(
+              x,
+              t.LineComment({value: ' EOL comment'}),
+            );
+            context.cloneCommentsTo(x, y);
+          },
+        }));
+
+        expect(result).toBe(`\
+x; // EOL comment
+y; // EOL comment
+`);
+      });
+    });
+  });
+
+  it('should not crash on optional chaining', () => {
+    const code = `\
+x?.y;
+x?.();
+`;
+    const result = transform(code, context => ({
+      Program(node) {
+        context.addTrailingInlineComments(
+          node.body[0],
+          t.LineComment({value: 'test'}),
+        );
+      },
+    }));
+    expect(result).toBe(`\
+x?.y; //test
+x?.();
+`);
   });
 });

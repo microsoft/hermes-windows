@@ -24,16 +24,18 @@ class BoxedDouble final : public GCCell {
   double value_;
 
  public:
+  static constexpr CellKind getCellKind() {
+    return CellKind::BoxedDoubleKind;
+  }
   static bool classof(const GCCell *cell) {
     return cell->getKind() == CellKind::BoxedDoubleKind;
   }
 
-  static BoxedDouble *create(double d, Runtime *runtime) {
-    return runtime->makeAFixed<BoxedDouble>(d, runtime);
+  static BoxedDouble *create(double d, Runtime &runtime) {
+    return runtime.makeAFixed<BoxedDouble>(d);
   }
 
-  BoxedDouble(double d, Runtime *runtime)
-      : GCCell(&runtime->getHeap(), &vt), value_(d) {}
+  BoxedDouble(double d) : value_(d) {}
 
   double get() const {
     return value_;

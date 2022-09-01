@@ -148,13 +148,13 @@ TEST_F(HandleTest, MarkTest) {
 
 /// Make sure that related Handle-s can be assigned.
 TEST_F(HandleTest, ScopedPointerConstructorTest) {
-  auto function = runtime->makeHandle<JSFunction>(
-      JSFunction::create(runtime, domain, runtime->makeNullHandle<JSObject>()));
+  auto function = runtime.makeHandle<JSFunction>(
+      JSFunction::create(runtime, domain, runtime.makeNullHandle<JSObject>()));
   Handle<JSObject> obj = function;
   ASSERT_EQ(function.get(), obj.get());
 }
 
-#ifdef HERMES_SLOW_DEBUG
+#if defined(HERMES_SLOW_DEBUG) && defined(ASSERT_DEATH)
 TEST_F(HandleDeathTest, UseFlushedHandle) {
   auto marker = gcScope.createMarker();
   auto handle = StringPrimitive::createNoThrow(runtime, "hello");

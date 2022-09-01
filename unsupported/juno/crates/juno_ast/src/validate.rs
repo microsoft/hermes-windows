@@ -5,14 +5,29 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use super::{
-    kind::*, AssignmentExpressionOperator, BinaryExpressionOperator, Context, ExportKind, GCLock,
-    ImportKind, LogicalExpressionOperator, MethodDefinitionKind, Node, NodeLabel, NodeList, NodeRc,
-    NodeString, NodeVariant, Path, PropertyKind, UnaryExpressionOperator, UpdateExpressionOperator,
-    VariableDeclarationKind, Visitor,
-};
-
 use thiserror::Error;
+
+use super::kind::*;
+use super::AssignmentExpressionOperator;
+use super::BinaryExpressionOperator;
+use super::Context;
+use super::ExportKind;
+use super::GCLock;
+use super::ImportKind;
+use super::LogicalExpressionOperator;
+use super::MethodDefinitionKind;
+use super::Node;
+use super::NodeLabel;
+use super::NodeList;
+use super::NodeRc;
+use super::NodeString;
+use super::NodeVariant;
+use super::Path;
+use super::PropertyKind;
+use super::UnaryExpressionOperator;
+use super::UpdateExpressionOperator;
+use super::VariableDeclarationKind;
+use super::Visitor;
 
 macro_rules! gen_validate_fn {
     ($name:ident {
@@ -119,7 +134,7 @@ impl<'gc> ValidChild<'gc> for NodeList<'gc> {
         node: &'gc Node<'gc>,
         constraints: &[NodeVariant],
     ) -> Result<(), ValidationError> {
-        'elems: for elem in self {
+        'elems: for elem in self.iter() {
             for &constraint in constraints {
                 if instanceof(elem.variant(), constraint) {
                     // Found a valid constraint for this element,

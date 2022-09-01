@@ -42,15 +42,21 @@ std::atomic<SamplingProfiler::GlobalProfiler *>
     SamplingProfiler::GlobalProfiler::instance_{nullptr};
 
 #ifndef _MSC_VER
-std::atomic<bool> SamplingProfiler::GlobalProfiler::handlerSyncFlag_{false};
+std::atomic<SamplingProfiler *>
+    SamplingProfiler::GlobalProfiler::profilerForSig_{nullptr};
 #endif
 
 void SamplingProfiler::GlobalProfiler::registerRuntime(
     SamplingProfiler *profiler) {
   std::lock_guard<std::mutex> lockGuard(profilerLock_);
   profilers_.insert(profiler);
-#ifndef _MSC_VER
-  threadLocalProfiler_.set(profiler);
+
+#if (defined(__ANDROID__) || defined(__APPLE__)) && \
+    defined(HERMES_FACEBOOK_BUILD)
+  assert(
+      threadLocalProfilerForLoom_.get() == nullptr &&
+      "multiple hermes runtime in the same thread");
+  threadLocalProfilerForLoom_.set(profiler);
 #endif
 }
 
@@ -63,8 +69,11 @@ void SamplingProfiler::GlobalProfiler::unregisterRuntime(
   assert(succeed && "How can runtime not registered yet?");
   (void)succeed;
 
-#ifndef _MSC_VER
-  threadLocalProfiler_.set(nullptr);
+#if (defined(__ANDROID__) || defined(__APPLE__)) && \
+    defined(HERMES_FACEBOOK_BUILD)
+  // TODO(T125910634): re-introduce the requirement for unregistering the
+  // runtime in the same thread it was registered.
+  threadLocalProfilerForLoom_.set(nullptr);
 #endif
 }
 
@@ -75,10 +84,34 @@ void SamplingProfiler::registerDomain(Domain *domain) {
     domains_.push_back(domain);
 }
 
+SamplingProfiler::NativeFunctionFrameInfo
+SamplingProfiler::registerNativeFunction(NativeFunction *nativeFunction) {
+  // If nativeFunction is not already registered, add it to the list.
+  auto it = std::find(
+      nativeFunctions_.begin(), nativeFunctions_.end(), nativeFunction);
+  if (it != nativeFunctions_.end()) {
+    return it - nativeFunctions_.begin();
+  }
+
+  nativeFunctions_.push_back(nativeFunction);
+  return nativeFunctions_.size() - 1;
+}
+
+void SamplingProfiler::markRootsForCompleteMarking(RootAcceptor &acceptor) {
+  std::lock_guard<std::mutex> lockGuard(runtimeDataLock_);
+  for (Domain *&domain : domains_) {
+    acceptor.acceptPtr(domain);
+  }
+}
+
 void SamplingProfiler::markRoots(RootAcceptor &acceptor) {
   std::lock_guard<std::mutex> lockGuard(runtimeDataLock_);
   for (Domain *&domain : domains_) {
     acceptor.acceptPtr(domain);
+  }
+
+  for (NativeFunction *&fn : nativeFunctions_) {
+    acceptor.acceptPtr(fn);
   }
 }
 
@@ -125,52 +158,42 @@ void SamplingProfiler::GlobalProfiler::profilingSignalHandler(int signo) {
 void SamplingProfiler::GlobalProfiler::profilingSignalHandler(
     SamplingProfiler *profiler) {
 #endif
-  // Ensure that writes made on the timer thread before setting this flag are
-  // correctly acquired.
 #ifndef _MSC_VER
-  while (!handlerSyncFlag_.load(std::memory_order_acquire)) {
+  // Ensure that writes made on the timer thread before setting the current
+  // profiler are correctly acquired.
+  SamplingProfiler *localProfiler;
+  while (!(localProfiler = profilerForSig_.load(std::memory_order_acquire))) {
   }
+#else
+  SamplingProfiler *localProfiler = profiler;
 #endif
+
+  assert(
+      localProfiler->suspendCount_ == 0 &&
+      "Shouldn't interrupt the VM thread when the sampling profiler is "
+      "suspended.");
 
   // Avoid spoiling errno in a signal handler by storing the old version and
   // re-assigning it.
   auto oldErrno = errno;
-  // Fetch runtime used by this sampling thread.
-  auto profilerInstance = instance_.load();
-#ifndef _MSC_VER
-  auto *localProfiler = profilerInstance->threadLocalProfiler_.get();
-#else
-  auto *localProfiler = profiler;
-#endif
-  auto *curThreadRuntime = localProfiler->runtime_;
-  if (curThreadRuntime == nullptr) {
-    // Runtime may have unregistered itself before signal.
-    errno = oldErrno;
-    return;
-  }
-  // Sampling stack will touch GC objects(like closure) so
-  // only do so if heap is valid.
-  if (LLVM_LIKELY(!curThreadRuntime->getHeap().inGC())) {
-    assert(
-        profilerInstance != nullptr &&
-        "Why is GlobalProfiler::instance_ not initialized yet?");
-    profilerInstance->sampledStackDepth_ = localProfiler->walkRuntimeStack(
-        profilerInstance->sampleStorage_, SaveDomains::Yes);
-  } else {
-    // GC in process. Copy pre-captured stack instead.
 
-    if (localProfiler->preGCStackDepth_ > 0) {
-      profilerInstance->sampleStorage_ = localProfiler->preGCStackStorage_;
-      profilerInstance->sampledStackDepth_ = localProfiler->preGCStackDepth_;
-    } else {
-      // This GC (like mallocGC) did not record JS stack.
-      // TODO: fix this for all GCs.
-      profilerInstance->sampledStackDepth_ = 0;
-    }
-  }
+  auto profilerInstance = instance_.load();
+  assert(
+      profilerInstance != nullptr &&
+      "Why is GlobalProfiler::instance_ not initialized yet?");
+
+  // Sampling stack will touch GC objects(like closure) so only do so if heap
+  // is valid.
+  auto &curThreadRuntime = localProfiler->runtime_;
+  assert(
+      !curThreadRuntime.getHeap().inGC() &&
+      "sampling profiler should be suspended before GC");
+  (void)curThreadRuntime;
+  profilerInstance->sampledStackDepth_ = localProfiler->walkRuntimeStack(
+      profilerInstance->sampleStorage_, InLoom::No);
 #ifndef _MSC_VER
   // Ensure that writes made in the handler are visible to the timer thread.
-  handlerSyncFlag_.store(false);
+  profilerForSig_.store(nullptr);
 
   if (!instance_.load()->samplingDoneSem_.notifyOne()) {
     errno = oldErrno;
@@ -188,57 +211,90 @@ bool SamplingProfiler::GlobalProfiler::sampleStack() {
     auto targetThreadHandle = localProfiler->currentThreadHandle_;
 #endif
     std::lock_guard<std::mutex> lk(localProfiler->runtimeDataLock_);
-    // Ensure there are no allocations in the signal handler by keeping ample
-    // reserved space.
-    localProfiler->domains_.reserve(
-        localProfiler->domains_.size() + kMaxStackDepth);
-    size_t domainCapacityBefore = localProfiler->domains_.capacity();
-    (void)domainCapacityBefore;
+
+    if (localProfiler->suspendCount_ > 0) {
+      // Sampling profiler is suspended. Copy pre-captured stack instead without
+      // interrupting the VM thread.
+      if (localProfiler->preSuspendStackDepth_ > 0) {
+        sampleStorage_ = localProfiler->preSuspendStackStorage_;
+        sampledStackDepth_ = localProfiler->preSuspendStackDepth_;
+      } else {
+        // This suspension didn't record a stack trace. For example, a GC (like
+        // mallocGC) did not record JS stack.
+        // TODO: fix this for all cases.
+        sampledStackDepth_ = 0;
+      }
+    } else {
+      // Ensure there are no allocations in the signal handler by keeping ample
+      // reserved space.
+      localProfiler->domains_.reserve(
+          localProfiler->domains_.size() + kMaxStackDepth);
+      size_t domainCapacityBefore = localProfiler->domains_.capacity();
+      (void)domainCapacityBefore;
 
 #ifndef _MSC_VER
-    // WINDOWS:: TODO:: Investigate whether this synchronization is required on Windows.
-    // Guarantee that the runtime thread will not proceed until it has acquired
-    // the updates to domains_.
-    handlerSyncFlag_.store(true, std::memory_order_release);
+      // WINDOWS:: TODO:: Investigate whether this synchronization is required
+      // on Windows. Guarantee that the runtime thread will not proceed until it
+      // has acquired the updates to domains_.
 
-    // Signal target runtime thread to sample stack.
-    pthread_kill(targetThreadId, SIGPROF);
+      // Ditto for native functions.
+      localProfiler->nativeFunctions_.reserve(
+          localProfiler->nativeFunctions_.size() + kMaxStackDepth);
+      size_t nativeFunctionsCapacityBefore =
+          localProfiler->nativeFunctions_.capacity();
+      (void)nativeFunctionsCapacityBefore;
+
+      // Guarantee that the runtime thread will not proceed until it has
+      // acquired the updates to domains_.
+      profilerForSig_.store(localProfiler, std::memory_order_release);
+
+      // Signal target runtime thread to sample stack.
+      pthread_kill(targetThreadId, SIGPROF);
 #else
-    // Suspend the runtime thread.
-    DWORD prevSuspendCount = SuspendThread(targetThreadHandle);
-    if (prevSuspendCount == -1) {
-      return true;
-    }
-    assert(prevSuspendCount == 0);
+      // Suspend the runtime thread.
+      DWORD prevSuspendCount = SuspendThread(targetThreadHandle);
+      if (prevSuspendCount == -1) {
+        return true;
+      }
+      assert(prevSuspendCount == 0);
 
-    // Get the thread context. This call ensure that the thread suspension is completed.
-    CONTEXT context;
-    GetThreadContext(targetThreadHandle, &context);
+      // Get the thread context. This call ensure that the thread suspension is
+      // completed.
+      CONTEXT context;
+      GetThreadContext(targetThreadHandle, &context);
 
-    // Collect samples.
-    profilingSignalHandler(localProfiler);
+      // Collect samples.
+      profilingSignalHandler(localProfiler);
 
-    // Resume runtime thread.
-    prevSuspendCount = ResumeThread(targetThreadHandle);
-    assert(prevSuspendCount == 1);
+      // Resume runtime thread.
+      prevSuspendCount = ResumeThread(targetThreadHandle);
+      assert(prevSuspendCount == 1);
 #endif
 
 #ifndef _MSC_VER
-    // Threading: samplingDoneSem_ will synchronise this thread with the signal
-    // handler, so that we only have one active signal at a time.
-    if (!samplingDoneSem_.wait()) {
-      return false;
-    }
+      // Threading: samplingDoneSem_ will synchronise this thread with the
+      // signal handler, so that we only have one active signal at a time.
+      if (!samplingDoneSem_.wait()) {
+        return false;
+      }
 
-    // Guarantee that this thread will observe all changes made to data
-    // structures in the signal handler.
-    while (handlerSyncFlag_.load(std::memory_order_acquire)) {
-    }
+      // Guarantee that this thread will observe all changes made to data
+      // structures in the signal handler.
+      while (profilerForSig_.load(std::memory_order_acquire) != nullptr) {
+      }
 #endif
 
-    assert(
-        localProfiler->domains_.capacity() == domainCapacityBefore &&
-        "Must not dynamically allocate in signal handler");
+      assert(
+          localProfiler->domains_.capacity() == domainCapacityBefore &&
+          "Must not dynamically allocate in signal handler");
+
+#ifndef _MSC_VER
+      assert(
+          localProfiler->nativeFunctions_.capacity() ==
+              nativeFunctionsCapacityBefore &&
+          "Must not dynamically allocate in signal handler");
+#endif
+    }
 
     assert(
         sampledStackDepth_ <= sampleStorage_.stack.size() &&
@@ -282,18 +338,18 @@ void SamplingProfiler::GlobalProfiler::timerLoop() {
 
 uint32_t SamplingProfiler::walkRuntimeStack(
     StackTrace &sampleStorage,
-    SaveDomains saveDomains,
+    InLoom inLoom,
     uint32_t startIndex) {
   unsigned count = startIndex;
 
   // TODO: capture leaf frame IP.
   const Inst *ip = nullptr;
-  for (ConstStackFramePtr frame : runtime_->getStackFrames()) {
+  for (ConstStackFramePtr frame : runtime_.getStackFrames()) {
     // Whether we successfully captured a stack frame or not.
     bool capturedFrame = true;
     auto &frameStorage = sampleStorage.stack[count];
     // Check if it is pure JS frame.
-    auto *calleeCodeBlock = frame.getCalleeCodeBlock();
+    auto *calleeCodeBlock = frame.getCalleeCodeBlock(runtime_);
     if (calleeCodeBlock != nullptr) {
       frameStorage.kind = StackFrame::FrameKind::JSFunction;
       frameStorage.jsFrame.functionId = calleeCodeBlock->getFunctionID();
@@ -304,15 +360,20 @@ uint32_t SamplingProfiler::walkRuntimeStack(
       frameStorage.jsFrame.module = module;
       // Don't execute a read or write barrier here because this is a signal
       // handler.
-      if (saveDomains == SaveDomains::Yes)
-        registerDomain(module->getDomainForSamplingProfiler());
+      if (inLoom != InLoom::Yes)
+        registerDomain(module->getDomainForSamplingProfiler(runtime_));
     } else if (
         auto *nativeFunction =
             dyn_vmcast<NativeFunction>(frame.getCalleeClosureUnsafe())) {
       frameStorage.kind = vmisa<FinalizableNativeFunction>(nativeFunction)
           ? StackFrame::FrameKind::FinalizableNativeFunction
           : StackFrame::FrameKind::NativeFunction;
-      frameStorage.nativeFrame = nativeFunction->getFunctionPtr();
+      if (inLoom != InLoom::Yes) {
+        frameStorage.nativeFrame = registerNativeFunction(nativeFunction);
+      } else {
+        frameStorage.nativeFunctionPtrForLoom =
+            nativeFunction->getFunctionPtr();
+      }
     } else {
       // TODO: handle BoundFunction.
       capturedFrame = false;
@@ -350,6 +411,11 @@ SamplingProfiler::GlobalProfiler::GlobalProfiler() {
   profilo_api()->register_external_tracer_callback(
       TRACER_TYPE_JAVASCRIPT, collectStackForLoom);
 #endif
+
+#if defined(__APPLE__) && defined(HERMES_FACEBOOK_BUILD)
+  fbloom_profilo_api()->fbloom_register_external_tracer_callback(
+      1, collectStackForLoom);
+#endif
 }
 
 bool SamplingProfiler::GlobalProfiler::enabled() {
@@ -365,23 +431,28 @@ bool SamplingProfiler::GlobalProfiler::enabled() {
     uint16_t max_depth) {
   auto profilerInstance = GlobalProfiler::instance_.load();
   SamplingProfiler *localProfiler =
-      profilerInstance->threadLocalProfiler_.get();
-  Runtime *curThreadRuntime = localProfiler->runtime_;
-  if (curThreadRuntime == nullptr) {
+      profilerInstance->threadLocalProfilerForLoom_.get();
+  if (localProfiler == nullptr) {
     // No runtime in this thread.
     return StackCollectionRetcode::NO_STACK_FOR_THREAD;
   }
+
+  uint32_t sampledStackDepth = 0;
   // Sampling stack will touch GC objects(like closure) so
   // only do so if heap is valid.
-  uint32_t sampledStackDepth = 0;
-  if (!curThreadRuntime->getHeap().inGC()) {
+  if (LLVM_LIKELY(localProfiler->suspendCount_ == 0)) {
+    Runtime &curThreadRuntime = localProfiler->runtime_;
+    assert(
+        !curThreadRuntime.getHeap().inGC() &&
+        "sampling profiler should be suspended before GC");
+    (void)curThreadRuntime;
     assert(
         profilerInstance != nullptr &&
         "Why is GlobalProfiler::instance_ not initialized yet?");
     // Do not register domains for Loom profiling, since we don't use them for
     // symbolication.
     sampledStackDepth = localProfiler->walkRuntimeStack(
-        profilerInstance->sampleStorage_, SaveDomains::No);
+        profilerInstance->sampleStorage_, InLoom::Yes);
   } else {
     // TODO: log "GC in process" meta event.
     sampledStackDepth = 0;
@@ -414,13 +485,11 @@ bool SamplingProfiler::GlobalProfiler::enabled() {
       }
 
       case StackFrame::FrameKind::NativeFunction:
-        frames[i] = ((uint64_t)stackFrame.nativeFrame | kNativeFrameMask);
+      case StackFrame::FrameKind::FinalizableNativeFunction: {
+        NativeFunctionPtr nativeFrame = stackFrame.nativeFunctionPtrForLoom;
+        frames[i] = ((uint64_t)nativeFrame | kNativeFrameMask);
         break;
-
-      case StackFrame::FrameKind::FinalizableNativeFunction:
-        frames[i] =
-            ((uint64_t)stackFrame.finalizableNativeFrame | kNativeFrameMask);
-        break;
+      }
 
       default:
         llvm_unreachable("Loom: unknown frame kind");
@@ -434,25 +503,88 @@ bool SamplingProfiler::GlobalProfiler::enabled() {
 }
 #endif
 
-SamplingProfiler::SamplingProfiler(Runtime *runtime) : 
-#ifndef _MSC_VER
-    currentThread_{pthread_self()}, 
+#if defined(__APPLE__) && defined(HERMES_FACEBOOK_BUILD)
+/*static*/ FBLoomStackCollectionRetcode SamplingProfiler::collectStackForLoom(
+    int64_t *frames,
+    uint16_t *depth,
+    uint16_t max_depth) {
+  auto profilerInstance = GlobalProfiler::get();
+  if (!profilerInstance->enableForLoomCollection()) {
+    return FBLoomStackCollectionRetcode::NO_STACK_FOR_THREAD;
+  }
+  if (!profilerInstance->sampleStack()) {
+    return FBLoomStackCollectionRetcode::NO_STACK_FOR_THREAD;
+  }
+  if (!profilerInstance->disableForLoomCollection()) {
+    return FBLoomStackCollectionRetcode::NO_STACK_FOR_THREAD;
+  }
+  std::lock_guard<std::mutex> lk(profilerInstance->profilerLock_);
+  *depth = 0;
+  int index = 0;
+  auto *localProfiler = *profilerInstance->profilers_.begin();
+  constexpr uint64_t kNativeFrameMask = ((uint64_t)1 << 63);
+  for (unsigned i = 0; i < localProfiler->sampledStacks_.size(); ++i) {
+    auto &sample = localProfiler->sampledStacks_[i];
+    for (auto iter = sample.stack.rbegin(); iter != sample.stack.rend();
+         ++iter) {
+      const StackFrame &frame = *iter;
+      switch (frame.kind) {
+        case StackFrame::FrameKind::JSFunction: {
+          auto *bcProvider = frame.jsFrame.module->getBytecode();
+          uint32_t virtualOffset = bcProvider->getVirtualOffsetForFunction(
+                                       frame.jsFrame.functionId) +
+              frame.jsFrame.offset;
+          uint32_t segmentID = bcProvider->getSegmentID();
+          uint64_t frameAddress = ((uint64_t)segmentID << 32) + virtualOffset;
+          frames[index++] = static_cast<int64_t>(frameAddress);
+          (*depth)++;
+          break;
+        }
+
+        case StackFrame::FrameKind::NativeFunction:
+        case StackFrame::FrameKind::FinalizableNativeFunction: {
+          NativeFunctionPtr nativeFrame =
+              localProfiler->getNativeFunctionPtr(frame);
+          frames[index++] = ((uint64_t)nativeFrame | kNativeFrameMask);
+          (*depth)++;
+          break;
+        }
+
+        default:
+          llvm_unreachable("Loom: unknown frame kind");
+      }
+    }
+  }
+  localProfiler->clear();
+  if (*depth == 0) {
+    return FBLoomStackCollectionRetcode::EMPTY_STACK;
+  }
+  return FBLoomStackCollectionRetcode::SUCCESS;
+}
 #endif
-    runtime_{runtime} {
+
+SamplingProfiler::SamplingProfiler(Runtime &runtime)
+    :
+#ifndef _MSC_VER
+      currentThread_{pthread_self()},
+#endif
+      runtime_{runtime} {
 
 #ifdef _MSC_VER
-    currentThreadHandle_ = OpenThread(
+  currentThreadHandle_ = OpenThread(
       THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION,
       false,
       GetCurrentThreadId());
 
   threadId_ = oscompat::thread_id();
 #endif
-    threadNames_[oscompat::thread_id()] = oscompat::thread_name();
+  threadNames_[oscompat::thread_id()] = oscompat::thread_name();
   GlobalProfiler::get()->registerRuntime(this);
 }
 
 SamplingProfiler::~SamplingProfiler() {
+  // TODO(T125910634): re-introduce the requirement for destroying the sampling
+  // profiler on the same thread in which it was created.
   GlobalProfiler::get()->unregisterRuntime(this);
 }
 
@@ -485,12 +617,14 @@ void SamplingProfiler::dumpSampledStack(llvh::raw_ostream &OS) {
              << frame.jsFrame.offset;
           break;
 
-        case StackFrame::FrameKind::NativeFunction:
-          OS << "[Native] " << reinterpret_cast<uintptr_t>(frame.nativeFrame);
+        case StackFrame::FrameKind::NativeFunction: {
+          NativeFunctionPtr nativeFrame = getNativeFunctionPtr(frame);
+          OS << "[Native] " << reinterpret_cast<uintptr_t>(nativeFrame);
           break;
+        }
 
         case StackFrame::FrameKind::FinalizableNativeFunction:
-          OS << "[HostFunction]";
+          OS << "[HostFunction] " << getNativeFunctionName(frame);
           break;
 
         default:
@@ -515,14 +649,23 @@ void SamplingProfiler::dumpChromeTrace(llvh::raw_ostream &OS) {
   std::lock_guard<std::mutex> lk(runtimeDataLock_);
 
 #ifndef _MSC_VER
-auto pid = getpid();
+  auto pid = getpid();
 #else
-auto pid = GetCurrentProcessId();
+  auto pid = GetCurrentProcessId();
 #endif
 
   ChromeTraceSerializer serializer(
-      ChromeTraceFormat::create(pid, threadNames_, sampledStacks_));
+      *this, ChromeTraceFormat::create(pid, threadNames_, sampledStacks_));
   serializer.serialize(OS);
+  clear();
+}
+
+void SamplingProfiler::serializeInDevToolsFormat(llvh::raw_ostream &OS) {
+  std::lock_guard<std::mutex> lk(runtimeDataLock_);
+  hermes::vm::serializeAsProfilerProfile(
+      *this,
+      OS,
+      ChromeTraceFormat::create(getpid(), threadNames_, sampledStacks_));
   clear();
 }
 
@@ -548,6 +691,23 @@ bool SamplingProfiler::GlobalProfiler::enable() {
   timerThread_ = std::thread(&GlobalProfiler::timerLoop, this);
   return true;
 }
+
+#if defined(__APPLE__) && defined(HERMES_FACEBOOK_BUILD)
+bool SamplingProfiler::GlobalProfiler::enableForLoomCollection() {
+  std::lock_guard<std::mutex> lockGuard(profilerLock_);
+  if (enabled_) {
+    return true;
+  }
+  if (!samplingDoneSem_.open(kSamplingDoneSemaphoreName)) {
+    return false;
+  }
+  if (!registerSignalHandlers()) {
+    return false;
+  }
+  enabled_ = true;
+  return true;
+}
+#endif
 
 bool SamplingProfiler::disable() {
   return GlobalProfiler::get()->disable();
@@ -581,55 +741,74 @@ bool SamplingProfiler::GlobalProfiler::disable() {
   return true;
 }
 
+#if defined(__APPLE__) && defined(HERMES_FACEBOOK_BUILD)
+bool SamplingProfiler::GlobalProfiler::disableForLoomCollection() {
+  {
+    std::lock_guard<std::mutex> lockGuard(profilerLock_);
+    if (!enabled_) {
+      // Already disabled.
+      return true;
+    }
+    if (!samplingDoneSem_.close()) {
+      return false;
+    }
+    // Unregister handlers before shutdown.
+    if (!unregisterSignalHandler()) {
+      return false;
+    }
+    // Telling timer thread to exit.
+    enabled_ = false;
+  }
+  // Notify the timer thread that it has been disabled.
+  enabledCondVar_.notify_all();
+  return true;
+}
+#endif
+
 void SamplingProfiler::clear() {
   sampledStacks_.clear();
-  // Release all strong roots to domains.
+  // Release all strong roots.
   domains_.clear();
+  nativeFunctions_.clear();
   // TODO: keep thread names that are still in use.
   threadNames_.clear();
 }
 
-void SamplingProfiler::onGCEvent(
-    GCEventKind kind,
-    const std::string &extraInfo) {
-  assert(
-      !runtime_->getHeap().inGC() &&
-      "Cannot be in a GC when setting a GC event");
-  switch (kind) {
-    case GCEventKind::CollectionStart: {
-      assert(
-          preGCStackDepth_ == 0 && "preGCStackDepth_ is not reset after GC?");
-      if (LLVM_LIKELY(!GlobalProfiler::get()->enabled())) {
-        return;
-      }
-      recordPreGCStack(extraInfo);
-      break;
-    }
+void SamplingProfiler::suspend(std::string_view extraInfo) {
+  std::lock_guard<std::mutex> lk(runtimeDataLock_);
+  if (++suspendCount_ > 1 || extraInfo.empty()) {
+    // If there are multiple nested suspend calls use a default "suspended"
+    // label for the suspend entry in the call stack. Also use the default
+    // when no extra info is provided.
+    extraInfo = "suspended";
+  }
 
-    case GCEventKind::CollectionEnd:
-      preGCStackDepth_ = 0;
-      break;
-
-    default:
-      llvm_unreachable("Unknown GC event");
+  // Only record the stack trace for the first suspend() call.
+  if (LLVM_UNLIKELY(GlobalProfiler::get()->enabled() && suspendCount_ == 1)) {
+    recordPreSuspendStack(extraInfo);
   }
 }
 
-void SamplingProfiler::recordPreGCStack(const std::string &extraInfo) {
-  GCFrameInfo gcExtraInfo = nullptr;
-  if (!extraInfo.empty()) {
-    std::pair<std::unordered_set<std::string>::iterator, bool> retPair =
-        gcEventExtraInfoSet_.insert(extraInfo);
-    gcExtraInfo = &(*(retPair.first));
-  }
-
-  auto &leafFrame = preGCStackStorage_.stack[0];
-  leafFrame.kind = StackFrame::FrameKind::GCFrame;
-  leafFrame.gcFrame = gcExtraInfo;
-
+void SamplingProfiler::resume() {
   std::lock_guard<std::mutex> lk(runtimeDataLock_);
+  assert(suspendCount_ > 0 && "resume() without suspend()");
+  if (--suspendCount_ == 0) {
+    preSuspendStackDepth_ = 0;
+  }
+}
+
+void SamplingProfiler::recordPreSuspendStack(std::string_view extraInfo) {
+  std::pair<std::unordered_set<std::string>::iterator, bool> retPair =
+      suspendEventExtraInfoSet_.emplace(extraInfo);
+  SuspendFrameInfo suspendExtraInfo = &(*(retPair.first));
+
+  auto &leafFrame = preSuspendStackStorage_.stack[0];
+  leafFrame.kind = StackFrame::FrameKind::SuspendFrame;
+  leafFrame.suspendFrame = suspendExtraInfo;
+
   // Leaf frame slot has been used, filling from index 1.
-  preGCStackDepth_ = walkRuntimeStack(preGCStackStorage_, SaveDomains::Yes, 1);
+  preSuspendStackDepth_ =
+      walkRuntimeStack(preSuspendStackStorage_, InLoom::No, 1);
 }
 
 bool operator==(
@@ -644,13 +823,11 @@ bool operator==(
           left.jsFrame.offset == right.jsFrame.offset;
 
     case SamplingProfiler::StackFrame::FrameKind::NativeFunction:
+    case SamplingProfiler::StackFrame::FrameKind::FinalizableNativeFunction:
       return left.nativeFrame == right.nativeFrame;
 
-    case SamplingProfiler::StackFrame::FrameKind::FinalizableNativeFunction:
-      return left.finalizableNativeFrame == right.finalizableNativeFrame;
-
-    case SamplingProfiler::StackFrame::FrameKind::GCFrame:
-      return left.gcFrame == right.gcFrame;
+    case SamplingProfiler::StackFrame::FrameKind::SuspendFrame:
+      return left.suspendFrame == right.suspendFrame;
 
     default:
       llvm_unreachable("Unknown frame kind");

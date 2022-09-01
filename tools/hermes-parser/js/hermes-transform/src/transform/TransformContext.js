@@ -18,28 +18,31 @@ import type {
   Statement,
   TypeAnnotationType,
 } from 'hermes-estree';
-import type {DetachedNode} from '../detachedNode';
+import type {DetachedNode, MaybeDetachedNode} from '../detachedNode';
 import type {TransformCloneSignatures} from '../generated/TransformCloneSignatures';
+import type {TransformModifySignatures} from '../generated/TransformModifySignatures';
 import type {TransformReplaceSignatures} from '../generated/TransformReplaceSignatures';
-import type {AddLeadingCommentsMutation} from './mutations/AddLeadingComments';
-import type {AddTrailingCommentsMutation} from './mutations/AddTrailingComments';
+import type {TraversalContext} from '../traverse/traverse';
+import type {AddCommentsMutation} from './mutations/AddComments';
 import type {CloneCommentsToMutation} from './mutations/CloneCommentsTo';
 import type {InsertStatementMutation} from './mutations/InsertStatement';
 import type {RemoveCommentMutation} from './mutations/RemoveComment';
 import type {RemoveNodeMutation} from './mutations/RemoveNode';
 import type {RemoveStatementMutation} from './mutations/RemoveStatement';
 import type {ReplaceNodeMutation} from './mutations/ReplaceNode';
-import type {ReplaceStatementWithManyMutation} from './mutations/ReplaceStatementWithMany';
+import type {
+  ReplaceStatementWithManyMutation,
+  ReplaceStatementWithManyMutationNodes,
+} from './mutations/ReplaceStatementWithMany';
 
-import {codeFrameColumns} from '@babel/code-frame';
-import {deepCloneNode, shallowCloneNode} from '../detachedNode';
+import {asDetachedNode, deepCloneNode, shallowCloneNode} from '../detachedNode';
 import {
+  CommentPlacement,
   getCommentsForNode,
   isLeadingComment,
   isTrailingComment,
 } from './comments/comments';
-import {createAddLeadingCommentsMutation} from './mutations/AddLeadingComments';
-import {createAddTrailingCommentsMutation} from './mutations/AddTrailingComments';
+import {createAddCommentsMutation} from './mutations/AddComments';
 import {createCloneCommentsToMutation} from './mutations/CloneCommentsTo';
 import {createInsertStatementMutation} from './mutations/InsertStatement';
 import {createRemoveCommentMutation} from './mutations/RemoveComment';
@@ -49,8 +52,7 @@ import {createReplaceNodeMutation} from './mutations/ReplaceNode';
 import {createReplaceStatementWithManyMutation} from './mutations/ReplaceStatementWithMany';
 
 type Mutation = $ReadOnly<
-  | AddLeadingCommentsMutation
-  | AddTrailingCommentsMutation
+  | AddCommentsMutation
   | CloneCommentsToMutation
   | InsertStatementMutation
   | RemoveCommentMutation
@@ -105,6 +107,8 @@ type TransformCloneAPIs = $ReadOnly<{
   shallowCloneArray: {
     <T: ESNode>(node: $ReadOnlyArray<T>): $ReadOnlyArray<DetachedNode<T>>,
     <T: ESNode>(node: ?$ReadOnlyArray<T>): ?$ReadOnlyArray<DetachedNode<T>>,
+    <T: ESNode>(node: $ReadOnlyArray<?T>): $ReadOnlyArray<DetachedNode<?T>>,
+    <T: ESNode>(node: ?$ReadOnlyArray<?T>): ?$ReadOnlyArray<DetachedNode<?T>>,
   },
 
   /**
@@ -150,22 +154,38 @@ type TransformCommentAPIs = $ReadOnly<{
    */
   cloneCommentsTo: (
     target: ESNode,
-    destination: ESNode | DetachedNode<ESNode>,
+    destination: MaybeDetachedNode<ESNode>,
   ) => void,
 
   /**
-   * Add leading comments to the specified node.
+   * Add comments on the line before a specified node.
    */
   addLeadingComments: (
-    node: ESNode | DetachedNode<ESNode>,
+    node: MaybeDetachedNode<ESNode>,
     comments: SingleOrArray<Comment>,
   ) => void,
 
   /**
-   * Add trailing comments to the specified node.
+   * Add comments inline before a specified node.
+   */
+  addLeadingInlineComments: (
+    node: MaybeDetachedNode<ESNode>,
+    comments: SingleOrArray<Comment>,
+  ) => void,
+
+  /**
+   * Add comments on the line after a specified node.
    */
   addTrailingComments: (
-    node: ESNode | DetachedNode<ESNode>,
+    node: MaybeDetachedNode<ESNode>,
+    comments: SingleOrArray<Comment>,
+  ) => void,
+
+  /**
+   * Add comments inline after a specified node.
+   */
+  addTrailingInlineComments: (
+    node: MaybeDetachedNode<ESNode>,
     comments: SingleOrArray<Comment>,
   ) => void,
 
@@ -183,7 +203,7 @@ type TransformInsertAPIs = $ReadOnly<{
   insertAfterStatement: (
     target: InsertStatementMutation['target'],
     nodeToInsert: SingleOrArray<
-      DetachedNode<InsertStatementMutation['target']>,
+      MaybeDetachedNode<InsertStatementMutation['target']>,
     >,
   ) => void,
 
@@ -194,9 +214,17 @@ type TransformInsertAPIs = $ReadOnly<{
   insertBeforeStatement: (
     target: InsertStatementMutation['target'],
     nodeToInsert: SingleOrArray<
-      DetachedNode<InsertStatementMutation['target']>,
+      MaybeDetachedNode<InsertStatementMutation['target']>,
     >,
   ) => void,
+}>;
+
+type TransformModifyAPIs = $ReadOnly<{
+  /**
+   * Modifies a given node in place.
+   * This is equivalent to doing a replace with a shallow clone with overrides.
+   */
+  modifyNodeInPlace: TransformModifySignatures,
 }>;
 
 type TransformRemoveAPIs = $ReadOnly<{
@@ -222,37 +250,37 @@ type TransformReplaceAPIs = $ReadOnly<{
     // Expressions may be replaced with other expressions
     (
       target: Expression,
-      nodeToReplaceWith: DetachedNode<Expression>,
+      nodeToReplaceWith: MaybeDetachedNode<Expression>,
       options?: ReplaceNodeOptions,
     ): void,
     // Module declarations may be replaced with statements or other module declarations
     (
       target: ModuleDeclaration,
-      nodeToReplaceWith: DetachedNode<ModuleDeclaration | Statement>,
+      nodeToReplaceWith: MaybeDetachedNode<ModuleDeclaration | Statement>,
       options?: ReplaceNodeOptions,
     ): void,
     // Statement maybe be replaced with statements or module declarations
     (
       target: Statement,
-      nodeToReplaceWith: DetachedNode<ModuleDeclaration | Statement>,
+      nodeToReplaceWith: MaybeDetachedNode<ModuleDeclaration | Statement>,
       options?: ReplaceNodeOptions,
     ): void,
     // Types maybe be replaced with other types
     (
       target: TypeAnnotationType,
-      nodeToReplaceWith: DetachedNode<TypeAnnotationType>,
+      nodeToReplaceWith: MaybeDetachedNode<TypeAnnotationType>,
       options?: ReplaceNodeOptions,
     ): void,
     // Class members may be replaced with other class members
     (
       target: ClassMember,
-      nodeToReplaceWith: DetachedNode<ClassMember>,
+      nodeToReplaceWith: MaybeDetachedNode<ClassMember>,
       options?: ReplaceNodeOptions,
     ): void,
     // Function params amy be replace with other function params
     (
       target: FunctionParameter,
-      nodeToReplaceWith: DetachedNode<FunctionParameter>,
+      nodeToReplaceWith: MaybeDetachedNode<FunctionParameter>,
       options?: ReplaceNodeOptions,
     ): void,
   } & TransformReplaceSignatures, // allow like-for-like replacements as well
@@ -263,7 +291,9 @@ type TransformReplaceAPIs = $ReadOnly<{
    */
   replaceStatementWithMany: (
     target: ReplaceStatementWithManyMutation['target'],
-    nodesToReplaceWith: ReplaceStatementWithManyMutation['nodesToReplaceWith'],
+    nodesToReplaceWith: $ReadOnlyArray<
+      MaybeDetachedNode<ReplaceStatementWithManyMutationNodes>,
+    >,
     options?: {
       /**
        * Moves the comments from the target node to the first node in the array.
@@ -275,43 +305,20 @@ type TransformReplaceAPIs = $ReadOnly<{
   ) => void,
 }>;
 
-export type TransformContext = $ReadOnly<{
+export type TransformContextAdditions = $ReadOnly<{
   mutations: $ReadOnlyArray<Mutation>,
   astWasMutated: boolean,
-
-  /**
-   * Creates a full code frame for the node along with the message.
-   *
-   * i.e. `context.buildCodeFrame(node, 'foo')` will create a string like:
-   * ```
-   * 56 | function () {
-   *    | ^^^^^^^^^^^^^
-   * 57 | }.bind(this)
-   *    | ^^ foo
-   * ```
-   */
-  buildCodeFrame: (node: ESNode, message: string) => string,
-
-  /**
-   * Creates a simple code frame for the node along with the message.
-   * Use this if you want a condensed marker for your message.
-   *
-   * i.e. `context.logWithNode(node, 'foo')` will create a string like:
-   * ```
-   * [FunctionExpression:56:44] foo
-   * ```
-   * (where 56:44 represents L56, Col44)
-   */
-  buildSimpleCodeFrame: (node: ESNode, message: string) => string,
 
   ...TransformCommentAPIs,
   ...TransformCloneAPIs,
   ...TransformInsertAPIs,
+  ...TransformModifyAPIs,
   ...TransformRemoveAPIs,
   ...TransformReplaceAPIs,
 }>;
+export type TransformContext = TraversalContext<TransformContextAdditions>;
 
-export function getTransformContext(code: string): TransformContext {
+export function getTransformContext(): TransformContextAdditions {
   /**
    * The mutations in order of collection.
    */
@@ -323,7 +330,6 @@ export function getTransformContext(code: string): TransformContext {
   }
 
   const cloneAPIs: TransformCloneAPIs = {
-    // $FlowExpectedError[incompatible-exact]
     shallowCloneNode: ((
       node: ?ESNode,
     ): // $FlowExpectedError[incompatible-cast]
@@ -332,14 +338,14 @@ export function getTransformContext(code: string): TransformContext {
         return null;
       }
 
-      return shallowCloneNode(node);
+      return shallowCloneNode(node, {});
     }: TransformCloneAPIs['shallowCloneNode']),
 
-    // $FlowExpectedError[incompatible-exact]
     shallowCloneNodeWithOverrides: ((
       node: ?ESNode,
-      newProps?: $ReadOnly<{...}>,
+      newProps?: $ReadOnly<{...}> = {},
     ): // $FlowExpectedError[incompatible-cast]
+    // $FlowExpectedError[prop-missing]
     ?DetachedNode<ESNode> => {
       if (node == null) {
         return null;
@@ -349,17 +355,22 @@ export function getTransformContext(code: string): TransformContext {
     }: TransformCloneAPIs['shallowCloneNodeWithOverrides']),
 
     shallowCloneArray: (<T: ESNode>(
-      nodes: ?$ReadOnlyArray<T>,
+      nodes: ?$ReadOnlyArray<?T>,
     ): // $FlowExpectedError[incompatible-cast]
-    ?$ReadOnlyArray<DetachedNode<ESNode>> => {
+    ?$ReadOnlyArray<DetachedNode<?ESNode>> => {
       if (nodes == null) {
         return null;
       }
 
-      return nodes.map(node => shallowCloneNode<T>(node));
+      return nodes.map(node => {
+        if (node == null) {
+          // $FlowExpectedError[incompatible-call]
+          return node;
+        }
+        return shallowCloneNode<T>(node, {});
+      });
     }: TransformCloneAPIs['shallowCloneArray']),
 
-    // $FlowExpectedError[incompatible-exact]
     deepCloneNode: ((
       node: ?ESNode,
     ): // $FlowExpectedError[incompatible-cast]
@@ -368,14 +379,14 @@ export function getTransformContext(code: string): TransformContext {
         return null;
       }
 
-      return deepCloneNode(node);
+      return deepCloneNode(node, {});
     }: TransformCloneAPIs['deepCloneNode']),
 
-    // $FlowExpectedError[incompatible-exact]
     deepCloneNodeWithOverrides: ((
       node: ?ESNode,
-      newProps?: $ReadOnly<{...}>,
+      newProps?: $ReadOnly<{...}> = {},
     ): // $FlowExpectedError[incompatible-cast]
+    // $FlowExpectedError[prop-missing]
     ?DetachedNode<ESNode> => {
       if (node == null) {
         return null;
@@ -402,12 +413,52 @@ export function getTransformContext(code: string): TransformContext {
     }: TransformCommentAPIs['cloneCommentsTo']),
 
     addLeadingComments: ((node, comments): void => {
-      pushMutation(createAddLeadingCommentsMutation(node, toArray(comments)));
+      pushMutation(
+        createAddCommentsMutation(
+          node,
+          toArray(comments).map(comment => ({
+            comment,
+            placement: CommentPlacement.LEADING_OWN_LINE,
+          })),
+        ),
+      );
     }: TransformCommentAPIs['addLeadingComments']),
 
+    addLeadingInlineComments: ((node, comments): void => {
+      pushMutation(
+        createAddCommentsMutation(
+          node,
+          toArray(comments).map(comment => ({
+            comment,
+            placement: CommentPlacement.LEADING_INLINE,
+          })),
+        ),
+      );
+    }: TransformCommentAPIs['addLeadingInlineComments']),
+
     addTrailingComments: ((node, comments): void => {
-      pushMutation(createAddTrailingCommentsMutation(node, toArray(comments)));
+      pushMutation(
+        createAddCommentsMutation(
+          node,
+          toArray(comments).map(comment => ({
+            comment,
+            placement: CommentPlacement.TRAILING_OWN_LINE,
+          })),
+        ),
+      );
     }: TransformCommentAPIs['addTrailingComments']),
+
+    addTrailingInlineComments: ((node, comments): void => {
+      pushMutation(
+        createAddCommentsMutation(
+          node,
+          toArray(comments).map(comment => ({
+            comment,
+            placement: CommentPlacement.TRAILING_INLINE,
+          })),
+        ),
+      );
+    }: TransformCommentAPIs['addTrailingInlineComments']),
 
     removeComments: ((comments): void => {
       toArray(comments).forEach(comment => {
@@ -418,13 +469,25 @@ export function getTransformContext(code: string): TransformContext {
   const insertAPIs: TransformInsertAPIs = {
     insertAfterStatement: ((target, nodesToInsert): void => {
       pushMutation(
-        createInsertStatementMutation('after', target, toArray(nodesToInsert)),
+        createInsertStatementMutation(
+          'after',
+          target,
+          toArray(nodesToInsert).map(n =>
+            asDetachedNode(n, {useDeepClone: true}),
+          ),
+        ),
       );
     }: TransformInsertAPIs['insertBeforeStatement']),
 
     insertBeforeStatement: ((target, nodesToInsert): void => {
       pushMutation(
-        createInsertStatementMutation('before', target, toArray(nodesToInsert)),
+        createInsertStatementMutation(
+          'before',
+          target,
+          toArray(nodesToInsert).map(n =>
+            asDetachedNode(n, {useDeepClone: true}),
+          ),
+        ),
       );
     }: TransformInsertAPIs['insertBeforeStatement']),
   };
@@ -440,27 +503,46 @@ export function getTransformContext(code: string): TransformContext {
   const replaceAPIs: TransformReplaceAPIs = {
     replaceNode: ((
       target: ESNode,
-      nodeToReplaceWith: DetachedNode<ESNode>,
-      options?: $ReadOnly<{keepComments?: boolean}>,
+      nodeToReplaceWith: MaybeDetachedNode<ESNode>,
+      options?: ReplaceNodeOptions,
     ): void => {
       pushMutation(
-        createReplaceNodeMutation(target, nodeToReplaceWith, options),
+        createReplaceNodeMutation(
+          target,
+          asDetachedNode(nodeToReplaceWith),
+          options,
+        ),
       );
     }: TransformReplaceAPIs['replaceNode']),
 
     replaceStatementWithMany: ((
       target,
       nodesToReplaceWith,
-      options?: $ReadOnly<{keepComments?: boolean}>,
+      options?: ReplaceNodeOptions,
     ): void => {
       pushMutation(
         createReplaceStatementWithManyMutation(
           target,
-          nodesToReplaceWith,
+          nodesToReplaceWith.map(n => asDetachedNode(n)),
           options,
         ),
       );
     }: TransformReplaceAPIs['replaceStatementWithMany']),
+  };
+  const modifyAPIs: TransformModifyAPIs = {
+    modifyNodeInPlace: ((
+      node: ?ESNode,
+      newProps?: $ReadOnly<{...}> = {},
+      options?: ReplaceNodeOptions,
+    ): void => {
+      if (node == null) {
+        return;
+      }
+
+      const cloned = shallowCloneNode(node, newProps, {preserveLocation: true});
+      // $FlowExpectedError[incompatible-call]
+      replaceAPIs.replaceNode(node, cloned, options);
+    }: TransformModifyAPIs['modifyNodeInPlace']),
   };
 
   return {
@@ -471,33 +553,10 @@ export function getTransformContext(code: string): TransformContext {
       return mutations.length > 0;
     },
 
-    buildCodeFrame: (node: ESNode, message: string): string => {
-      // babel uses 1-indexed columns
-      const locForBabel = {
-        start: {
-          line: node.loc.start.line,
-          column: node.loc.start.column + 1,
-        },
-        end: {
-          line: node.loc.end.line,
-          column: node.loc.end.column + 1,
-        },
-      };
-      return codeFrameColumns(code, locForBabel, {
-        linesAbove: 0,
-        linesBelow: 0,
-        highlightCode: process.env.NODE_ENV !== 'test',
-        message: message,
-      });
-    },
-
-    buildSimpleCodeFrame: (node: ESNode, message: string): string => {
-      return `[${node.type}:${node.loc.start.line}:${node.loc.start.column}] ${message}`;
-    },
-
     ...cloneAPIs,
     ...commentAPIs,
     ...insertAPIs,
+    ...modifyAPIs,
     ...removeAPIs,
     ...replaceAPIs,
   };

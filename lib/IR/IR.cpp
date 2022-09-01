@@ -23,9 +23,6 @@
 
 using namespace hermes;
 
-using llvh::cast;
-using llvh::dyn_cast;
-
 // Make sure the ValueKinds.def tree is consistent with the class hierarchy.
 #define QUOTE(X) #X
 #define DEF_VALUE(CLASS, PARENT)                                           \
@@ -64,13 +61,13 @@ void Value::destroy(Value *V) {
   }
 }
 
-StringRef Value::getKindStr() const {
+llvh::StringRef Value::getKindStr() const {
   switch (Kind) {
     default:
       llvm_unreachable("Invalid kind");
 #define DEF_VALUE(XX, PARENT) \
   case ValueKind::XX##Kind:   \
-    return StringRef(#XX);
+    return llvh::StringRef(#XX);
 #include "hermes/IR/ValueKinds.def"
   }
 }
@@ -261,8 +258,8 @@ BasicBlock::BasicBlock(Function *parent)
   Parent->addBlock(this);
 }
 
-void BasicBlock::dump() {
-  IRPrinter D(getParent()->getContext(), llvh::outs());
+void BasicBlock::dump(llvh::raw_ostream &os) const {
+  IRPrinter D(getParent()->getContext(), os);
   D.visit(*this);
 }
 
@@ -272,7 +269,7 @@ void BasicBlock::printAsOperand(llvh::raw_ostream &OS, bool) const {
   OS << "BB#" << std::to_string(Num);
 }
 
-void Instruction::dump(llvh::raw_ostream &os) {
+void Instruction::dump(llvh::raw_ostream &os) const {
   IRPrinter D(getParent()->getContext(), os);
   D.visit(*this);
 }
@@ -409,7 +406,7 @@ void Function::eraseFromParentNoDestroy() {
   getParent()->getFunctionList().remove(getIterator());
 }
 
-StringRef Instruction::getName() {
+llvh::StringRef Instruction::getName() {
   switch (getKind()) {
     default:
       llvm_unreachable("Invalid kind");
@@ -543,6 +540,9 @@ Module::~Module() {
   for (auto &L : literalNumbers) {
     toDelete.push_back(&L);
   }
+  for (auto &L : literalBigInts) {
+    toDelete.push_back(&L);
+  }
   for (auto &L : literalStrings) {
     toDelete.push_back(&L);
   }
@@ -671,8 +671,8 @@ int Parameter::getIndexInParamList() const {
   llvm_unreachable("Cannot find parameter in the function");
 }
 
-void Function::dump() {
-  IRPrinter D(getParent()->getContext(), llvh::outs());
+void Function::dump(llvh::raw_ostream &os) const {
+  IRPrinter D(getParent()->getContext(), os);
   D.visit(*this);
 }
 
@@ -739,10 +739,9 @@ void Module::viewGraph() {
   }
 }
 
-void Module::dump() {
-  for (auto &F : *this) {
-    F.dump();
-  }
+void Module::dump(llvh::raw_ostream &os) const {
+  IRPrinter D(getContext(), os);
+  D.visit(*this);
 }
 
 LiteralNumber *Module::getLiteralNumber(double value) {
@@ -758,6 +757,22 @@ LiteralNumber *Module::getLiteralNumber(double value) {
 
   auto New = new LiteralNumber(value);
   literalNumbers.InsertNode(New, InsertPos);
+  return New;
+}
+
+LiteralBigInt *Module::getLiteralBigInt(UniqueString *value) {
+  // Check to see if we've already seen this tuple before.
+  llvh::FoldingSetNodeID ID;
+
+  LiteralBigInt::Profile(ID, value);
+
+  // If this is not the first time we see this tuple then return the old copy.
+  void *InsertPos = nullptr;
+  if (LiteralBigInt *LN = literalBigInts.FindNodeOrInsertPos(ID, InsertPos))
+    return LN;
+
+  auto New = new LiteralBigInt(value);
+  literalBigInts.InsertNode(New, InsertPos);
   return New;
 }
 

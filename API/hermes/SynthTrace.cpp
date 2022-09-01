@@ -46,7 +46,7 @@ double decodeNumber(const std::string &numberAsString) {
   ss << std::hex << numberAsString;
   uint64_t x;
   ss >> x;
-  return ::hermes::safeTypeCast<uint64_t, double>(x);
+  return llvh::BitsToDouble(x);
 }
 
 std::string doublePrinter(double x) {
@@ -61,7 +61,7 @@ std::string doublePrinter(double x) {
   llvh::raw_string_ostream resultStream{result};
   llvh::write_hex(
       resultStream,
-      ::hermes::safeTypeCast<double, uint64_t>(x),
+      llvh::DoubleToBits(x),
       llvh::HexPrintStyle::PrefixLower,
       16);
   resultStream.flush();
@@ -136,6 +136,7 @@ SynthTrace::SynthTrace(
     json_->emitKeyValue("ES6Promise", conf.getES6Promise());
     json_->emitKeyValue("ES6Proxy", conf.getES6Proxy());
     json_->emitKeyValue("Intl", conf.getIntl());
+    json_->emitKeyValue("MicrotasksQueue", conf.getMicrotaskQueue());
     json_->emitKeyValue("enableSampledStats", conf.getEnableSampledStats());
     json_->emitKeyValue("vmExperimentFlags", conf.getVMExperimentFlags());
     json_->closeDict();
@@ -220,12 +221,20 @@ SynthTrace::TraceValue SynthTrace::encodeObject(ObjectID objID) {
   return TraceValue::encodeObjectValue(objID);
 }
 
+SynthTrace::TraceValue SynthTrace::encodeBigInt(ObjectID objID) {
+  return TraceValue::encodeBigIntValue(objID);
+}
+
 SynthTrace::TraceValue SynthTrace::encodeString(ObjectID objID) {
   return TraceValue::encodeStringValue(objID);
 }
 
 SynthTrace::TraceValue SynthTrace::encodePropNameID(ObjectID objID) {
   return TraceValue::encodePropNameIDValue(objID);
+}
+
+SynthTrace::TraceValue SynthTrace::encodeSymbol(ObjectID objID) {
+  return TraceValue::encodeSymbolValue(objID);
 }
 
 /*static*/
@@ -236,10 +245,14 @@ std::string SynthTrace::encode(TraceValue value) {
     return "null:";
   } else if (value.isObject()) {
     return std::string("object:") + std::to_string(value.getUID());
+  } else if (value.isBigInt()) {
+    return std::string("bigint:") + std::to_string(value.getUID());
   } else if (value.isString()) {
     return std::string("string:") + std::to_string(value.getUID());
   } else if (value.isPropNameID()) {
     return std::string("propNameID:") + std::to_string(value.getUID());
+  } else if (value.isSymbol()) {
+    return std::string("symbol:") + std::to_string(value.getUID());
   } else if (value.isNumber()) {
     return std::string("number:") + doublePrinter(value.getNumber());
   } else if (value.isBool()) {
@@ -271,8 +284,12 @@ SynthTrace::TraceValue SynthTrace::decode(const std::string &str) {
     return encodeObject(decodeID(rest));
   } else if (tag == "string") {
     return encodeString(decodeID(rest));
+  } else if (tag == "bigint") {
+    return encodeBigInt(decodeID(rest));
   } else if (tag == "propNameID") {
     return encodePropNameID(decodeID(rest));
+  } else if (tag == "symbol") {
+    return encodeSymbol(decodeID(rest));
   } else {
     llvm_unreachable("Illegal object encountered");
   }
@@ -320,6 +337,32 @@ bool SynthTrace::CreateObjectRecord::operator==(const Record &that) const {
   return objID_ == thatCasted.objID_;
 }
 
+bool SynthTrace::DrainMicrotasksRecord::operator==(const Record &that) const {
+  if (!Record::operator==(that)) {
+    return false;
+  }
+  const auto &thatCasted = dynamic_cast<const DrainMicrotasksRecord &>(that);
+  return maxMicrotasksHint_ == thatCasted.maxMicrotasksHint_;
+}
+
+bool SynthTrace::CreateBigIntRecord::operator==(const Record &that) const {
+  if (!Record::operator==(that)) {
+    return false;
+  }
+  auto &thatCasted = dynamic_cast<const CreateBigIntRecord &>(that);
+  return objID_ == thatCasted.objID_ && method_ == thatCasted.method_ &&
+      bits_ == thatCasted.bits_;
+}
+
+bool SynthTrace::BigIntToStringRecord::operator==(const Record &that) const {
+  if (!Record::operator==(that)) {
+    return false;
+  }
+  auto &thatCasted = dynamic_cast<const BigIntToStringRecord &>(that);
+  return strID_ == thatCasted.strID_ && bigintID_ == thatCasted.bigintID_ &&
+      radix_ == thatCasted.radix_;
+}
+
 bool SynthTrace::CreateStringRecord::operator==(const Record &that) const {
   if (!Record::operator==(that)) {
     return false;
@@ -334,8 +377,9 @@ bool SynthTrace::CreatePropNameIDRecord::operator==(const Record &that) const {
     return false;
   }
   auto &thatCasted = dynamic_cast<const CreatePropNameIDRecord &>(that);
-  return propNameID_ == thatCasted.propNameID_ && ascii_ == thatCasted.ascii_ &&
-      chars_ == thatCasted.chars_;
+  return propNameID_ == thatCasted.propNameID_ &&
+      valueType_ == thatCasted.valueType_ &&
+      traceValue_ == thatCasted.traceValue_ && chars_ == thatCasted.chars_;
 }
 
 bool SynthTrace::CreateHostFunctionRecord::operator==(
@@ -498,6 +542,36 @@ void SynthTrace::CreateObjectRecord::toJSONInternal(JSONEmitter &json) const {
   json.emitKeyValue("objID", objID_);
 }
 
+static std::string createBigIntMethodToString(
+    SynthTrace::CreateBigIntRecord::Method m) {
+  switch (m) {
+    case SynthTrace::CreateBigIntRecord::Method::FromInt64:
+      return "FromInt64";
+    case SynthTrace::CreateBigIntRecord::Method::FromUint64:
+      return "FromUint64";
+    default:
+      llvm_unreachable("No other valid CreateBigInt::Method.");
+  }
+}
+
+void SynthTrace::CreateBigIntRecord::toJSONInternal(
+    ::hermes::JSONEmitter &json) const {
+  Record::toJSONInternal(json);
+  json.emitKeyValue("objID", objID_);
+  json.emitKeyValue("method", createBigIntMethodToString(method_));
+  // bits is potentially an invalid number (i.e., > 53 bits), so emit it
+  // as a string.
+  json.emitKeyValue("bits", std::to_string(bits_));
+}
+
+void SynthTrace::BigIntToStringRecord::toJSONInternal(
+    ::hermes::JSONEmitter &json) const {
+  Record::toJSONInternal(json);
+  json.emitKeyValue("strID", strID_);
+  json.emitKeyValue("bigintID", bigintID_);
+  json.emitKeyValue("radix", radix_);
+}
+
 static std::string encodingName(bool isASCII) {
   return isASCII ? "ASCII" : "UTF-8";
 }
@@ -513,8 +587,12 @@ void SynthTrace::CreatePropNameIDRecord::toJSONInternal(
     JSONEmitter &json) const {
   Record::toJSONInternal(json);
   json.emitKeyValue("objID", propNameID_);
-  json.emitKeyValue("encoding", encodingName(ascii_));
-  json.emitKeyValue("chars", llvh::StringRef(chars_.data(), chars_.size()));
+  if (valueType_ == TRACEVALUE)
+    json.emitKeyValue("value", encode(traceValue_));
+  else {
+    json.emitKeyValue("encoding", encodingName(valueType_ == ASCII));
+    json.emitKeyValue("chars", llvh::StringRef(chars_.data(), chars_.size()));
+  }
 }
 
 void SynthTrace::CreateHostFunctionRecord::toJSONInternal(
@@ -531,7 +609,7 @@ void SynthTrace::GetOrSetPropertyRecord::toJSONInternal(
     JSONEmitter &json) const {
   Record::toJSONInternal(json);
   json.emitKeyValue("objID", objID_);
-  json.emitKeyValue("propID", propID_);
+  json.emitKeyValue("propID", encode(propID_));
 #ifdef HERMESVM_API_TRACE_DEBUG
   json.emitKeyValue("propName", propNameDbg_);
 #endif
@@ -541,10 +619,16 @@ void SynthTrace::GetOrSetPropertyRecord::toJSONInternal(
 void SynthTrace::HasPropertyRecord::toJSONInternal(JSONEmitter &json) const {
   Record::toJSONInternal(json);
   json.emitKeyValue("objID", objID_);
-  json.emitKeyValue("propID", propID_);
+  json.emitKeyValue("propID", encode(propID_));
 #ifdef HERMESVM_API_TRACE_DEBUG
   json.emitKeyValue("propName", propNameDbg_);
 #endif
+}
+
+void SynthTrace::DrainMicrotasksRecord::toJSONInternal(
+    JSONEmitter &json) const {
+  Record::toJSONInternal(json);
+  json.emitKeyValue("maxMicrotasksHint", maxMicrotasksHint_);
 }
 
 void SynthTrace::GetPropertyNamesRecord::toJSONInternal(
@@ -677,7 +761,7 @@ const char *SynthTrace::nameFromReleaseUnused(::hermes::vm::ReleaseUnused ru) {
   if (name == "youngAlways") {
     return ::hermes::vm::ReleaseUnused::kReleaseUnusedYoungAlways;
   }
-  throw std::invalid_argument("Name for RelaseUnused not recognized");
+  throw std::invalid_argument("Name for ReleaseUnused not recognized");
 }
 
 void SynthTrace::flushRecordsIfNecessary() {
@@ -708,28 +792,6 @@ void SynthTrace::flushAndDisable(
   // Env section.
   json_->emitKey("env");
   json_->openDict();
-  json_->emitKeyValue("mathRandomSeed", env.mathRandomSeed);
-
-  json_->emitKey("callsToDateNow");
-  json_->openArray();
-  for (uint64_t dateNow : env.callsToDateNow) {
-    json_->emitValue(dateNow);
-  }
-  json_->closeArray();
-
-  json_->emitKey("callsToNewDate");
-  json_->openArray();
-  for (uint64_t newDate : env.callsToNewDate) {
-    json_->emitValue(newDate);
-  }
-  json_->closeArray();
-
-  json_->emitKey("callsToDateAsFunction");
-  json_->openArray();
-  for (const std::string &dateAsFunc : env.callsToDateAsFunction) {
-    json_->emitValue(dateAsFunc);
-  }
-  json_->closeArray();
 
   json_->emitKey("callsToHermesInternalGetInstrumentedStats");
   json_->openArray();
@@ -777,6 +839,7 @@ llvh::raw_ostream &operator<<(
     CASE(CreatePropNameID);
     CASE(CreateHostObject);
     CASE(CreateHostFunction);
+    CASE(DrainMicrotasks);
     CASE(GetProperty);
     CASE(SetProperty);
     CASE(HasProperty);
@@ -795,6 +858,8 @@ llvh::raw_ostream &operator<<(
     CASE(SetPropertyNativeReturn);
     CASE(GetNativePropertyNames);
     CASE(GetNativePropertyNamesReturn);
+    CASE(CreateBigInt);
+    CASE(BigIntToString);
   }
 #undef CASE
   // This only exists to appease gcc.
@@ -819,6 +884,7 @@ std::istream &operator>>(std::istream &is, SynthTrace::RecordType &type) {
   CASE(CreatePropNameID)
   CASE(CreateHostObject)
   CASE(CreateHostFunction)
+  CASE(DrainMicrotasks)
   CASE(GetProperty)
   CASE(SetProperty)
   CASE(HasProperty)
@@ -837,8 +903,13 @@ std::istream &operator>>(std::istream &is, SynthTrace::RecordType &type) {
   CASE(SetPropertyNativeReturn)
   CASE(GetNativePropertyNames)
   CASE(GetNativePropertyNamesReturn)
+  CASE(CreateBigInt)
+  CASE(BigIntToString)
 #undef CASE
-  return is;
+
+  llvm_unreachable(
+      "failed to parse SynthTrace::RecordType. Make sure all enum values are "
+      "handled.");
 }
 
 } // namespace tracing

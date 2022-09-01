@@ -27,14 +27,12 @@
 
 using namespace hermes;
 
-using llvh::cast;
 using llvh::dyn_cast;
 using llvh::isa;
-using llvh::raw_ostream;
 
 namespace hermes {
 
-std::string IRPrinter::escapeStr(StringRef name) {
+std::string IRPrinter::escapeStr(llvh::StringRef name) {
   std::string s = name.str();
   std::string out;
   out += getQuoteSign();
@@ -72,7 +70,7 @@ std::string IRPrinter::escapeStr(StringRef name) {
   return out;
 }
 
-std::string IRPrinter::quoteStr(StringRef name) {
+std::string IRPrinter::quoteStr(llvh::StringRef name) {
   if (name.count(" ") || name.empty()) {
     return getQuoteSign() + name.str() + getQuoteSign();
   }
@@ -117,6 +115,8 @@ void IRPrinter::printValueLabel(Instruction *I, Value *V, unsigned opIndex) {
        << getBuiltinMethodName(
               cast<GetBuiltinClosureInst>(I)->getBuiltinIndex())
        << "]";
+  } else if (auto LBI = dyn_cast<LiteralBigInt>(V)) {
+    os << LBI->getValue();
   } else if (auto LS = dyn_cast<LiteralString>(V)) {
     os << escapeStr(ctx.toString(LS->getValue()));
   } else if (auto LB = dyn_cast<LiteralBool>(V)) {
@@ -159,7 +159,7 @@ void IRPrinter::printValueLabel(Instruction *I, Value *V, unsigned opIndex) {
   } else if (auto VR = dyn_cast<Variable>(V)) {
     os << "[" << quoteStr(ctx.toString(VR->getName()));
     if (I->getParent()->getParent() != VR->getParent()->getFunction()) {
-      StringRef scopeName =
+      llvh::StringRef scopeName =
           VR->getParent()->getFunction()->getInternalNameStr();
       os << "@" << quoteStr(scopeName);
     }
@@ -363,7 +363,10 @@ struct DottyPrinter : public IRVisitor<DottyPrinter, void> {
   llvh::SmallVector<std::pair<std::string, std::string>, 4> Edges;
   IRPrinter Printer;
 
-  explicit DottyPrinter(Context &ctx, llvh::raw_ostream &ost, StringRef Title)
+  explicit DottyPrinter(
+      Context &ctx,
+      llvh::raw_ostream &ost,
+      llvh::StringRef Title)
       : os(ost), Printer(ctx, ost, /* escape output */ true) {
     os << " digraph g {\n graph [ rankdir = \"TD\" ];\n";
     os << "labelloc=\"t\"; ";
@@ -448,7 +451,7 @@ struct DottyPrinter : public IRVisitor<DottyPrinter, void> {
 void hermes::viewGraph(Function *F) {
 #ifndef NDEBUG
   auto &Ctx = F->getContext();
-  StringRef Name = Ctx.toString(F->getInternalName());
+  llvh::StringRef Name = Ctx.toString(F->getInternalName());
   int FD;
   // Windows can't always handle long paths, so limit the length of the name.
   std::string N = Name.str();

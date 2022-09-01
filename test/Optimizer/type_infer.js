@@ -41,7 +41,7 @@ function test_one(x,y) {
   sink("hi" + "bye");
 
 //CHECK-NEXT:  %12 = BinaryOperatorInst '+', %x, %y
-//CHECK-NEXT:  %13 = CallInst %x, undefined : undefined, %12 : string|number
+//CHECK-NEXT:  %13 = CallInst %x, undefined : undefined, %12 : string|number|bigint
   sink(x + y);
 
 //CHECK-NEXT:  %14 = BinaryOperatorInst '+', "hi" : string, %y
@@ -70,8 +70,8 @@ function test_one(x,y) {
 //CHECK-NEXT:  %2 = CallInst %0, undefined : undefined, %1 : undefined
 //CHECK-NEXT:  %3 = UnaryOperatorInst '!', %x
 //CHECK-NEXT:  %4 = CallInst %0, undefined : undefined, %3 : boolean
-//CHECK-NEXT:  %5 = AsNumberInst %x
-//CHECK-NEXT:  %6 = CallInst %0, undefined : undefined, %5 : number
+//CHECK-NEXT:  %5 = AsNumericInst %x
+//CHECK-NEXT:  %6 = CallInst %0, undefined : undefined, %5 : number|bigint
 //CHECK-NEXT:  %7 = UnaryOperatorInst 'typeof', %x
 //CHECK-NEXT:  %8 = CallInst %0, undefined : undefined, %7 : string
 //CHECK-NEXT:  %9 = ReturnInst undefined : undefined
@@ -86,4 +86,3 @@ function test_unary(x) {
   sk(typeof(x)); // string
 
 }
-

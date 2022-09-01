@@ -16,10 +16,6 @@ const char *globalReturnObjectTrace() {
 {
   "globalObjID": 1,
   "env": {
-    "mathRandomSeed": 0,
-    "callsToDateNow": [],
-    "callsToNewDate": [],
-    "callsToDateAsFunction": [],
     "callsToHermesInternalGetInstrumentedStats": [],
   },
   "trace": [
@@ -42,7 +38,7 @@ const char *globalReturnObjectTrace() {
       "type": "GetPropertyRecord",
       "time": 0,
       "objID": 10,
-      "propID": 2,
+      "propID": "propIDTag:2",
       "propName": "a",
       "value": "object:11"
     },

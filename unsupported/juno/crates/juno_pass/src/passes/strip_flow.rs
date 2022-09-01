@@ -5,8 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::Pass;
+//! Pass to strip the Flow type declarations from code.
+
 use juno::ast::*;
+
+use crate::Pass;
 
 #[derive(Default)]
 pub struct StripFlow {}
@@ -86,16 +89,13 @@ impl<'gc> VisitorMut<'gc> for StripFlow {
 
             Node::FunctionDeclaration(n) => {
                 let mut builder = builder::FunctionDeclaration::from_node(n);
-                builder.params(
-                    n.params
-                        .iter()
-                        .filter(|p| match p {
-                            Node::Identifier(Identifier { name, .. }) => gc.str(*name) != "this",
-                            _ => true,
-                        })
-                        .copied()
-                        .collect(),
-                );
+                builder.params(NodeList::from_iter(
+                    gc,
+                    n.params.iter().filter(|p| match p {
+                        Node::Identifier(Identifier { name, .. }) => gc.str(*name) != "this",
+                        _ => true,
+                    }),
+                ));
                 builder.type_parameters(None);
                 builder.return_type(None);
                 builder.predicate(None);
@@ -107,16 +107,13 @@ impl<'gc> VisitorMut<'gc> for StripFlow {
             }
             Node::FunctionExpression(n) => {
                 let mut builder = builder::FunctionExpression::from_node(n);
-                builder.params(
-                    n.params
-                        .iter()
-                        .filter(|p| match p {
-                            Node::Identifier(Identifier { name, .. }) => gc.str(*name) != "this",
-                            _ => true,
-                        })
-                        .copied()
-                        .collect(),
-                );
+                builder.params(NodeList::from_iter(
+                    gc,
+                    n.params.iter().filter(|p| match p {
+                        Node::Identifier(Identifier { name, .. }) => gc.str(*name) != "this",
+                        _ => true,
+                    }),
+                ));
                 builder.type_parameters(None);
                 builder.return_type(None);
                 builder.predicate(None);
@@ -140,7 +137,7 @@ impl<'gc> VisitorMut<'gc> for StripFlow {
 
             Node::ClassDeclaration(n) => {
                 let mut builder = builder::ClassDeclaration::from_node(n);
-                builder.implements(vec![]);
+                builder.implements(NodeList::new(gc));
                 builder.super_type_parameters(None);
                 builder.type_parameters(None);
                 return node.replace_with_new(
@@ -151,7 +148,7 @@ impl<'gc> VisitorMut<'gc> for StripFlow {
             }
             Node::ClassExpression(n) => {
                 let mut builder = builder::ClassExpression::from_node(n);
-                builder.implements(vec![]);
+                builder.implements(NodeList::new(gc));
                 builder.super_type_parameters(None);
                 builder.type_parameters(None);
                 return node.replace_with_new(builder::Builder::ClassExpression(builder), gc, self);
@@ -225,43 +222,40 @@ impl<'gc> VisitorMut<'gc> for StripFlow {
     }
 }
 
-fn transform_enum<'gc>(gc: &'gc GCLock<'_, '_>, n: &'gc EnumDeclaration) -> &'gc Node<'gc> {
+fn transform_enum<'gc>(gc: &'gc GCLock<'_, '_>, n: &'gc EnumDeclaration<'gc>) -> &'gc Node<'gc> {
     let (method, args) = match n.body {
         Node::EnumStringBody(body)
-            if matches!(body.members.get(0), Some(Node::EnumDefaultedMember(_))) =>
+            if matches!(body.members.head(), Some(Node::EnumDefaultedMember(_))) =>
         {
-            let elements: Vec<&Node> = body
-                .members
-                .iter()
-                .map(|m| match m {
-                    Node::EnumDefaultedMember(m) => builder::StringLiteral::build_template(
-                        gc,
-                        template::StringLiteral {
-                            metadata: Default::default(),
-                            value: NodeString {
-                                str: (match m.id {
-                                    Node::Identifier(id) => {
-                                        gc.str(id.name).encode_utf16().collect()
-                                    }
-                                    _ => unreachable!(),
-                                }),
-                            },
-                        },
-                    ),
-                    _ => unreachable!(),
-                })
-                .collect();
+            let elements = body.members.iter().map(|m| match m {
+                Node::EnumDefaultedMember(m) => builder::StringLiteral::build_template(
+                    gc,
+                    template::StringLiteral {
+                        metadata: Default::default(),
+                        value: gc.atom_u16(match m.id {
+                            Node::Identifier(id) => {
+                                gc.str(id.name).encode_utf16().collect::<Vec<u16>>()
+                            }
+                            _ => unreachable!(),
+                        }),
+                    },
+                ),
+                _ => unreachable!(),
+            });
 
             (
                 Some("Mirrored"),
-                vec![builder::ArrayExpression::build_template(
+                NodeList::from_iter(
                     gc,
-                    template::ArrayExpression {
-                        metadata: Default::default(),
-                        trailing_comma: false,
-                        elements,
-                    },
-                )],
+                    [builder::ArrayExpression::build_template(
+                        gc,
+                        template::ArrayExpression {
+                            metadata: Default::default(),
+                            trailing_comma: false,
+                            elements: NodeList::from_iter(gc, elements),
+                        },
+                    )],
+                ),
             )
         }
         Node::EnumSymbolBody(EnumSymbolBody { members, .. })
@@ -269,17 +263,22 @@ fn transform_enum<'gc>(gc: &'gc GCLock<'_, '_>, n: &'gc EnumDeclaration) -> &'gc
         | Node::EnumBooleanBody(EnumBooleanBody { members, .. })
         | Node::EnumNumberBody(EnumNumberBody { members, .. }) => (
             None,
-            vec![builder::ObjectExpression::build_template(
+            NodeList::from_iter(
                 gc,
-                template::ObjectExpression {
-                    metadata: Default::default(),
-                    properties: members
-                        .iter()
-                        .map(|m| match m {
-                            Node::EnumStringMember(EnumStringMember { metadata, id, init })
-                            | Node::EnumNumberMember(EnumNumberMember { metadata, id, init })
-                            | Node::EnumBooleanMember(EnumBooleanMember { metadata, id, init }) => {
-                                builder::Property::build_template(
+                [builder::ObjectExpression::build_template(
+                    gc,
+                    template::ObjectExpression {
+                        metadata: Default::default(),
+                        properties: NodeList::from_iter(
+                            gc,
+                            members.iter().map(|m| match m {
+                                Node::EnumStringMember(EnumStringMember { metadata, id, init })
+                                | Node::EnumNumberMember(EnumNumberMember { metadata, id, init })
+                                | Node::EnumBooleanMember(EnumBooleanMember {
+                                    metadata,
+                                    id,
+                                    init,
+                                }) => builder::Property::build_template(
                                     gc,
                                     template::Property {
                                         metadata: TemplateMetadata {
@@ -293,62 +292,61 @@ fn transform_enum<'gc>(gc: &'gc GCLock<'_, '_>, n: &'gc EnumDeclaration) -> &'gc
                                         key: id,
                                         value: init,
                                     },
-                                )
-                            }
+                                ),
 
-                            // Has to be contained in a EnumSymbolBody
-                            Node::EnumDefaultedMember(m) => builder::Property::build_template(
-                                gc,
-                                template::Property {
-                                    metadata: TemplateMetadata {
-                                        range: m.metadata.range,
-                                        ..Default::default()
-                                    },
-                                    kind: PropertyKind::Init,
-                                    computed: false,
-                                    method: false,
-                                    shorthand: false,
-                                    key: m.id,
-                                    value: builder::CallExpression::build_template(
-                                        gc,
-                                        template::CallExpression {
-                                            metadata: Default::default(),
-                                            type_arguments: None,
-                                            callee: builder::Identifier::build_template(
-                                                gc,
-                                                template::Identifier {
-                                                    metadata: Default::default(),
-                                                    name: gc.atom("Symbol"),
-                                                    optional: false,
-                                                    type_annotation: None,
-                                                },
-                                            ),
-                                            arguments: vec![
-                                                builder::StringLiteral::build_template(
+                                // Has to be contained in a EnumSymbolBody
+                                Node::EnumDefaultedMember(m) => builder::Property::build_template(
+                                    gc,
+                                    template::Property {
+                                        metadata: TemplateMetadata {
+                                            range: m.metadata.range,
+                                            ..Default::default()
+                                        },
+                                        kind: PropertyKind::Init,
+                                        computed: false,
+                                        method: false,
+                                        shorthand: false,
+                                        key: m.id,
+                                        value: builder::CallExpression::build_template(
+                                            gc,
+                                            template::CallExpression {
+                                                metadata: Default::default(),
+                                                type_arguments: None,
+                                                callee: builder::Identifier::build_template(
                                                     gc,
-                                                    template::StringLiteral {
+                                                    template::Identifier {
                                                         metadata: Default::default(),
-                                                        value: NodeString {
-                                                            str: (match m.id {
+                                                        name: gc.atom("Symbol"),
+                                                        optional: false,
+                                                        type_annotation: None,
+                                                    },
+                                                ),
+                                                arguments: NodeList::from_iter(
+                                                    gc,
+                                                    [builder::StringLiteral::build_template(
+                                                        gc,
+                                                        template::StringLiteral {
+                                                            metadata: Default::default(),
+                                                            value: gc.atom_u16(match m.id {
                                                                 Node::Identifier(id) => gc
                                                                     .str(id.name)
                                                                     .encode_utf16()
-                                                                    .collect(),
+                                                                    .collect::<Vec<u16>>(),
                                                                 _ => unreachable!(),
                                                             }),
                                                         },
-                                                    },
+                                                    )],
                                                 ),
-                                            ],
-                                        },
-                                    ),
-                                },
-                            ),
-                            _ => unreachable!(),
-                        })
-                        .collect(),
-                },
-            )],
+                                            },
+                                        ),
+                                    },
+                                ),
+                                _ => unreachable!(),
+                            }),
+                        ),
+                    },
+                )],
+            ),
         ),
         _ => unreachable!(),
     };
@@ -366,15 +364,17 @@ fn transform_enum<'gc>(gc: &'gc GCLock<'_, '_>, n: &'gc EnumDeclaration) -> &'gc
                     type_annotation: None,
                 },
             ),
-            arguments: vec![builder::StringLiteral::build_template(
+            arguments: NodeList::from_iter(
                 gc,
-                template::StringLiteral {
-                    metadata: Default::default(),
-                    value: NodeString {
-                        str: "flow-enums-runtime".encode_utf16().collect(),
+                [builder::StringLiteral::build_template(
+                    gc,
+                    template::StringLiteral {
+                        metadata: Default::default(),
+                        value: gc
+                            .atom_u16("flow-enums-runtime".encode_utf16().collect::<Vec<u16>>()),
                     },
-                },
-            )],
+                )],
+            ),
         },
     );
     return builder::VariableDeclaration::build_template(
@@ -385,41 +385,44 @@ fn transform_enum<'gc>(gc: &'gc GCLock<'_, '_>, n: &'gc EnumDeclaration) -> &'gc
                 ..Default::default()
             },
             kind: VariableDeclarationKind::Const,
-            declarations: vec![builder::VariableDeclarator::build_template(
+            declarations: NodeList::from_iter(
                 gc,
-                template::VariableDeclarator {
-                    metadata: Default::default(),
-                    id: n.id,
-                    init: Some(builder::CallExpression::build_template(
-                        gc,
-                        template::CallExpression {
-                            metadata: Default::default(),
-                            type_arguments: None,
-                            callee: match method {
-                                Some(m) => builder::MemberExpression::build_template(
-                                    gc,
-                                    template::MemberExpression {
-                                        metadata: Default::default(),
-                                        computed: false,
-                                        object: runtime,
-                                        property: builder::Identifier::build_template(
-                                            gc,
-                                            template::Identifier {
-                                                metadata: Default::default(),
-                                                name: gc.atom(m),
-                                                optional: false,
-                                                type_annotation: None,
-                                            },
-                                        ),
-                                    },
-                                ),
-                                None => runtime,
+                [builder::VariableDeclarator::build_template(
+                    gc,
+                    template::VariableDeclarator {
+                        metadata: Default::default(),
+                        id: n.id,
+                        init: Some(builder::CallExpression::build_template(
+                            gc,
+                            template::CallExpression {
+                                metadata: Default::default(),
+                                type_arguments: None,
+                                callee: match method {
+                                    Some(m) => builder::MemberExpression::build_template(
+                                        gc,
+                                        template::MemberExpression {
+                                            metadata: Default::default(),
+                                            computed: false,
+                                            object: runtime,
+                                            property: builder::Identifier::build_template(
+                                                gc,
+                                                template::Identifier {
+                                                    metadata: Default::default(),
+                                                    name: gc.atom(m),
+                                                    optional: false,
+                                                    type_annotation: None,
+                                                },
+                                            ),
+                                        },
+                                    ),
+                                    None => runtime,
+                                },
+                                arguments: args,
                             },
-                            arguments: args,
-                        },
-                    )),
-                },
-            )],
+                        )),
+                    },
+                )],
+            ),
         },
     );
 }

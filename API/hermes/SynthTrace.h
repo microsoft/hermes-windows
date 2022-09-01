@@ -65,6 +65,10 @@ class SynthTrace {
       return tag_ == Tag::Object;
     }
 
+    bool isBigInt() const {
+      return tag_ == Tag::BigInt;
+    }
+
     bool isString() const {
       return tag_ == Tag::String;
     }
@@ -73,8 +77,13 @@ class SynthTrace {
       return tag_ == Tag::PropNameID;
     }
 
+    bool isSymbol() const {
+      return tag_ == Tag::Symbol;
+    }
+
     bool isUID() const {
-      return isObject() || isString() || isPropNameID();
+      return isObject() || isBigInt() || isString() || isPropNameID() ||
+          isSymbol();
     }
 
     static TraceValue encodeUndefinedValue() {
@@ -97,12 +106,20 @@ class SynthTrace {
       return TraceValue(Tag::Object, uid);
     }
 
+    static TraceValue encodeBigIntValue(uint64_t uid) {
+      return TraceValue(Tag::BigInt, uid);
+    }
+
     static TraceValue encodeStringValue(uint64_t uid) {
       return TraceValue(Tag::String, uid);
     }
 
     static TraceValue encodePropNameIDValue(uint64_t uid) {
       return TraceValue(Tag::PropNameID, uid);
+    }
+
+    static TraceValue encodeSymbolValue(uint64_t uid) {
+      return TraceValue(Tag::Symbol, uid);
     }
 
     bool operator==(const TraceValue &that) const;
@@ -130,7 +147,9 @@ class SynthTrace {
       Number,
       Object,
       String,
-      PropNameID
+      PropNameID,
+      Symbol,
+      BigInt,
     };
 
     explicit TraceValue(Tag tag) : tag_(tag) {}
@@ -169,6 +188,7 @@ class SynthTrace {
     CreatePropNameID,
     CreateHostObject,
     CreateHostFunction,
+    DrainMicrotasks,
     GetProperty,
     SetProperty,
     HasProperty,
@@ -187,6 +207,8 @@ class SynthTrace {
     SetPropertyNativeReturn,
     GetNativePropertyNames,
     GetNativePropertyNamesReturn,
+    CreateBigInt,
+    BigIntToString,
   };
 
   /// A Record is one element of a trace.
@@ -280,17 +302,21 @@ class SynthTrace {
   static TraceValue encodeNumber(double value);
   /// Encodes an object for the trace as a unique id.
   static TraceValue encodeObject(ObjectID objID);
+  /// Encodes a bigint for the trace as a unique id.
+  static TraceValue encodeBigInt(ObjectID objID);
   /// Encodes a string for the trace as a unique id.
   static TraceValue encodeString(ObjectID objID);
   /// Encodes a PropNameID for the trace as a unique id.
   static TraceValue encodePropNameID(ObjectID objID);
+  /// Encodes a Symbol for the trace as a unique id.
+  static TraceValue encodeSymbol(ObjectID objID);
 
   /// Decodes a string into a trace value.
   static TraceValue decode(const std::string &);
 
   /// The version of the Synth Benchmark
   constexpr static uint32_t synthVersion() {
-    return 3;
+    return 4;
   }
 
   static const char *nameFromReleaseUnused(::hermes::vm::ReleaseUnused ru);
@@ -449,6 +475,74 @@ class SynthTrace {
     }
   };
 
+  /// A CreateBigIntRecord is an event where a jsi::BigInt (and thus a
+  /// Hermes BigIntPrimitive) is created by the native code.
+  struct CreateBigIntRecord : public Record {
+    static constexpr RecordType type{RecordType::CreateBigInt};
+    const ObjectID objID_;
+    enum class Method {
+      FromInt64,
+      FromUint64,
+    };
+    Method method_;
+    uint64_t bits_;
+
+    CreateBigIntRecord(
+        TimeSinceStart time,
+        ObjectID objID,
+        Method m,
+        uint64_t bits)
+        : Record(time), objID_(objID), method_(m), bits_(bits) {}
+
+    bool operator==(const Record &that) const override;
+
+    void toJSONInternal(::hermes::JSONEmitter &json) const override;
+
+    RecordType getType() const override {
+      return type;
+    }
+
+    std::vector<ObjectID> defs() const override {
+      return {objID_};
+    }
+
+    std::vector<ObjectID> uses() const override {
+      return {};
+    }
+  };
+
+  /// A BigIntToString is an event where a jsi::BigInt is converted to a
+  /// string by native code
+  struct BigIntToStringRecord : public Record {
+    static constexpr RecordType type{RecordType::BigIntToString};
+    const ObjectID strID_;
+    const ObjectID bigintID_;
+    int radix_;
+
+    BigIntToStringRecord(
+        TimeSinceStart time,
+        ObjectID strID,
+        ObjectID bigintID,
+        int radix)
+        : Record(time), strID_(strID), bigintID_(bigintID), radix_(radix) {}
+
+    bool operator==(const Record &that) const override;
+
+    void toJSONInternal(::hermes::JSONEmitter &json) const override;
+
+    RecordType getType() const override {
+      return type;
+    }
+
+    std::vector<ObjectID> defs() const override {
+      return {strID_};
+    }
+
+    std::vector<ObjectID> uses() const override {
+      return {bigintID_};
+    }
+  };
+
   /// A CreateStringRecord is an event where a jsi::String (and thus a
   /// Hermes StringPrimitive) is created by the native code.
   struct CreateStringRecord : public Record {
@@ -497,7 +591,8 @@ class SynthTrace {
     static constexpr RecordType type{RecordType::CreatePropNameID};
     const ObjectID propNameID_;
     std::string chars_;
-    bool ascii_;
+    const TraceValue traceValue_{TraceValue::encodeUndefinedValue()};
+    enum ValueType { ASCII, UTF8, TRACEVALUE } valueType_;
 
     // General UTF-8.
     CreatePropNameIDRecord(
@@ -508,7 +603,7 @@ class SynthTrace {
         : Record(time),
           propNameID_(propNameID),
           chars_(reinterpret_cast<const char *>(chars), length),
-          ascii_(false) {}
+          valueType_(UTF8) {}
     // Ascii.
     CreatePropNameIDRecord(
         TimeSinceStart time,
@@ -518,17 +613,16 @@ class SynthTrace {
         : Record(time),
           propNameID_(propNameID),
           chars_(chars, length),
-          ascii_(true) {}
-    // std::string
+          valueType_(ASCII) {}
+    // jsi::String or jsi::Symbol.
     CreatePropNameIDRecord(
         TimeSinceStart time,
         ObjectID propNameID,
-        std::string &&chars,
-        bool isAscii)
+        TraceValue traceValue)
         : Record(time),
           propNameID_(propNameID),
-          chars_(std::move(chars)),
-          ascii_(isAscii) {}
+          traceValue_(traceValue),
+          valueType_(TRACEVALUE) {}
 
     bool operator==(const Record &that) const override;
 
@@ -542,7 +636,9 @@ class SynthTrace {
     }
 
     std::vector<ObjectID> uses() const override {
-      return {};
+      std::vector<ObjectID> vec;
+      pushIfTrackedValue(traceValue_, vec);
+      return vec;
     }
   };
 
@@ -593,8 +689,7 @@ class SynthTrace {
 
   struct GetOrSetPropertyRecord : public Record {
     const ObjectID objID_;
-    // This may be the ID of a String or a PropNameID.
-    const ObjectID propID_{0};
+    const TraceValue propID_;
 #ifdef HERMESVM_API_TRACE_DEBUG
     std::string propNameDbg_;
 #endif
@@ -603,7 +698,7 @@ class SynthTrace {
     GetOrSetPropertyRecord(
         TimeSinceStart time,
         ObjectID objID,
-        ObjectID propID,
+        TraceValue propID,
 #ifdef HERMESVM_API_TRACE_DEBUG
         const std::string &propNameDbg,
 #endif
@@ -620,7 +715,25 @@ class SynthTrace {
     bool operator==(const Record &that) const final;
 
     std::vector<ObjectID> uses() const override {
-      return {objID_, propID_};
+      std::vector<ObjectID> vec{objID_};
+      pushIfTrackedValue(propID_, vec);
+      return vec;
+    }
+
+    void toJSONInternal(::hermes::JSONEmitter &json) const override;
+  };
+
+  struct DrainMicrotasksRecord : public Record {
+    static constexpr RecordType type{RecordType::DrainMicrotasks};
+    int maxMicrotasksHint_;
+
+    DrainMicrotasksRecord(TimeSinceStart time, int tasksHint = -1)
+        : Record(time), maxMicrotasksHint_(tasksHint) {}
+
+    bool operator==(const Record &that) const final;
+
+    RecordType getType() const override {
+      return type;
     }
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
@@ -665,13 +778,12 @@ class SynthTrace {
 #ifdef HERMESVM_API_TRACE_DEBUG
     std::string propNameDbg_;
 #endif
-    // This may be the ID of a String or a PropNameID.
-    const ObjectID propID_{0};
+    const TraceValue propID_;
 
     HasPropertyRecord(
         TimeSinceStart time,
         ObjectID objID,
-        ObjectID propID
+        TraceValue propID
 #ifdef HERMESVM_API_TRACE_DEBUG
         ,
         const std::string &propNameDbg
@@ -692,7 +804,9 @@ class SynthTrace {
       return type;
     }
     std::vector<ObjectID> uses() const override {
-      return {objID_, propID_};
+      std::vector<ObjectID> vec{objID_};
+      pushIfTrackedValue(propID_, vec);
+      return vec;
     }
   };
 

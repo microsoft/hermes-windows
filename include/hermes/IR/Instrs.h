@@ -227,6 +227,33 @@ class AsNumberInst : public SingleOperandInst {
   }
 };
 
+class AsNumericInst : public SingleOperandInst {
+  AsNumericInst(const AsNumericInst &) = delete;
+  void operator=(const AsNumericInst &) = delete;
+
+ public:
+  explicit AsNumericInst(Value *value)
+      : SingleOperandInst(ValueKind::AsNumericInstKind, value) {
+    setType(Type::createNumeric());
+  }
+  explicit AsNumericInst(
+      const AsNumericInst *src,
+      llvh::ArrayRef<Value *> operands)
+      : SingleOperandInst(src, operands) {}
+
+  SideEffectKind getSideEffect() {
+    return SideEffectKind::Unknown;
+  }
+
+  WordBitSet<> getChangedOperandsImpl() {
+    return {};
+  }
+
+  static bool classof(const Value *V) {
+    return kindIsA(V->getKind(), ValueKind::AsNumericInstKind);
+  }
+};
+
 class AsInt32Inst : public SingleOperandInst {
   AsInt32Inst(const AsInt32Inst &) = delete;
   void operator=(const AsInt32Inst &) = delete;
@@ -1487,6 +1514,8 @@ class UnaryOperatorInst : public SingleOperandInst {
     MinusKind, // -
     TildeKind, // ~
     BangKind, // !
+    IncKind, // + 1
+    DecKind, // - 1
     LAST_OPCODE
   };
 
@@ -1508,10 +1537,10 @@ class UnaryOperatorInst : public SingleOperandInst {
 
   // Convert the operator string \p into the enum representation or assert
   // fail if the string is invalud.
-  static OpKind parseOperator(StringRef op);
+  static OpKind parseOperator(llvh::StringRef op);
 
   /// \return the string representation of the operator.
-  StringRef getOperatorStr() {
+  llvh::StringRef getOperatorStr() {
     return opStringRepr[static_cast<int>(op_)];
   }
 
@@ -1599,18 +1628,18 @@ class BinaryOperatorInst : public Instruction {
 
   // Convert the operator string \p into the enum representation or assert
   // fail if the string is invalud.
-  static OpKind parseOperator(StringRef op);
+  static OpKind parseOperator(llvh::StringRef op);
 
   // Convert the assignment operator string \p into the enum representation or
   // assert fail if the string is invalud.
-  static OpKind parseAssignmentOperator(StringRef op);
+  static OpKind parseAssignmentOperator(llvh::StringRef op);
 
   // Get the operator that allows you to swap the operands, if one exists.
   // >= becomes <= and + becomes +.
   static llvh::Optional<OpKind> tryGetReverseOperator(OpKind op);
 
   /// \return the string representation of the operator.
-  StringRef getOperatorStr() {
+  llvh::StringRef getOperatorStr() {
     return opStringRepr[static_cast<int>(op_)];
   }
 
@@ -2999,7 +3028,7 @@ class CompareBranchInst : public TerminatorInst {
   }
 
   /// \return the string representation of the operator.
-  StringRef getOperatorStr() {
+  llvh::StringRef getOperatorStr() {
     return BinaryOperatorInst::opStringRepr[static_cast<int>(op_)];
   }
 

@@ -11,12 +11,15 @@
 
 #include "hermes/Support/OSCompat.h"
 
-#include <string.h>
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <functional>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -97,8 +100,8 @@ void CardTable::updateBoundaries(
   // that we should go backwards by 2^(-k - 1) cards, and consult the
   // table there.
   int8_t currentExp = 0;
-  int64_t currentIndexDelta = 1;
-  int8_t numWithCurrentExp = 0;
+  unsigned currentIndexDelta = 1;
+  unsigned numWithCurrentExp = 0;
   while (boundary->address() < end) {
     boundaries_[boundary->index()] = encodeExp(currentExp);
     numWithCurrentExp++;

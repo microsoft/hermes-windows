@@ -23,7 +23,11 @@
 
 #include <memory>
 #include <vector>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -31,7 +35,7 @@ class RuntimeModule;
 class CodeBlock;
 
 /// A pointer to JIT-compiled function.
-typedef CallResult<HermesValue> (*JITCompiledFunctionPtr)(Runtime *runtime);
+typedef CallResult<HermesValue> (*JITCompiledFunctionPtr)(Runtime &runtime);
 
 /// A sequence of instructions representing the body of a function.
 class CodeBlock final
@@ -59,7 +63,7 @@ class CodeBlock final
 
 #ifndef HERMESVM_LEAN
   /// Compiles a lazy CodeBlock. Intended to be called from lazyCompile.
-  void lazyCompileImpl(Runtime *runtime);
+  void lazyCompileImpl(Runtime &runtime);
 #endif
 
   /// Helper function for getting start and end locations.
@@ -93,7 +97,7 @@ class CodeBlock final
   }
 
  public:
-#if defined(HERMESVM_PROFILER_JSFUNCTION) || defined(HERMESVM_PROFILER_EXTERN)
+#if defined(HERMESVM_PROFILER_JSFUNCTION)
   /// ID written/read by JS function profiler on first/later function events.
   ProfilerID profilerID{NO_PROFILER_ID};
 #endif
@@ -180,7 +184,7 @@ class CodeBlock final
 
   /// \return The name of this code block, as a UTF-8 encoded string.
   /// Does no JS heap allocation.
-  std::string getNameString(GCBase::GCCallbacks *runtime) const;
+  std::string getNameString(GCBase::GCCallbacks &runtime) const;
 
   const_iterator begin() const {
     return bytecode_;
@@ -233,7 +237,7 @@ class CodeBlock final
   }
 
   /// Compiles this CodeBlock, if it's lazy and not already compiled.
-  void lazyCompile(Runtime *runtime) {
+  void lazyCompile(Runtime &runtime) {
     if (LLVM_UNLIKELY(isLazy())) {
       lazyCompileImpl(runtime);
     }
@@ -243,7 +247,7 @@ class CodeBlock final
   bool isLazy() const {
     return false;
   }
-  void lazyCompile(Runtime *) {}
+  void lazyCompile(Runtime &) {}
 #endif
 
   /// Get the start location of this function, if it's lazy.
@@ -269,7 +273,7 @@ class CodeBlock final
   }
 
   // Mark all hidden classes in the property cache as roots.
-  void markCachedHiddenClasses(Runtime *runtime, WeakRootAcceptor &acceptor);
+  void markCachedHiddenClasses(Runtime &runtime, WeakRootAcceptor &acceptor);
 
   static CodeBlock *createCodeBlock(
       RuntimeModule *runtimeModule,
@@ -311,5 +315,6 @@ class CodeBlock final
 
 } // namespace vm
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif // HERMES_VM_CODEBLOCK_H

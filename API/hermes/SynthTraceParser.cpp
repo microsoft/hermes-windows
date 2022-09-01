@@ -76,6 +76,29 @@ NumericType getNumberAs(const JSONValue *val, NumericType dflt) {
   }
 }
 
+/// Parses the json \p value (which must be a string) as a uint64_t. Throws if
+/// std::stoull throws, or if it fails to parse the entire string.
+uint64_t jsonStringToUint64(const ::hermes::parser::JSONValue *val) {
+  if (!val) {
+    throw std::invalid_argument("value doesn't exist");
+  }
+
+  auto str = llvh::dyn_cast<JSONString>(val);
+  if (!str) {
+    throw std::invalid_argument("value is not a string");
+  }
+
+  llvh::StringRef r = str->str();
+  std::size_t numProcessed;
+  uint64_t ret = std::stoull(std::string{r.data(), r.size()}, &numProcessed);
+  if (numProcessed < r.size()) {
+    throw std::invalid_argument(
+        std::string("failed to convert jsonString '") + r.data() +
+        "' to uint64_t");
+  }
+  return ret;
+}
+
 ::hermes::vm::GCConfig::Builder getGCConfig(JSONObject *rtConfig) {
   // This function should extract all fields from GCConfig that can affect
   // performance metrics. Configs for debugging can be ignored.
@@ -141,6 +164,9 @@ NumericType getNumberAs(const JSONValue *val, NumericType dflt) {
   }
   if (auto *intl = rtConfig->get("Intl")) {
     conf.withIntl(llvh::cast<JSONBoolean>(intl)->getValue());
+  }
+  if (auto *microtasks = rtConfig->get("MicrotasksQueue")) {
+    conf.withMicrotaskQueue(llvh::cast<JSONBoolean>(microtasks)->getValue());
   }
   if (auto *enableSampledStats = rtConfig->get("enableSampledStats")) {
     conf.withEnableSampledStats(
@@ -213,35 +239,10 @@ getListOfStatsTable(JSONArray *array) {
 }
 
 ::hermes::vm::MockedEnvironment getMockedEnvironment(JSONObject *env) {
-  auto getListOfNumbers = [](JSONArray *array) -> std::deque<uint64_t> {
-    std::deque<uint64_t> calls;
-    std::transform(
-        array->begin(),
-        array->end(),
-        std::back_inserter(calls),
-        [](const JSONValue *value) { return getNumberAs<uint64_t>(value); });
-    return calls;
-  };
-
-  if (!llvh::dyn_cast_or_null<JSONNumber>(env->get("mathRandomSeed"))) {
-    throw std::invalid_argument("env.mathRandomSeed is not a number");
-  }
-  std::minstd_rand::result_type mathRandomSeed =
-      llvh::cast<JSONNumber>(env->at("mathRandomSeed"))->getValue();
-  auto callsToDateNow =
-      getListOfNumbers(llvh::cast<JSONArray>(env->at("callsToDateNow")));
-  auto callsToNewDate =
-      getListOfNumbers(llvh::cast<JSONArray>(env->at("callsToNewDate")));
-  auto callsToDateAsFunction = getListOfStrings<std::deque>(
-      llvh::cast<JSONArray>(env->at("callsToDateAsFunction")));
   auto callsToHermesInternalGetInstrumentedStats =
       getListOfStatsTable<std::deque>(llvh::cast_or_null<JSONArray>(
           env->get("callsToHermesInternalGetInstrumentedStats")));
   return ::hermes::vm::MockedEnvironment{
-      mathRandomSeed,
-      callsToDateNow,
-      callsToNewDate,
-      callsToDateAsFunction,
       callsToHermesInternalGetInstrumentedStats};
 }
 
@@ -278,7 +279,7 @@ SynthTrace getTrace(JSONArray *array, SynthTrace::ObjectID globalObjID) {
     auto *hostObjID =
         llvh::dyn_cast_or_null<JSONNumber>(obj->get("hostObjectID"));
     auto *funcID = llvh::dyn_cast_or_null<JSONNumber>(obj->get("functionID"));
-    auto *propID = llvh::dyn_cast_or_null<JSONNumber>(obj->get("propID"));
+    auto *propID = llvh::dyn_cast_or_null<JSONString>(obj->get("propID"));
     auto *propNameID =
         llvh::dyn_cast_or_null<JSONNumber>(obj->get("propNameID"));
     auto *propName = llvh::dyn_cast_or_null<JSONString>(obj->get("propName"));
@@ -324,6 +325,38 @@ SynthTrace getTrace(JSONArray *array, SynthTrace::ObjectID globalObjID) {
         trace.emplace_back<SynthTrace::CreateObjectRecord>(
             timeFromStart, objID->getValue());
         break;
+      case RecordType::DrainMicrotasks: {
+        int maxMicrotasksHint = getNumberAs<int>(obj->get("maxMicrotasksHint"));
+        trace.emplace_back<SynthTrace::DrainMicrotasksRecord>(
+            timeFromStart, maxMicrotasksHint);
+        break;
+      }
+      case RecordType::CreateBigInt: {
+        auto method = llvh::dyn_cast<JSONString>(obj->get("method"));
+        SynthTrace::CreateBigIntRecord::Method creationMethod =
+            SynthTrace::CreateBigIntRecord::Method::FromUint64;
+        if (method->str() == "FromInt64") {
+          creationMethod = SynthTrace::CreateBigIntRecord::Method::FromInt64;
+        } else {
+          assert(method->str() == "FromUint64");
+        }
+        trace.emplace_back<SynthTrace::CreateBigIntRecord>(
+            timeFromStart,
+            objID->getValue(),
+            creationMethod,
+            jsonStringToUint64(obj->get("bits")));
+        break;
+      }
+      case RecordType::BigIntToString: {
+        auto *strID = llvh::dyn_cast<JSONNumber>(obj->get("strID"));
+        auto *bigintID = llvh::dyn_cast<JSONNumber>(obj->get("bigintID"));
+        trace.emplace_back<SynthTrace::BigIntToStringRecord>(
+            timeFromStart,
+            strID->getValue(),
+            bigintID->getValue(),
+            getNumberAs<int>(obj->get("radix")));
+        break;
+      }
       case RecordType::CreateString: {
         auto encoding =
             llvh::dyn_cast_or_null<JSONString>(obj->get("encoding"));
@@ -351,27 +384,32 @@ SynthTrace getTrace(JSONArray *array, SynthTrace::ObjectID globalObjID) {
       }
       case RecordType::CreatePropNameID: {
         auto id = llvh::dyn_cast_or_null<JSONNumber>(obj->get("objID"));
-        auto encoding =
-            llvh::dyn_cast_or_null<JSONString>(obj->get("encoding"));
-        bool isAscii = false;
-        if (encoding->str() == "ASCII") {
-          isAscii = true;
-        } else {
-          assert(encoding->str() == "UTF-8");
-        }
-        auto str = llvh::dyn_cast_or_null<JSONString>(obj->get("chars"));
-        if (isAscii) {
+        if (propValue) {
           trace.emplace_back<SynthTrace::CreatePropNameIDRecord>(
-              timeFromStart,
-              id->getValue(),
-              str->str().data(),
-              str->str().size());
+              timeFromStart, id->getValue(), trace.decode(propValue->c_str()));
         } else {
-          trace.emplace_back<SynthTrace::CreatePropNameIDRecord>(
-              timeFromStart,
-              id->getValue(),
-              reinterpret_cast<const uint8_t *>(str->str().data()),
-              str->str().size());
+          auto encoding =
+              llvh::dyn_cast_or_null<JSONString>(obj->get("encoding"));
+          bool isAscii = false;
+          if (encoding->str() == "ASCII") {
+            isAscii = true;
+          } else {
+            assert(encoding->str() == "UTF-8");
+          }
+          auto str = llvh::dyn_cast_or_null<JSONString>(obj->get("chars"));
+          if (isAscii) {
+            trace.emplace_back<SynthTrace::CreatePropNameIDRecord>(
+                timeFromStart,
+                id->getValue(),
+                str->str().data(),
+                str->str().size());
+          } else {
+            trace.emplace_back<SynthTrace::CreatePropNameIDRecord>(
+                timeFromStart,
+                id->getValue(),
+                reinterpret_cast<const uint8_t *>(str->str().data()),
+                str->str().size());
+          }
         }
         break;
       }
@@ -404,7 +442,7 @@ SynthTrace getTrace(JSONArray *array, SynthTrace::ObjectID globalObjID) {
         trace.emplace_back<SynthTrace::GetPropertyRecord>(
             timeFromStart,
             objID->getValue(),
-            propID->getValue(),
+            SynthTrace::decode(propID->str()),
 #ifdef HERMESVM_API_TRACE_DEBUG
             std::string(propName->c_str()),
 #endif
@@ -414,7 +452,7 @@ SynthTrace getTrace(JSONArray *array, SynthTrace::ObjectID globalObjID) {
         trace.emplace_back<SynthTrace::SetPropertyRecord>(
             timeFromStart,
             objID->getValue(),
-            propID->getValue(),
+            SynthTrace::decode(propID->str()),
 #ifdef HERMESVM_API_TRACE_DEBUG
             std::string(propName->c_str()),
 #endif
@@ -424,7 +462,7 @@ SynthTrace getTrace(JSONArray *array, SynthTrace::ObjectID globalObjID) {
         trace.emplace_back<SynthTrace::HasPropertyRecord>(
             timeFromStart,
             objID->getValue(),
-            propID->getValue()
+            SynthTrace::decode(propID->str())
 #ifdef HERMESVM_API_TRACE_DEBUG
                 ,
             std::string(propName->c_str())

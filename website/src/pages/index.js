@@ -48,18 +48,22 @@ const features = [
   },
 ];
 
-function ELIVideo() {
+function VideoContainer() {
   return (
-    <div className={styles.videoContainer}>
-      <div className={styles.videoWrapper}>
-        <iframe
-          width="560"
-          height="315"
-          src="https://www.youtube.com/embed/JsppO1HUYx4"
-          title="Explained Like I'm 5: Hermes"
-          frameborder="0"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowfullscreen="true"></iframe>
+    <div className="container text--center margin-bottom--xl margin-top--lg">
+      <div className="row">
+        <div className="col">
+          <h2>Check it out in the intro video</h2>
+            <iframe
+              width="560"
+              height="315"
+              src="https://www.youtube.com/embed/JsppO1HUYx4"
+              title="Explain Like I'm 5: Hermes"
+              frameBorder="0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+        </div>
       </div>
     </div>
   );
@@ -72,31 +76,42 @@ function Home() {
     <Layout
       title="Hermes"
       description="JavaScript engine optimized for React Native">
-      <header className={classnames('hero hero--primary', styles.heroBanner)}>
+      <div className={styles.bannerWrapper}>
+        <div className={styles.banner}>
+          Support Ukraine 🇺🇦{" "}
+          <Link to="https://opensource.fb.com/support-ukraine">
+            Help Provide Humanitarian Aid to Ukraine
+          </Link>
+        </div>
+      </div>
+      <header className={classnames("hero hero--primary", styles.heroBanner)}>
         <div className="container">
           <h1 className="hero__title">{siteConfig.title}</h1>
           <p className="hero__subtitle">{siteConfig.tagline}</p>
           <div className={styles.buttons}>
             <Link
               className={classnames(
-                'button button--secondary button--lg',
-                styles.getStarted,
+                "button button--secondary button--lg",
+                styles.getStarted
               )}
-              to={'https://reactnative.dev/docs/hermes'}>
+              to={"https://reactnative.dev/docs/hermes"}
+            >
               Start Using Hermes
             </Link>
           </div>
         </div>
       </header>
       <main>
+        <VideoContainer />
         {features && features.length && (
           <section className={styles.features}>
             <div className="container">
               <div className="row">
-                {features.map(({imageUrl, title, description}, idx) => (
+                {features.map(({ imageUrl, title, description }, idx) => (
                   <div
                     key={idx}
-                    className={classnames('col col--4', styles.feature)}>
+                    className={classnames("col col--4", styles.feature)}
+                  >
                     {imageUrl && (
                       <div className="text--center margin-bottom--lg">
                         <img
@@ -114,11 +129,6 @@ function Home() {
             </div>
           </section>
         )}
-        <div className={classnames(styles.videoSection)}>
-          <div className="container">
-            <ELIVideo />
-          </div>
-        </div>
       </main>
     </Layout>
   );

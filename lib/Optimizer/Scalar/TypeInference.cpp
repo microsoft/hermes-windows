@@ -22,7 +22,6 @@
 
 using namespace hermes;
 using llvh::dbgs;
-using llvh::isa;
 using llvh::SmallPtrSetImpl;
 
 STATISTIC(NumTI, "Number of instructions type inferred");
@@ -61,6 +60,40 @@ class TypeInferenceImpl {
   bool runOnModule(Module *M);
 };
 
+static bool inferUnaryArith(UnaryOperatorInst *UOI, Type numberResultType) {
+  Value *op = UOI->getSingleOperand();
+
+  if (op->getType().isNumberType()) {
+    UOI->setType(numberResultType);
+    return true;
+  }
+
+  if (op->getType().isBigIntType()) {
+    UOI->setType(Type::createBigInt());
+    return true;
+  }
+
+  Type mayBeBigInt =
+      op->getType().canBeBigInt() ? Type::createBigInt() : Type::createNoType();
+
+  // - ?? => Number|?BigInt. BigInt is only possible if op.Type canBeBigInt.
+  UOI->setType(Type::unionTy(numberResultType, mayBeBigInt));
+  return true;
+}
+
+static bool inferUnaryArithDefault(UnaryOperatorInst *UOI) {
+  // - Number => Number
+  // - BigInt => BigInt
+  // - ?? => Number|BigInt
+  return inferUnaryArith(UOI, Type::createNumber());
+}
+
+static bool inferTilde(UnaryOperatorInst *UOI) {
+  // ~ Number => Int32
+  // ~ BigInt => BigInt
+  // ~ ?? => Int32|BigInt
+  return inferUnaryArith(UOI, Type::createInt32());
+}
 } // anonymous namespace.
 
 static bool inferUnaryInst(UnaryOperatorInst *UOI) {
@@ -76,13 +109,22 @@ static bool inferUnaryInst(UnaryOperatorInst *UOI) {
     case OpKind::TypeofKind: // typeof
       UOI->setType(Type::createString());
       return true;
-    case OpKind::PlusKind: // +
+    // https://tc39.es/ecma262/#sec-prefix-increment-operator
+    // https://tc39.es/ecma262/#sec-postfix-increment-operator
+    case OpKind::IncKind: // ++
+    // https://tc39.es/ecma262/#sec-prefix-decrement-operator
+    // https://tc39.es/ecma262/#sec-postfix-decrement-operator
+    case OpKind::DecKind: // --
+    // https://tc39.es/ecma262/#sec-unary-minus-operator
     case OpKind::MinusKind: // -
+      return inferUnaryArithDefault(UOI);
+    // https://tc39.es/ecma262/#sec-unary-plus-operator
+    case OpKind::PlusKind: // +
       UOI->setType(Type::createNumber());
       return true;
+    // https://tc39.es/ecma262/#sec-bitwise-not-operator
     case OpKind::TildeKind: // ~
-      UOI->setType(Type::createInt32());
-      return true;
+      return inferTilde(UOI);
     case OpKind::BangKind: // !
       UOI->setType(Type::createBoolean());
       return true;
@@ -237,6 +279,50 @@ static bool inferPhiInstInst(PhiInst *P) {
   }
 }
 
+namespace {
+static bool inferBinaryArith(
+    BinaryOperatorInst *BOI,
+    Type numberType = Type::createNumber()) {
+  Type LeftTy = BOI->getLeftHandSide()->getType();
+  Type RightTy = BOI->getRightHandSide()->getType();
+
+  // Number - Number => Number
+  if (LeftTy.isNumberType() && RightTy.isNumberType()) {
+    BOI->setType(numberType);
+    return true;
+  }
+
+  // BigInt - BigInt => BigInt
+  if (LeftTy.isBigIntType() && RightTy.isBigIntType()) {
+    BOI->setType(Type::createBigInt());
+    return true;
+  }
+
+  Type mayBeBigInt = LeftTy.canBeBigInt() && RightTy.canBeBigInt()
+      ? Type::createBigInt()
+      : Type::createNoType();
+
+  // ?? - ?? => Number|?BigInt. BigInt is only possible if both operands can be
+  // BigInt due to the no automatic BigInt conversion.
+  BOI->setType(Type::unionTy(numberType, mayBeBigInt));
+  return true;
+}
+
+static bool inferBinaryBitwise(BinaryOperatorInst *BOI) {
+  Type LeftTy = BOI->getLeftHandSide()->getType();
+  Type RightTy = BOI->getRightHandSide()->getType();
+
+  Type mayBeBigInt = LeftTy.canBeBigInt() && RightTy.canBeBigInt()
+      ? Type::createBigInt()
+      : Type::createNoType();
+
+  // ?? - ?? => Int32|?BigInt. BigInt is only possible if both operands can be
+  // BigInt due to the no automatic BigInt conversion.
+  BOI->setType(Type::unionTy(Type::createInt32(), mayBeBigInt));
+  return true;
+}
+} // anonymous namespace
+
 static bool inferBinaryInst(BinaryOperatorInst *BOI) {
   switch (BOI->getOperatorKind()) {
     // The following operations always return a boolean result.
@@ -258,30 +344,28 @@ static bool inferBinaryInst(BinaryOperatorInst *BOI) {
       BOI->setType(Type::createBoolean());
       return true;
 
-    // These arithmetic operations always return a number:
-    // https://es5.github.io/#x11.5.1
-    case BinaryOperatorInst::OpKind::MultiplyKind:
-    // https://es5.github.io/#x11.5.2
+    // These arithmetic operations always return a number or bigint:
+    // https://262.ecma-international.org/#sec-multiplicative-operators
     case BinaryOperatorInst::OpKind::DivideKind:
-    // https://es5.github.io/#x11.5.3
-    case BinaryOperatorInst::OpKind::ModuloKind:
-    // https://es5.github.io/#x11.6.2
+    case BinaryOperatorInst::OpKind::MultiplyKind:
+    // https://tc39.es/ecma262/#sec-subtraction-operator-minus
     case BinaryOperatorInst::OpKind::SubtractKind:
-      BOI->setType(Type::createNumber());
-      return true;
-    // https://es5.github.io/#x11.7.1
+    // https://tc39.es/ecma262/#sec-left-shift-operator
     case BinaryOperatorInst::OpKind::LeftShiftKind:
-    // https://es5.github.io/#x11.7.2
+    // https://tc39.es/ecma262/#sec-signed-right-shift-operator
     case BinaryOperatorInst::OpKind::RightShiftKind:
-      BOI->setType(Type::createInt32());
-      return true;
+      return inferBinaryArith(BOI);
+
+    case BinaryOperatorInst::OpKind::ModuloKind:
+      return inferBinaryArith(BOI, Type::createInt32());
+
     // https://es5.github.io/#x11.7.3
     case BinaryOperatorInst::OpKind::UnsignedRightShiftKind:
       BOI->setType(Type::createUint32());
       return true;
 
     // The Add operator is special:
-    // https://es5.github.io/#x11.6.1
+    // https://262.ecma-international.org/#sec-addition-operator-plus
     case BinaryOperatorInst::OpKind::AddKind: {
       Type LeftTy = BOI->getLeftHandSide()->getType();
       Type RightTy = BOI->getRightHandSide()->getType();
@@ -291,33 +375,48 @@ static bool inferBinaryInst(BinaryOperatorInst *BOI) {
         BOI->setType(Type::createString());
         return true;
       }
+
       // Number + Number -> Number.
       if (LeftTy.isNumberType() && RightTy.isNumberType()) {
         BOI->setType(Type::createNumber());
         return true;
       }
 
-      // If both sides of the binary operand are known and both sides are known
-      // to be non-string (and can't be converted to strings) then the result
-      // must be of a number type.
-      if (isSideEffectFree(LeftTy) && isSideEffectFree(RightTy) &&
-          !LeftTy.canBeString() && !RightTy.canBeString()) {
-        BOI->setType(Type::createNumber());
+      // BigInt + BigInt -> BigInt.
+      if (LeftTy.isBigIntType() && RightTy.isBigIntType()) {
+        BOI->setType(Type::createBigInt());
         return true;
       }
 
-      // The plus operator always returns a number or a string.
-      BOI->setType(Type::unionTy(Type::createNumber(), Type::createString()));
+      // ?BigInt + ?BigInt => ?BigInt. Both operands need to "may be a BigInt"
+      // for a possible BigInt result from this operator. This is true because
+      // there's no automative BigInt type conversion.
+      Type mayBeBigInt = (LeftTy.canBeBigInt() && RightTy.canBeBigInt())
+          ? Type::createBigInt()
+          : Type::createNoType();
+
+      // handy alias for number|maybe(BigInt).
+      Type numeric = Type::unionTy(Type::createNumber(), mayBeBigInt);
+
+      // If both sides of the binary operand are known and both sides are known
+      // to be non-string (and can't be converted to strings) then the result
+      // must be of a numeric type.
+      if (isSideEffectFree(LeftTy) && isSideEffectFree(RightTy) &&
+          !LeftTy.canBeString() && !RightTy.canBeString()) {
+        BOI->setType(numeric);
+        return true;
+      }
+
+      // The plus operator always returns a number, bigint, or a string.
+      BOI->setType(Type::unionTy(numeric, Type::createString()));
       return false;
     }
 
-    // Binary operators alwats return a number.
-    // https://es5.github.io/#x11.10
+    // https://tc39.es/ecma262/#sec-binary-bitwise-operators
+    case BinaryOperatorInst::OpKind::AndKind:
     case BinaryOperatorInst::OpKind::OrKind:
     case BinaryOperatorInst::OpKind::XorKind:
-    case BinaryOperatorInst::OpKind::AndKind:
-      BOI->setType(Type::createInt32());
-      return true;
+      return inferBinaryBitwise(BOI);
 
     default:
       break;

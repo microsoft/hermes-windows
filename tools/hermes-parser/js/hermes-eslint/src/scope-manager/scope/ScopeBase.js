@@ -32,6 +32,7 @@ import type {
 } from '../referencer/Reference';
 import type {ScopeManager} from '../ScopeManager';
 
+import {isStringLiteral} from 'hermes-estree';
 import {ScopeType} from './ScopeType';
 import {DefinitionType} from '../definition';
 import {createIdGenerator} from '../ID';
@@ -95,18 +96,10 @@ function isStrictScope(scope: Scope, isMethodDefinition: boolean): boolean {
     }
     const expr = stmt.expression;
 
-    if (expr.type !== 'Literal' || typeof expr.value !== 'string') {
+    if (!isStringLiteral(expr)) {
       break;
     }
-    if (expr.raw != null) {
-      if (expr.raw === '"use strict"' || expr.raw === "'use strict'") {
-        return true;
-      }
-    } else {
-      if (expr.value === 'use strict') {
-        return true;
-      }
-    }
+    return expr.value === 'use strict';
   }
 
   return false;
@@ -231,6 +224,11 @@ type VariableScope =
    * @public
    */
   +variableScope: VariableScope;
+  /**
+   * The names that are indirectly referenced within this scope.
+   * @private
+   */
+  +__indirectReferences: Set<string> = new Set();
 
   constructor(
     scopeManager: ScopeManager,
@@ -349,12 +347,12 @@ type VariableScope =
 
   _dynamicCloseRef = (ref: Reference, _?: ScopeManager): void => {
     // notify all names are through to global
-    let current = asScope(this);
+    let current: Scope | null = asScope(this);
 
-    do {
+    while (current) {
       current.through.push(ref);
       current = current.upper;
-    } while (current);
+    }
   };
 
   _globalCloseRef = (ref: Reference, scopeManager: ScopeManager): void => {
@@ -387,6 +385,23 @@ type VariableScope =
       closeRef(ref, scopeManager);
     }
     this.__referencesLeftToResolve = null;
+
+    if (this.__indirectReferences.size > 0) {
+      const upper = this.upper;
+      for (const name of this.__indirectReferences) {
+        const variable = this.set.get(name);
+        if (variable) {
+          variable.eslintUsed = true;
+          this.__indirectReferences.delete(name);
+          continue;
+        }
+        // delegate it to the upper scope
+        if (upper) {
+          upper.__indirectReferences.add(name);
+          this.__indirectReferences.delete(name);
+        }
+      }
+    }
 
     return this.upper;
   }
@@ -478,6 +493,15 @@ type VariableScope =
 
     this.references.push(ref);
     this.__referencesLeftToResolve?.push(ref);
+  }
+
+  /**
+   * Creates an indirect reference to a given `name` `from` the given location
+   * This is useful when a build process is expected to create a reference to
+   * the name, for example - the JSX transform that references a JSX pragma (React)
+   */
+  indirectlyReferenceValue(name: string): void {
+    this.__indirectReferences.add(name);
   }
 
   referenceType(node: Identifier): void {

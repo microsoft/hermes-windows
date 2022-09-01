@@ -16,10 +16,6 @@ const char *callbacksCallJSFunctionTrace() {
 {
   "globalObjID": 1,
   "env": {
-    "mathRandomSeed": 0,
-    "callsToDateNow": [],
-    "callsToNewDate": [],
-    "callsToDateAsFunction": [],
     "callsToHermesInternalGetInstrumentedStats": [],
   },
   "trace": [
@@ -42,7 +38,7 @@ const char *callbacksCallJSFunctionTrace() {
       "type": "GetPropertyRecord",
       "time": 0,
       "objID": 1,
-      "propID": 2,
+      "propID": "propIDTag:2",
       "propName": "f",
       "value": "object:10"
     },

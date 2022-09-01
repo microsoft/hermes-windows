@@ -9,6 +9,7 @@
 /// \file
 /// ES6 24.1 ArrayBuffer
 //===----------------------------------------------------------------------===//
+
 #include "JSLibInternal.h"
 
 #include "hermes/VM/JSArrayBuffer.h"
@@ -16,7 +17,11 @@
 #include "hermes/VM/JSTypedArray.h"
 #include "hermes/VM/Operations.h"
 #include "hermes/VM/StringPrimitive.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -26,16 +31,16 @@ using std::min;
 /// @name Implementation
 /// @{
 
-Handle<JSObject> createArrayBufferConstructor(Runtime *runtime) {
+Handle<JSObject> createArrayBufferConstructor(Runtime &runtime) {
   auto arrayBufferPrototype =
-      Handle<JSObject>::vmcast(&runtime->arrayBufferPrototype);
+      Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype);
   auto cons = defineSystemConstructor<JSArrayBuffer>(
       runtime,
       Predefined::getSymbolID(Predefined::ArrayBuffer),
       arrayBufferConstructor,
       arrayBufferPrototype,
       1,
-      CellKind::ArrayBufferKind);
+      CellKind::JSArrayBufferKind);
 
   // ArrayBuffer.prototype.xxx() methods.
   defineAccessor(
@@ -62,7 +67,7 @@ Handle<JSObject> createArrayBufferConstructor(Runtime *runtime) {
       runtime,
       arrayBufferPrototype,
       Predefined::getSymbolID(Predefined::SymbolToStringTag),
-      runtime->getPredefinedStringHandle(Predefined::ArrayBuffer),
+      runtime.getPredefinedStringHandle(Predefined::ArrayBuffer),
       dpf);
 
   // ArrayBuffer.xxx() methods.
@@ -78,10 +83,10 @@ Handle<JSObject> createArrayBufferConstructor(Runtime *runtime) {
 }
 
 CallResult<HermesValue>
-arrayBufferConstructor(void *, Runtime *runtime, NativeArgs args) {
+arrayBufferConstructor(void *, Runtime &runtime, NativeArgs args) {
   // 1. If NewTarget is undefined, throw a TypeError exception.
   if (!args.isConstructorCall()) {
-    return runtime->raiseTypeError(
+    return runtime.raiseTypeError(
         "ArrayBuffer() called in function context instead of constructor");
   }
   auto self = args.vmcastThis<JSArrayBuffer>();
@@ -102,9 +107,9 @@ arrayBufferConstructor(void *, Runtime *runtime, NativeArgs args) {
   if (byteLength > std::numeric_limits<JSArrayBuffer::size_type>::max()) {
     // On a non-64-bit platform and requested a buffer size greater than
     // this platform's size type can hold
-    return runtime->raiseRangeError("Too large of a byteLength requested");
+    return runtime.raiseRangeError("Too large of a byteLength requested");
   }
-  if (self->createDataBlock(runtime, byteLength) ==
+  if (JSArrayBuffer::createDataBlock(runtime, self, byteLength) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -112,7 +117,7 @@ arrayBufferConstructor(void *, Runtime *runtime, NativeArgs args) {
 }
 
 CallResult<HermesValue>
-arrayBufferIsView(void *, Runtime *runtime, NativeArgs args) {
+arrayBufferIsView(void *, Runtime &runtime, NativeArgs args) {
   // 1. If Type(arg) is not Object, return false.
   // 2. If arg has a [[ViewedArrayBuffer]] internal slot, return true.
   // 3. Return false.
@@ -122,17 +127,17 @@ arrayBufferIsView(void *, Runtime *runtime, NativeArgs args) {
 }
 
 CallResult<HermesValue>
-arrayBufferPrototypeByteLength(void *, Runtime *runtime, NativeArgs args) {
+arrayBufferPrototypeByteLength(void *, Runtime &runtime, NativeArgs args) {
   auto self = args.dyncastThis<JSArrayBuffer>();
   if (!self) {
-    return runtime->raiseTypeError(
+    return runtime.raiseTypeError(
         "byteLength called on a non ArrayBuffer object");
   }
   return HermesValue::encodeNumberValue(self->size());
 }
 
 CallResult<HermesValue>
-arrayBufferPrototypeSlice(void *, Runtime *runtime, NativeArgs args) {
+arrayBufferPrototypeSlice(void *, Runtime &runtime, NativeArgs args) {
   auto start = args.getArgHandle(0);
   auto end = args.getArgHandle(1);
   // 1. Let O be the this value.
@@ -142,7 +147,7 @@ arrayBufferPrototypeSlice(void *, Runtime *runtime, NativeArgs args) {
   // TypeError exception. 4. If IsDetachedBuffer(O) is true, throw a TypeError
   // exception.
   if (!self) {
-    return runtime->raiseTypeError(
+    return runtime.raiseTypeError(
         "Called ArrayBuffer.prototype.slice on a non-ArrayBuffer");
   }
 
@@ -187,10 +192,10 @@ arrayBufferPrototypeSlice(void *, Runtime *runtime, NativeArgs args) {
   // 15. Let new be Construct(ctor, «newLen»).
   // 16. ReturnIfAbrupt(new).
 
-  auto newBuf = runtime->makeHandle(JSArrayBuffer::create(
-      runtime, Handle<JSObject>::vmcast(&runtime->arrayBufferPrototype)));
+  auto newBuf = runtime.makeHandle(JSArrayBuffer::create(
+      runtime, Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype)));
 
-  if (newBuf->createDataBlock(runtime, newLen_int) ==
+  if (JSArrayBuffer::createDataBlock(runtime, newBuf, newLen_int) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -203,13 +208,14 @@ arrayBufferPrototypeSlice(void *, Runtime *runtime, NativeArgs args) {
   // 21. NOTE: Side-effects of the above steps may have detached O.
   // 22. If IsDetachedBuffer(O) is true, throw a TypeError exception.
   if (!self->attached() || !newBuf->attached()) {
-    return runtime->raiseTypeError("Cannot split with detached ArrayBuffers");
+    return runtime.raiseTypeError("Cannot split with detached ArrayBuffers");
   }
 
   // 23. Let fromBuf be the value of O’s [[ArrayBufferData]] internal slot.
   // 24. Let toBuf be the value of new’s [[ArrayBufferData]] internal slot.
   // 25. Perform CopyDataBlockBytes(toBuf, 0, fromBuf, first, newLen).
-  JSArrayBuffer::copyDataBlockBytes(*newBuf, 0, *self, first_int, newLen_int);
+  JSArrayBuffer::copyDataBlockBytes(
+      runtime, *newBuf, 0, *self, first_int, newLen_int);
   // 26. Return new.
   return newBuf.getHermesValue();
 }

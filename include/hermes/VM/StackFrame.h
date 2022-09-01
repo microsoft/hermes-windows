@@ -182,7 +182,7 @@ class StackFramePtrT {
   /// \return the callee's CodeBlock, i.e. the CodeBlock that is executing in
   ///   this frame. It could be nullptr if calleeClosure is a Callable but not
   ///   a JSFunction.
-  QualifiedCB *getCalleeCodeBlock() const;
+  QualifiedCB *getCalleeCodeBlock(Runtime &runtime) const;
 
   /// \return true if this is a constructor being invoked by \c new.
   bool isConstructorCall() const {
@@ -293,18 +293,19 @@ static_assert(
 /// Unidirectional iterator over stack frames, starting from the top-most
 /// frame.
 template <bool isConst>
-class StackFrameIteratorT : public std::iterator<
-                                std::forward_iterator_tag,
-                                StackFramePtrT<isConst>,
-                                int32_t,
-                                StackFramePtrT<isConst>,
-                                StackFramePtrT<isConst>> {
+class StackFrameIteratorT {
   using QualifiedHV = typename std::
       conditional<isConst, const PinnedHermesValue, PinnedHermesValue>::type;
 
   StackFramePtrT<isConst> frame_;
 
  public:
+  using iterator_category = std::forward_iterator_tag;
+  using value_type = StackFramePtrT<isConst>;
+  using difference_type = int32_t;
+  using pointer = StackFramePtrT<isConst>;
+  using reference = StackFramePtrT<isConst>;
+
   /// To satisfy the requirements of a forward iterator, a default constructor
   /// initializing the iterator with a null stack frame.
   StackFrameIteratorT() : frame_() {}

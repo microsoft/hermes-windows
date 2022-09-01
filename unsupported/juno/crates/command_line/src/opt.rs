@@ -5,12 +5,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::cl::CommandLine;
-use std::cell::{Cell, UnsafeCell};
+use std::cell::Cell;
+use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::str::FromStr;
+
+use crate::cl::CommandLine;
 
 /// This enum controls whether an option can have a value.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -351,7 +353,7 @@ impl<T: 'static + Clone> CLOption for OptHolder<T> {
 
         match (
             self.expected_value,
-            enum_opt_value.as_ref().or_else(|| self.def_value.as_ref()),
+            enum_opt_value.as_ref().or(self.def_value.as_ref()),
             s,
         ) {
             (ExpectedValue::Disallowed, _, Some(s)) => {

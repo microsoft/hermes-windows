@@ -9,6 +9,7 @@
 #include "hermes/VM/GC.h"
 
 #include "hermes/Platform/Logging.h"
+#include "hermes/Public/JSOutOfMemoryError.h"
 #include "hermes/Support/ErrorHandling.h"
 #include "hermes/Support/OSCompat.h"
 #include "hermes/VM/CellKind.h"
@@ -28,8 +29,11 @@
 #include <clocale>
 #include <stdexcept>
 #include <system_error>
+#pragma GCC diagnostic push
 
-using llvh::dbgs;
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 using llvh::format;
 
 namespace hermes {
@@ -39,8 +43,8 @@ const char GCBase::kNaturalCauseForAnalytics[] = "natural";
 const char GCBase::kHandleSanCauseForAnalytics[] = "handle-san";
 
 GCBase::GCBase(
-    GCCallbacks *gcCallbacks,
-    PointerBase *pointerBase,
+    GCCallbacks &gcCallbacks,
+    PointerBase &pointerBase,
     const GCConfig &gcConfig,
     std::shared_ptr<CrashManager> crashMgr,
     HeapKind kind)
@@ -53,18 +57,23 @@ GCBase::GCBase(
       // Start off not in GC.
       inGC_(false),
       name_(gcConfig.getName()),
+#ifdef HERMES_MEMORY_INSTRUMENTATION
       allocationLocationTracker_(this),
       samplingAllocationTracker_(this),
+#endif
 #ifdef HERMESVM_SANITIZE_HANDLES
       sanitizeRate_(gcConfig.getSanitizeConfig().getSanitizeRate()),
 #endif
       tripwireCallback_(gcConfig.getTripwireConfig().getCallback()),
-      tripwireLimit_(gcConfig.getTripwireConfig().getLimit())
-#ifndef NDEBUG
-      ,
-      randomizeAllocSpace_(gcConfig.getShouldRandomizeAllocSpace())
-#endif
-{
+      tripwireLimit_(gcConfig.getTripwireConfig().getLimit()) {
+  for (unsigned i = 0; i < (unsigned)XorPtrKeyID::_NumKeys; ++i) {
+    pointerEncryptionKey_[i] = std::random_device()();
+    if constexpr (sizeof(uintptr_t) >= 8) {
+      // std::random_device() yields an unsigned int, so combine two.
+      pointerEncryptionKey_[i] =
+          (pointerEncryptionKey_[i] << 32) | std::random_device()();
+    }
+  }
   buildMetadataTable();
 #ifdef HERMESVM_PLATFORM_LOGGING
   hermesLog(
@@ -93,30 +102,18 @@ GCBase::GCBase(
 #endif
 }
 
-GCBase::GCCycle::GCCycle(
-    GCBase *gc,
-    OptValue<GCCallbacks *> gcCallbacksOpt,
-    std::string extraInfo)
-    : gc_(gc),
-      gcCallbacksOpt_(gcCallbacksOpt),
-      extraInfo_(std::move(extraInfo)),
-      previousInGC_(gc_->inGC_) {
+GCBase::GCCycle::GCCycle(GCBase &gc, std::string extraInfo)
+    : gc_(gc), extraInfo_(std::move(extraInfo)), previousInGC_(gc_.inGC_) {
   if (!previousInGC_) {
-    if (gcCallbacksOpt_.hasValue()) {
-      gcCallbacksOpt_.getValue()->onGCEvent(
-          GCEventKind::CollectionStart, extraInfo_);
-    }
-    gc_->inGC_ = true;
+    gc_.getCallbacks().onGCEvent(GCEventKind::CollectionStart, extraInfo_);
+    gc_.inGC_ = true;
   }
 }
 
 GCBase::GCCycle::~GCCycle() {
   if (!previousInGC_) {
-    gc_->inGC_ = false;
-    if (gcCallbacksOpt_.hasValue()) {
-      gcCallbacksOpt_.getValue()->onGCEvent(
-          GCEventKind::CollectionEnd, extraInfo_);
-    }
+    gc_.inGC_ = false;
+    gc_.getCallbacks().onGCEvent(GCEventKind::CollectionEnd, extraInfo_);
   }
 }
 
@@ -130,6 +127,7 @@ void GCBase::runtimeWillExecute() {
   }
 }
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
 std::error_code GCBase::createSnapshotToFile(const std::string &fileName) {
   std::error_code code;
   llvh::raw_fd_ostream os(fileName, code, llvh::sys::fs::FileAccess::FA_Write);
@@ -158,7 +156,7 @@ constexpr HeapSnapshot::NodeID objectIDForRootSection(
 struct SnapshotAcceptor : public RootAndSlotAcceptorWithNamesDefault {
   using RootAndSlotAcceptorWithNamesDefault::accept;
 
-  SnapshotAcceptor(PointerBase *base, HeapSnapshot &snap)
+  SnapshotAcceptor(PointerBase &base, HeapSnapshot &snap)
       : RootAndSlotAcceptorWithNamesDefault(base), snap_(snap) {}
 
   void acceptHV(HermesValue &hv, const char *name) override {
@@ -182,7 +180,7 @@ struct PrimitiveNodeAcceptor : public SnapshotAcceptor {
   using SnapshotAcceptor::accept;
 
   PrimitiveNodeAcceptor(
-      PointerBase *base,
+      PointerBase &base,
       HeapSnapshot &snap,
       GCBase::IDTracker &tracker)
       : SnapshotAcceptor(base, snap), tracker_(tracker) {}
@@ -293,7 +291,7 @@ struct EdgeAddingAcceptor : public SnapshotAcceptor, public WeakRefAcceptor {
       // If the slot is free, there's no edge to add.
       return;
     }
-    if (!slot->hasPointer()) {
+    if (!slot->hasValue()) {
       // Filter out empty refs from adding edges.
       return;
     }
@@ -303,7 +301,7 @@ struct EdgeAddingAcceptor : public SnapshotAcceptor, public WeakRefAcceptor {
     snap_.addNamedEdge(
         HeapSnapshot::EdgeType::Weak,
         indexName,
-        gc_.getObjectID(slot->getPointer()));
+        gc_.getObjectID(slot->getNoBarrierUnsafe(gc_.getPointerBase())));
   }
 
   void acceptSym(SymbolID sym, const char *name) override {
@@ -327,7 +325,7 @@ struct SnapshotRootSectionAcceptor : public SnapshotAcceptor,
   using SnapshotAcceptor::accept;
   using WeakRootAcceptor::acceptWeak;
 
-  SnapshotRootSectionAcceptor(PointerBase *base, HeapSnapshot &snap)
+  SnapshotRootSectionAcceptor(PointerBase &base, HeapSnapshot &snap)
       : SnapshotAcceptor(base, snap), WeakAcceptorDefault(base) {}
 
   void accept(GCCell *&, const char *) override {
@@ -384,11 +382,12 @@ struct SnapshotRootAcceptor : public SnapshotAcceptor,
       // If the slot is free, there's no edge to add.
       return;
     }
-    if (!slot->hasPointer()) {
+    if (!slot->hasValue()) {
       // Filter out empty refs from adding edges.
       return;
     }
-    pointerAccept(slot->getPointer(), nullptr, true);
+    pointerAccept(
+        slot->getNoBarrierUnsafe(gc_.getPointerBase()), nullptr, true);
   }
 
   void acceptSym(SymbolID sym, const char *name) override {
@@ -479,11 +478,11 @@ struct SnapshotRootAcceptor : public SnapshotAcceptor,
 
 } // namespace
 
-void GCBase::createSnapshot(GC *gc, llvh::raw_ostream &os) {
+void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
   JSONEmitter json(os);
-  HeapSnapshot snap(json, gcCallbacks_->getStackTracesTree());
+  HeapSnapshot snap(json, gcCallbacks_.getStackTracesTree());
 
-  const auto rootScan = [gc, &snap, this]() {
+  const auto rootScan = [&gc, &snap, this]() {
     {
       // Make the super root node and add edges to each root section.
       SnapshotRootSectionAcceptor rootSectionAcceptor(getPointerBase(), snap);
@@ -519,13 +518,13 @@ void GCBase::createSnapshot(GC *gc, llvh::raw_ostream &os) {
       // Within a root section, there might be duplicates. The root acceptor
       // filters out duplicate edges because there cannot be duplicate edges to
       // nodes reachable from the super root.
-      SnapshotRootAcceptor rootAcceptor(*gc, snap);
+      SnapshotRootAcceptor rootAcceptor(gc, snap);
       markRoots(rootAcceptor, true);
       markWeakRoots(rootAcceptor, /*markLongLived*/ true);
     }
-    gcCallbacks_->visitIdentifiers([&snap, this](
-                                       SymbolID sym,
-                                       const StringPrimitive *str) {
+    gcCallbacks_.visitIdentifiers([&snap, this](
+                                      SymbolID sym,
+                                      const StringPrimitive *str) {
       snap.beginNode();
       if (str) {
         snap.addNamedEdge(
@@ -554,11 +553,11 @@ void GCBase::createSnapshot(GC *gc, llvh::raw_ostream &os) {
       primitiveAcceptor};
   // Add a node for each object in the heap.
   const auto snapshotForObject =
-      [&snap, &primitiveVisitor, gc, this](GCCell *cell) {
+      [&snap, &primitiveVisitor, &gc, this](GCCell *cell) {
         auto &allocationLocationTracker = getAllocationLocationTracker();
         // First add primitive nodes.
         markCellWithNames(primitiveVisitor, cell);
-        EdgeAddingAcceptor acceptor(*gc, snap);
+        EdgeAddingAcceptor acceptor(gc, snap);
         SlotVisitorWithNames<EdgeAddingAcceptor> visitor(acceptor);
         // Allow nodes to add extra nodes not in the JS heap.
         cell->getVT()->snapshotMetaData.addNodes(cell, gc, snap);
@@ -569,15 +568,15 @@ void GCBase::createSnapshot(GC *gc, llvh::raw_ostream &os) {
         cell->getVT()->snapshotMetaData.addEdges(cell, gc, snap);
         auto stackTracesTreeNode =
             allocationLocationTracker.getStackTracesTreeNodeForAlloc(
-                gc->getObjectID(cell));
+                gc.getObjectID(cell));
         snap.endNode(
             cell->getVT()->snapshotMetaData.nodeType(),
             cell->getVT()->snapshotMetaData.nameForNode(cell, gc),
-            gc->getObjectID(cell),
+            gc.getObjectID(cell),
             cell->getAllocatedSize(),
             stackTracesTreeNode ? stackTracesTreeNode->id : 0);
       };
-  gc->forAllObjs(snapshotForObject);
+  gc.forAllObjs(snapshotForObject);
   // Write the singleton number nodes into the snapshot.
   primitiveAcceptor.writeAllNodes();
   snap.endSection(HeapSnapshot::Section::Nodes);
@@ -596,7 +595,7 @@ void GCBase::createSnapshot(GC *gc, llvh::raw_ostream &os) {
   snap.endSection(HeapSnapshot::Section::Samples);
 
   snap.beginSection(HeapSnapshot::Section::Locations);
-  forAllObjs([&snap, gc](GCCell *cell) {
+  forAllObjs([&snap, &gc](GCCell *cell) {
     cell->getVT()->snapshotMetaData.addLocations(cell, gc, snap);
   });
   snap.endSection(HeapSnapshot::Section::Locations);
@@ -639,6 +638,7 @@ void GCBase::enableSamplingHeapProfiler(size_t samplingInterval, int64_t seed) {
 void GCBase::disableSamplingHeapProfiler(llvh::raw_ostream &os) {
   getSamplingAllocationTracker().disable(os);
 }
+#endif // HERMES_MEMORY_INSTRUMENTATION
 
 void GCBase::checkTripwire(size_t dataSize) {
   if (LLVM_LIKELY(!tripwireCallback_) ||
@@ -646,6 +646,7 @@ void GCBase::checkTripwire(size_t dataSize) {
     return;
   }
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   class Ctx : public GCTripwireContext {
    public:
     Ctx(GCBase *gc) : gc_(gc) {}
@@ -663,6 +664,18 @@ void GCBase::checkTripwire(size_t dataSize) {
    private:
     GCBase *gc_;
   } ctx(this);
+#else // !defined(HERMES_MEMORY_INSTRUMENTATION)
+  class Ctx : public GCTripwireContext {
+   public:
+    std::error_code createSnapshotToFile(const std::string &path) override {
+      return std::error_code(ENOSYS, std::system_category());
+    }
+
+    std::error_code createSnapshot(std::ostream &os) override {
+      return std::error_code(ENOSYS, std::system_category());
+    }
+  } ctx;
+#endif // !defined(HERMES_MEMORY_INSTRUMENTATION)
 
   tripwireCalled_ = true;
   tripwireCallback_(ctx);
@@ -732,7 +745,7 @@ void GCBase::dump(llvh::raw_ostream &, bool) { /* nop */
 void GCBase::printStats(JSONEmitter &json) {
   json.emitKeyValue("type", "hermes");
   json.emitKeyValue("version", 0);
-  gcCallbacks_->printRuntimeGCStats(json);
+  gcCallbacks_.printRuntimeGCStats(json);
 
   std::chrono::duration<double> elapsedTime =
       std::chrono::steady_clock::now() - execStartTime_;
@@ -861,6 +874,7 @@ void GCBase::recordGCStats(const GCAnalyticsEvent &event, bool onMutator) {
 }
 
 void GCBase::oom(std::error_code reason) {
+  hasOOMed_ = true;
   char detailBuffer[400];
   oomDetail(detailBuffer, reason);
 #ifdef HERMESVM_EXCEPTION_ON_OOM
@@ -868,7 +882,7 @@ void GCBase::oom(std::error_code reason) {
   // ~Runtime.
   throw JSOutOfMemoryError(
       std::string(detailBuffer) + "\ncall stack:\n" +
-      gcCallbacks_->getCallStackNoAlloc());
+      gcCallbacks_.getCallStackNoAlloc());
 #else
   hermesLog("HermesGC", "OOM: %s.", detailBuffer);
   // Record the OOM custom data with the crash manager.
@@ -897,15 +911,6 @@ void GCBase::oomDetail(
       heapInfo.va,
       heapInfo.externalBytes);
 }
-
-#ifndef NDEBUG
-/*static*/
-bool GCBase::isMostRecentCellInFinalizerVector(
-    const std::vector<GCCell *> &finalizables,
-    const GCCell *cell) {
-  return !finalizables.empty() && finalizables.back() == cell;
-}
-#endif
 
 #ifdef HERMESVM_SANITIZE_HANDLES
 bool GCBase::shouldSanitizeHandles() {
@@ -955,7 +960,6 @@ GCBASE_BARRIER_2(
     const GCSmallHermesValue *,
     uint32_t);
 GCBASE_BARRIER_1(weakRefReadBarrier, GCCell *);
-GCBASE_BARRIER_1(weakRefReadBarrier, HermesValue);
 
 #undef GCBASE_BARRIER_1
 #undef GCBASE_BARRIER_2
@@ -963,17 +967,30 @@ GCBASE_BARRIER_1(weakRefReadBarrier, HermesValue);
 
 /*static*/
 std::vector<detail::WeakRefKey *> GCBase::buildKeyList(
-    GC *gc,
+    GC &gc,
     JSWeakMap *weakMap) {
   std::vector<detail::WeakRefKey *> res;
   for (auto iter = weakMap->keys_begin(), end = weakMap->keys_end();
        iter != end;
        iter++) {
-    if (iter->getObject(gc)) {
+    if (iter->getObjectInGC(gc)) {
       res.push_back(&(*iter));
     }
   }
   return res;
+}
+
+WeakRefSlot *GCBase::allocWeakSlot(CompressedPointer ptr) {
+  // The weak ref mutex doesn't need to be held since we are only accessing free
+  // slots, which the background thread cannot access.
+  if (auto *slot = firstFreeWeak_) {
+    assert(slot->state() == WeakSlotState::Free && "invalid free slot state");
+    firstFreeWeak_ = firstFreeWeak_->nextFree();
+    slot->reset(ptr);
+    return slot;
+  }
+  weakSlots_.push_back({ptr});
+  return &weakSlots_.back();
 }
 
 HeapSnapshot::NodeID GCBase::getObjectID(const GCCell *cell) {
@@ -1009,8 +1026,10 @@ bool GCBase::hasObjectID(const GCCell *cell) {
 }
 
 void GCBase::newAlloc(const GCCell *ptr, uint32_t sz) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   allocationLocationTracker_.newAlloc(ptr, sz);
   samplingAllocationTracker_.newAlloc(ptr, sz);
+#endif
 }
 
 void GCBase::moveObject(
@@ -1023,17 +1042,21 @@ void GCBase::moveObject(
           const_cast<GCCell *>(oldPtr), pointerBase_),
       CompressedPointer::encodeNonNull(
           const_cast<GCCell *>(newPtr), pointerBase_));
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   // Use newPtr here because the idTracker_ just moved it.
   allocationLocationTracker_.updateSize(newPtr, oldSize, newSize);
   samplingAllocationTracker_.updateSize(newPtr, oldSize, newSize);
+#endif
 }
 
 void GCBase::untrackObject(const GCCell *cell, uint32_t sz) {
   assert(cell && "Called untrackObject on a null pointer");
   // The allocation tracker needs to use the ID, so this needs to come
   // before untrackObject.
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   getAllocationLocationTracker().freeAlloc(cell, sz);
   getSamplingAllocationTracker().freeAlloc(cell, sz);
+#endif
   idTracker_.untrackObject(CompressedPointer::encodeNonNull(
       const_cast<GCCell *>(cell), pointerBase_));
 }
@@ -1046,20 +1069,6 @@ uint64_t GCBase::nextObjectID() {
 
 const GCExecTrace &GCBase::getGCExecTrace() const {
   return execTrace_;
-}
-
-/*static*/
-double GCBase::clockDiffSeconds(TimePoint start, TimePoint end) {
-  std::chrono::duration<double> elapsed = (end - start);
-  return elapsed.count();
-}
-
-/*static*/
-double GCBase::clockDiffSeconds(
-    std::chrono::microseconds start,
-    std::chrono::microseconds end) {
-  std::chrono::duration<double> elapsed = (end - start);
-  return elapsed.count();
 }
 
 llvh::raw_ostream &operator<<(
@@ -1176,7 +1185,8 @@ bool GCBase::IDTracker::hasNativeIDs() {
   return !nativeIDMap_.empty();
 }
 
-bool GCBase::IDTracker::isTrackingIDs() const {
+bool GCBase::IDTracker::isTrackingIDs() {
+  std::lock_guard<Mutex> lk{mtx_};
   return !objectIDMap_.empty();
 }
 
@@ -1278,6 +1288,8 @@ HeapSnapshot::NodeID GCBase::IDTracker::nextNumberID() {
   return nextObjectID();
 }
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+
 GCBase::AllocationLocationTracker::AllocationLocationTracker(GCBase *gc)
     : gc_(gc) {}
 
@@ -1342,7 +1354,7 @@ void GCBase::AllocationLocationTracker::newAlloc(
   // enabled as it allows us to assert this feature works across many tests.
   // Note it's not very slow, it's slower than the non-virtual version
   // in Runtime though.
-  const auto *ip = gc_->gcCallbacks_->getCurrentIPSlow();
+  const auto *ip = gc_->gcCallbacks_.getCurrentIPSlow();
   if (!enabled_) {
     return;
   }
@@ -1362,7 +1374,7 @@ void GCBase::AllocationLocationTracker::newAlloc(
   if (lastFrag.numBytes_ >= kFlushThreshold) {
     flushCallback();
   }
-  if (auto node = gc_->gcCallbacks_->getCurrentStackTracesTreeNode(ip)) {
+  if (auto node = gc_->gcCallbacks_.getCurrentStackTracesTreeNode(ip)) {
     auto itAndDidInsert = stackMap_.try_emplace(id, node);
     assert(itAndDidInsert.second && "Failed to create a new node");
     (void)itAndDidInsert;
@@ -1498,7 +1510,7 @@ void GCBase::SamplingAllocationLocationTracker::disable(llvh::raw_ostream &os) {
 
   // Have to emit the tree of stack frames before emitting samples, Chrome
   // requires the tree emitted first.
-  profile.emitTree(gc_->gcCallbacks_->getStackTracesTree(), sizesToCounts);
+  profile.emitTree(gc_->gcCallbacks_.getStackTracesTree(), sizesToCounts);
   profile.beginSamples();
   for (const auto &s : samples_) {
     const Sample &sample = s.second;
@@ -1522,11 +1534,11 @@ void GCBase::SamplingAllocationLocationTracker::newAlloc(
     limit_ -= sz;
     return;
   }
-  const auto *ip = gc_->gcCallbacks_->getCurrentIPSlow();
+  const auto *ip = gc_->gcCallbacks_.getCurrentIPSlow();
   // This is stateful and causes the object to have an ID assigned.
   const auto id = gc_->getObjectID(ptr);
   if (StackTracesTreeNode *node =
-          gc_->gcCallbacks_->getCurrentStackTracesTreeNode(ip)) {
+          gc_->gcCallbacks_.getCurrentStackTracesTreeNode(ip)) {
     // Hold a lock while modifying samples_.
     std::lock_guard<Mutex> lk{mtx_};
     auto sampleItAndDidInsert =
@@ -1579,6 +1591,7 @@ void GCBase::SamplingAllocationLocationTracker::updateSize(
 size_t GCBase::SamplingAllocationLocationTracker::nextSample() {
   return (*dist_)(randomEngine_);
 }
+#endif // HERMES_MEMORY_INSTRUMENTATION
 
 llvh::Optional<HeapSnapshot::NodeID> GCBase::getSnapshotID(HermesValue val) {
   if (val.isPointer() && val.getPointer()) {
@@ -1698,9 +1711,9 @@ void GCBase::sizeDiagnosticCensus(size_t allocatedBytes) {
     const int64_t HINT32_MAX = (1LL << 31) - 1;
 
     HeapSizeDiagnostic diagnostic;
-    PointerBase *pointerBase_;
+    PointerBase &pointerBase_;
 
-    HeapSizeDiagnosticAcceptor(PointerBase *pb) : pointerBase_{pb} {}
+    HeapSizeDiagnosticAcceptor(PointerBase &pb) : pointerBase_{pb} {}
 
     using SlotAcceptor::accept;
 
@@ -1715,6 +1728,9 @@ void GCBase::sizeDiagnosticCensus(size_t allocatedBytes) {
     }
 
     void accept(PinnedHermesValue &hv) override {
+      acceptNullable(hv);
+    }
+    void acceptNullable(PinnedHermesValue &hv) override {
       acceptHV(
           hv,
           diagnostic.stats.breakdown["HermesValue"],

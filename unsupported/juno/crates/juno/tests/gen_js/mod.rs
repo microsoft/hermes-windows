@@ -13,7 +13,16 @@ use juno::sourcemap::merge_sourcemaps;
 fn do_gen<'ast>(ctx: &mut Context<'ast>, node: &NodeRc, pretty: gen_js::Pretty) -> String {
     use juno::gen_js::*;
     let mut out: Vec<u8> = vec![];
-    generate(&mut out, ctx, node, pretty).unwrap();
+    generate(
+        &mut out,
+        ctx,
+        node,
+        gen_js::Opt {
+            pretty,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     String::from_utf8(out).expect("Invalid UTF-8 output in test")
 }
 
@@ -57,6 +66,7 @@ fn test_roundtrip_flow(src1: &str) {
             strict_mode: false,
             enable_jsx: false,
             dialect: hparser::ParserDialect::Flow,
+            store_doc_block: false,
         },
         src1,
     );
@@ -68,6 +78,7 @@ fn test_roundtrip_jsx(src1: &str) {
             strict_mode: false,
             enable_jsx: true,
             dialect: hparser::ParserDialect::JavaScript,
+            store_doc_block: false,
         },
         src1,
     )
@@ -77,26 +88,26 @@ fn test_roundtrip_jsx(src1: &str) {
 fn test_literals() {
     let mut ctx = Context::new();
     let string = {
-        let gc = GCLock::new(&mut ctx);
+        let gc = ctx.lock();
         NodeRc::from_node(
             &gc,
             builder::StringLiteral::build_template(
                 &gc,
                 template::StringLiteral {
                     metadata: Default::default(),
-                    value: juno::ast::NodeString {
-                        str: vec!['A' as u16, 0x1234u16, '\t' as u16],
-                    },
+                    value: gc.atom_u16(vec!['A' as u16, 0x1234u16, '\t' as u16]),
                 },
             ),
         )
     };
     assert_eq!(
         do_gen(&mut ctx, &string, gen_js::Pretty::Yes).trim(),
-        r#""A\u1234\t""#,
+        r#"'A\u1234\t'"#,
     );
 
     test_roundtrip("1");
+    test_roundtrip("1n");
+    test_roundtrip("11298379123162378326187361n");
     test_roundtrip("\"abc\"");
     test_roundtrip(r#" "\ud800" "#);
     test_roundtrip(r#" "\ud83d\udcd5" "#);
@@ -175,6 +186,8 @@ fn test_functions() {
     test_roundtrip("(x) => 3");
     test_roundtrip("(x,y) => 3");
     test_roundtrip("x => {3}");
+    test_roundtrip("x => ({y: 10})");
+    test_roundtrip("x => ({y: 10}[z])");
     test_roundtrip("async x => {3}");
     test_roundtrip("async (x,y) => {3}");
     test_roundtrip("(x => 1) + (y => 1)");
@@ -205,6 +218,7 @@ fn test_calls() {
     test_roundtrip("f(...x)");
     test_roundtrip("new f();");
     test_roundtrip("new f(1);");
+    test_roundtrip("new f(...x)");
     test_roundtrip("new(a.b);");
     test_roundtrip("new(a.b());");
     test_roundtrip("new(a.b())();");
@@ -238,6 +252,9 @@ fn test_statements() {
         }",
     );
     test_roundtrip("do {fn();} while (1)");
+    test_roundtrip("do fn(); while (1)");
+    test_roundtrip("do x, y, z; while (1)");
+    test_roundtrip("do if (x) y; while (1)");
     test_roundtrip("debugger");
     test_roundtrip("{fn(); fn();}");
     test_roundtrip("for (;;) { break; }");
@@ -327,6 +344,7 @@ fn test_objects() {
 #[test]
 fn test_arrays() {
     test_roundtrip("([])");
+    test_roundtrip("var x = [, 1, , 3]");
     test_roundtrip("var x = [1, 2, 3, ...from]");
     test_roundtrip("var x = [1, 2, 3, ...from, 4, 5, 6]");
 }
@@ -351,6 +369,9 @@ fn test_assignment() {
     test_roundtrip("a && b = c");
     test_roundtrip("a && (b = c)");
     test_roundtrip("var {x: {y: [{z}]}} = foo;");
+    test_roundtrip("({x: {y: [{z}]}} = foo);");
+    test_roundtrip("var [x, y] = foo;");
+    test_roundtrip("([x, y] = foo);");
 }
 
 #[test]
@@ -427,6 +448,10 @@ fn test_classes() {
             declare prop4;
             #prop5;
             #prop5: ?number = null;
+            declare +prop6;
+            static +prop7;
+            static +[prop8];
+            declare static +prop9;
             foo<T>() {}
         }",
     );
@@ -484,29 +509,110 @@ fn test_types() {
     test_roundtrip_flow("type A = \"foo\"");
     test_roundtrip_flow("type A = 'foo'");
     test_roundtrip_flow("type A = 3");
+    test_roundtrip_flow("type A = 3n");
     test_roundtrip_flow("type A = boolean");
     test_roundtrip_flow("type A = true | false");
+    test_roundtrip_flow("type A = true & false");
+    test_roundtrip_flow("type A = (X | Y) & Z");
+    test_roundtrip_flow("type A = X | Y & Z");
+    test_roundtrip_flow("type A = X<Y, Z>");
+    test_roundtrip_flow("type A = X<Y>");
+    test_roundtrip_flow("type A<X: Y, Z> = T");
     test_roundtrip_flow("type A = symbol");
     test_roundtrip_flow("type A = mixed");
     test_roundtrip_flow("type A = any");
     test_roundtrip_flow("type A = void");
+    test_roundtrip_flow("type A = null");
     test_roundtrip_flow("type A = number => number");
+    test_roundtrip_flow("type A = X.Y");
+    test_roundtrip_flow("type A = X.Y<Z>");
+    test_roundtrip_flow("type A = typeof X");
+    test_roundtrip_flow("type A = [number, string]");
+    test_roundtrip_flow("type A = []");
+    test_roundtrip_flow("type A = number[]");
+    test_roundtrip_flow("type A = number[string]");
+    test_roundtrip_flow("type A = number?.[string]");
+    test_roundtrip_flow("type A = [number, string][]");
     test_roundtrip_flow("type A = (foo: number) => number");
+    test_roundtrip_flow("type A = (foo?: number) => number");
+    test_roundtrip_flow("type A = (foo?: ?number) => number");
     test_roundtrip_flow("type A = (number, string) => number");
     test_roundtrip_flow("type A = (?number) => number");
     test_roundtrip_flow("type A = ?(number, string) => number");
+    test_roundtrip_flow("type A = (this: number, number, string) => number");
+    test_roundtrip_flow("interface A { }");
+    test_roundtrip_flow("interface A extends B { }");
+    test_roundtrip_flow("interface A extends B, C, D { }");
+    test_roundtrip_flow("type A = { x: number }");
+    test_roundtrip_flow("type A = {| x: number |}");
+    test_roundtrip_flow(
+        "
+        type A = {
+            a?: number,
+            b: ?string,
+            +[c]: string,
+            (d?: number): number;
+            [[e]]: number,
+            [[f]]?: number,
+            [[g]](a: T): number,
+            ...h,
+            static (i?: number): number;
+            +proto: number,
+            ...
+        };
+        ",
+    );
+}
+
+#[test]
+fn test_declare() {
+    test_roundtrip_flow("declare function foo(): number;");
+    test_roundtrip_flow("declare var x : number;");
+    test_roundtrip_flow("declare export var x: number;");
+    test_roundtrip_flow("declare opaque type x;");
+    test_roundtrip_flow("declare export opaque type x: y;");
+    test_roundtrip_flow("declare type x = number;");
+    test_roundtrip_flow("declare interface Foo {}");
+    test_roundtrip_flow("declare class A extends B {}");
+    test_roundtrip_flow("declare class A extends B mixins C, D implements E {}");
+    test_roundtrip_flow("declare export class A extends B {}");
+    test_roundtrip_flow("declare module A {}");
+    test_roundtrip_flow("declare module.exports: number;");
+    test_roundtrip_flow("declare export function foo(): number;");
 }
 
 #[test]
 fn test_enum() {
     test_roundtrip_flow("enum Foo {}");
-    test_roundtrip_flow("enum Foo : string {A = 'A', B = 'B'}");
+    test_roundtrip_flow("enum Foo of string {A = 'A', B = 'B'}");
+    test_roundtrip_flow("enum Foo of string {A, B, C}");
+    test_roundtrip_flow("enum Foo of string {A = 'A', B = 'B', ...}");
+    test_roundtrip_flow("enum Foo of number {A = 1}");
+    test_roundtrip_flow("enum Foo of boolean {A = true}");
 }
 
 #[test]
 fn test_typecast() {
     test_roundtrip_flow("async function foo() { return (x: any); }");
     test_roundtrip_flow("var x = (y: number | number => string)");
+}
+
+#[test]
+fn test_predicate() {
+    test_roundtrip_flow("function foo(): %checks {}");
+    test_roundtrip_flow("function foo(): number %checks {}");
+    test_roundtrip_flow("function foo(): number %checks(bar) {}");
+    test_roundtrip_flow("((x): %checks => 3)");
+    test_roundtrip_flow("((x): number %checks => 3)");
+    test_roundtrip_flow("((x): number %checks(bar) => 3)");
+}
+
+#[test]
+fn test_this_param() {
+    test_roundtrip_flow("function foo(this: number): number {}");
+    test_roundtrip_flow("function foo(this: number, x: number): number {}");
+    test_roundtrip_flow("declare function foo(this: number): number;");
+    test_roundtrip_flow("declare function foo(this: number, x: number): number;");
 }
 
 #[test]
@@ -544,7 +650,7 @@ fn test_sourcemap() {
     let mut ctx = Context::new();
     let ast1: NodeRc = hparser::parse(&mut ctx, "function foo() { return 1 }").unwrap();
     let mut out: Vec<u8> = vec![];
-    let sourcemap = generate(&mut out, &mut ctx, &ast1, Pretty::Yes).unwrap();
+    let sourcemap = generate(&mut out, &mut ctx, &ast1, gen_js::Opt::new()).unwrap();
     let string = String::from_utf8(out).expect("Invalid UTF-8 output in test");
     assert_eq!(
         string,
@@ -626,7 +732,7 @@ fn test_sourcemap_merged() {
     .unwrap();
     let mut out: Vec<u8> = vec![];
     let node = hparser::parse_with_flags(Default::default(), input_src, ctx).unwrap();
-    let output_map = generate(&mut out, ctx, &node, Pretty::Yes).unwrap();
+    let output_map = generate(&mut out, ctx, &node, gen_js::Opt::new()).unwrap();
     let output = String::from_utf8(out).expect("Invalid UTF-8 output in test");
     assert_eq!(output, "function foo() {\n  1;\n}\n",);
 

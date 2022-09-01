@@ -17,8 +17,6 @@
 
 #define INCLUDE_ALL_INSTRS
 
-using llvh::cast;
-
 using namespace hermes;
 
 unsigned TerminatorInst::getNumSuccessors() const {
@@ -53,7 +51,7 @@ bool hermes::isSideEffectFree(Type T) {
 }
 
 const char *UnaryOperatorInst::opStringRepr[] =
-    {"delete", "void", "typeof", "+", "-", "~", "!"};
+    {"delete", "void", "typeof", "+", "-", "~", "!", "++", "--"};
 
 const char *BinaryOperatorInst::opStringRepr[] = {
     "",   "==", "!=",  "===", "!==", "<", "<=", ">",         ">=",
@@ -65,7 +63,7 @@ const char *BinaryOperatorInst::assignmentOpStringRepr[] = {
     "<<=", ">>=", ">>>=", "+=",  "-=",  "*=",    "/=", "%=", "|=",
     "^=",  "&=",  "**=",  "||=", "&&=", "\?\?=", "",   ""};
 
-UnaryOperatorInst::OpKind UnaryOperatorInst::parseOperator(StringRef op) {
+UnaryOperatorInst::OpKind UnaryOperatorInst::parseOperator(llvh::StringRef op) {
   for (int i = 0; i < static_cast<int>(BinaryOperatorInst::OpKind::LAST_OPCODE);
        i++) {
     if (op == UnaryOperatorInst::opStringRepr[i]) {
@@ -98,7 +96,7 @@ SideEffectKind UnaryOperatorInst::getSideEffect() {
 }
 
 static BinaryOperatorInst::OpKind parseOperator_impl(
-    StringRef op,
+    llvh::StringRef op,
     const char **lookup_table) {
   for (int i = 0; i < static_cast<int>(BinaryOperatorInst::OpKind::LAST_OPCODE);
        i++) {
@@ -110,12 +108,13 @@ static BinaryOperatorInst::OpKind parseOperator_impl(
   llvm_unreachable("invalid operator string");
 }
 
-BinaryOperatorInst::OpKind BinaryOperatorInst::parseOperator(StringRef op) {
+BinaryOperatorInst::OpKind BinaryOperatorInst::parseOperator(
+    llvh::StringRef op) {
   return parseOperator_impl(op, opStringRepr);
 }
 
 BinaryOperatorInst::OpKind BinaryOperatorInst::parseAssignmentOperator(
-    StringRef op) {
+    llvh::StringRef op) {
   return parseOperator_impl(op, assignmentOpStringRepr);
 }
 

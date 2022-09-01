@@ -11,10 +11,15 @@
 #include "hermes/VM/AlignedStorage.h"
 #include "hermes/VM/SegmentInfo.h"
 #include "llvh/Support/Compiler.h"
+#include "llvh/Support/MathExtras.h"
 
 #include <cassert>
 #include <cstdint>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -39,11 +44,13 @@ class BasedPointer final {
   inline StorageType getRawValue() const;
 
  private:
+#ifndef HERMESVM_CONTIGUOUS_HEAP
   // Only PointerBase needs these functions. To every other part of the system
   // this is an opaque type that PointerBase handles translations for.
   friend class PointerBase;
   inline uint32_t getSegmentIndex() const;
   inline uint32_t getOffset() const;
+#endif
 
   StorageType raw_;
 };
@@ -81,6 +88,7 @@ class PointerBase {
   /// \pre ptr is not null.
   inline void *basedToPointerNonNull(BasedPointer ptr) const;
 
+#ifndef HERMESVM_CONTIGUOUS_HEAP
   static constexpr unsigned kNullPtrSegmentIndex = 0;
   /// To support 32-bit GC pointers in segmentIdx:offset form,
   /// segmentMap_ maps segment indices to "biased segment starts."
@@ -117,6 +125,7 @@ class PointerBase {
   /// We subtract one entry so that segmentMap_[0] can contain the null pointer.
   static constexpr unsigned kMaxSegments = kSegmentMapSize - 1;
   SegmentPtr segmentMap_[kSegmentMapSize];
+#endif
 #endif // HERMESVM_COMPRESSED_POINTERS
 };
 
@@ -148,6 +157,39 @@ inline bool BasedPointer::operator!=(BasedPointer other) const {
   return raw_ != other.raw_;
 }
 
+#ifdef HERMESVM_CONTIGUOUS_HEAP
+inline void *PointerBase::basedToPointerNonNull(BasedPointer ptr) const {
+  assert(ptr && "Null pointer given to basedToPointerNonNull");
+  uintptr_t addr = reinterpret_cast<uintptr_t>(this) + ptr.getRawValue();
+  return reinterpret_cast<void *>(addr);
+}
+
+inline PointerBase::PointerBase() {
+  // The PointerBase must be segment aligned, so that the compressed pointer
+  // corresponding to the start of a segment is also segment aligned.
+  assert(llvh::alignmentAdjustment(this, AlignedStorage::size()) == 0);
+}
+
+inline void *PointerBase::basedToPointer(BasedPointer ptr) const {
+  return ptr ? basedToPointerNonNull(ptr) : nullptr;
+}
+
+inline BasedPointer PointerBase::pointerToBasedNonNull(const void *ptr) const {
+  assert(ptr && "Null pointer given to pointerToBasedNonNull");
+  uintptr_t offset = (uintptr_t)ptr - (uintptr_t)this;
+  assert(llvh::isUInt<32>(offset) && "Pointer out of range");
+  return BasedPointer{static_cast<uint32_t>(offset)};
+}
+
+inline BasedPointer PointerBase::pointerToBased(const void *ptr) const {
+  return ptr ? pointerToBasedNonNull(ptr) : BasedPointer{nullptr};
+}
+
+inline void PointerBase::setSegment(unsigned idx, void *segStart) {
+  assert(segStart == AlignedStorage::start(segStart) && "Precondition");
+  SegmentInfo::setSegmentIndexFromStart(segStart, idx);
+}
+#else
 inline void *PointerBase::basedToPointerNonNull(BasedPointer ptr) const {
   assert(ptr && "Null pointer given to basedToPointerNonNull");
   // This implementation is the same for null and non-null pointers.
@@ -206,7 +248,7 @@ inline void PointerBase::setSegment(unsigned idx, void *segStart) {
   segmentMap_[idx] = bias;
   SegmentInfo::setSegmentIndexFromStart(segStart, idx);
 }
-
+#endif // HERMESVM_CONTIGUOUS_HEAP
 #else
 inline PointerBase::PointerBase() {}
 
@@ -214,11 +256,11 @@ inline void PointerBase::setSegment(unsigned idx, void *segStart) {
   assert(segStart == AlignedStorage::start(segStart) && "Precondition");
   SegmentInfo::setSegmentIndexFromStart(segStart, idx);
 }
-#endif
+#endif // HERMESVM_COMPRESSED_POINTERS
 
 /// @}
 
 } // namespace vm
 } // namespace hermes
-
+#pragma GCC diagnostic pop
 #endif

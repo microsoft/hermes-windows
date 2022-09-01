@@ -91,9 +91,9 @@ TEST_F(OperationsTest, IsSameValueTest) {
   v2 = HermesValue::encodeDoubleValue(182.54);
   IsSameValueTest(FALSE, v1, v2);
 
-  auto nullObj = runtime->makeNullHandle<JSObject>();
-  auto obj1 = runtime->makeHandle(JSObject::create(runtime, nullObj));
-  auto obj2 = runtime->makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = runtime.makeNullHandle<JSObject>();
+  auto obj1 = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto obj2 = runtime.makeHandle(JSObject::create(runtime, nullObj));
 
   v1 = HermesValue::encodeObjectValue(obj1.get());
   v2 = HermesValue::encodeObjectValue(&obj2);
@@ -126,23 +126,34 @@ TEST_F(OperationsTest, IsSameValueTest) {
 
   v2 = HermesValue::encodeDoubleValue(0);
   IsSameValueTest(FALSE, v1, v2);
+
+  auto b1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
+  auto b2 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
+  auto b3 = BigIntPrimitive::fromSignedNoThrow(runtime, -22);
+
+  v1 = HermesValue::encodeBigIntValue(b1.get());
+  v2 = HermesValue::encodeBigIntValue(b2.get());
+  v3 = HermesValue::encodeBigIntValue(b3.get());
+  IsSameValueTest(TRUE, v1, v2);
+  IsSameValueTest(FALSE, v1, v3);
 }
 
 #define AbstractEqualityTest(result, x, y)                          \
   {                                                                 \
-    auto xHandle = runtime->makeHandle(x);                          \
-    auto yHandle = runtime->makeHandle(y);                          \
+    GCScopeMarkerRAII trimmer(gcScope);                             \
+    auto xHandle = runtime.makeHandle(x);                           \
+    auto yHandle = runtime.makeHandle(y);                           \
     auto res = abstractEqualityTest_RJS(runtime, xHandle, yHandle); \
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());          \
-    EXPECT_##result(res->getBool());                                \
+    EXPECT_##result(*res);                                          \
                                                                     \
     res = abstractEqualityTest_RJS(runtime, yHandle, xHandle);      \
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());          \
-    EXPECT_##result(res->getBool());                                \
+    EXPECT_##result(*res);                                          \
   }
 
 TEST_F(OperationsTest, AbstractEqualityTest) {
-  GCScope gcScope{runtime, "OperationsTest.AbstractEqualityTest", 200};
+  GCScope gcScope{runtime, "OperationsTest.AbstractEqualityTest", 80};
 
   PinnedHermesValue v1;
   PinnedHermesValue v2;
@@ -208,9 +219,9 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
   v2 = HermesValue::encodeDoubleValue(182.54);
   AbstractEqualityTest(FALSE, v1, v2);
 
-  auto nullObj = runtime->makeNullHandle<JSObject>();
-  auto obj1 = runtime->makeHandle(JSObject::create(runtime, nullObj));
-  auto obj2 = runtime->makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = runtime.makeNullHandle<JSObject>();
+  auto obj1 = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto obj2 = runtime.makeHandle(JSObject::create(runtime, nullObj));
 
   v1 = HermesValue::encodeObjectValue(obj1.get());
   v2 = HermesValue::encodeObjectValue(obj2.get());
@@ -254,6 +265,93 @@ TEST_F(OperationsTest, AbstractEqualityTest) {
   v1 = HermesValue::encodeBoolValue(true);
   v2 = HermesValue::encodeDoubleValue(153);
   AbstractEqualityTest(FALSE, v1, v2);
+
+  // BigInt tests
+  // 0n does not equal null, undefined
+  auto bigint0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeNullValue();
+  AbstractEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeUndefinedValue();
+  AbstractEqualityTest(FALSE, v1, v2);
+
+  // 0n equals bigint created with no bytes
+  auto bigintNoBytes = BigIntPrimitive::fromBytesNoThrow(runtime, {});
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeBigIntValue(bigintNoBytes.get());
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  // 0n equals false, "", "0", 0.0, +0.0, -0.0
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeBoolValue(false);
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  auto s0 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"0"));
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeStringValue(s0.get());
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  auto sEmpty = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u""));
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeStringValue(sEmpty.get());
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeNumberValue(0);
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeNumberValue(+0.0);
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeNumberValue(-0.0);
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  // 1n equals true, "1", 1
+  auto bigint1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
+  s1 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"1"));
+
+  v1 = HermesValue::encodeBigIntValue(bigint1.get());
+  v2 = HermesValue::encodeBoolValue(true);
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint1.get());
+  v2 = HermesValue::encodeStringValue(s1.get());
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint1.get());
+  v2 = HermesValue::encodeNumberValue(1.0);
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  // Other tests
+  auto bigint0x00ffff00ffff00 =
+      BigIntPrimitive::fromSignedNoThrow(runtime, 0x0000ffff00ffff00ll);
+  uint8_t bigint00ffff00ffff00Bytes[] = {
+      0x00, 0xff, 0xff, 0x00, 0xff, 0xff, 0x00};
+  auto bigint00ffff00ffff00 =
+      BigIntPrimitive::fromBytesNoThrow(runtime, bigint00ffff00ffff00Bytes);
+  v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
+  v2 = HermesValue::encodeBigIntValue(bigint00ffff00ffff00.get());
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  auto s281470698520320 = StringPrimitive::createNoThrow(
+      runtime, createUTF16Ref(u"281470698520320"));
+  v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
+  v2 = HermesValue::encodeStringValue(s281470698520320.get());
+  AbstractEqualityTest(TRUE, v1, v2);
+
+  auto s281470698520320_0 = StringPrimitive::createNoThrow(
+      runtime, createUTF16Ref(u"281470698520320.0"));
+  v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
+  v2 = HermesValue::encodeStringValue(s281470698520320_0.get());
+  AbstractEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
+  v2 = HermesValue::encodeDoubleValue(281470698520320.0);
+  AbstractEqualityTest(TRUE, v1, v2);
 
   // TODO: Test Object equality once Runtime::interpretFunction() is written.
 }
@@ -329,9 +427,9 @@ TEST_F(OperationsTest, StrictEquaityTest) {
   v2 = HermesValue::encodeDoubleValue(182.54);
   StrictEqualityTest(FALSE, v1, v2);
 
-  auto nullObj = runtime->makeNullHandle<JSObject>();
-  auto obj1 = runtime->makeHandle(JSObject::create(runtime, nullObj));
-  auto obj2 = runtime->makeHandle(JSObject::create(runtime, nullObj));
+  auto nullObj = runtime.makeNullHandle<JSObject>();
+  auto obj1 = runtime.makeHandle(JSObject::create(runtime, nullObj));
+  auto obj2 = runtime.makeHandle(JSObject::create(runtime, nullObj));
 
   v1 = HermesValue::encodeObjectValue(obj1.get());
   v2 = HermesValue::encodeObjectValue(&obj2);
@@ -353,6 +451,93 @@ TEST_F(OperationsTest, StrictEquaityTest) {
   v3 = HermesValue::encodeStringValue(s3.get());
   StrictEqualityTest(TRUE, v1, v2);
   StrictEqualityTest(FALSE, v1, v3);
+
+  // BigInt tests
+  // 0n does not equal null, undefined
+  auto bigint0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeNullValue();
+  StrictEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeUndefinedValue();
+  StrictEqualityTest(FALSE, v1, v2);
+
+  // 0n equals bigint created with no bytes
+  auto bigintNoBytes = BigIntPrimitive::fromBytesNoThrow(runtime, {});
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeBigIntValue(bigintNoBytes.get());
+  StrictEqualityTest(TRUE, v1, v2);
+
+  // 0n is not strictly equal to false, "", "0", 0.0, +0.0, -0.0
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeBoolValue(false);
+  StrictEqualityTest(FALSE, v1, v2);
+
+  auto s0 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"0"));
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeStringValue(s0.get());
+  StrictEqualityTest(FALSE, v1, v2);
+
+  auto sEmpty = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u""));
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeStringValue(sEmpty.get());
+  StrictEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeNumberValue(0);
+  StrictEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeNumberValue(+0.0);
+  StrictEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0.get());
+  v2 = HermesValue::encodeNumberValue(-0.0);
+  StrictEqualityTest(FALSE, v1, v2);
+
+  // 1n is not strictly equal to true, "1", 1
+  auto bigint1 = BigIntPrimitive::fromSignedNoThrow(runtime, 1);
+  s1 = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"1"));
+
+  v1 = HermesValue::encodeBigIntValue(bigint1.get());
+  v2 = HermesValue::encodeBoolValue(true);
+  StrictEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint1.get());
+  v2 = HermesValue::encodeStringValue(s1.get());
+  StrictEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint1.get());
+  v2 = HermesValue::encodeNumberValue(1.0);
+  StrictEqualityTest(FALSE, v1, v2);
+
+  // Other tests
+  auto bigint0x00ffff00ffff00 =
+      BigIntPrimitive::fromSignedNoThrow(runtime, 0x0000ffff00ffff00ll);
+  uint8_t bigint00ffff00ffff00Bytes[] = {
+      0x00, 0xff, 0xff, 0x00, 0xff, 0xff, 0x00};
+  auto bigint00ffff00ffff00 =
+      BigIntPrimitive::fromBytesNoThrow(runtime, bigint00ffff00ffff00Bytes);
+  v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
+  v2 = HermesValue::encodeBigIntValue(bigint00ffff00ffff00.get());
+  StrictEqualityTest(TRUE, v1, v2);
+
+  auto s281470698520320 = StringPrimitive::createNoThrow(
+      runtime, createUTF16Ref(u"281470698520320"));
+  v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
+  v2 = HermesValue::encodeStringValue(s281470698520320.get());
+  StrictEqualityTest(FALSE, v1, v2);
+
+  auto s281470698520320_0 = StringPrimitive::createNoThrow(
+      runtime, createUTF16Ref(u"281470698520320.0"));
+  v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
+  v2 = HermesValue::encodeStringValue(s281470698520320_0.get());
+  StrictEqualityTest(FALSE, v1, v2);
+
+  v1 = HermesValue::encodeBigIntValue(bigint0x00ffff00ffff00.get());
+  v2 = HermesValue::encodeDoubleValue(281470698520320.0);
+  StrictEqualityTest(FALSE, v1, v2);
 }
 
 TEST_F(OperationsTest, IsPrimitiveTest) {
@@ -378,7 +563,7 @@ TEST_F(OperationsTest, IsPrimitiveTest) {
   v = HermesValue::encodeStringValue(s.get());
   EXPECT_TRUE(isPrimitive(v));
 
-  auto nullObj = runtime->makeNullHandle<JSObject>();
+  auto nullObj = runtime.makeNullHandle<JSObject>();
   auto obj = JSObject::create(runtime, nullObj);
   v = HermesValue::encodeObjectValue(&obj);
   EXPECT_FALSE(isPrimitive(v));
@@ -405,6 +590,17 @@ TEST_F(OperationsTest, ToBooleanTest) {
   }
 
   {
+    auto bigint12 = BigIntPrimitive::fromSignedNoThrow(runtime, 12);
+    EXPECT_TRUE(toBoolean(HermesValue::encodeBigIntValue(bigint12.get())));
+
+    auto bigint0 = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+    EXPECT_FALSE(toBoolean(HermesValue::encodeBigIntValue(bigint0.get())));
+
+    auto bigintMinus42 = BigIntPrimitive::fromSignedNoThrow(runtime, -42);
+    EXPECT_TRUE(toBoolean(HermesValue::encodeBigIntValue(bigintMinus42.get())));
+  }
+
+  {
     EXPECT_FALSE(toBoolean(HermesValue::encodeDoubleValue(0)));
     EXPECT_FALSE(toBoolean(HermesValue::encodeDoubleValue(-0.0)));
     EXPECT_FALSE(toBoolean(HermesValue::encodeNaNValue()));
@@ -416,15 +612,14 @@ TEST_F(OperationsTest, ToBooleanTest) {
 }
 
 // Use macros for these tests because they're verbose.
-#define ToStringTest(result, value)                                     \
-  {                                                                     \
-    Handle<> scopedValue = runtime->makeHandle(value);                  \
-    auto strRes = toString_RJS(runtime, scopedValue);                   \
-    EXPECT_EQ(ExecutionStatus::RETURNED, strRes.getStatus());           \
-    EXPECT_TRUE(                                                        \
-        StringPrimitive::createStringView(                              \
-            runtime, runtime->makeHandle(std::move(strRes.getValue()))) \
-            .equals(createUTF16Ref(result)));                           \
+#define ToStringTest(result, value)                                            \
+  {                                                                            \
+    Handle<> scopedValue = runtime.makeHandle(value);                          \
+    auto strRes = toString_RJS(runtime, scopedValue);                          \
+    EXPECT_EQ(ExecutionStatus::RETURNED, strRes.getStatus());                  \
+    EXPECT_TRUE(StringPrimitive::createStringView(                             \
+                    runtime, runtime.makeHandle(std::move(strRes.getValue()))) \
+                    .equals(createUTF16Ref(result)));                          \
   }
 
 #define DoubleToStringTest(result, value) \
@@ -494,10 +689,74 @@ TEST_F(OperationsTest, ToStringTest) {
   // TODO: Test Object toString once Runtime::interpretFunction() is written.
 }
 
+#define ToNumericTest(result, value)                       \
+  {                                                        \
+    Handle<> scopedValue = runtime.makeHandle(value);      \
+    res = toNumeric_RJS(runtime, scopedValue);             \
+    EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus()); \
+    EXPECT_EQ((double)result, res->getDouble());           \
+  }
+
+#define InvalidToNumericTest(value)                        \
+  {                                                        \
+    Handle<> scopedValue = runtime.makeHandle(value);      \
+    res = toNumeric_RJS(runtime, scopedValue);             \
+    EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus()); \
+    EXPECT_TRUE(std::isnan(res->getDouble()));             \
+  }
+
+#define StringToNumericTest(result, string)                               \
+  {                                                                       \
+    auto strPrim =                                                        \
+        StringPrimitive::createNoThrow(runtime, createUTF16Ref(string));  \
+    ToNumericTest(result, HermesValue::encodeStringValue(strPrim.get())); \
+  }
+
+#define InvalidStringToNumericTest(string)                               \
+  {                                                                      \
+    auto strPrim =                                                       \
+        StringPrimitive::createNoThrow(runtime, createUTF16Ref(string)); \
+    InvalidToNumericTest(HermesValue::encodeStringValue(strPrim.get())); \
+  }
+
+#define BigIntToNumericTest(result, value)                      \
+  {                                                             \
+    Handle<> scopedValue = runtime.makeHandle(value);           \
+    Handle<> scopedResult = runtime.makeHandle(result);         \
+    res = toNumeric_RJS(runtime, scopedValue);                  \
+    ASSERT_EQ(ExecutionStatus::RETURNED, res.getStatus());      \
+    ASSERT_TRUE(res->isBigInt());                               \
+    EXPECT_TRUE(scopedResult->getBigInt() == res->getBigInt()); \
+  }
+
+TEST_F(OperationsTest, ToNumericTest) {
+  // Sanity-check a few simple values that should be numbers, not bigints.
+  ToNumericTest(+0.0, HermesValue::encodeNullValue());
+  InvalidToNumericTest(HermesValue::encodeUndefinedValue());
+  ToNumericTest(1, HermesValue::encodeBoolValue(true));
+  ToNumericTest(0, HermesValue::encodeBoolValue(false));
+  StringToNumericTest(1.0, u"1");
+
+  // ToNumeric(string) should never return a bigint, even for well-formed
+  // bigints.
+  InvalidStringToNumericTest(u"0n");
+
+  {
+    auto bigintPrim = BigIntPrimitive::fromSignedNoThrow(runtime, 12);
+    BigIntToNumericTest(bigintPrim.get(), bigintPrim.get());
+  }
+
+  {
+    auto bigintPrim = BigIntPrimitive::fromSignedNoThrow(runtime, 42);
+    auto bigintBoxed = toObject(runtime, bigintPrim);
+    BigIntToNumericTest(bigintPrim.get(), *bigintBoxed);
+  }
+}
+
 // Use macros for these tests because they're verbose.
 #define ToNumberTest(result, value)                        \
   {                                                        \
-    Handle<> scopedValue = runtime->makeHandle(value);     \
+    Handle<> scopedValue = runtime.makeHandle(value);      \
     res = toNumber_RJS(runtime, scopedValue);              \
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus()); \
     EXPECT_EQ((double)result, res->getDouble());           \
@@ -505,7 +764,7 @@ TEST_F(OperationsTest, ToStringTest) {
 
 #define InvalidToNumberTest(value)                         \
   {                                                        \
-    Handle<> scopedValue = runtime->makeHandle(value);     \
+    Handle<> scopedValue = runtime.makeHandle(value);      \
     res = toNumber_RJS(runtime, scopedValue);              \
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus()); \
     EXPECT_TRUE(std::isnan(res->getDouble()));             \
@@ -622,13 +881,13 @@ TEST_F(OperationsLargeHeapTest, ToNumberTest) {
     auto str = StringPrimitive::createNoThrow(
         runtime, createUTF16Ref(u"0xFFFFFFFFFFFFFFFF"));
     auto scopedVal =
-        runtime->makeHandle(HermesValue::encodeStringValue(str.get()));
+        runtime.makeHandle(HermesValue::encodeStringValue(str.get()));
     res = toNumber_RJS(runtime, scopedVal);
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());
-    auto strRes = toString_RJS(runtime, runtime->makeHandle(res.getValue()));
+    auto strRes = toString_RJS(runtime, runtime.makeHandle(res.getValue()));
     EXPECT_EQ(ExecutionStatus::RETURNED, strRes.getStatus());
     EXPECT_TRUE(StringPrimitive::createStringView(
-                    runtime, runtime->makeHandle(std::move(*strRes)))
+                    runtime, runtime.makeHandle(std::move(*strRes)))
                     .equals(createUTF16Ref(u"18446744073709552000")));
   }
 
@@ -652,12 +911,31 @@ TEST_F(OperationsLargeHeapTest, ToNumberTest) {
     InvalidStringToNumberTest(u"1֍  ");
   }
 
+  // BigInt
+  {
+    auto bigintPrim = BigIntPrimitive::fromSignedNoThrow(runtime, 0);
+    Handle<> hBigInt =
+        runtime.makeHandle(HermesValue::encodeBigIntValue(bigintPrim.get()));
+    res = toNumber_RJS(runtime, hBigInt);
+    ASSERT_EQ(ExecutionStatus::EXCEPTION, res.getStatus());
+    HermesValue thrownValue = runtime.getThrownValue();
+    ASSERT_TRUE(thrownValue.isObject());
+    auto *thrownJSObject = dyn_vmcast<JSObject>(thrownValue.getObject(runtime));
+    ASSERT_TRUE(thrownJSObject);
+    auto thrownProto =
+        JSObject::getPrototypeOf(createPseudoHandle(thrownJSObject), runtime);
+    ASSERT_NE(ExecutionStatus::EXCEPTION, thrownProto.getStatus());
+    EXPECT_EQ(
+        runtime.TypeErrorPrototype.getObject(runtime), thrownProto->get());
+    runtime.clearThrownValue();
+  }
+
   // TODO: Test Object toNumber once Runtime::interpretFunction() is written.
 }
 
 #define ToIntegerTest(result, value)                       \
   {                                                        \
-    auto scopedValue = runtime->makeHandle(value);         \
+    auto scopedValue = runtime.makeHandle(value);          \
     res = toIntegerOrInfinity(runtime, scopedValue);       \
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus()); \
     EXPECT_EQ(result, res->getNumber());                   \
@@ -686,7 +964,7 @@ TEST_F(OperationsTest, ToIntegerTest) {
 
 #define ToInt32Test(result, value)                         \
   {                                                        \
-    auto scopedValue = runtime->makeHandle(value);         \
+    auto scopedValue = runtime.makeHandle(value);          \
     res = toInt32_RJS(runtime, scopedValue);               \
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus()); \
     EXPECT_EQ(result, res->getNumber());                   \
@@ -720,7 +998,7 @@ TEST_F(OperationsTest, ToInt32Test) {
 
 #define ToUInt32Test(result, value)                        \
   {                                                        \
-    auto scopedValue = runtime->makeHandle(value);         \
+    auto scopedValue = runtime.makeHandle(value);          \
     res = toUInt32_RJS(runtime, scopedValue);              \
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus()); \
     EXPECT_EQ(result, res->getNumber());                   \
@@ -758,7 +1036,7 @@ TEST_F(OperationsTest, ToUInt32Test) {
 
 #define ToUInt16Test(result, value)                        \
   {                                                        \
-    auto scopedValue = runtime->makeHandle(value);         \
+    auto scopedValue = runtime.makeHandle(value);          \
     res = toUInt16(runtime, scopedValue);                  \
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus()); \
     EXPECT_EQ(result, res->getNumber());                   \
@@ -796,21 +1074,21 @@ TEST_F(OperationsTest, ToUInt16Test) {
 
 TEST_F(OperationsTest, ToObjectTest) {
   {
-    auto scopedVal = runtime->makeHandle(HermesValue::encodeNullValue());
+    auto scopedVal = runtime.makeHandle(HermesValue::encodeNullValue());
     EXPECT_EQ(
         ExecutionStatus::EXCEPTION, toObject(runtime, scopedVal).getStatus());
-    runtime->clearThrownValue();
+    runtime.clearThrownValue();
   }
 
   {
-    auto scopedVal = runtime->makeHandle(HermesValue::encodeUndefinedValue());
+    auto scopedVal = runtime.makeHandle(HermesValue::encodeUndefinedValue());
     EXPECT_EQ(
         ExecutionStatus::EXCEPTION, toObject(runtime, scopedVal).getStatus());
-    runtime->clearThrownValue();
+    runtime.clearThrownValue();
   }
 
   {
-    auto scopedVal = runtime->makeHandle(HermesValue::encodeBoolValue(true));
+    auto scopedVal = runtime.makeHandle(HermesValue::encodeBoolValue(true));
     auto res = toObject(runtime, scopedVal);
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());
     EXPECT_TRUE(res->isObject());
@@ -820,7 +1098,7 @@ TEST_F(OperationsTest, ToObjectTest) {
 
   {
     auto m = 1529.184;
-    auto scopedVal = runtime->makeHandle(HermesValue::encodeDoubleValue(m));
+    auto scopedVal = runtime.makeHandle(HermesValue::encodeDoubleValue(m));
     auto res = toObject(runtime, scopedVal);
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());
     EXPECT_TRUE(res->isObject());
@@ -832,32 +1110,119 @@ TEST_F(OperationsTest, ToObjectTest) {
     auto strRef = createUTF16Ref(u"hello");
     auto str = StringPrimitive::createNoThrow(runtime, strRef);
     auto scopedVal =
-        runtime->makeHandle(HermesValue::encodeStringValue(str.get()));
+        runtime.makeHandle(HermesValue::encodeStringValue(str.get()));
     auto res = toObject(runtime, scopedVal);
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());
     EXPECT_TRUE(res->isObject());
     auto obj = vmcast<JSString>(static_cast<GCCell *>(res->getObject()));
     auto objStrHandle =
-        runtime->makeHandle(JSString::getPrimitiveString(obj, runtime));
+        runtime.makeHandle(JSString::getPrimitiveString(obj, runtime));
     EXPECT_TRUE(StringPrimitive::createStringView(runtime, objStrHandle)
                     .equals(strRef));
   }
+
+  {
+    auto bigint = BigIntPrimitive::fromSignedNoThrow(runtime, 0x7ffffffe);
+    auto scopedVal =
+        runtime.makeHandle(HermesValue::encodeBigIntValue(bigint.get()));
+    auto res = toObject(runtime, scopedVal);
+    EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());
+    EXPECT_TRUE(res->isObject());
+    auto obj = vmcast<JSBigInt>(static_cast<GCCell *>(res->getObject()));
+    // Although not required by the spec, Hermes' implementation is expected to
+    // not create a new BigIntPrimitive when boxing. Thus, make sure the
+    // addresses match.
+    EXPECT_TRUE(bigint.get() == JSBigInt::getPrimitiveBigInt(obj, runtime));
+  }
 }
 
-#define NumberAdditionTest(result, x, y)                                      \
-  {                                                                           \
-    res = addOp_RJS(runtime, runtime->makeHandle(x), runtime->makeHandle(y)); \
-    EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());                    \
-    EXPECT_TRUE(res.getValue().isNumber());                                   \
-    EXPECT_EQ(result, res->getNumber());                                      \
+#define TypeOfTest(result, hv)                                      \
+  do {                                                              \
+    auto handleValue = runtime.makeHandle(hv);                      \
+    auto res = typeOf(runtime, handleValue);                        \
+    ASSERT_TRUE(res.isString());                                    \
+    auto str = runtime.makeHandle(res.getString());                 \
+    auto strView = StringPrimitive::createStringView(runtime, str); \
+    EXPECT_TRUE(strView.equals(createUTF16Ref(result)));            \
+  } while (0)
+
+TEST_F(OperationsTest, typeOfTest) {
+  TypeOfTest(u"undefined", HermesValue::encodeUndefinedValue());
+
+  TypeOfTest(u"object", HermesValue::encodeNullValue());
+
+  TypeOfTest(u"boolean", HermesValue::encodeBoolValue(false));
+  TypeOfTest(u"boolean", HermesValue::encodeBoolValue(true));
+
+  TypeOfTest(u"number", HermesValue::encodeNumberValue(+0.0));
+  TypeOfTest(u"number", HermesValue::encodeNaNValue());
+
+  TypeOfTest(
+      u"string", *StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"")));
+
+  TypeOfTest(u"bigint", *BigIntPrimitive::fromSignedNoThrow(runtime, 0));
+
+  TypeOfTest(
+      u"symbol", HermesValue::encodeSymbolValue(SymbolID::unsafeCreate(1)));
+}
+
+#define GetPrimitivePrototypeTest(result, hv)               \
+  do {                                                      \
+    auto handleValue = runtime.makeHandle(hv);              \
+    auto res = getPrimitivePrototype(runtime, handleValue); \
+    ASSERT_EQ(ExecutionStatus::RETURNED, res.getStatus());  \
+    EXPECT_TRUE(Handle<JSObject>::vmcast(&result) == *res); \
+  } while (0)
+
+#define GetPrimitivePrototypeThrowsTest(hv)                 \
+  do {                                                      \
+    auto handleValue = runtime.makeHandle(hv);              \
+    auto res = getPrimitivePrototype(runtime, handleValue); \
+    EXPECT_EQ(ExecutionStatus::EXCEPTION, res.getStatus()); \
+    runtime.clearThrownValue();                             \
+  } while (0)
+
+TEST_F(OperationsTest, getPrimitivePrototypeTest) {
+  GetPrimitivePrototypeThrowsTest(HermesValue::encodeUndefinedValue());
+
+  GetPrimitivePrototypeThrowsTest(HermesValue::encodeNullValue());
+
+  GetPrimitivePrototypeTest(
+      runtime.booleanPrototype, HermesValue::encodeBoolValue(false));
+  GetPrimitivePrototypeTest(
+      runtime.booleanPrototype, HermesValue::encodeBoolValue(true));
+
+  GetPrimitivePrototypeTest(
+      runtime.numberPrototype, HermesValue::encodeNumberValue(+0.0));
+  GetPrimitivePrototypeTest(
+      runtime.numberPrototype, HermesValue::encodeNaNValue());
+
+  GetPrimitivePrototypeTest(
+      runtime.stringPrototype,
+      *StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"")));
+
+  GetPrimitivePrototypeTest(
+      runtime.bigintPrototype, *BigIntPrimitive::fromSignedNoThrow(runtime, 0));
+
+  GetPrimitivePrototypeTest(
+      runtime.symbolPrototype,
+      HermesValue::encodeSymbolValue(SymbolID::unsafeCreate(1)));
+}
+
+#define NumberAdditionTest(result, x, y)                                    \
+  {                                                                         \
+    res = addOp_RJS(runtime, runtime.makeHandle(x), runtime.makeHandle(y)); \
+    EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());                  \
+    EXPECT_TRUE(res.getValue().isNumber());                                 \
+    EXPECT_EQ(result, res->getNumber());                                    \
   }
 
-#define InvalidNumberAdditionTest(x, y)                                       \
-  {                                                                           \
-    res = addOp_RJS(runtime, runtime->makeHandle(x), runtime->makeHandle(y)); \
-    EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());                    \
-    EXPECT_TRUE(res.getValue().isNumber());                                   \
-    EXPECT_TRUE(std::isnan(res->getNumber()));                                \
+#define InvalidNumberAdditionTest(x, y)                                     \
+  {                                                                         \
+    res = addOp_RJS(runtime, runtime.makeHandle(x), runtime.makeHandle(y)); \
+    EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());                  \
+    EXPECT_TRUE(res.getValue().isNumber());                                 \
+    EXPECT_TRUE(std::isnan(res->getNumber()));                              \
   }
 
 #define DoubleAdditionTest(result, x, y)    \
@@ -874,31 +1239,29 @@ TEST_F(OperationsTest, AdditionTest) {
   {
     auto a = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"abc"));
     auto b = StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"def"));
-    auto aHandle = runtime->makeHandle(HermesValue::encodeStringValue(a.get()));
-    auto bHandle = runtime->makeHandle(HermesValue::encodeStringValue(b.get()));
+    auto aHandle = runtime.makeHandle(HermesValue::encodeStringValue(a.get()));
+    auto bHandle = runtime.makeHandle(HermesValue::encodeStringValue(b.get()));
     res = addOp_RJS(runtime, aHandle, bHandle);
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());
     EXPECT_TRUE(res.getValue().isString());
-    EXPECT_TRUE(
-        StringPrimitive::createStringView(
-            runtime,
-            runtime->makeHandle(vmcast<StringPrimitive>(res.getValue())))
-            .equals(createUTF16Ref(u"abcdef")));
+    EXPECT_TRUE(StringPrimitive::createStringView(
+                    runtime,
+                    runtime.makeHandle(vmcast<StringPrimitive>(res.getValue())))
+                    .equals(createUTF16Ref(u"abcdef")));
   }
 
   {
     auto a =
         StringPrimitive::createNoThrow(runtime, createUTF16Ref(u"number: "));
-    auto aHandle = runtime->makeHandle(HermesValue::encodeStringValue(a.get()));
-    auto bHandle = runtime->makeHandle(HermesValue::encodeDoubleValue(1.4));
+    auto aHandle = runtime.makeHandle(HermesValue::encodeStringValue(a.get()));
+    auto bHandle = runtime.makeHandle(HermesValue::encodeDoubleValue(1.4));
     res = addOp_RJS(runtime, aHandle, bHandle);
     EXPECT_EQ(ExecutionStatus::RETURNED, res.getStatus());
     EXPECT_TRUE(res.getValue().isString());
-    EXPECT_TRUE(
-        StringPrimitive::createStringView(
-            runtime,
-            runtime->makeHandle(vmcast<StringPrimitive>(res.getValue())))
-            .equals(createUTF16Ref(u"number: 1.4")));
+    EXPECT_TRUE(StringPrimitive::createStringView(
+                    runtime,
+                    runtime.makeHandle(vmcast<StringPrimitive>(res.getValue())))
+                    .equals(createUTF16Ref(u"number: 1.4")));
   }
 
   {
@@ -965,6 +1328,24 @@ TEST_F(OperationsTest, AdditionTest) {
     DoubleAdditionTest(2, 1, 1);
     DoubleAdditionTest(185, 189, -4);
     DoubleAdditionTest(3528.142, 3527, 1.142);
+  }
+}
+
+TEST_F(OperationsTest, NumberToBigIntTest) {
+  // Non-integral inputs to numberToBigInt should result in an exception.
+  {
+    auto res = numberToBigInt(runtime, 0.5);
+    ASSERT_EQ(ExecutionStatus::EXCEPTION, res.getStatus());
+    HermesValue thrownValue = runtime.getThrownValue();
+    ASSERT_TRUE(thrownValue.isObject());
+    auto *thrownJSObject = dyn_vmcast<JSObject>(thrownValue.getObject(runtime));
+    ASSERT_TRUE(thrownJSObject);
+    auto thrownProto =
+        JSObject::getPrototypeOf(createPseudoHandle(thrownJSObject), runtime);
+    ASSERT_NE(ExecutionStatus::EXCEPTION, thrownProto.getStatus());
+    EXPECT_EQ(
+        runtime.RangeErrorPrototype.getObject(runtime), thrownProto->get());
+    runtime.clearThrownValue();
   }
 }
 } // namespace

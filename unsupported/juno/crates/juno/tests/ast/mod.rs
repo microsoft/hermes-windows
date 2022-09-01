@@ -5,7 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use juno::ast::{node_cast, *};
+use juno::ast::node_cast;
+use juno::ast::*;
 use juno::hparser;
 
 mod validate;
@@ -63,6 +64,143 @@ fn test_node_clone_outlives_context() {
 }
 
 #[test]
+fn test_list_empty() {
+    let mut ctx = Context::new();
+    let gc = GCLock::new(&mut ctx);
+    let ast = builder::Program::build_template(
+        &gc,
+        template::Program {
+            metadata: Default::default(),
+            body: NodeList::new(&gc),
+        },
+    );
+    match ast {
+        Node::Program(Program { body, .. }) => {
+            assert!(body.is_empty());
+            assert_eq!(body.len(), 0);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn test_list_elements() {
+    let mut ctx = Context::new();
+    let gc = GCLock::new(&mut ctx);
+    let ast = builder::Program::build_template(
+        &gc,
+        template::Program {
+            metadata: Default::default(),
+            body: NodeList::from_iter(
+                &gc,
+                [
+                    builder::NullLiteral::build_template(
+                        &gc,
+                        template::NullLiteral {
+                            metadata: Default::default(),
+                        },
+                    ),
+                    builder::BooleanLiteral::build_template(
+                        &gc,
+                        template::BooleanLiteral {
+                            metadata: Default::default(),
+                            value: false,
+                        },
+                    ),
+                ],
+            ),
+        },
+    );
+    match ast {
+        Node::Program(Program { body, .. }) => {
+            assert!(!body.is_empty());
+            assert_eq!(body.len(), 2);
+            let mut it = body.iter();
+            assert!(matches!(it.next(), Some(Node::NullLiteral(_))));
+            assert!(matches!(
+                it.next(),
+                Some(Node::BooleanLiteral(BooleanLiteral { value: false, .. }))
+            ));
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Tests to ensure that list elements allocated off the free list are valid.
+#[test]
+fn test_list_elements_from_freelist() {
+    let mut ctx = Context::new();
+    // First, allocate a two-element list.
+    {
+        let gc = GCLock::new(&mut ctx);
+        let ast = builder::Program::build_template(
+            &gc,
+            template::Program {
+                metadata: Default::default(),
+                body: NodeList::from_iter(
+                    &gc,
+                    [
+                        builder::NullLiteral::build_template(
+                            &gc,
+                            template::NullLiteral {
+                                metadata: Default::default(),
+                            },
+                        ),
+                        builder::BooleanLiteral::build_template(
+                            &gc,
+                            template::BooleanLiteral {
+                                metadata: Default::default(),
+                                value: false,
+                            },
+                        ),
+                    ],
+                ),
+            },
+        );
+        assert_eq!(node_cast!(Node::Program, ast).body.len(), 2);
+    }
+    // Free both elements.
+    ctx.gc();
+    // Allocate two one-element lists to ensure they both have one element
+    // and the old connection between the two elements was not retained.
+    {
+        let gc = GCLock::new(&mut ctx);
+        let ast = builder::Program::build_template(
+            &gc,
+            template::Program {
+                metadata: Default::default(),
+                body: NodeList::from_iter(
+                    &gc,
+                    [builder::NullLiteral::build_template(
+                        &gc,
+                        template::NullLiteral {
+                            metadata: Default::default(),
+                        },
+                    )],
+                ),
+            },
+        );
+        assert_eq!(node_cast!(Node::Program, ast).body.len(), 1);
+        let ast = builder::Program::build_template(
+            &gc,
+            template::Program {
+                metadata: Default::default(),
+                body: NodeList::from_iter(
+                    &gc,
+                    [builder::NullLiteral::build_template(
+                        &gc,
+                        template::NullLiteral {
+                            metadata: Default::default(),
+                        },
+                    )],
+                ),
+            },
+        );
+        assert_eq!(node_cast!(Node::Program, ast).body.len(), 1);
+    }
+}
+
+#[test]
 #[allow(clippy::float_cmp)]
 fn test_visit() {
     let mut ctx = Context::new();
@@ -70,42 +208,35 @@ fn test_visit() {
         let gc = GCLock::new(&mut ctx);
         NodeRc::from_node(
             &gc,
-            builder::BlockStatement::build_template(
-                &gc,
-                template::BlockStatement {
-                    metadata: Default::default(),
-                    body: vec![
-                        builder::ExpressionStatement::build_template(
-                            &gc,
-                            template::ExpressionStatement {
+            template::BlockStatement {
+                metadata: Default::default(),
+                body: NodeList::from_iter(
+                    &gc,
+                    [
+                        template::ExpressionStatement {
+                            metadata: Default::default(),
+                            expression: template::NumericLiteral {
                                 metadata: Default::default(),
-                                expression: builder::NumericLiteral::build_template(
-                                    &gc,
-                                    template::NumericLiteral {
-                                        metadata: Default::default(),
-                                        value: 1.0,
-                                    },
-                                ),
-                                directive: None,
-                            },
-                        ),
-                        builder::ExpressionStatement::build_template(
-                            &gc,
-                            template::ExpressionStatement {
+                                value: 1.0,
+                            }
+                            .build(&gc),
+                            directive: None,
+                        }
+                        .build(&gc),
+                        template::ExpressionStatement {
+                            metadata: Default::default(),
+                            expression: template::NumericLiteral {
                                 metadata: Default::default(),
-                                expression: builder::NumericLiteral::build_template(
-                                    &gc,
-                                    template::NumericLiteral {
-                                        metadata: Default::default(),
-                                        value: 2.0,
-                                    },
-                                ),
-                                directive: None,
-                            },
-                        ),
+                                value: 2.0,
+                            }
+                            .build(&gc),
+                            directive: None,
+                        }
+                        .build(&gc),
                     ],
-                },
-            ),
+                ),
+            }
+            .build(&gc),
         )
     };
 
@@ -207,11 +338,7 @@ fn test_visit_mut() {
                 let mut builder = builder::BinaryExpression::from_node(e1);
                 builder.operator(BinaryExpressionOperator::Minus);
                 builder.right(e2);
-                return node.replace_with_new(
-                    builder::Builder::BinaryExpression(builder),
-                    ctx,
-                    self,
-                );
+                return node.replace_with_new(builder.into(), ctx, self);
             }
             node.visit_children_mut(ctx, self)
         }
@@ -289,13 +416,13 @@ fn test_replace_var_decls() {
                 }) if declarations.len() > 1 => {
                     assert_eq!(path.unwrap().field, NodeField::body);
                     let mut result: Vec<builder::Builder> = Vec::new();
-                    for decl in declarations {
+                    for decl in *declarations {
                         result.push(builder::Builder::VariableDeclaration(
                             builder::VariableDeclaration::from_template(
                                 template::VariableDeclaration {
-                                    metadata: Default::default(),
+                                    metadata: (*decl.range()).into(),
                                     kind: *kind,
-                                    declarations: vec![decl],
+                                    declarations: NodeList::from_iter(lock, [decl]),
                                 },
                             ),
                         ));
@@ -318,27 +445,32 @@ fn test_replace_var_decls() {
         match transformed.node(&gc) {
             Node::Program(Program { body, .. }) => {
                 assert_eq!(body.len(), 2, "Program is {:#?}", transformed.node(&gc));
+                let x_decl = node_cast!(Node::VariableDeclaration, body.head().unwrap())
+                    .declarations
+                    .head()
+                    .unwrap();
                 assert_eq!(
                     gc.ctx().str(
                         node_cast!(
                             Node::Identifier,
-                            node_cast!(
-                                Node::VariableDeclarator,
-                                node_cast!(Node::VariableDeclaration, body[0]).declarations[0]
-                            )
-                            .id
+                            node_cast!(Node::VariableDeclarator, x_decl).id
                         )
                         .name
                     ),
                     "x"
                 );
+                assert_eq!(x_decl.range().start.line, 1);
+                assert_eq!(x_decl.range().start.col, 5);
                 assert_eq!(
                     gc.ctx().str(
                         node_cast!(
                             Node::Identifier,
                             node_cast!(
                                 Node::VariableDeclarator,
-                                node_cast!(Node::VariableDeclaration, body[1]).declarations[0]
+                                node_cast!(Node::VariableDeclaration, body.iter().nth(1).unwrap())
+                                    .declarations
+                                    .head()
+                                    .unwrap()
                             )
                             .id
                         )

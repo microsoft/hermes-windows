@@ -16,10 +16,6 @@ const char *hostFunctionReturnArgumentTrace() {
 {
   "globalObjID": 1,
   "env": {
-    "mathRandomSeed": 0,
-    "callsToDateNow": [],
-    "callsToNewDate": [],
-    "callsToDateAsFunction": [],
     "callsToHermesInternalGetInstrumentedStats": [],
   },
   "trace": [
@@ -46,7 +42,7 @@ const char *hostFunctionReturnArgumentTrace() {
       "type": "SetPropertyRecord",
       "time": 0,
       "objID": 1,
-      "propID": 22,
+      "propID": "propIDTag:22",
       "propName": "foo",
       "value": "object:10"
     },

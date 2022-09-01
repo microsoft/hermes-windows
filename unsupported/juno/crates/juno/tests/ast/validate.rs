@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use juno::{
-    ast::*,
-    hparser::{self, ParserDialect, ParserFlags},
-};
+use juno::ast::*;
+use juno::hparser;
+use juno::hparser::ParserDialect;
+use juno::hparser::ParserFlags;
 
 fn validate_src_with_flags(
     flags: hparser::ParserFlags,
@@ -116,19 +116,22 @@ fn test_error() {
                 &gc,
                 template::BlockStatement {
                     metadata: Default::default(),
-                    body: vec![builder::ReturnStatement::build_template(
+                    body: NodeList::from_iter(
                         &gc,
-                        template::ReturnStatement {
-                            metadata: Default::default(),
-                            argument: Some(builder::ReturnStatement::build_template(
-                                &gc,
-                                template::ReturnStatement {
-                                    metadata: Default::default(),
-                                    argument: None,
-                                },
-                            )),
-                        },
-                    )],
+                        [builder::ReturnStatement::build_template(
+                            &gc,
+                            template::ReturnStatement {
+                                metadata: Default::default(),
+                                argument: Some(builder::ReturnStatement::build_template(
+                                    &gc,
+                                    template::ReturnStatement {
+                                        metadata: Default::default(),
+                                        argument: None,
+                                    },
+                                )),
+                            },
+                        )],
+                    ),
                 },
             ),
         )
@@ -137,7 +140,9 @@ fn test_error() {
     let bad_ret: NodeRc = {
         let gc = GCLock::new(&mut ctx);
         match ast.node(&gc) {
-            Node::BlockStatement(BlockStatement { body, .. }) => NodeRc::from_node(&gc, body[0]),
+            Node::BlockStatement(BlockStatement { body, .. }) => {
+                NodeRc::from_node(&gc, body.head().unwrap())
+            }
             _ => {
                 unreachable!("bad match");
             }
@@ -160,7 +165,16 @@ fn test_literals() {
     validate_src("({x: y});").unwrap();
     validate_src("({x: y, ...z});").unwrap();
     validate_src("[]").unwrap();
+    validate_src("[x,y,,z]").unwrap();
     validate_src("[x, y, ...z]").unwrap();
+}
+
+#[test]
+fn test_patterns() {
+    validate_src("[x] = y;").unwrap();
+    validate_src("[x.y , , ...z] = y;").unwrap();
+    validate_src("({x} = y)").unwrap();
+    validate_src("({x: y} = y)").unwrap();
 }
 
 #[test]
@@ -168,6 +182,15 @@ fn test_calls() {
     validate_src("foo()").unwrap();
     validate_src("foo(1,2)").unwrap();
     validate_src("foo(1,2,...bar)").unwrap();
+}
+
+#[test]
+fn test_import_export() {
+    validate_src("import * as foo from 'foo'").unwrap();
+    validate_src("import {x} from 'foo'").unwrap();
+    validate_src("import {x as y} from 'foo'").unwrap();
+    validate_src("export var x;").unwrap();
+    validate_src("export * as x from 'foo';").unwrap();
 }
 
 #[test]
@@ -182,8 +205,10 @@ fn test_jsx() {
 #[test]
 fn test_flow() {
     validate_src_flow("function foo(a: number): number { return a; }").unwrap();
+    validate_src_flow("function foo(a: number): number %checks { return a; }").unwrap();
+    validate_src_flow("function foo(a: number): number %checks(a[1]) { return a; }").unwrap();
     validate_src_flow(
-        "class A extends B {
+        "class A<T> extends B<T> {
             foo: number;
             +bar: string;
     }",

@@ -18,18 +18,20 @@ namespace vm {
 
 const ObjectVTable JSArrayBuffer::vt{
     VTable(
-        CellKind::ArrayBufferKind,
+        CellKind::JSArrayBufferKind,
         cellSize<JSArrayBuffer>(),
         _finalizeImpl,
         nullptr,
         _mallocSizeImpl,
-        nullptr,
-        VTable::HeapSnapshotMetadata{
-            HeapSnapshot::NodeType::Object,
-            nullptr,
-            _snapshotAddEdgesImpl,
-            _snapshotAddNodesImpl,
-            nullptr}),
+        nullptr
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+        ,
+        VTable::HeapSnapshotMetadata {
+          HeapSnapshot::NodeType::Object, nullptr, _snapshotAddEdgesImpl,
+              _snapshotAddNodesImpl, nullptr
+        }
+#endif
+        ),
     _getOwnIndexedRangeImpl,
     _haveOwnIndexedImpl,
     _getOwnIndexedPropertyFlagsImpl,
@@ -39,47 +41,49 @@ const ObjectVTable JSArrayBuffer::vt{
     _checkAllOwnIndexedImpl,
 };
 
-void ArrayBufferBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
+void JSArrayBufferBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.addJSObjectOverlapSlots(JSObject::numOverlapSlots<JSArrayBuffer>());
-  ObjectBuildMeta(cell, mb);
-  mb.setVTable(&JSArrayBuffer::vt.base);
+  JSObjectBuildMeta(cell, mb);
+  mb.setVTable(&JSArrayBuffer::vt);
 }
 
 PseudoHandle<JSArrayBuffer> JSArrayBuffer::create(
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<JSObject> parentHandle) {
-  auto *cell = runtime->makeAFixed<JSArrayBuffer, HasFinalizer::Yes>(
+  auto *cell = runtime.makeAFixed<JSArrayBuffer, HasFinalizer::Yes>(
       runtime,
       parentHandle,
-      runtime->getHiddenClassForPrototype(
+      runtime.getHiddenClassForPrototype(
           *parentHandle, numOverlapSlots<JSArrayBuffer>()));
   return JSObjectInit::initToPseudoHandle(runtime, cell);
 }
 
 CallResult<Handle<JSArrayBuffer>> JSArrayBuffer::clone(
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<JSArrayBuffer> src,
     size_type srcOffset,
     size_type srcSize) {
   if (!src->attached()) {
-    return runtime->raiseTypeError("Cannot clone from a detached buffer");
+    return runtime.raiseTypeError("Cannot clone from a detached buffer");
   }
 
-  auto arr = runtime->makeHandle(JSArrayBuffer::create(
-      runtime, Handle<JSObject>::vmcast(&runtime->arrayBufferPrototype)));
+  auto arr = runtime.makeHandle(JSArrayBuffer::create(
+      runtime, Handle<JSObject>::vmcast(&runtime.arrayBufferPrototype)));
 
   // Don't need to zero out the data since we'll be copying into it immediately.
-  if (arr->createDataBlock(runtime, srcSize, false) ==
+  if (createDataBlock(runtime, arr, srcSize, false) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   if (srcSize != 0) {
-    JSArrayBuffer::copyDataBlockBytes(*arr, 0, *src, srcOffset, srcSize);
+    JSArrayBuffer::copyDataBlockBytes(
+        runtime, *arr, 0, *src, srcOffset, srcSize);
   }
   return arr;
 }
 
 void JSArrayBuffer::copyDataBlockBytes(
+    Runtime &runtime,
     JSArrayBuffer *dst,
     size_type dstIndex,
     JSArrayBuffer *src,
@@ -91,7 +95,7 @@ void JSArrayBuffer::copyDataBlockBytes(
     return;
   }
   assert(
-      dst->getDataBlock() != src->getDataBlock() &&
+      dst->getDataBlock(runtime) != src->getDataBlock(runtime) &&
       "Cannot copy into the same block, must be different blocks");
   assert(
       srcIndex + count <= src->size() &&
@@ -100,134 +104,173 @@ void JSArrayBuffer::copyDataBlockBytes(
       dstIndex + count <= dst->size() &&
       "Cannot copy more data into a block than it has space for");
   // Copy from the other buffer.
-  memcpy(dst->getDataBlock() + dstIndex, src->getDataBlock() + srcIndex, count);
+  memcpy(
+      dst->getDataBlock(runtime) + dstIndex,
+      src->getDataBlock(runtime) + srcIndex,
+      count);
 }
 
 JSArrayBuffer::JSArrayBuffer(
-    Runtime *runtime,
+    Runtime &runtime,
     Handle<JSObject> parent,
     Handle<HiddenClass> clazz)
-    : JSObject(runtime, &vt.base, *parent, *clazz),
-      data_(nullptr),
-      size_(0),
-      attached_(false) {}
+    : JSObject(runtime, *parent, *clazz), attached_(false) {}
 
-void JSArrayBuffer::_finalizeImpl(GCCell *cell, GC *gc) {
+void JSArrayBuffer::_finalizeImpl(GCCell *cell, GC &gc) {
   auto *self = vmcast<JSArrayBuffer>(cell);
-  if (LLVM_UNLIKELY(self->externalBuffer_)) {
-    self->externalBuffer_.reset();
-    self->data_ = nullptr;
-    self->size_ = 0;
-  } else {
-    // Need to untrack the native memory that may have been tracked by
-    // snapshots.
-    gc->getIDTracker().untrackNative(self->data_);
-    gc->debitExternalMemory(self, self->size_);
-    free(self->data_);
-  }
+  if (self->attached() && !self->external_)
+    self->freeInternalBuffer(gc);
   self->~JSArrayBuffer();
 }
 
 size_t JSArrayBuffer::_mallocSizeImpl(GCCell *cell) {
   const auto *buffer = vmcast<JSArrayBuffer>(cell);
-  return !buffer->externalBuffer_ ? buffer->size_ : 0;
+  return buffer->size_;
 }
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
 void JSArrayBuffer::_snapshotAddEdgesImpl(
     GCCell *cell,
-    GC *gc,
+    GC &gc,
     HeapSnapshot &snap) {
   auto *const self = vmcast<JSArrayBuffer>(cell);
-  if (!self->data_ || self->externalBuffer_) {
+  if (!self->attached() || self->external_) {
     return;
   }
-  // While this is an internal edge, it is to a native node which is not
-  // automatically added by the metadata.
-  snap.addNamedEdge(
-      HeapSnapshot::EdgeType::Internal,
-      "backingStore",
-      gc->getNativeID(self->data_));
-  // The backing store just has numbers, so there's no edges to add here.
+  if (uint8_t *data = self->data_.get(gc)) {
+    // While this is an internal edge, it is to a native node which is not
+    // automatically added by the metadata.
+    snap.addNamedEdge(
+        HeapSnapshot::EdgeType::Internal, "backingStore", gc.getNativeID(data));
+    // The backing store just has numbers, so there's no edges to add here.
+  }
 }
 
 void JSArrayBuffer::_snapshotAddNodesImpl(
     GCCell *cell,
-    GC *gc,
+    GC &gc,
     HeapSnapshot &snap) {
   auto *const self = vmcast<JSArrayBuffer>(cell);
-  if (!self->data_ || self->externalBuffer_) {
+  if (!self->attached() || self->external_) {
     return;
   }
-  // Add the native node before the JSArrayBuffer node.
-  snap.beginNode();
-  snap.endNode(
-      HeapSnapshot::NodeType::Native,
-      "JSArrayBufferData",
-      gc->getNativeID(self->data_),
-      self->size_,
-      0);
+  if (uint8_t *data = self->data_.get(gc)) {
+    // Add the native node before the JSArrayBuffer node.
+    snap.beginNode();
+    snap.endNode(
+        HeapSnapshot::NodeType::Native,
+        "JSArrayBufferData",
+        gc.getNativeID(data),
+        self->size_,
+        0);
+  }
+}
+#endif
+
+void JSArrayBuffer::freeInternalBuffer(GC &gc) {
+  uint8_t *data = data_.get(gc);
+  assert(attached() && "Buffer must be attached");
+  assert((data || size_ == 0) && "Null buffers must have zero size");
+  assert(!external_ && "External buffer cannot be freed");
+
+  // Need to untrack the native memory that may have been tracked by snapshots.
+  gc.debitExternalMemory(this, size_);
+  gc.getIDTracker().untrackNative(data);
+  free(data);
 }
 
-void JSArrayBuffer::detach(GC *gc) {
-  if (LLVM_UNLIKELY(externalBuffer_)) {
-    externalBuffer_.reset();
-    data_ = nullptr;
-    size_ = 0;
-  } else if (data_) {
-    gc->debitExternalMemory(this, size_);
-    free(data_);
-    data_ = nullptr;
-    size_ = 0;
-  } else {
-    assert(size_ == 0);
+ExecutionStatus JSArrayBuffer::detach(
+    Runtime &runtime,
+    Handle<JSArrayBuffer> self) {
+  if (!self->attached())
+    return ExecutionStatus::RETURNED;
+  if (!self->external_)
+    self->freeInternalBuffer(runtime.getHeap());
+  else {
+    auto res = setExternalFinalizer(
+        runtime, self, HandleRootOwner::getUndefinedValue());
+    if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
   }
   // Note that whether a buffer is attached is independent of whether
   // it has allocated data.
-  attached_ = false;
+  self->attached_ = false;
+  return ExecutionStatus::RETURNED;
 }
 
-ExecutionStatus
-JSArrayBuffer::createDataBlock(Runtime *runtime, size_type size, bool zero) {
-  detach(&runtime->getHeap());
-  if (size == 0) {
-    // Even though there is no storage allocated, the spec requires an empty
-    // ArrayBuffer to still be considered as attached.
-    attached_ = true;
-    return ExecutionStatus::RETURNED;
-  }
-  // If an external allocation of this size would exceed the GC heap size,
-  // raise RangeError.
-  if (LLVM_UNLIKELY(!runtime->getHeap().canAllocExternalMemory(size))) {
-    return runtime->raiseRangeError(
-        "Cannot allocate a data block for the ArrayBuffer");
+ExecutionStatus JSArrayBuffer::createDataBlock(
+    Runtime &runtime,
+    Handle<JSArrayBuffer> self,
+    size_type size,
+    bool zero) {
+  if (LLVM_UNLIKELY(detach(runtime, self) == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  uint8_t *data = nullptr;
+  if (size > 0) {
+    // If an external allocation of this size would exceed the GC heap size,
+    // raise RangeError.
+    if (LLVM_UNLIKELY(!runtime.getHeap().canAllocExternalMemory(size))) {
+      return runtime.raiseRangeError(
+          "Cannot allocate a data block for the ArrayBuffer");
+    }
+
+    // Note that the result of calloc or malloc is immediately checked below, so
+    // we don't use the checked versions.
+    data = zero ? static_cast<uint8_t *>(calloc(sizeof(uint8_t), size))
+                : static_cast<uint8_t *>(malloc(sizeof(uint8_t) * size));
+    if (!data) {
+      return runtime.raiseRangeError(
+          "Cannot allocate a data block for the ArrayBuffer");
+    }
   }
 
-  // Note that the result of calloc or malloc is immediately checked below, so
-  // we don't use the checked versions.
-  data_ = zero ? static_cast<uint8_t *>(calloc(sizeof(uint8_t), size))
-               : static_cast<uint8_t *>(malloc(sizeof(uint8_t) * size));
-  if (data_ == nullptr) {
-    // Failed to allocate.
-    return runtime->raiseRangeError(
-        "Cannot allocate a data block for the ArrayBuffer");
-  } else {
-    attached_ = true;
-    size_ = size;
-    runtime->getHeap().creditExternalMemory(this, size);
-    return ExecutionStatus::RETURNED;
-  }
+  self->attached_ = true;
+  self->data_.set(runtime, data);
+  self->size_ = size;
+  self->external_ = false;
+  runtime.getHeap().creditExternalMemory(*self, size);
+  return ExecutionStatus::RETURNED;
 }
 
-void JSArrayBuffer::setExternalBuffer(
-    Runtime *runtime,
-    std::unique_ptr<Buffer> externalBuffer) {
-  detach(&runtime->getHeap());
-  externalBuffer_ = std::move(externalBuffer);
-  attached_ = true;
-  if (externalBuffer_) {
-    data_ = const_cast<uint8_t *>(externalBuffer_->data());
-    size_ = externalBuffer_->size();
-  }
+ExecutionStatus JSArrayBuffer::setExternalFinalizer(
+    Runtime &runtime,
+    Handle<JSArrayBuffer> self,
+    Handle<> value) {
+  auto res = JSObject::defineOwnProperty(
+      self,
+      runtime,
+      Predefined::getSymbolID(
+          Predefined::InternalPropertyArrayBufferExternalFinalizer),
+      DefinePropertyFlags::getDefaultNewPropertyFlags(),
+      value);
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  if (LLVM_UNLIKELY(!*res))
+    return runtime.raiseTypeError("Cannot modify external buffer.");
+  return ExecutionStatus::RETURNED;
+}
+
+ExecutionStatus JSArrayBuffer::setExternalDataBlock(
+    Runtime &runtime,
+    Handle<JSArrayBuffer> self,
+    uint8_t *data,
+    size_type size,
+    void *context,
+    FinalizeNativeStatePtr finalizePtr) {
+  if (LLVM_UNLIKELY(detach(runtime, self) == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+
+  // Set the external finalizer first, so that if it throws, the buffer is not
+  // left in an attached state.
+  auto *ns = NativeState::create(runtime, context, finalizePtr);
+  auto res = setExternalFinalizer(runtime, self, runtime.makeHandle(ns));
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  self->attached_ = true;
+  self->size_ = size;
+  self->external_ = true;
+  self->data_.set(runtime, data);
+  return ExecutionStatus::RETURNED;
 }
 
 } // namespace vm

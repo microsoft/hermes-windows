@@ -26,6 +26,13 @@ unsigned BytecodeFunctionGenerator::getIdentifierID(
   return BMGen_.getIdentifierID(value->getValue().str());
 }
 
+uint32_t BytecodeFunctionGenerator::addBigInt(bigint::ParsedBigInt bigint) {
+  assert(
+      !complete_ &&
+      "Cannot modify BytecodeFunction after call to bytecodeGenerationComplete.");
+  return BMGen_.addBigInt(std::move(bigint));
+}
+
 uint32_t BytecodeFunctionGenerator::addRegExp(CompiledRegExp regexp) {
   assert(
       !complete_ &&
@@ -33,7 +40,7 @@ uint32_t BytecodeFunctionGenerator::addRegExp(CompiledRegExp regexp) {
   return BMGen_.addRegExp(std::move(regexp));
 }
 
-uint32_t BytecodeFunctionGenerator::addFilename(StringRef filename) {
+uint32_t BytecodeFunctionGenerator::addFilename(llvh::StringRef filename) {
   assert(
       !complete_ &&
       "Cannot modify BytecodeFunction after call to bytecodeGenerationComplete.");
@@ -213,11 +220,11 @@ void BytecodeModuleGenerator::setFunctionGenerator(
   functionGenerators_[F] = std::move(BFG);
 }
 
-unsigned BytecodeModuleGenerator::getStringID(StringRef str) const {
+unsigned BytecodeModuleGenerator::getStringID(llvh::StringRef str) const {
   return stringTable_.getStringID(str);
 }
 
-unsigned BytecodeModuleGenerator::getIdentifierID(StringRef str) const {
+unsigned BytecodeModuleGenerator::getIdentifierID(llvh::StringRef str) const {
   return stringTable_.getIdentifierID(str);
 }
 
@@ -227,11 +234,15 @@ void BytecodeModuleGenerator::initializeStringTable(
   stringTable_ = std::move(stringTable);
 }
 
+uint32_t BytecodeModuleGenerator::addBigInt(bigint::ParsedBigInt bigint) {
+  return bigIntTable_.addBigInt(std::move(bigint));
+}
+
 uint32_t BytecodeModuleGenerator::addRegExp(CompiledRegExp regexp) {
   return regExpTable_.addRegExp(std::move(regexp));
 }
 
-uint32_t BytecodeModuleGenerator::addFilename(StringRef filename) {
+uint32_t BytecodeModuleGenerator::addFilename(llvh::StringRef filename) {
   return filenameTable_.addFilename(filename);
 }
 
@@ -280,6 +291,8 @@ std::unique_ptr<BytecodeModule> BytecodeModuleGenerator::generate() {
       std::move(hashes),
       stringTable_.acquireStringTable(),
       stringTable_.acquireStringStorage(),
+      bigIntTable_.getEntryList(),
+      bigIntTable_.getDigitsBuffer(),
       regExpTable_.getEntryList(),
       regExpTable_.getBytecodeBuffer(),
       entryPointIndex_,

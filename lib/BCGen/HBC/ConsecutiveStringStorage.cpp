@@ -758,8 +758,12 @@ uint32_t ConsecutiveStringStorage::getEntryHash(size_t i) const {
   ensureStorageValid();
 
   auto &entry = strTable_[i];
-  const unsigned char *data = &storage_[entry.getOffset()];
   uint32_t length = entry.getLength();
+  assert(
+      entry.getOffset() + (entry.isUTF16() ? length * 2 : length) <=
+          storage_.size() &&
+      "entry past end");
+  const unsigned char *data = storage_.data() + entry.getOffset();
   if (entry.isUTF16()) {
     const char16_t *u16data = reinterpret_cast<const char16_t *>(data);
     return hermes::hashString(ArrayRef<char16_t>{u16data, length});
@@ -808,7 +812,7 @@ llvh::StringRef getStringFromEntry(
       offset + length <= storage.size() && offset + length >= offset &&
       "Invalid entry");
   if (!entry.isUTF16()) {
-    return StringRef{(const char *)storage.data() + offset, length};
+    return llvh::StringRef{(const char *)storage.data() + offset, length};
   } else {
     const char16_t *s =
         reinterpret_cast<const char16_t *>(storage.data() + offset);

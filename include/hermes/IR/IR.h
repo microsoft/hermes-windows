@@ -21,6 +21,7 @@
 #include "llvh/ADT/Hashing.h"
 #include "llvh/ADT/SmallPtrSet.h"
 #include "llvh/ADT/SmallVector.h"
+#include "llvh/ADT/StringRef.h"
 #include "llvh/ADT/Twine.h"
 #include "llvh/ADT/ilist_node.h"
 #include "llvh/ADT/iterator_range.h"
@@ -55,6 +56,7 @@ class Type {
     Boolean,
     String,
     Number,
+    BigInt,
     Object,
     Closure, // Subtype of Object.
     RegExp, // Subtype of Object.
@@ -71,7 +73,7 @@ class Type {
   };
 
   /// Return the string representation of the type at index \p idx.
-  StringRef getKindStr(TypeKind idx) const {
+  llvh::StringRef getKindStr(TypeKind idx) const {
     // The strings below match the values in TypeKind.
     static const char *const names[] = {
         "empty",
@@ -80,6 +82,7 @@ class Type {
         "boolean",
         "string",
         "number",
+        "bigint",
         "object",
         "closure",
         "regexp"};
@@ -93,34 +96,34 @@ class Type {
 #define NUM_IS_VAL(XX) (numBitmask_ == (1 << NumTypeKind::XX))
 
   // The 'Any' type means all possible types.
-  static constexpr unsigned TYPE_ANY_MASK = (1u << TypeKind::LAST_TYPE) - 1;
+  static constexpr uint16_t TYPE_ANY_MASK = (1u << TypeKind::LAST_TYPE) - 1;
 
-  static constexpr unsigned PRIMITIVE_BITS = BIT_TO_VAL(Number) |
-      BIT_TO_VAL(String) | BIT_TO_VAL(Null) | BIT_TO_VAL(Undefined) |
-      BIT_TO_VAL(Boolean);
+  static constexpr uint16_t PRIMITIVE_BITS = BIT_TO_VAL(Number) |
+      BIT_TO_VAL(String) | BIT_TO_VAL(BigInt) | BIT_TO_VAL(Null) |
+      BIT_TO_VAL(Undefined) | BIT_TO_VAL(Boolean);
 
-  static constexpr unsigned OBJECT_BITS =
+  static constexpr uint16_t OBJECT_BITS =
       BIT_TO_VAL(Object) | BIT_TO_VAL(Closure) | BIT_TO_VAL(RegExp);
 
-  static constexpr unsigned NONPTR_BITS = BIT_TO_VAL(Number) |
+  static constexpr uint16_t NONPTR_BITS = BIT_TO_VAL(Number) |
       BIT_TO_VAL(Boolean) | BIT_TO_VAL(Null) | BIT_TO_VAL(Undefined);
 
-  static constexpr unsigned ANY_NUM_BITS =
+  static constexpr uint16_t ANY_NUM_BITS =
       NUM_BIT_TO_VAL(Double) | NUM_BIT_TO_VAL(Int32) | NUM_BIT_TO_VAL(Uint32);
 
-  static constexpr unsigned INTEGER_BITS =
+  static constexpr uint16_t INTEGER_BITS =
       NUM_BIT_TO_VAL(Int32) | NUM_BIT_TO_VAL(Uint32);
 
   /// Each bit represent the possibility of the type being the type that's
   /// represented in the enum entry.
-  unsigned bitmask_{TYPE_ANY_MASK};
+  uint16_t bitmask_{TYPE_ANY_MASK};
   /// Each bit represent the possibility of the type being the subtype of number
   /// that's represented in the number type enum entry. If the number bit is not
   /// set, this bitmask is meaningless.
-  unsigned numBitmask_{ANY_NUM_BITS};
+  uint16_t numBitmask_{ANY_NUM_BITS};
 
   /// The constructor is only accessible by static builder methods.
-  constexpr explicit Type(unsigned mask, unsigned numMask = ANY_NUM_BITS)
+  constexpr explicit Type(uint16_t mask, uint16_t numMask = ANY_NUM_BITS)
       : bitmask_(mask), numBitmask_(numMask) {}
 
  public:
@@ -172,6 +175,12 @@ class Type {
   static constexpr Type createNumber() {
     return Type(BIT_TO_VAL(Number));
   }
+  static constexpr Type createBigInt() {
+    return Type(BIT_TO_VAL(BigInt));
+  }
+  static constexpr Type createNumeric() {
+    return unionTy(createNumber(), createBigInt());
+  }
   static constexpr Type createClosure() {
     return Type(BIT_TO_VAL(Closure));
   }
@@ -210,6 +219,9 @@ class Type {
   constexpr bool isNumberType() const {
     return IS_VAL(Number);
   }
+  constexpr bool isBigIntType() const {
+    return IS_VAL(BigInt);
+  }
   constexpr bool isClosureType() const {
     return IS_VAL(Closure);
   }
@@ -227,7 +239,7 @@ class Type {
   }
 
   /// \return true if the type is one of the known javascript primitive types:
-  /// Number, Null, Boolean, String, Undefined.
+  /// Number, BigInt, Null, Boolean, String, Undefined.
   constexpr bool isKnownPrimitiveType() const {
     return isPrimitive() && 1 == llvh::countPopulation(bitmask_);
   }
@@ -262,6 +274,11 @@ class Type {
   /// \returns true if this type can represent a string value.
   constexpr bool canBeString() const {
     return canBeType(Type::createString());
+  }
+
+  /// \returns true if this type can represent a bigint value.
+  constexpr bool canBeBigInt() const {
+    return canBeType(Type::createBigInt());
   }
 
   /// \returns true if this type can represent a number value.
@@ -492,7 +509,7 @@ class Value {
   }
 
   /// \returns the string representation of the Value kind.
-  StringRef getKindStr() const;
+  llvh::StringRef getKindStr() const;
 
   /// Sets a new type \p type to the value.
   void setType(Type type) {
@@ -659,6 +676,36 @@ class LiteralUndefined : public Literal {
   }
 };
 
+class LiteralBigInt : public Literal, public llvh::FoldingSetNode {
+  LiteralBigInt(const LiteralBigInt &) = delete;
+  LiteralBigInt &operator=(const LiteralBigInt &) = delete;
+
+  // value holds the BigInt literal string as parsed by the front-end.
+  UniqueString *value;
+
+ public:
+  explicit LiteralBigInt(UniqueString *v)
+      : Literal(ValueKind::LiteralBigIntKind), value(v) {
+    setType(Type::createBigInt());
+  }
+
+  UniqueString *getValue() const {
+    return value;
+  }
+
+  static void Profile(llvh::FoldingSetNodeID &ID, UniqueString *value) {
+    ID.AddPointer(value);
+  }
+
+  void Profile(llvh::FoldingSetNodeID &ID) const {
+    LiteralBigInt::Profile(ID, value);
+  }
+
+  static bool classof(const Value *V) {
+    return V->getKind() == ValueKind::LiteralBigIntKind;
+  }
+};
+
 class LiteralNumber : public Literal, public llvh::FoldingSetNode {
   LiteralNumber(const LiteralNumber &) = delete;
   void operator=(const LiteralNumber &) = delete;
@@ -765,7 +812,7 @@ class LiteralNumber : public Literal, public llvh::FoldingSetNode {
   }
 
   static void Profile(llvh::FoldingSetNodeID &ID, double value) {
-    ID.AddInteger(safeTypeCast<double, int64_t>(value));
+    ID.AddInteger(llvh::DoubleToBits(value));
   }
 
   void Profile(llvh::FoldingSetNodeID &ID) const {
@@ -1018,7 +1065,7 @@ class Instruction
 
   /// A debug utility that dumps the textual representation of the IR to the
   /// given ostream, defaults to stdout.
-  void dump(llvh::raw_ostream &os = llvh::outs());
+  void dump(llvh::raw_ostream &os = llvh::outs()) const;
 
   /// Replace the first operand from \p From to \p To. The value \p From must
   /// be an operand of the instruction. The method only replaces the first
@@ -1035,7 +1082,7 @@ class Instruction
   void eraseFromParent();
 
   /// Return the name of the instruction.
-  StringRef getName();
+  llvh::StringRef getName();
 
   /// \returns true if the instruction has some side effect.
   bool hasSideEffect() {
@@ -1134,8 +1181,9 @@ class BasicBlock : public llvh::ilist_node_with_parent<BasicBlock, Function>,
  public:
   explicit BasicBlock(Function *parent);
 
-  /// A debug utility that dumps the textual representation of the IR to stdout.
-  void dump();
+  /// A debug utility that dumps the textual representation of the IR to \p os,
+  /// defaults to stdout.
+  void dump(llvh::raw_ostream &os = llvh::outs()) const;
 
   /// Used by LLVM's graph trait.
   void printAsOperand(llvh::raw_ostream &OS, bool) const;
@@ -1497,7 +1545,7 @@ class Function : public llvh::ilist_node_with_parent<Function, Module>,
   }
 
   /// \returns the string representation of internal name.
-  StringRef getInternalNameStr() const {
+  llvh::StringRef getInternalNameStr() const {
     return internalName_.str();
   }
 
@@ -1535,8 +1583,9 @@ class Function : public llvh::ilist_node_with_parent<Function, Module>,
   /// However this does not deallocate (destroy) the memory of this function.
   void eraseFromParentNoDestroy();
 
-  /// A debug utility that dumps the textual representation of the IR to stdout.
-  void dump();
+  /// A debug utility that dumps the textual representation of the IR to \p os,
+  /// defaults to stdout.
+  void dump(llvh::raw_ostream &os = llvh::outs()) const;
 
   /// Return the kind of function: constructor, arrow, etc.
   DefinitionKind getDefinitionKind() const {
@@ -1836,9 +1885,11 @@ class Module : public Value {
   EmptySentinel emptySentinel_{};
 
   using LiteralNumberFoldingSet = llvh::FoldingSet<LiteralNumber>;
+  using LiteralBigIntFoldingSet = llvh::FoldingSet<LiteralBigInt>;
   using LiteralStringFoldingSet = llvh::FoldingSet<LiteralString>;
 
   LiteralNumberFoldingSet literalNumbers{};
+  LiteralBigIntFoldingSet literalBigInts{};
   LiteralStringFoldingSet literalStrings{};
 
   /// Map from an identifier to a number indicating how many times it has been
@@ -1958,6 +2009,9 @@ class Module : public Value {
 
   /// Create a new literal number of value \p value.
   LiteralNumber *getLiteralNumber(double value);
+
+  /// Create a new literal BigInt of value \p value.
+  LiteralBigInt *getLiteralBigInt(UniqueString *value);
 
   /// Create a new literal string of value \p value.
   LiteralString *getLiteralString(Identifier value);
@@ -2100,7 +2154,7 @@ class Module : public Value {
   }
 
   void viewGraph();
-  void dump();
+  void dump(llvh::raw_ostream &os = llvh::outs()) const;
 
   static bool classof(const Value *V) {
     return V->getKind() == ValueKind::ModuleKind;

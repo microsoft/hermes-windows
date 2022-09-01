@@ -28,8 +28,8 @@ namespace {
 
 using testhelpers::DummyObject;
 
-static DummyObject *createWithMarkWeakCount(GC *gc, int *numMarkWeakCalls) {
-  auto *obj = DummyObject::create(gc);
+static DummyObject *createWithMarkWeakCount(GC &gc, int *numMarkWeakCalls) {
+  auto *obj = DummyObject::create(gc, gc.getPointerBase());
   obj->markWeakCallback = std::make_unique<DummyObject::MarkWeakCallback>(
       [numMarkWeakCalls](GCCell *, WeakRefAcceptor &) mutable {
         (*numMarkWeakCalls)++;
@@ -54,13 +54,13 @@ TEST(GCMarkWeakTest, MarkWeak) {
   // Probably zero, but we only care about the increase/decrease.
   const int initUsedWeak = gc.countUsedWeakRefs();
   {
-    GCScope scope{&rt};
-    auto t = rt.makeHandle(createWithMarkWeakCount(&gc, &numMarkWeakCalls));
+    GCScope scope{rt};
+    auto t = rt.makeHandle(createWithMarkWeakCount(gc, &numMarkWeakCalls));
     rt.collect();
 
     WeakRefLock lk{gc.weakRefMutex()};
-    ASSERT_TRUE(t->weak.isValid());
-    EXPECT_EQ(*t, getNoHandle(t->weak, &gc));
+    ASSERT_TRUE(t->weak->isValid());
+    EXPECT_EQ(*t, t->weak->getNoBarrierUnsafe(rt));
     // Exactly one call to _markWeakImpl
     EXPECT_EQ(1 + 2 * checkHeapOn, numMarkWeakCalls);
     EXPECT_EQ(initUsedWeak + 1, gc.countUsedWeakRefs());

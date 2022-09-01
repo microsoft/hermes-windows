@@ -17,7 +17,9 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <set>
+#include <sstream>
 
 using namespace hermes::parser;
 using namespace facebook::jsi;
@@ -368,7 +370,8 @@ Value traceValueToJSIValue(
   if (value.isBool()) {
     return Value(value.getBool());
   }
-  if (value.isObject() || value.isString()) {
+  if (value.isObject() || value.isBigInt() || value.isString() ||
+      value.isSymbol()) {
     return getJSIValueForUse(value.getUID());
   }
   llvm_unreachable("Unrecognized value type encountered");
@@ -510,6 +513,8 @@ void assertMatch(const SynthTrace::TraceValue &traceValue, const Value &val) {
     assert(val.isString() && "type mismatch between trace and replay");
   } else if (traceValue.isObject()) {
     assert(val.isObject() && "type mismatch between trace and replay");
+  } else if (traceValue.isSymbol()) {
+    assert(val.isSymbol() && "type mismatch between trace and replay");
   }
 }
 #endif
@@ -961,7 +966,7 @@ std::string TraceInterpreter::execEntryFunction(
 
 #ifdef HERMESVM_PROFILER_BB
   if (auto *hermesRuntime = dynamic_cast<HermesRuntime *>(&rt_)) {
-    hermesRuntime->dumpBasicBlockProfileTrace(llvh::errs());
+    hermesRuntime->dumpBasicBlockProfileTrace(std::cerr);
   }
 #endif
 
@@ -1009,15 +1014,16 @@ Value TraceInterpreter::execFunction(
 #endif
   for (const TraceInterpreter::Call::Piece &piece : call.pieces) {
     uint64_t globalRecordNum = piece.start;
-    const auto getJSIValueForUseOpt =
-        [this, &call, &locals, &globalRecordNum](
-            ObjectID obj) -> llvh::Optional<Value> {
+    const auto getJSIValueForUse =
+        [this, &call, &locals, &globalRecordNum](ObjectID obj) -> Value {
       // Check locals, then globals.
       auto it = locals.find(obj);
       if (it != locals.end()) {
         // Satisfiable locally
         Value val{rt_, it->second};
-        assert(val.isObject() || val.isString());
+        assert(
+            val.isObject() || val.isBigInt() || val.isString() ||
+            val.isSymbol());
         // If it was the last local use, delete that object id from locals.
         auto defAndUse = call.locals.find(obj);
         if (defAndUse != call.locals.end() &&
@@ -1030,29 +1036,20 @@ Value TraceInterpreter::execFunction(
         return val;
       }
       auto defAndUse = globalDefsAndUses_.find(obj);
-      // Since the use might not be a jsi::Value, it might be found in the
-      // locals table for non-Values, and therefore might not be in the global
-      // use/def table.
-      if (defAndUse == globalDefsAndUses_.end()) {
-        return llvh::None;
-      }
+      assert(
+          defAndUse != globalDefsAndUses_.end() &&
+          "All global uses must have a global definition");
       it = gom_.find(obj);
-      if (it != gom_.end()) {
-        Value val{rt_, it->second};
-        assert(val.isObject() || val.isString());
-        // If it was the last global use, delete that object id from globals.
-        if (defAndUse->second.lastUse == globalRecordNum) {
-          gom_.erase(it);
-        }
-        return val;
+      assert(
+          it != gom_.end() &&
+          "If there is a global definition, it must exist in one of the maps");
+      Value val{rt_, it->second};
+      assert(val.isObject() || val.isString() || val.isSymbol());
+      // If it was the last global use, delete that object id from globals.
+      if (defAndUse->second.lastUse == globalRecordNum) {
+        gom_.erase(it);
       }
-      return llvh::None;
-    };
-    const auto getJSIValueForUse =
-        [&getJSIValueForUseOpt](ObjectID obj) -> Value {
-      auto valOpt = getJSIValueForUseOpt(obj);
-      assert(valOpt && "There must be a definition for all uses.");
-      return std::move(*valOpt);
+      return val;
     };
     const auto getObjForUse = [this,
                                getJSIValueForUse](ObjectID obj) -> Object {
@@ -1168,6 +1165,39 @@ Value TraceInterpreter::execFunction(
                 call, cor.objID_, globalRecordNum, Object(rt_), locals);
             break;
           }
+          case RecordType::CreateBigInt: {
+            const auto &cbr =
+                static_cast<const SynthTrace::CreateBigIntRecord &>(*rec);
+            Value bigint;
+            switch (cbr.method_) {
+              case SynthTrace::CreateBigIntRecord::Method::FromInt64:
+                bigint =
+                    BigInt::fromInt64(rt_, static_cast<int64_t>(cbr.bits_));
+                assert(
+                    bigint.asBigInt(rt_).getInt64(rt_) ==
+                    static_cast<int64_t>(cbr.bits_));
+                break;
+              case SynthTrace::CreateBigIntRecord::Method::FromUint64:
+                bigint = BigInt::fromUint64(rt_, cbr.bits_);
+                assert(bigint.asBigInt(rt_).getUint64(rt_) == cbr.bits_);
+                break;
+            }
+            addJSIValueToDefs(
+                call, cbr.objID_, globalRecordNum, std::move(bigint), locals);
+            break;
+          }
+          case RecordType::BigIntToString: {
+            const auto &bts =
+                static_cast<const SynthTrace::BigIntToStringRecord &>(*rec);
+            BigInt obj = getJSIValueForUse(bts.bigintID_).asBigInt(rt_);
+            addJSIValueToDefs(
+                call,
+                bts.strID_,
+                globalRecordNum,
+                obj.toString(rt_, bts.radix_),
+                locals);
+            break;
+          }
           case RecordType::CreateString: {
             const auto &csr =
                 static_cast<const SynthTrace::CreateStringRecord &>(*rec);
@@ -1190,19 +1220,26 @@ Value TraceInterpreter::execFunction(
             const auto &cpnr =
                 static_cast<const SynthTrace::CreatePropNameIDRecord &>(*rec);
             // We perform the calls below for their side effects (for example,
-            auto propNameID =
-                (cpnr.ascii_ ? PropNameID::forAscii(
-                                   rt_, cpnr.chars_.data(), cpnr.chars_.size())
-                             : PropNameID::forUtf8(
-                                   rt_,
-                                   reinterpret_cast<const uint8_t *>(
-                                       cpnr.chars_.data()),
-                                   cpnr.chars_.size()));
-            assert(
-                propNameID.utf8(rt_) ==
-                std::string(
-                    reinterpret_cast<const char *>(cpnr.chars_.data()),
-                    cpnr.chars_.size()));
+            auto propNameID = [&] {
+              switch (cpnr.valueType_) {
+                case SynthTrace::CreatePropNameIDRecord::ASCII:
+                  return PropNameID::forAscii(
+                      rt_, cpnr.chars_.data(), cpnr.chars_.size());
+                case SynthTrace::CreatePropNameIDRecord::UTF8:
+                  return PropNameID::forUtf8(
+                      rt_,
+                      reinterpret_cast<const uint8_t *>(cpnr.chars_.data()),
+                      cpnr.chars_.size());
+                case SynthTrace::CreatePropNameIDRecord::TRACEVALUE: {
+                  auto val = traceValueToJSIValue(
+                      rt_, trace_, getJSIValueForUse, cpnr.traceValue_);
+                  if (val.isSymbol())
+                    return PropNameID::forSymbol(rt_, val.getSymbol(rt_));
+                  return PropNameID::forString(rt_, val.getString(rt_));
+                }
+              }
+              llvm_unreachable("No other way to construct PropNameID");
+            }();
             addPropNameIDToDefs(
                 call,
                 cpnr.propNameID_,
@@ -1246,6 +1283,12 @@ Value TraceInterpreter::execFunction(
                 locals);
             break;
           }
+          case RecordType::DrainMicrotasks: {
+            const auto &drainRecord =
+                static_cast<const SynthTrace::DrainMicrotasksRecord &>(*rec);
+            rt_.drainMicrotasks(drainRecord.maxMicrotasksHint_);
+            break;
+          }
           case RecordType::GetProperty: {
             const auto &gpr =
                 static_cast<const SynthTrace::GetPropertyRecord &>(*rec);
@@ -1253,15 +1296,16 @@ Value TraceInterpreter::execFunction(
             // the result.
             jsi::Value value;
             const auto &obj = getObjForUse(gpr.objID_);
-            auto propIDValOpt = getJSIValueForUseOpt(gpr.propID_);
-            if (propIDValOpt) {
-              const jsi::String propString = (*propIDValOpt).asString(rt_);
+            if (gpr.propID_.isString()) {
+              const jsi::String propString =
+                  getJSIValueForUse(gpr.propID_.getUID()).asString(rt_);
 #ifdef HERMESVM_API_TRACE_DEBUG
               assert(propString.utf8(rt_) == gpr.propNameDbg_);
 #endif
               value = obj.getProperty(rt_, propString);
             } else {
-              auto propNameID = getPropNameIDForUse(gpr.propID_);
+              assert(gpr.propID_.isPropNameID());
+              auto propNameID = getPropNameIDForUse(gpr.propID_.getUID());
 #ifdef HERMESVM_API_TRACE_DEBUG
               assert(propNameID.utf8(rt_) == gpr.propNameDbg_);
 #endif
@@ -1276,9 +1320,9 @@ Value TraceInterpreter::execFunction(
                 static_cast<const SynthTrace::SetPropertyRecord &>(*rec);
             auto obj = getObjForUse(spr.objID_);
             // Call set property on the object specified and give it the value.
-            auto propIDValOpt = getJSIValueForUseOpt(spr.propID_);
-            if (propIDValOpt) {
-              const jsi::String propString = (*propIDValOpt).asString(rt_);
+            if (spr.propID_.isString()) {
+              const jsi::String propString =
+                  getJSIValueForUse(spr.propID_.getUID()).asString(rt_);
 #ifdef HERMESVM_API_TRACE_DEBUG
               assert(propString.utf8(rt_) == spr.propNameDbg_);
 #endif
@@ -1288,7 +1332,8 @@ Value TraceInterpreter::execFunction(
                   traceValueToJSIValue(
                       rt_, trace_, getJSIValueForUse, spr.value_));
             } else {
-              auto propNameID = getPropNameIDForUse(spr.propID_);
+              assert(spr.propID_.isPropNameID());
+              auto propNameID = getPropNameIDForUse(spr.propID_.getUID());
 #ifdef HERMESVM_API_TRACE_DEBUG
               assert(propNameID.utf8(rt_) == spr.propNameDbg_);
 #endif
@@ -1304,15 +1349,16 @@ Value TraceInterpreter::execFunction(
             const auto &hpr =
                 static_cast<const SynthTrace::HasPropertyRecord &>(*rec);
             auto obj = getObjForUse(hpr.objID_);
-            auto propIDValOpt = getJSIValueForUseOpt(hpr.propID_);
-            if (propIDValOpt) {
-              const jsi::String propString = (*propIDValOpt).asString(rt_);
+            if (hpr.propID_.isString()) {
+              const jsi::String propString =
+                  getJSIValueForUse(hpr.propID_.getUID()).asString(rt_);
 #ifdef HERMESVM_API_TRACE_DEBUG
               assert(propString.utf8(rt_) == hpr.propNameDbg_);
 #endif
               obj.hasProperty(rt_, propString);
             } else {
-              auto propNameID = getPropNameIDForUse(hpr.propID_);
+              assert(hpr.propID_.isPropNameID());
+              auto propNameID = getPropNameIDForUse(hpr.propID_.getUID());
 #ifdef HERMESVM_API_TRACE_DEBUG
               assert(propNameID.utf8(rt_) == hpr.propNameDbg_);
 #endif
@@ -1616,7 +1662,7 @@ void TraceInterpreter::ifObjectAddToDefs(
     assertMatch(traceValue, val);
   }
 #endif
-  if (traceValue.isObject() || traceValue.isString()) {
+  if (traceValue.isObject() || traceValue.isString() || traceValue.isSymbol()) {
     addJSIValueToDefs(
         call, traceValue.getUID(), globalRecordNum, std::move(val), locals);
   }
@@ -1691,15 +1737,13 @@ std::string TraceInterpreter::printStats() {
   ::hermes::vm::instrumentation::PerfEvents::endAndInsertStats(stats);
 #ifdef HERMESVM_PROFILER_OPCODE
   stats += "\n";
-  std::string opcodeOutput;
-  llvh::raw_string_ostream os{opcodeOutput};
+  std::ostringstream os;
   if (auto *hermesRuntime = dynamic_cast<HermesRuntime *>(&rt_)) {
     hermesRuntime->dumpOpcodeStats(os);
   } else {
     throw std::runtime_error("Unable to cast runtime into HermesRuntime");
   }
-  os.flush();
-  stats += opcodeOutput;
+  stats += os.str();
   stats += "\n";
 #endif
   return stats;

@@ -12,6 +12,7 @@
 #include "hermes/BCGen/HBC/HBC.h"
 #include "hermes/IR/Analysis.h"
 #include "hermes/SourceMap/SourceMapGenerator.h"
+#include "hermes/Support/BigIntSupport.h"
 #include "hermes/Support/Statistic.h"
 
 #include "llvh/ADT/Optional.h"
@@ -21,7 +22,7 @@
 using namespace hermes;
 using namespace hbc;
 
-using llvh::isa;
+using llvh::dbgs;
 using llvh::Optional;
 
 #define INCLUDE_HBC_INSTRS
@@ -211,7 +212,7 @@ bool HBCISel::getDebugSourceLocation(
   }
 
   if (debugIdCache_.currentBufId != coords.bufId) {
-    StringRef filename = manager.getSourceUrl(coords.bufId);
+    llvh::StringRef filename = manager.getSourceUrl(coords.bufId);
     debugIdCache_.currentFilenameId = BCFGen_->addFilename(filename);
 
     auto sourceMappingUrl = manager.getSourceMappingUrl(coords.bufId);
@@ -323,6 +324,12 @@ void HBCISel::generateAsNumberInst(AsNumberInst *Inst, BasicBlock *next) {
   BCFGen_->emitToNumber(dst, src);
 }
 
+void HBCISel::generateAsNumericInst(AsNumericInst *Inst, BasicBlock *next) {
+  auto dst = encodeValue(Inst);
+  auto src = encodeValue(Inst->getSingleOperand());
+  BCFGen_->emitToNumeric(dst, src);
+}
+
 void HBCISel::generateAsInt32Inst(AsInt32Inst *Inst, BasicBlock *next) {
   auto dst = encodeValue(Inst);
   auto src = encodeValue(Inst->getSingleOperand());
@@ -423,6 +430,14 @@ void HBCISel::generateUnaryOperatorInst(
     }
     case OpKind::VoidKind: { // Void operator.
       BCFGen_->emitLoadConstUndefined(resReg);
+      break;
+    }
+    case OpKind::IncKind: { // ++
+      BCFGen_->emitInc(resReg, opReg);
+      break;
+    }
+    case OpKind::DecKind: { // --
+      BCFGen_->emitDec(resReg, opReg);
       break;
     }
     default:
@@ -1397,6 +1412,18 @@ void HBCISel::generateHBCLoadConstInst(
           // Instead we are going to copy it as if it is binary.
           BCFGen_->emitLoadConstDoubleDirect(output, litNum->getValue());
         }
+      }
+      break;
+    }
+    case ValueKind::LiteralBigIntKind: {
+      auto parsedBigInt = bigint::ParsedBigInt::parsedBigIntFromNumericValue(
+          cast<LiteralBigInt>(literal)->getValue()->str());
+      assert(parsedBigInt && "should be valid");
+      auto idx = BCFGen_->addBigInt(std::move(*parsedBigInt));
+      if (idx <= UINT16_MAX) {
+        BCFGen_->emitLoadConstBigInt(output, idx);
+      } else {
+        BCFGen_->emitLoadConstBigIntLongIndex(output, idx);
       }
       break;
     }

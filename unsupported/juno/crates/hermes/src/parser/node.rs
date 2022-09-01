@@ -5,10 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use super::generated_ffi::NodeKind;
 use std::convert::AsRef;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
+
+use super::generated_ffi::NodeKind;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -37,6 +38,12 @@ impl SMLoc {
 pub struct SMRange {
     pub start: SMLoc,
     pub end: SMLoc,
+}
+
+impl SMRange {
+    pub fn is_empty(self) -> bool {
+        self.start.ptr == self.end.ptr
+    }
 }
 
 #[repr(C)]
@@ -76,7 +83,7 @@ pub struct NodeLabelOpt {
 }
 
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct NodeString {
     ptr: *const UniqueString,
 }

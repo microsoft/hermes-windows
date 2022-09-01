@@ -111,6 +111,8 @@ C_STRING((function() {
         return colors.white + "undefined" + colors.reset;
       case "number":
         return colors.yellow + prettyPrintNumber(value) + colors.reset;
+      case "bigint":
+        return colors.yellow + value + "n" + colors.reset;
       case "string":
         // Wrap strings in quotes so we their type.
         return colors.green + '"' + value + '"' + colors.reset;
@@ -213,7 +215,9 @@ C_STRING((function() {
              val instanceof Uint16Array ||
              val instanceof Uint32Array ||
              val instanceof Float32Array ||
-             val instanceof Float64Array;
+             val instanceof Float64Array ||
+             val instanceof BigInt64Array ||
+             val instanceof BigUint64Array;
     }
 
     if (isTypedArray(value)) {

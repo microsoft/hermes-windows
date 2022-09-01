@@ -10,7 +10,11 @@
 
 #include "hermes/VM/SymbolID.h"
 #include "llvh/ADT/DenseMap.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace inst {
 struct Inst;
@@ -108,7 +112,7 @@ class InlineCacheProfiler {
   /// the information to ostream. Inline caching miss records are
   /// ranked in descending order based on the miss count.
   void dumpRankedInlineCachingMisses(
-      Runtime *runtime,
+      Runtime &runtime,
       llvh::raw_ostream &ostream);
 
  private:
@@ -136,7 +140,7 @@ class InlineCacheProfiler {
   void dumpInfoOfSourceLocation(
       ICSrcKey &srcLoc,
       ICMiss &icMiss,
-      Runtime *runtime,
+      Runtime &runtime,
       llvh::raw_ostream &ostream);
 
   /// Dump a inline caching miss record, which
@@ -144,14 +148,14 @@ class InlineCacheProfiler {
   void dumpInlineCachingMissRecord(
       ICMissKey &icInfo,
       uint64_t icMiss,
-      Runtime *runtime,
+      Runtime &runtime,
       llvh::raw_ostream &ostream);
 
   /// Dump properties of a hidden class to ostream.
   void dumpHiddenClassProperties(
       llvh::raw_ostream &ostream,
       HiddenClass *hc,
-      Runtime *runtime);
+      Runtime &runtime);
 
   /// Total number of inline caching misses during the program execution.
   uint64_t totalMisses_{0};
@@ -167,5 +171,6 @@ class InlineCacheProfiler {
 
 } // namespace vm
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif

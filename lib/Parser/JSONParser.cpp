@@ -18,8 +18,6 @@ JSONNull JSONNull::instance_{};
 JSONBoolean JSONBoolean::true_{true};
 JSONBoolean JSONBoolean::false_{false};
 
-using Allocator = BacktrackingBumpPtrAllocator;
-
 const char *JSONKindToString(JSONKind kind) {
   switch (kind) {
     case JSONKind::Object:
@@ -91,7 +89,7 @@ JSONString *JSONFactory::getString(UniqueString *lit) {
   return res;
 }
 
-JSONString *JSONFactory::getString(StringRef str) {
+JSONString *JSONFactory::getString(llvh::StringRef str) {
   return getString(strTab_.getString(str));
 }
 

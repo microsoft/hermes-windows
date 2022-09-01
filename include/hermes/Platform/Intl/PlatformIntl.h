@@ -82,86 +82,98 @@ using Part = std::unordered_map<std::u16string, std::u16string>;
 /// as anybody depending on it is trying too hard.
 
 vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales);
 vm::CallResult<std::u16string> toLocaleLowerCase(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const std::u16string &str);
 vm::CallResult<std::u16string> toLocaleUpperCase(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const std::u16string &str);
 
+enum class NativeType {
+  Collator,
+  DateTimeFormat,
+  NumberFormat,
+};
+
 class Collator : public vm::DecoratedObject::Decoration {
- public:
+ protected:
   Collator();
-  ~Collator();
+
+ public:
+  ~Collator() override;
+
+  static constexpr NativeType getNativeType() {
+    return NativeType::Collator;
+  }
 
   static vm::CallResult<std::vector<std::u16string>> supportedLocalesOf(
-      vm::Runtime *runtime,
+      vm::Runtime &runtime,
       const std::vector<std::u16string> &locales,
       const Options &options) noexcept;
 
-  vm::ExecutionStatus initialize(
-      vm::Runtime *runtime,
+  static vm::CallResult<std::unique_ptr<Collator>> create(
+      vm::Runtime &runtime,
       const std::vector<std::u16string> &locales,
       const Options &options) noexcept;
   Options resolvedOptions() noexcept;
 
   double compare(const std::u16string &x, const std::u16string &y) noexcept;
-
- private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
 };
 
 class DateTimeFormat : public vm::DecoratedObject::Decoration {
- public:
+ protected:
   DateTimeFormat();
-  ~DateTimeFormat();
+
+ public:
+  ~DateTimeFormat() override;
+
+  static constexpr NativeType getNativeType() {
+    return NativeType::DateTimeFormat;
+  }
 
   static vm::CallResult<std::vector<std::u16string>> supportedLocalesOf(
-      vm::Runtime *runtime,
+      vm::Runtime &runtime,
       const std::vector<std::u16string> &locales,
       const Options &options) noexcept;
 
-  vm::ExecutionStatus initialize(
-      vm::Runtime *runtime,
+  static vm::CallResult<std::unique_ptr<DateTimeFormat>> create(
+      vm::Runtime &runtime,
       const std::vector<std::u16string> &locales,
       const Options &options) noexcept;
   Options resolvedOptions() noexcept;
 
   std::u16string format(double jsTimeValue) noexcept;
   std::vector<Part> formatToParts(double jsTimeValue) noexcept;
-
- private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
 };
 
 class NumberFormat : public vm::DecoratedObject::Decoration {
- public:
+ protected:
   NumberFormat();
-  ~NumberFormat();
+
+ public:
+  ~NumberFormat() override;
+
+  static constexpr NativeType getNativeType() {
+    return NativeType::NumberFormat;
+  }
 
   static vm::CallResult<std::vector<std::u16string>> supportedLocalesOf(
-      vm::Runtime *runtime,
+      vm::Runtime &runtime,
       const std::vector<std::u16string> &locales,
       const Options &options) noexcept;
 
-  vm::ExecutionStatus initialize(
-      vm::Runtime *runtime,
+  static vm::CallResult<std::unique_ptr<NumberFormat>> create(
+      vm::Runtime &runtime,
       const std::vector<std::u16string> &locales,
       const Options &options) noexcept;
   Options resolvedOptions() noexcept;
 
   std::u16string format(double jsTimeValue) noexcept;
   std::vector<Part> formatToParts(double jsTimeValue) noexcept;
-
- private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
 };
 
 } // namespace platform_intl

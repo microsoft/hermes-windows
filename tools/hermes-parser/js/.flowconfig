@@ -10,6 +10,7 @@ emoji=true
 file_watcher=watchman
 lazy_mode=true
 exact_by_default=true
+exact_empty_objects=true
 module.system=node
 munge_underscores=true
 ; Yarn workspaces hoist packages to the top level node_modules, causing module resolution errors if
@@ -19,8 +20,12 @@ module.name_mapper='^hermes-estree$' -> '<PROJECT_ROOT>/hermes-estree/src/index.
 module.name_mapper='^hermes-eslint$' -> '<PROJECT_ROOT>/hermes-eslint/src/index.js'
 module.name_mapper='^hermes-transform$' -> '<PROJECT_ROOT>/hermes-transform/src/index.js'
 
+enums=true
+inference_mode=constrain_writes
+experimental.enforce_local_inference_annotations=true
+
 [version]
-0.167.1
+^0.184.0
 
 [lints]
 untyped-type-import=error

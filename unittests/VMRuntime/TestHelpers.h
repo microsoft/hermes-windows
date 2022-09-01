@@ -11,6 +11,7 @@
 #include "hermes/BCGen/HBC/BytecodeGenerator.h"
 #include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
 #include "hermes/Public/GCConfig.h"
+#include "hermes/Public/JSOutOfMemoryError.h"
 #include "hermes/Public/RuntimeConfig.h"
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/CodeBlock.h"
@@ -38,10 +39,8 @@ static constexpr uint32_t kInitHeapLarge = 1 << 20;
 static constexpr uint32_t kMaxHeapLarge = 1 << 24;
 
 static const GCConfig::Builder kTestGCConfigBaseBuilder =
-    GCConfig::Builder()
-        .withSanitizeConfig(
-            vm::GCSanitizeConfig::Builder().withSanitizeRate(0.0).build())
-        .withShouldRandomizeAllocSpace(false);
+    GCConfig::Builder().withSanitizeConfig(
+        vm::GCSanitizeConfig::Builder().withSanitizeRate(0.0).build());
 
 static const GCConfig kTestGCConfigSmall =
     GCConfig::Builder(kTestGCConfigBaseBuilder)
@@ -77,13 +76,13 @@ static const RuntimeConfig kTestRTConfigLargeHeap =
 
 template <typename T>
 ::testing::AssertionResult isException(
-    Runtime *runtime,
+    Runtime &runtime,
     const CallResult<T> &res) {
   return isException(runtime, res.getStatus());
 }
 
 ::testing::AssertionResult isException(
-    Runtime *runtime,
+    Runtime &runtime,
     ExecutionStatus status);
 
 /// A RuntimeTestFixture should be used by any test that requires a Runtime.
@@ -93,7 +92,7 @@ class RuntimeTestFixtureBase : public ::testing::Test {
 
  protected:
   // Convenience accessor that points to rt.
-  Runtime *runtime;
+  Runtime &runtime;
 
   RuntimeConfig rtConfig;
 
@@ -103,10 +102,10 @@ class RuntimeTestFixtureBase : public ::testing::Test {
 
   RuntimeTestFixtureBase(const RuntimeConfig &runtimeConfig)
       : rt(Runtime::create(runtimeConfig)),
-        runtime(rt.get()),
+        runtime(*rt),
         rtConfig(runtimeConfig),
         gcScope(runtime),
-        domain(runtime->makeHandle(Domain::create(runtime))) {}
+        domain(runtime.makeHandle(Domain::create(runtime))) {}
 
   /// Can't copy due to internal pointer.
   RuntimeTestFixtureBase(const RuntimeTestFixtureBase &) = delete;
@@ -251,7 +250,7 @@ inline const GCConfig TestGCConfigFixedSize(
   } while (0)
 
 /// Get the global object.
-#define GET_GLOBAL(predefinedId) GET_VALUE(runtime->getGlobal(), predefinedId)
+#define GET_GLOBAL(predefinedId) GET_VALUE(runtime.getGlobal(), predefinedId)
 
 inline HermesValue operator"" _hd(long double d) {
   return HermesValue::encodeDoubleValue(d);
@@ -285,7 +284,7 @@ class DummyRuntime final : public HandleRootOwner,
   /// function.
   static std::unique_ptr<StorageProvider> defaultProvider();
 
-  ~DummyRuntime();
+  ~DummyRuntime() override;
 
   template <
       typename T,
@@ -361,6 +360,7 @@ class DummyRuntime final : public HandleRootOwner,
     return nullptr;
   }
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   StackTracesTreeNode *getCurrentStackTracesTreeNode(
       const inst::Inst *ip) override {
     return nullptr;
@@ -369,6 +369,7 @@ class DummyRuntime final : public HandleRootOwner,
   StackTracesTree *getStackTracesTree() override {
     return nullptr;
   }
+#endif
 
  private:
   DummyRuntime(
@@ -385,14 +386,12 @@ class DummyRuntimeTestFixtureBase : public ::testing::Test {
 
  protected:
   // Convenience accessor that points to rt.
-  DummyRuntime *runtime;
+  DummyRuntime &runtime;
 
   GCScope gcScope;
 
   DummyRuntimeTestFixtureBase(const GCConfig &gcConfig)
-      : rt(DummyRuntime::create(gcConfig)),
-        runtime(rt.get()),
-        gcScope(runtime) {}
+      : rt(DummyRuntime::create(gcConfig)), runtime(*rt), gcScope(runtime) {}
 
   /// Can't copy due to internal pointer.
   DummyRuntimeTestFixtureBase(const DummyRuntimeTestFixtureBase &) = delete;
@@ -410,7 +409,7 @@ inline bool operator==(HermesValue a, HermesValue b) {
 /// runtimeModule.
 inline CodeBlock *createCodeBlock(
     RuntimeModule *runtimeModule,
-    Runtime *,
+    Runtime &,
     hbc::BytecodeFunctionGenerator *BFG) {
   std::unique_ptr<hbc::BytecodeModule> BM(new hbc::BytecodeModule(1));
   BM->setFunction(

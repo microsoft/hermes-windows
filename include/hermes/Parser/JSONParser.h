@@ -30,8 +30,6 @@
 namespace hermes {
 namespace parser {
 
-using llvh::StringRef;
-
 class JSONFactory;
 class JSONParser;
 
@@ -127,10 +125,10 @@ class JSONString : public JSONScalar, public llvh::FoldingSetNode {
     return value_;
   }
 
-  const StringRef &str() const {
+  const llvh::StringRef &str() const {
     return value_->str();
   }
-  explicit operator StringRef() const {
+  explicit operator llvh::StringRef() const {
     return value_->str();
   }
   const char *c_str() const {
@@ -165,7 +163,7 @@ class JSONNumber : public JSONScalar, public llvh::FoldingSetNode {
   }
 
   static void Profile(llvh::FoldingSetNodeID &id, double value) {
-    id.AddInteger(safeTypeCast<double, int64_t>(value));
+    id.AddInteger(llvh::DoubleToBits(value));
   }
 
   void Profile(llvh::FoldingSetNodeID &id) {
@@ -184,10 +182,10 @@ class JSONHiddenClass {
   JSONString *keys_[];
 
   struct NameComparator {
-    bool operator()(StringRef a, JSONString *b) const {
+    bool operator()(llvh::StringRef a, JSONString *b) const {
       return a < b->str();
     }
-    bool operator()(JSONString *a, StringRef b) const {
+    bool operator()(JSONString *a, llvh::StringRef b) const {
       return a->str() < b;
     }
   };
@@ -224,7 +222,7 @@ class JSONHiddenClass {
     return keys_ + size_;
   }
 
-  llvh::Optional<size_t> find(StringRef name) {
+  llvh::Optional<size_t> find(llvh::StringRef name) {
     auto e = end();
     auto it = std::lower_bound(begin(), e, name, NameComparator{});
     if (it != e && (*it)->str() == name)
@@ -285,7 +283,7 @@ class JSONObject : public JSONValue {
   }
 
   /// Obtain a value, or return nullptr if not found.
-  JSONValue *get(StringRef name) const {
+  JSONValue *get(llvh::StringRef name) const {
     if (auto res = hiddenClass_->find(name))
       return values()[res.getValue()];
     else
@@ -294,7 +292,7 @@ class JSONObject : public JSONValue {
 
   /// Obtain a value. If the value is not found, debug builds assert; in release
   /// builds the behavior is undefined.
-  JSONValue *at(StringRef name) const {
+  JSONValue *at(llvh::StringRef name) const {
     if (auto res = hiddenClass_->find(name))
       return values()[res.getValue()];
 
@@ -303,11 +301,11 @@ class JSONObject : public JSONValue {
   }
 
   /// Obtain a value by name, Behavior is undefined if the name is not found.
-  JSONValue *operator[](StringRef name) const {
+  JSONValue *operator[](llvh::StringRef name) const {
     return values()[hiddenClass_->find(name).getValue()];
   }
   /// Obtain a value by name, Behavior is undefined if the name is not found.
-  JSONValue *&operator[](StringRef name) {
+  JSONValue *&operator[](llvh::StringRef name) {
     return values()[hiddenClass_->find(name).getValue()];
   }
   /// Obtain a value by index.
@@ -322,16 +320,14 @@ class JSONObject : public JSONValue {
   }
 
   /// Check for the presence of a key.
-  size_t count(StringRef name) const {
+  size_t count(llvh::StringRef name) const {
     return hiddenClass_->find(name) ? 1 : 0;
   }
 
   /// Iterator creating the impression that we are storing key/value pairs.
   /// The illusion is not complete as "it->first" doesn't work, but it is better
   /// than nothing.
-  class iterator : public std::iterator<
-                       std::bidirectional_iterator_tag,
-                       std::pair<JSONString *, JSONValue *&>> {
+  class iterator {
     JSONObject *obj_;
     size_t index_;
 
@@ -340,6 +336,12 @@ class JSONObject : public JSONValue {
     friend class const_iterator;
 
    public:
+    using iterator_category = std::bidirectional_iterator_tag;
+    using value_type = std::pair<JSONString *, JSONValue *&>;
+    using difference_type = std::ptrdiff_t;
+    using pointer = value_type *;
+    using reference = value_type &;
+
     iterator(const iterator &) = default;
     iterator &operator=(const iterator &) = default;
 
@@ -369,9 +371,7 @@ class JSONObject : public JSONValue {
       return obj_ != it.obj_ || index_ != it.index_;
     }
   };
-  class const_iterator : public std::iterator<
-                             std::bidirectional_iterator_tag,
-                             std::pair<JSONString *, JSONValue *>> {
+  class const_iterator {
     const JSONObject *obj_;
     size_t index_;
 
@@ -380,6 +380,12 @@ class JSONObject : public JSONValue {
     friend class JSONObject;
 
    public:
+    using iterator_category = std::bidirectional_iterator_tag;
+    using value_type = std::pair<JSONString *, JSONValue *>;
+    using difference_type = std::ptrdiff_t;
+    using pointer = value_type *;
+    using reference = value_type &;
+
     const_iterator(const const_iterator &) = default;
     const_iterator &operator=(const const_iterator &) = default;
 
@@ -395,12 +401,12 @@ class JSONObject : public JSONValue {
       return value_type{obj_->hiddenClass_->begin()[index_], (*obj_)[index_]};
     }
 
-    iterator &operator++() {
+    const_iterator &operator++() {
       ++index_;
       return *this;
     }
 
-    iterator &operator--() {
+    const_iterator &operator--() {
       --index_;
       return *this;
     }
@@ -431,13 +437,13 @@ class JSONObject : public JSONValue {
     return const_iterator(this, size());
   }
 
-  iterator find(StringRef name) {
+  iterator find(llvh::StringRef name) {
     if (auto res = hiddenClass_->find(name))
       return iterator(this, res.getValue());
     else
       return end();
   }
-  const_iterator find(StringRef name) const {
+  const_iterator find(llvh::StringRef name) const {
     if (auto res = hiddenClass_->find(name))
       return const_iterator(this, res.getValue());
     else
@@ -565,7 +571,7 @@ class JSONFactory {
   // same object.
 
   JSONString *getString(UniqueString *lit);
-  JSONString *getString(StringRef str);
+  JSONString *getString(llvh::StringRef str);
   JSONNumber *getNumber(double value);
   static JSONBoolean *getBoolean(bool v) {
     return JSONBoolean::getInstance(v);
@@ -636,7 +642,7 @@ class JSONParser {
 
   JSONParser(
       JSONFactory &factory,
-      StringRef input,
+      llvh::StringRef input,
       SourceErrorManager &sm,
       bool convertSurrogates = false)
       : JSONParser(

@@ -6,6 +6,7 @@
 set(source_files
   ArrayStorage.cpp
   BasicBlockExecutionInfo.cpp
+  BigIntPrimitive.cpp
   BoxedDouble.cpp
   BuildMetadata.cpp
   Callable.cpp
@@ -16,7 +17,6 @@ set(source_files
   Domain.cpp
   DummyObject.cpp
   GCBase.cpp
-  GCCell.cpp
   OrderedHashMap.cpp
   HandleRootOwner.cpp
   HeapSnapshot.cpp
@@ -26,6 +26,7 @@ set(source_files
   Interpreter.cpp InstLayout.inc Interpreter-slowpaths.cpp
   JSArray.cpp
   JSArrayBuffer.cpp
+  JSCallSite.cpp
   JSCallableProxy.cpp
   JSDataView.cpp
   JSDate.cpp
@@ -39,17 +40,17 @@ set(source_files
   JSNativeFunctions.cpp
   JSTypedArray.cpp
   JSWeakMapImpl.cpp
+  JSWeakRef.cpp
   LimitedStorageProvider.cpp
   DecoratedObject.cpp
   HostModel.cpp
+  NativeState.cpp
   Operations.cpp
   PredefinedStringIDs.cpp
   PrimitiveBox.cpp
-  Profiler.cpp
   PropertyAccessor.cpp
   Runtime.cpp Runtime-profilers.cpp
   RuntimeModule.cpp
-  RuntimeStats.cpp
   Profiler/ChromeTraceSerializerPosix.cpp
   Profiler/CodeCoverageProfiler.cpp
   Profiler/InlineCacheProfiler.cpp
@@ -75,6 +76,8 @@ set(source_files
   JSLib/ArrayBuffer.cpp
   JSLib/ArrayIterator.cpp
   JSLib/AsyncFunction.cpp
+  JSLib/BigInt.cpp
+  JSLib/CallSite.cpp
   JSLib/DataView.cpp
   JSLib/TypedArray.cpp
   JSLib/Error.cpp
@@ -109,6 +112,7 @@ set(source_files
   JSLib/Symbol.cpp
   JSLib/Date.cpp JSLib/DateUtil.cpp
   JSLib/WeakMap.cpp
+  JSLib/WeakRef.cpp
   JSLib/WeakSet.cpp
   JSLib/print.cpp
   JSLib/eval.cpp
@@ -160,6 +164,7 @@ set(link_libs
   hermesSupport
   hermesPlatform
   hermesInternalBytecode
+  hermesPublic
   dtoa
 )
 

@@ -12,30 +12,20 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <ostream>
 #include <string>
 
+#include <hermes/Public/HermesExport.h>
 #include <hermes/Public/RuntimeConfig.h>
 #include <jsi/jsi.h>
 #include <unordered_map>
 
 // Patch to avoid Compiler Warning (level 2) C4275
-#ifndef HERMES_EXPORT
-#ifdef _MSC_VER
 #ifdef CREATE_SHARED_LIBRARY
-#define HERMES_EXPORT __declspec(dllexport)
 #else
 #define HERMES_EXPORT
 #endif // CREATE_SHARED_LIBRARY
-#else // _MSC_VER
-#define HERMES_EXPORT __attribute__((visibility("default")))
-#endif // _MSC_VER
-#endif // !defined(HERMES_EXPORT)
-
 struct HermesTestHelper;
-
-namespace llvh {
-class raw_ostream;
-}
 
 namespace hermes {
 namespace vm {
@@ -97,7 +87,11 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
   static void __cdecl dumpSampledTraceToFile(const std::string &fileName);
 
   /// Dump sampled stack trace to the given stream.
-  static void dumpSampledTraceToStream(llvh::raw_ostream &stream);
+  static void dumpSampledTraceToStream(std::ostream &stream);
+
+  /// Serialize the sampled stack to the format expected by DevTools'
+  /// Profiler.stop return type.
+  void sampledTraceToStreamInDevToolsFormat(std::ostream &stream);
 
   /// Return the executed JavaScript function info.
   /// This information holds the segmentID, Virtualoffset and sourceURL.
@@ -134,8 +128,10 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
   /// static throughout that object's (or string's, or PropNameID's)
   /// lifetime.
   uint64_t getUniqueID(const jsi::Object &o) const;
+  uint64_t getUniqueID(const jsi::BigInt &s) const;
   uint64_t getUniqueID(const jsi::String &s) const;
   uint64_t getUniqueID(const jsi::PropNameID &pni) const;
+  uint64_t getUniqueID(const jsi::Symbol &sym) const;
 
   /// Same as the other \c getUniqueID, except it can return 0 for some values.
   /// 0 means there is no ID associated with the value.
@@ -167,17 +163,12 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
 
 #ifdef HERMESVM_PROFILER_BB
   /// Write the trace to the given stream.
-  void dumpBasicBlockProfileTrace(llvh::raw_ostream &os) const;
+  void dumpBasicBlockProfileTrace(std::ostream &os) const;
 #endif
 
 #ifdef HERMESVM_PROFILER_OPCODE
   /// Write the opcode stats to the given stream.
-  void dumpOpcodeStats(llvh::raw_ostream &os) const;
-#endif
-
-#ifdef HERMESVM_PROFILER_EXTERN
-  /// Dump map of profiler symbols to given file name.
-  void dumpProfilerSymbolsToFile(const std::string &fileName) const;
+  void dumpOpcodeStats(std::ostream &os) const;
 #endif
 
 #ifdef HERMES_ENABLE_DEBUGGER
@@ -224,7 +215,7 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
       const std::shared_ptr<const jsi::Buffer> &sourceMapBuf,
       const std::string &sourceURL);
 
-private:
+ private:
   // Only HermesRuntimeImpl can subclass this.
   HermesRuntime() = default;
   friend class HermesRuntimeImpl;
@@ -236,6 +227,17 @@ private:
   // object size inconsistencies.  All data should be in the impl
   // class in the .cpp file.
 };
+
+/// Return a RuntimeConfig that is more suited for running untrusted JS than
+/// the default config. Disables some language features and may trade off some
+/// performance for security.
+///
+/// Can serve as a starting point with tweaks to re-enable needed features:
+///   auto conf = hardenedHermesRuntimeConfig().rebuild();
+///   conf.withArrayBuffer(true);
+///   ...
+///   auto runtime = makeHermesRuntime(conf.build());
+HERMES_EXPORT ::hermes::vm::RuntimeConfig hardenedHermesRuntimeConfig();
 
 HERMES_EXPORT std::unique_ptr<HermesRuntime> __cdecl makeHermesRuntime(
     const ::hermes::vm::RuntimeConfig &runtimeConfig =

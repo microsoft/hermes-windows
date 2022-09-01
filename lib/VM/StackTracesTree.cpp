@@ -7,14 +7,18 @@
 
 #include "hermes/VM/StackTracesTree-NoRuntime.h"
 
-#ifdef HERMES_ENABLE_ALLOCATION_LOCATION_TRACES
+#ifdef HERMES_MEMORY_INSTRUMENTATION
 
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/StackFrame-inline.h"
 #include "hermes/VM/StackTracesTree.h"
 #include "hermes/VM/StringPrimitive.h"
 #include "hermes/VM/StringView.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -90,17 +94,17 @@ StackTracesTree::StackTracesTree()
       anonymousFunctionID_(strings_->insert("(anonymous)")),
       head_(root_.get()) {}
 
-void StackTracesTree::syncWithRuntimeStack(Runtime *runtime) {
+void StackTracesTree::syncWithRuntimeStack(Runtime &runtime) {
   head_ = root_.get();
 
-  const StackFramePtr framesEnd = *runtime->getStackFrames().end();
+  const StackFramePtr framesEnd = *runtime.getStackFrames().end();
   std::vector<std::pair<CodeBlock *, const Inst *>> stack;
 
   // Walk the current stack, and call pushCallStack for each JS frame (not
   // native frames). The current frame is not included, because any allocs after
   // this point will call pushCallStack which will get the most recent IP. Each
   // stack frame tracks information about the caller.
-  for (StackFramePtr cf : runtime->getStackFrames()) {
+  for (StackFramePtr cf : runtime.getStackFrames()) {
     CodeBlock *savedCodeBlock = cf.getSavedCodeBlock();
     const Inst *savedIP = cf.getSavedIP();
     // Go up one frame and get the callee code block but use the current
@@ -109,7 +113,7 @@ void StackTracesTree::syncWithRuntimeStack(Runtime *runtime) {
     // the interpreter.
     StackFramePtr prev = cf.getPreviousFrame();
     if (prev != framesEnd) {
-      if (CodeBlock *parentCB = prev.getCalleeCodeBlock()) {
+      if (CodeBlock *parentCB = prev.getCalleeCodeBlock(runtime)) {
         assert(
             (!savedCodeBlock || savedCodeBlock == parentCB) &&
             "If savedCodeBlock is non-null, it should match the parent's "
@@ -123,7 +127,7 @@ void StackTracesTree::syncWithRuntimeStack(Runtime *runtime) {
       // sense laying around. But that matches the behavior of enabling from the
       // beginning. When a fix for the non-synced version is found, remove this
       // branch as well.
-      savedCodeBlock = cf.getCalleeCodeBlock();
+      savedCodeBlock = cf.getCalleeCodeBlock(runtime);
       savedIP = savedCodeBlock->getOffsetPtr(0);
     }
     stack.emplace_back(savedCodeBlock, savedIP);
@@ -153,7 +157,7 @@ void StackTracesTree::popCallStack() {
 }
 
 StackTracesTreeNode::SourceLoc StackTracesTree::computeSourceLoc(
-    Runtime *runtime,
+    Runtime &runtime,
     const CodeBlock *codeBlock,
     uint32_t bytecodeOffset) {
   auto location = codeBlock->getSourceLocation(bytecodeOffset);
@@ -184,7 +188,7 @@ StackTracesTreeNode::SourceLoc StackTracesTree::computeSourceLoc(
 }
 
 void StackTracesTree::pushCallStack(
-    Runtime *runtime,
+    Runtime &runtime,
     const CodeBlock *codeBlock,
     const Inst *ip) {
   assert(codeBlock && ip && "Code block and IP must be known");
@@ -230,7 +234,7 @@ void StackTracesTree::pushCallStack(
   //   }
   //   Object.defineProperty(foo, 'name', {writable:true, value: 'bar'});
   //
-  auto nameStr = codeBlock->getNameString(runtime->getHeap().getCallbacks());
+  auto nameStr = codeBlock->getNameString(runtime.getHeap().getCallbacks());
   auto nameID =
       nameStr.empty() ? anonymousFunctionID_ : strings_->insert(nameStr);
 
@@ -243,7 +247,7 @@ void StackTracesTree::pushCallStack(
 }
 
 StackTracesTreeNode *StackTracesTree::getStackTrace(
-    Runtime *runtime,
+    Runtime &runtime,
     const CodeBlock *codeBlock,
     const Inst *ip) {
   if (!codeBlock || !ip) {
@@ -258,4 +262,4 @@ StackTracesTreeNode *StackTracesTree::getStackTrace(
 } // namespace vm
 } // namespace hermes
 
-#endif // HERMES_ENABLE_ALLOCATION_LOCATION_TRACES
+#endif // HERMES_MEMORY_INSTRUMENTATION

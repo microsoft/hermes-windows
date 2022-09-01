@@ -16,10 +16,6 @@ const char *nativePropertyNamesTrace() {
 {
   "globalObjID": 1,
   "env": {
-    "mathRandomSeed": 0,
-    "callsToDateNow": [],
-    "callsToNewDate": [],
-    "callsToDateAsFunction": [],
     "callsToHermesInternalGetInstrumentedStats": [],
   },
   "trace": [
@@ -38,7 +34,7 @@ const char *nativePropertyNamesTrace() {
       "type": "SetPropertyRecord",
       "time": 0,
       "objID": 1,
-      "propID": 22,
+      "propID": "propIDTag:22",
       "propName": "hostObj1",
       "value": "object:10"
     },
@@ -57,7 +53,7 @@ const char *nativePropertyNamesTrace() {
       "type": "SetPropertyRecord",
       "time": 0,
       "objID": 1,
-      "propID": 23,
+      "propID": "propIDTag:23",
       "propName": "hostObj2",
       "value": "object:11"
     },
@@ -80,7 +76,7 @@ const char *nativePropertyNamesTrace() {
       "type": "GetPropertyRecord",
       "time": 0,
       "objID": 1,
-      "propID": 24,
+      "propID": "propIDTag:24",
       "propName": "jsFunc",
       "value": "object:12"
     },

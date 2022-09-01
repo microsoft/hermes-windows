@@ -16,10 +16,6 @@ const char *hostCallsJSTrace() {
 {
   "globalObjID": 1,
   "env": {
-    "mathRandomSeed": 0,
-    "callsToDateNow": [],
-    "callsToNewDate": [],
-    "callsToDateAsFunction": [],
     "callsToHermesInternalGetInstrumentedStats": [],
   },
   "trace": [
@@ -46,7 +42,7 @@ const char *hostCallsJSTrace() {
       "type": "SetPropertyRecord",
       "time": 0,
       "objID": 1,
-      "propID": 22,
+      "propID": "propIDTag:22",
       "propName": "foo",
       "value": "object:10"
     },
@@ -71,7 +67,7 @@ const char *hostCallsJSTrace() {
       "type": "GetPropertyRecord",
       "time": 0,
       "objID": 1,
-      "propID": 23,
+      "propID": "propIDTag:23",
       "propName": "f",
       "value": "object:12"
     },

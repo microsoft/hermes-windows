@@ -12,7 +12,6 @@
 /// integral constant values and operations on them.
 ///
 //===----------------------------------------------------------------------===//
-
 #ifndef LLVM_ADT_APINT_H
 #define LLVM_ADT_APINT_H
 
@@ -22,6 +21,12 @@
 #include <climits>
 #include <cstring>
 #include <string>
+
+#pragma GCC diagnostic push
+
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 
 namespace llvh {
 class FoldingSetNodeID;
@@ -2208,5 +2213,7 @@ Optional<APInt> SolveQuadraticEquationWrap(APInt A, APInt B, APInt C,
 // order to compile LLVM with IBM xlC compiler.
 hash_code hash_value(const APInt &Arg);
 } // End of llvm namespace
+
+#pragma GCC diagnostic pop
 
 #endif

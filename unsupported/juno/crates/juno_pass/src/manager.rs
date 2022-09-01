@@ -5,8 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use juno::ast::Context;
+use juno::ast::GCLock;
+use juno::ast::Node;
+use juno::ast::NodeRc;
+use juno::ast::TransformResult;
+
 use crate::passes::*;
-use juno::ast::{Context, GCLock, Node, NodeRc, TransformResult};
 
 /// Manager to create pipelines of multiple passes over the AST.
 #[derive(Default)]
@@ -28,14 +33,11 @@ impl PassManager {
     /// Pipeline containing a list of standard passes.
     pub fn standard() -> Self {
         Self {
-            passes: vec![
-                Box::new(add_negative::AddNegative::new()),
-                Box::new(reduce_conditional::ReduceConditional::new()),
-            ],
+            passes: vec![Box::new(reduce_conditional::ReduceConditional::new())],
         }
     }
 
-    /// Pipeline containing a list of standard passes.
+    /// Pipeline containing only the Flow type stripping pass.
     pub fn strip_flow() -> Self {
         Self {
             passes: vec![Box::new(strip_flow::StripFlow::new())],

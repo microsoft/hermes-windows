@@ -6,6 +6,7 @@
  */
 
 #define DEBUG_TYPE "vm"
+
 #include "hermes/VM/Runtime.h"
 
 #include "hermes/VM/Callable.h"
@@ -24,7 +25,7 @@ namespace vm {
 #ifdef HERMESVM_PROFILER_OPCODE
 void Runtime::dumpOpcodeStats(llvh::raw_ostream &os) const {
   std::ostringstream stream;
-  // Get all non-zero occurence opcodes.
+  // Get all non-zero occurrence opcodes.
   std::vector<size_t> idx;
   for (size_t i = 0; i < static_cast<uint32_t>(inst::OpCode::_last); ++i) {
     if (opcodeExecuteFrequency[i])
@@ -71,13 +72,13 @@ void Runtime::dumpOpcodeStats(llvh::raw_ostream &os) const {
 }
 #endif
 
-#if defined(HERMESVM_PROFILER_JSFUNCTION) || defined(HERMESVM_PROFILER_EXTERN)
+#if defined(HERMESVM_PROFILER_JSFUNCTION)
 std::atomic<ProfilerID> Runtime::nextProfilerId;
 
 ProfilerID Runtime::getProfilerID(CodeBlock *block) {
   auto &profilerID = block->profilerID;
   if (profilerID == NO_PROFILER_ID) {
-    std::string name = block->getNameString(this);
+    std::string name = block->getNameString(*this);
     profilerID = nextProfilerId.fetch_add(1, std::memory_order_relaxed);
     functionInfo.emplace_back(
         profilerID,
@@ -200,7 +201,7 @@ void Runtime::dumpNativeCallStats(llvh::raw_ostream &OS) {
   OS << "Native call stats\n";
   OS << "=================\n";
 
-  // The stats we gather for a single native finction.
+  // The stats we gather for a single native function.
   struct Info {
     uint32_t count{};
     uint64_t duration{};

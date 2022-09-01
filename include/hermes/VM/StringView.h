@@ -13,7 +13,11 @@
 #include "hermes/VM/StringPrimitive.h"
 #include "hermes/VM/StringRefUtils.h"
 #include "hermes/VM/TwineChar16.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -22,7 +26,7 @@ namespace vm {
 /// allow you to iterate through a string without worrying about the type.
 /// Internally, it's a char pointer and a char16 pointer (only one is valid).
 ///
-/// Performance: Iterating from StringView is slighly slower than normal
+/// Performance: Iterating from StringView is slightly slower than normal
 /// iterations: every operation has one extra conditional check on the type.
 /// If you are in a extremely performance sensitive setting, consider getting
 /// raw pointers directly out of StringPrimitive and explicitly duplicate code
@@ -68,8 +72,7 @@ class StringView {
   /// Iterator for StringView. It's mostly standard except *operator does not
   /// return a reference, which disables certain things such as creating a
   /// reverse_iterator using std::reverse_iterator.
-  class const_iterator
-      : public std::iterator<std::random_access_iterator_tag, char16_t> {
+  class const_iterator {
     friend class StringView;
 
     /// Current pointer position if the underlying string is char string.
@@ -91,6 +94,9 @@ class StringView {
         : const_iterator(nullptr, ptr) {}
 
    public:
+    using iterator_category = std::random_access_iterator_tag;
+    using value_type = char16_t;
+    using pointer = char16_t *;
     using difference_type = std::ptrdiff_t;
     using reference = char16_t;
 
@@ -431,4 +437,5 @@ llvh::raw_ostream &operator<<(llvh::raw_ostream &os, const StringView &sv);
 } // namespace vm
 } // namespace hermes
 
+#pragma GCC diagnostic pop
 #endif // HERMES_VM_STRINGVIEW_H

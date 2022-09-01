@@ -3,9 +3,8 @@ include(FetchContent)
 FetchContent_Declare(
   reactnative
   GIT_REPOSITORY https://github.com/facebook/react-native.git
-  GIT_TAG        v0.66.4
+  GIT_TAG        v0.70.0-rc.3
   GIT_SHALLOW    1
-  GIT_PROGRESS   1
 )
 
 FetchContent_GetProperties(reactnative)
@@ -36,6 +35,18 @@ if(NOT reactnative_POPULATED)
     "${file_text}"
   )
   file(WRITE ${reactnative_SOURCE_DIR}/ReactCommon/hermes/inspector/chrome/Registration.h "${file_text}")
+
+  # Fix for https://github.com/microsoft/react-native-windows/issues/9662 (pushed in FB RN per
+  # https://github.com/facebook/react-native/pull/34342). This patch is no longer needed and should be 
+  # removed once the GIT_TAG above contains commit ID 60e7eb4d534298cb9888d5ab0c8b6a6b041dc299.
+  file(READ ${reactnative_SOURCE_DIR}/ReactCommon/hermes/inspector/chrome/ConnectionDemux.cpp file_text)
+  string(REGEX REPLACE 
+    "\n([ \t]*)auto conn = conns_\\.at\\(pageId\\);\n[ \t]*conn->disconnect\\(\\);\n"
+    "\n\\1auto conn = conns_.at(pageId);\n\\1std::string title = conn->getTitle();\n\\1inspectedContexts_->erase(title);\n\\1conn->disconnect();\n"
+    file_text
+    "${file_text}"
+  )
+  file(WRITE ${reactnative_SOURCE_DIR}/ReactCommon/hermes/inspector/chrome/ConnectionDemux.cpp  "${file_text}")
 
   file(GLOB_RECURSE YARN_FILES ${reactnative_SOURCE_DIR}/yarn.lock ${reactnative_SOURCE_DIR}/**/yarn.lock)
   message("Removing unused yarn.lock files: ${YARN_FILES}")

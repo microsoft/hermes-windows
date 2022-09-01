@@ -18,6 +18,12 @@
 
 namespace hermes {
 namespace vm {
+#pragma GCC diagnostic push
+
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
+#ifdef HERMES_MEMORY_INSTRUMENTATION
 
 namespace {
 
@@ -507,6 +513,8 @@ void ChromeSamplingMemoryProfile::emitSample(
 void ChromeSamplingMemoryProfile::endSamples() {
   json_.closeArray();
 }
+
+#endif
 
 std::string converter(const char *name) {
   return std::string(name);

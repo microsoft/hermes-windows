@@ -175,7 +175,7 @@ Part partFromJava(jni::alias_ref<JPartMap> result) {
 }
 
 vm::CallResult<std::vector<std::u16string>> localesFromJava(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     vm::CallResult<jni::local_ref<JLocalesList>> &&result) {
   if (LLVM_UNLIKELY(result == vm::ExecutionStatus::EXCEPTION)) {
     return vm::ExecutionStatus::EXCEPTION;
@@ -243,37 +243,37 @@ class JIntl : public jni::JavaClass<JIntl> {
 } // namespace
 
 vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales) {
   try {
     return localesFromJava(
         runtime, JIntl::getCanonicalLocales(localesToJava(locales)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 }
 
 vm::CallResult<std::u16string> toLocaleLowerCase(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const std::u16string &str) {
   try {
     return stringFromJava(
         JIntl::toLocaleLowerCase(localesToJava(locales), stringToJava(str)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 }
 
 vm::CallResult<std::u16string> toLocaleUpperCase(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const std::u16string &str) {
   try {
     return stringFromJava(
         JIntl::toLocaleUpperCase(localesToJava(locales), stringToJava(str)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 }
 
@@ -316,20 +316,37 @@ class JCollator : public jni::JavaClass<JCollator> {
   }
 };
 
-} // namespace
+class CollatorAndroid : public Collator {
+ public:
+  CollatorAndroid() = default;
+  ~CollatorAndroid() {
+    jni::ThreadScope::WithClassLoader([&] { jCollator_.reset(); });
+  }
 
-struct Collator::Impl {
+  vm::ExecutionStatus initialize(
+      vm::Runtime &runtime,
+      const std::vector<std::u16string> &locales,
+      const Options &options) noexcept;
+
+  Options resolvedOptions() noexcept {
+    return optionsFromJava(jCollator_->resolvedOptions());
+  }
+
+  double compare(const std::u16string &x, const std::u16string &y) noexcept {
+    return jCollator_->compare(stringToJava(x), stringToJava(y));
+  }
+
+ private:
   jni::global_ref<JCollator> jCollator_;
 };
+} // namespace
 
-Collator::Collator() : impl_(std::make_unique<Impl>()) {}
+Collator::Collator() = default;
 
-Collator::~Collator() {
-  jni::ThreadScope::WithClassLoader([&] { impl_.reset(); });
-}
+Collator::~Collator() = default;
 
 vm::CallResult<std::vector<std::u16string>> Collator::supportedLocalesOf(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   try {
@@ -338,32 +355,45 @@ vm::CallResult<std::vector<std::u16string>> Collator::supportedLocalesOf(
         JCollator::supportedLocalesOf(
             localesToJava(locales), optionsToJava(options)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 }
 
-vm::ExecutionStatus Collator::initialize(
-    vm::Runtime *runtime,
+vm::ExecutionStatus CollatorAndroid::initialize(
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   try {
-    impl_->jCollator_ = jni::make_global(
+    jCollator_ = jni::make_global(
         JCollator::create(localesToJava(locales), optionsToJava(options)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 
   return vm::ExecutionStatus::RETURNED;
 }
 
+vm::CallResult<std::unique_ptr<Collator>> Collator::create(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const Options &options) noexcept {
+  auto instance = std::make_unique<CollatorAndroid>();
+  if (LLVM_UNLIKELY(
+          instance->initialize(runtime, locales, options) ==
+          vm::ExecutionStatus::EXCEPTION)) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  return instance;
+}
+
 Options Collator::resolvedOptions() noexcept {
-  return optionsFromJava(impl_->jCollator_->resolvedOptions());
+  return static_cast<CollatorAndroid *>(this)->resolvedOptions();
 }
 
 double Collator::compare(
     const std::u16string &x,
     const std::u16string &y) noexcept {
-  return impl_->jCollator_->compare(stringToJava(x), stringToJava(y));
+  return static_cast<CollatorAndroid *>(this)->compare(x, y);
 }
 
 namespace {
@@ -411,20 +441,46 @@ class JDateTimeFormat : public jni::JavaClass<JDateTimeFormat> {
   }
 };
 
-} // namespace
+class DateTimeFormatAndroid : public DateTimeFormat {
+ public:
+  DateTimeFormatAndroid() = default;
+  ~DateTimeFormatAndroid() {
+    jni::ThreadScope::WithClassLoader([&] { jDateTimeFormat_.reset(); });
+  }
 
-struct DateTimeFormat::Impl {
+  vm::ExecutionStatus initialize(
+      vm::Runtime &runtime,
+      const std::vector<std::u16string> &locales,
+      const Options &options) noexcept;
+
+  Options resolvedOptions() noexcept {
+    return optionsFromJava(jDateTimeFormat_->resolvedOptions());
+  }
+
+  std::u16string format(double jsTimeValue) noexcept {
+    // I don't believe the Java logic can throw an exception (the JS
+    // method can, but the errors all come from the Intl.cpp logic).  If
+    // I am incorrect, this will need to add a try/catch and take a
+    // runtime to call raiseRangeError on it.  This is true for all the
+    // format methods.
+    return stringFromJava(jDateTimeFormat_->format(jsTimeValue));
+  }
+
+  std::vector<Part> formatToParts(double jsTimeValue) noexcept {
+    return partsFromJava(jDateTimeFormat_->formatToParts(jsTimeValue));
+  }
+
+ private:
   jni::global_ref<JDateTimeFormat> jDateTimeFormat_;
 };
+} // namespace
 
-DateTimeFormat::DateTimeFormat() : impl_(std::make_unique<Impl>()) {}
+DateTimeFormat::DateTimeFormat() = default;
 
-DateTimeFormat::~DateTimeFormat() {
-  jni::ThreadScope::WithClassLoader([&] { impl_.reset(); });
-}
+DateTimeFormat::~DateTimeFormat() = default;
 
 vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   try {
@@ -433,39 +489,47 @@ vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
         JDateTimeFormat::supportedLocalesOf(
             localesToJava(locales), optionsToJava(options)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 }
 
-vm::ExecutionStatus DateTimeFormat::initialize(
-    vm::Runtime *runtime,
+vm::ExecutionStatus DateTimeFormatAndroid::initialize(
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   try {
-    impl_->jDateTimeFormat_ = jni::make_global(JDateTimeFormat::create(
+    jDateTimeFormat_ = jni::make_global(JDateTimeFormat::create(
         localesToJava(locales), optionsToJava(options)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 
   return vm::ExecutionStatus::RETURNED;
 }
 
+vm::CallResult<std::unique_ptr<DateTimeFormat>> DateTimeFormat::create(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const Options &options) noexcept {
+  auto instance = std::make_unique<DateTimeFormatAndroid>();
+  if (LLVM_UNLIKELY(
+          instance->initialize(runtime, locales, options) ==
+          vm::ExecutionStatus::EXCEPTION)) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  return instance;
+}
+
 Options DateTimeFormat::resolvedOptions() noexcept {
-  return optionsFromJava(impl_->jDateTimeFormat_->resolvedOptions());
+  return static_cast<DateTimeFormatAndroid *>(this)->resolvedOptions();
 }
 
 std::u16string DateTimeFormat::format(double jsTimeValue) noexcept {
-  // I don't believe the Java logic can throw an exception (the JS
-  // method can, but the errors all come from the Intl.cpp logic).  If
-  // I am incorrect, this will need to add a try/catch and take a
-  // runtime to call raiseRangeError on it.  This is true for all the
-  // format methods.
-  return stringFromJava(impl_->jDateTimeFormat_->format(jsTimeValue));
+  return static_cast<DateTimeFormatAndroid *>(this)->format(jsTimeValue);
 }
 
 std::vector<Part> DateTimeFormat::formatToParts(double jsTimeValue) noexcept {
-  return partsFromJava(impl_->jDateTimeFormat_->formatToParts(jsTimeValue));
+  return static_cast<DateTimeFormatAndroid *>(this)->formatToParts(jsTimeValue);
 }
 
 namespace {
@@ -513,20 +577,47 @@ class JNumberFormat : public jni::JavaClass<JNumberFormat> {
   }
 };
 
-} // namespace
+class NumberFormatAndroid : public NumberFormat {
+ public:
+  NumberFormatAndroid() = default;
 
-struct NumberFormat::Impl {
+  ~NumberFormatAndroid() {
+    jni::ThreadScope::WithClassLoader([&] { jNumberFormat_.reset(); });
+  }
+
+  vm::ExecutionStatus initialize(
+      vm::Runtime &runtime,
+      const std::vector<std::u16string> &locales,
+      const Options &options) noexcept;
+
+  Options resolvedOptions() noexcept {
+    return optionsFromJava(jNumberFormat_->resolvedOptions());
+  }
+
+  std::u16string format(double number) noexcept {
+    // I don't believe the Java logic can throw an exception (the JS
+    // method can, but the errors all come from the Intl.cpp logic).  If
+    // I am incorrect, this will need to add a try/catch and take a
+    // runtime to call raiseRangeError on it.  This is true for all the
+    // format methods.
+    return stringFromJava(jNumberFormat_->format(number));
+  }
+
+  std::vector<Part> formatToParts(double number) noexcept {
+    return partsFromJava(jNumberFormat_->formatToParts(number));
+  }
+
+ private:
   jni::global_ref<JNumberFormat> jNumberFormat_;
 };
+} // namespace
 
-NumberFormat::NumberFormat() : impl_(std::make_unique<Impl>()) {}
+NumberFormat::NumberFormat() = default;
 
-NumberFormat::~NumberFormat() {
-  jni::ThreadScope::WithClassLoader([&] { impl_.reset(); });
-}
+NumberFormat::~NumberFormat() = default;
 
 vm::CallResult<std::vector<std::u16string>> NumberFormat::supportedLocalesOf(
-    vm::Runtime *runtime,
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   try {
@@ -535,39 +626,47 @@ vm::CallResult<std::vector<std::u16string>> NumberFormat::supportedLocalesOf(
         JNumberFormat::supportedLocalesOf(
             localesToJava(locales), optionsToJava(options)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 }
 
-vm::ExecutionStatus NumberFormat::initialize(
-    vm::Runtime *runtime,
+vm::ExecutionStatus NumberFormatAndroid::initialize(
+    vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
   try {
-    impl_->jNumberFormat_ = jni::make_global(
+    jNumberFormat_ = jni::make_global(
         JNumberFormat::create(localesToJava(locales), optionsToJava(options)));
   } catch (const std::exception &ex) {
-    return runtime->raiseRangeError(ex.what());
+    return runtime.raiseRangeError(ex.what());
   }
 
   return vm::ExecutionStatus::RETURNED;
 }
 
+vm::CallResult<std::unique_ptr<NumberFormat>> NumberFormat::create(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const Options &options) noexcept {
+  auto instance = std::make_unique<NumberFormatAndroid>();
+  if (LLVM_UNLIKELY(
+          instance->initialize(runtime, locales, options) ==
+          vm::ExecutionStatus::EXCEPTION)) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  return instance;
+}
+
 Options NumberFormat::resolvedOptions() noexcept {
-  return optionsFromJava(impl_->jNumberFormat_->resolvedOptions());
+  return static_cast<NumberFormatAndroid *>(this)->resolvedOptions();
 }
 
 std::u16string NumberFormat::format(double number) noexcept {
-  // I don't believe the Java logic can throw an exception (the JS
-  // method can, but the errors all come from the Intl.cpp logic).  If
-  // I am incorrect, this will need to add a try/catch and take a
-  // runtime to call raiseRangeError on it.  This is true for all the
-  // format methods.
-  return stringFromJava(impl_->jNumberFormat_->format(number));
+  return static_cast<NumberFormatAndroid *>(this)->format(number);
 }
 
 std::vector<Part> NumberFormat::formatToParts(double number) noexcept {
-  return partsFromJava(impl_->jNumberFormat_->formatToParts(number));
+  return static_cast<NumberFormatAndroid *>(this)->formatToParts(number);
 }
 
 } // namespace platform_intl

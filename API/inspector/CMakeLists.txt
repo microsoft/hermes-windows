@@ -110,6 +110,8 @@ set(HERMES_ENABLE_RTTI ON)
 
 add_library(hermesinspector SHARED ${inspector_sources} ${inspector_headers} ${folly_sources} ${inspector_public_headers})
 target_link_libraries(hermesinspector
+  hermesPublic
+  jsi
   libhermes
 )
 hermes_link_icu(hermesinspector)
@@ -139,9 +141,6 @@ endif()
 set_target_properties(hermesinspector PROPERTIES
   COMPILE_FLAGS "${compile_flags}"
   LINK_OPTIONS "$<IF:$<CONFIG:Debug>,${link_flags_debug},${link_flags_release}>"
-  # Declare our dependency on std::make_unique
-  CXX_STANDARD 17
-  CXX_STANDARD_REQUIRED 17
   OUTPUT_NAME hermesinspector
 )
 

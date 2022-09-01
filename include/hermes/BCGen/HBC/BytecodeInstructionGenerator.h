@@ -11,7 +11,11 @@
 #include "hermes/Support/Conversions.h"
 
 #include <vector>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace hbc {
 
@@ -155,10 +159,11 @@ class BytecodeInstructionGenerator {
   /// a raw double value instead of having to convert it
   /// to int64_t.
   offset_t emitLoadConstDoubleDirect(param_t dst, double value) {
-    return emitLoadConstDouble(dst, safeTypeCast<double, param_t>(value));
+    return emitLoadConstDouble(dst, llvh::DoubleToBits(value));
   }
 };
 } // namespace hbc
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif

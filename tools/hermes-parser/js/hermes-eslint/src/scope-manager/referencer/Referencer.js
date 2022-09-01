@@ -35,7 +35,6 @@ import type {
   ExportAllDeclaration,
   ExportDefaultDeclaration,
   ExportNamedDeclaration,
-  ExportNamespaceSpecifier,
   ForInStatement,
   ForOfStatement,
   ForStatement,
@@ -50,14 +49,15 @@ import type {
   JSXFragment,
   JSXIdentifier,
   JSXMemberExpression,
+  JSXNamespacedName,
   JSXOpeningElement,
+  JSXTagNameExpression,
   LabeledStatement,
   MemberExpression,
   MetaProperty,
   NewExpression,
   OpaqueType,
-  OptionalMemberExpression,
-  PrivateName,
+  PrivateIdentifier,
   Program,
   Property,
   SwitchStatement,
@@ -67,6 +67,7 @@ import type {
   UpdateExpression,
   VariableDeclaration,
   WithStatement,
+  DeclareModuleExports,
 } from 'hermes-estree';
 import type {ReferenceImplicitGlobal} from './Reference';
 import type {VisitorOptions} from './Visitor';
@@ -88,8 +89,27 @@ import {
   VariableDefinition,
 } from '../definition';
 
+function getJsxName(name: JSXTagNameExpression): string {
+  switch (name.type) {
+    case 'JSXIdentifier':
+      return name.name;
+
+    case 'JSXNamespacedName':
+      return getJsxName(name.namespace);
+
+    case 'JSXMemberExpression':
+      return getJsxName(name.object);
+
+    default:
+      throw new Error(`Unexpected JSX tag name ${name.type}`);
+  }
+}
+
+const FBT_NAMES = new Set(['fbt', 'fbs']);
+
 type ReferencerOptions = $ReadOnly<{
   ...VisitorOptions,
+  fbtSupport: boolean | null,
   jsxPragma: string | null,
   jsxFragmentName: string | null,
 }>;
@@ -98,18 +118,23 @@ type ReferencerOptions = $ReadOnly<{
 class Referencer extends Visitor {
   +_jsxPragma: string | null;
   +_jsxFragmentName: string | null;
-  _hasReferencedJsxFactory = false;
-  _hasReferencedJsxFragmentFactory = false;
+  +_fbtSupport: boolean | null;
   +scopeManager: ScopeManager;
 
   constructor(
-    {childVisitorKeys, jsxFragmentName, jsxPragma}: ReferencerOptions,
+    {
+      childVisitorKeys,
+      fbtSupport,
+      jsxFragmentName,
+      jsxPragma,
+    }: ReferencerOptions,
     scopeManager: ScopeManager,
   ) {
     super({childVisitorKeys});
     this.scopeManager = scopeManager;
     this._jsxPragma = jsxPragma;
     this._jsxFragmentName = jsxFragmentName;
+    this._fbtSupport = fbtSupport;
   }
 
   currentScope: {
@@ -150,44 +175,20 @@ class Referencer extends Visitor {
     });
   }
 
-  /**
-   * Searches for a variable named "name" in the upper scopes and adds a pseudo-reference from itself to itself
-   */
-  _referenceInSomeUpperScope(name: string): boolean {
-    let scope = this.scopeManager.currentScope;
-    while (scope) {
-      const variable = scope.set.get(name);
-      if (!variable) {
-        scope = scope.upper;
-        continue;
-      }
-
-      scope.referenceValue(variable.identifiers[0]);
-      return true;
-    }
-
-    return false;
-  }
-
   _referenceJsxPragma(): void {
-    if (this._jsxPragma == null || this._hasReferencedJsxFactory) {
+    const jsxPragma = this._jsxPragma;
+    if (jsxPragma == null) {
       return;
     }
-    this._hasReferencedJsxFactory = this._referenceInSomeUpperScope(
-      this._jsxPragma,
-    );
+    this.currentScope().indirectlyReferenceValue(jsxPragma);
   }
 
   _referenceJsxFragment(): void {
-    if (
-      this._jsxFragmentName == null ||
-      this._hasReferencedJsxFragmentFactory
-    ) {
+    const jsxFragmentName = this._jsxFragmentName;
+    if (jsxFragmentName == null) {
       return;
     }
-    this._hasReferencedJsxFragmentFactory = this._referenceInSomeUpperScope(
-      this._jsxFragmentName,
-    );
+    this.currentScope().indirectlyReferenceValue(jsxFragmentName);
   }
 
   ///////////////////
@@ -339,23 +340,6 @@ class Referencer extends Visitor {
     this.close(node);
   }
 
-  visitMemberExpression(
-    node: MemberExpression | OptionalMemberExpression,
-  ): void {
-    this.visit(node.object);
-    if (node.computed) {
-      this.visit(node.property);
-    }
-  }
-
-  visitProperty(node: Property): void {
-    if (node.computed) {
-      this.visit(node.key);
-    }
-
-    this.visit(node.value);
-  }
-
   visitType: (?ESNode) => void = (node): void => {
     if (!node) {
       return;
@@ -499,10 +483,6 @@ class Referencer extends Visitor {
     }
   }
 
-  ExportNamespaceSpecifier(_: ExportNamespaceSpecifier): void {
-    // this defines no local variables
-  }
-
   ForInStatement(node: ForInStatement): void {
     this.visitForIn(node);
   }
@@ -578,19 +558,42 @@ class Referencer extends Visitor {
     // we don't ever reference the property as it's always going to be a property on the thing
   }
 
+  JSXNamespacedName(node: JSXNamespacedName): void {
+    this.visit(node.namespace);
+    // namespace:name
+    // the "name" doesn't reference a variable so it should be ignored, like a member expression
+  }
+
   JSXOpeningElement(node: JSXOpeningElement): void {
-    this._referenceJsxPragma();
-    if (node.name.type === 'JSXIdentifier') {
-      const name = node.name.name;
-      if (name[0].toUpperCase() === name[0]) {
-        // lower cased component names are always treated as "intrinsic" names, and are converted to a string,
-        // not a variable by JSX transforms:
-        // <div /> => React.createElement("div", null)
-        this.visit(node.name);
-      }
-    } else {
-      this.visit(node.name);
+    const rootName = getJsxName(node.name);
+    if (this._fbtSupport !== true || !FBT_NAMES.has(rootName)) {
+      // <fbt /> does not reference the jsxPragma, but instead references the fbt import
+      this._referenceJsxPragma();
     }
+
+    switch (node.name.type) {
+      case 'JSXIdentifier':
+        if (
+          rootName[0].toUpperCase() === rootName[0] ||
+          (this._fbtSupport === true && FBT_NAMES.has(rootName))
+        ) {
+          // lower cased component names are always treated as "intrinsic" names, and are converted to a string,
+          // not a variable by JSX transforms:
+          // <div /> => React.createElement("div", null)
+          this.visit(node.name);
+        }
+        break;
+
+      case 'JSXMemberExpression':
+      case 'JSXNamespacedName':
+        // special case for <this.Foo /> - we don't want to create an unclosed
+        // and impossible-to-resolve reference to a variable called `this`.
+        if (rootName !== 'this') {
+          this.visit(node.name);
+        }
+        break;
+    }
+
     for (const attr of node.attributes) {
       this.visit(attr);
     }
@@ -601,7 +604,10 @@ class Referencer extends Visitor {
   }
 
   MemberExpression(node: MemberExpression): void {
-    this.visitMemberExpression(node);
+    this.visit(node.object);
+    if (node.computed === true) {
+      this.visit(node.property);
+    }
   }
 
   MetaProperty(_: MetaProperty): void {
@@ -613,11 +619,7 @@ class Referencer extends Visitor {
     this.visitType(node.typeArguments);
   }
 
-  OptionalMemberExpression(node: MemberExpression): void {
-    this.visitMemberExpression(node);
-  }
-
-  PrivateName(_: PrivateName): void {
+  PrivateIdentifier(_: PrivateIdentifier): void {
     // private names can only reference class properties
   }
 
@@ -646,7 +648,11 @@ class Referencer extends Visitor {
   }
 
   Property(node: Property): void {
-    this.visitProperty(node);
+    if (node.computed) {
+      this.visit(node.key);
+    }
+
+    this.visit(node.value);
   }
 
   SwitchStatement(node: SwitchStatement): void {
@@ -754,6 +760,10 @@ class Referencer extends Visitor {
   }
 
   DeclareModule(node: DeclareModule): void {
+    this.visitType(node);
+  }
+
+  DeclareModuleExports(node: DeclareModuleExports): void {
     this.visitType(node);
   }
 

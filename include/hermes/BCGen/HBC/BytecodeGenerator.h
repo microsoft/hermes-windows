@@ -20,9 +20,11 @@
 #include "hermes/BCGen/HBC/UniquingFilenameTable.h"
 #include "hermes/BCGen/HBC/UniquingStringLiteralTable.h"
 #include "hermes/IR/IR.h"
+#include "hermes/Support/BigIntSupport.h"
 #include "hermes/Support/Conversions.h"
 #include "hermes/Support/OptValue.h"
 #include "hermes/Support/RegExpSerialization.h"
+#include "llvh/ADT/StringRef.h"
 
 namespace hermes {
 namespace hbc {
@@ -130,6 +132,10 @@ class BytecodeFunctionGenerator : public BytecodeInstructionGenerator {
 
   unsigned getFunctionID(Function *F);
 
+  /// \return the ID in the bytecode's bigint table for a given literal string
+  /// \p value.
+  unsigned getBigIntID(LiteralBigInt *value) const;
+
   /// \return the ID in the bytecode's string table for a given literal string
   /// \p value.
   unsigned getStringID(LiteralString *value) const;
@@ -138,13 +144,17 @@ class BytecodeFunctionGenerator : public BytecodeInstructionGenerator {
   /// \p value, assuming it has been registered for us as an identifier.
   unsigned getIdentifierID(LiteralString *value) const;
 
+  /// Adds a parsed bigint to the module table.
+  /// \return the index of the bigint in the table.
+  uint32_t addBigInt(bigint::ParsedBigInt bigint);
+
   /// Adds a compiled regexp to the module table.
   /// \return the index of the regexp in the table.
   uint32_t addRegExp(CompiledRegExp regexp);
 
   /// Add filename to the filename table.
   /// \return the index of the string.
-  uint32_t addFilename(StringRef filename);
+  uint32_t addFilename(llvh::StringRef filename);
 
   void addExceptionHandler(HBCExceptionHandlerInfo info);
 
@@ -274,6 +284,9 @@ class BytecodeModuleGenerator {
   /// module.
   StringLiteralTable stringTable_{};
 
+  /// A module-wide parsed bigint table.
+  bigint::UniquingBigIntTable bigIntTable_{};
+
   /// A module-wide compiled regexp table.
   UniquingRegExpTable regExpTable_;
 
@@ -351,16 +364,21 @@ class BytecodeModuleGenerator {
     entryPointIndex_ = index;
   }
 
+  /// \returns the index of the bigint in this module's bigint table if it
+  /// exists.  If the bigint does not exist will trigger an assertion failure
+  /// if assertions are enabled.
+  unsigned getBigIntID(llvh::StringRef str) const;
+
   /// \returns the index of the string in this module's string table if it
   /// exists.  If the string does not exist will trigger an assertion failure
   /// if assertions are enabled.
-  unsigned getStringID(StringRef str) const;
+  unsigned getStringID(llvh::StringRef str) const;
 
   /// \returns the index of the string in this module's string table, assuming
   /// it exists and is an identifier.  If the string does not exist in the
   /// table, or it is not marked as an identifier, an assertion failure will be
   /// triggered, if assertions are enabled.
-  unsigned getIdentifierID(StringRef str) const;
+  unsigned getIdentifierID(llvh::StringRef str) const;
 
   /// Set the string table this generator uses to find the IDs for strings.
   /// Once it is set, this table will not be further modified -- all strings
@@ -368,13 +386,17 @@ class BytecodeModuleGenerator {
   /// generator.
   void initializeStringTable(StringLiteralTable stringTable);
 
+  /// Adds a parsed bigint to the module table.
+  /// \return the index of the bigint in the table.
+  uint32_t addBigInt(bigint::ParsedBigInt bigint);
+
   /// Adds a compiled regexp to the module table.
   /// \return the index of the regexp in the table.
   uint32_t addRegExp(CompiledRegExp regexp);
 
   /// Add filename to the filename table.
   /// \return the index of the string.
-  uint32_t addFilename(StringRef str);
+  uint32_t addFilename(llvh::StringRef str);
 
   /// Set the segment ID for this module.
   void setSegmentID(uint32_t id) {
