@@ -15,23 +15,16 @@
 #include <ostream>
 #include <string>
 
+#include <hermes/Public/HermesExport.h>
 #include <hermes/Public/RuntimeConfig.h>
 #include <jsi/jsi.h>
 #include <unordered_map>
 
 // Patch to avoid Compiler Warning (level 2) C4275
-#ifndef HERMES_EXPORT
-#ifdef _MSC_VER
 #ifdef CREATE_SHARED_LIBRARY
-#define HERMES_EXPORT __declspec(dllexport)
 #else
 #define HERMES_EXPORT
 #endif // CREATE_SHARED_LIBRARY
-#else // _MSC_VER
-#define HERMES_EXPORT __attribute__((visibility("default")))
-#endif // _MSC_VER
-#endif // !defined(HERMES_EXPORT)
-
 struct HermesTestHelper;
 
 namespace hermes {
@@ -135,6 +128,7 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
   /// static throughout that object's (or string's, or PropNameID's)
   /// lifetime.
   uint64_t getUniqueID(const jsi::Object &o) const;
+  uint64_t getUniqueID(const jsi::BigInt &s) const;
   uint64_t getUniqueID(const jsi::String &s) const;
   uint64_t getUniqueID(const jsi::PropNameID &pni) const;
   uint64_t getUniqueID(const jsi::Symbol &sym) const;
@@ -175,11 +169,6 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
 #ifdef HERMESVM_PROFILER_OPCODE
   /// Write the opcode stats to the given stream.
   void dumpOpcodeStats(std::ostream &os) const;
-#endif
-
-#ifdef HERMESVM_PROFILER_EXTERN
-  /// Dump map of profiler symbols to given file name.
-  void dumpProfilerSymbolsToFile(const std::string &fileName) const;
 #endif
 
 #ifdef HERMES_ENABLE_DEBUGGER
@@ -238,6 +227,17 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
   // object size inconsistencies.  All data should be in the impl
   // class in the .cpp file.
 };
+
+/// Return a RuntimeConfig that is more suited for running untrusted JS than
+/// the default config. Disables some language features and may trade off some
+/// performance for security.
+///
+/// Can serve as a starting point with tweaks to re-enable needed features:
+///   auto conf = hardenedHermesRuntimeConfig().rebuild();
+///   conf.withArrayBuffer(true);
+///   ...
+///   auto runtime = makeHermesRuntime(conf.build());
+HERMES_EXPORT ::hermes::vm::RuntimeConfig hardenedHermesRuntimeConfig();
 
 HERMES_EXPORT std::unique_ptr<HermesRuntime> __cdecl makeHermesRuntime(
     const ::hermes::vm::RuntimeConfig &runtimeConfig =

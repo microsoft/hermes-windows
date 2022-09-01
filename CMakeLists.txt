@@ -62,7 +62,7 @@ endif()
 # - npm/package.json
 # - hermes-engine.podspec
 project(Hermes
-        VERSION 0.70.1
+        VERSION 0.71.0.20220901
         LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
@@ -230,9 +230,6 @@ set(HERMESVM_EXCEPTION_ON_OOM OFF CACHE BOOL
 
 set(HERMESVM_PLATFORM_LOGGING OFF CACHE BOOL
     "hermesLog(...) is enabled, using the platform's logging mechanism")
-
-set(HERMESJSI_DISABLE_STATS_TIMER OFF CACHE BOOL
-    "Record timing stats for every JS<->C++ transition")
 
 set(HERMES_RUN_WASM OFF CACHE BOOL
     "Emit Asm.js/Wasm unsafe compiler intrinsics")
@@ -412,9 +409,6 @@ if(HERMESVM_EXCEPTION_ON_OOM)
 endif()
 if(HERMESVM_PLATFORM_LOGGING)
     add_definitions(-DHERMESVM_PLATFORM_LOGGING)
-endif()
-if(HERMESJSI_DISABLE_STATS_TIMER)
-    add_definitions(-DHERMESJSI_DISABLE_STATS_TIMER)
 endif()
 if(HERMES_RUN_WASM)
     add_definitions(-DHERMES_RUN_WASM)
@@ -612,6 +606,13 @@ if (HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB)
   add_definitions(-DUSE_PLATFORM_UNICODE_WINGLOB)
 endif()
 
+# Disables the GCC 64-to-32 bit truncation diagnostic if the compiler supports
+# -Wshorten-64-to-32.
+check_cxx_compiler_flag("-Wshorten-64-to-32" CXX_SUPPORTS_SHORTEN_64_TO_32)
+if (${CXX_SUPPORTS_SHORTEN_64_TO_32})
+  add_definitions(-DHERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32)
+endif()
+
 set(CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LANGUAGE_STANDARD "c++17")
 
 # JSI_DIR has always priority over other folders.
@@ -745,48 +746,4 @@ if(HERMES_ENABLE_TEST_SUITE)
     ARGS ${HERMES_TEST_EXTRA_ARGS}
     )
   set_target_properties(check-hermes PROPERTIES FOLDER "Hermes regression tests")
-endif()
-
-# This is how github release files are built.
-
-set(HERMES_GITHUB_DIR ${CMAKE_CURRENT_BINARY_DIR}/github)
-file(MAKE_DIRECTORY ${HERMES_GITHUB_DIR})
-string(TOLOWER ${CMAKE_SYSTEM_NAME} HERMES_GITHUB_SYSTEM_NAME)
-
-if(HERMES_ENABLE_TOOLS)
-  set(HERMES_CLI_GITHUB_FILE hermes-cli-${HERMES_GITHUB_SYSTEM_NAME}-v${HERMES_RELEASE_VERSION}.tar.gz)
-  set(HERMES_GITHUB_BUNDLE_DIR ${CMAKE_CURRENT_BINARY_DIR}/bundle)
-
-  # If the github release should include extra files (like dlls)
-  if (HERMES_GITHUB_RESOURCE_DIR STREQUAL "")
-    set(HERMES_GITHUB_EXTRAS "")
-  else()
-    if (IS_DIRECTORY ${HERMES_GITHUB_RESOURCE_DIR})
-      file(GLOB HERMES_GITHUB_EXTRAS "${HERMES_GITHUB_RESOURCE_DIR}/*")
-    else()
-      message(FATAL_ERROR "Extra resource dir not found: ${HERMES_GITHUB_RESOURCE_DIR}")
-    endif()
-  endif()
-
-  # We need this as a separate target because Ninja doesn't run PRE_BUILD/PRE_LINKs in time
-  add_custom_command(
-    OUTPUT ${HERMES_GITHUB_BUNDLE_DIR}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${HERMES_GITHUB_BUNDLE_DIR})
-  add_custom_target(make_bundle_dir DEPENDS ${HERMES_GITHUB_BUNDLE_DIR})
-
-  add_custom_command(
-    OUTPUT ${HERMES_GITHUB_DIR}/${HERMES_CLI_GITHUB_FILE}
-    WORKING_DIRECTORY ${HERMES_GITHUB_BUNDLE_DIR}
-    DEPENDS hermes hermesc hdb hbcdump make_bundle_dir
-    VERBATIM
-    COMMAND
-      # We need bin/hermes or Release/bin/hermes.exe in a predictable location
-      ${CMAKE_COMMAND} -E copy $<TARGET_FILE:hermes> $<TARGET_FILE:hermesc> $<TARGET_FILE:hdb> $<TARGET_FILE:hbcdump> ${HERMES_GITHUB_EXTRAS} .
-    COMMAND
-      ${CMAKE_COMMAND} -E tar zcf ${HERMES_GITHUB_DIR}/${HERMES_CLI_GITHUB_FILE} .
-  )
-
-  add_custom_target(
-    github-cli-release
-    DEPENDS ${HERMES_GITHUB_DIR}/${HERMES_CLI_GITHUB_FILE})
 endif()

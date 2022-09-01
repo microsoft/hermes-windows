@@ -526,15 +526,6 @@ void MallocGC::updateWeakReferences() {
   }
 }
 
-WeakRefSlot *MallocGC::allocWeakSlot(CompressedPointer ptr) {
-  weakSlots_.push_back({ptr});
-  return &weakSlots_.back();
-}
-
-void MallocGC::freeWeakSlot(WeakRefSlot *slot) {
-  slot->free(nullptr);
-}
-
 #ifndef NDEBUG
 bool MallocGC::validPointer(const void *p) const {
   return dbgContains(p) && static_cast<const GCCell *>(p)->isValid();
@@ -546,6 +537,10 @@ bool MallocGC::dbgContains(const void *p) const {
   bool isValid = pointers_.find(header) != pointers_.end();
   isValid = isValid || newPointers_.find(header) != newPointers_.end();
   return isValid;
+}
+
+bool MallocGC::needsWriteBarrier(void *loc, GCCell *value) {
+  return false;
 }
 #endif
 

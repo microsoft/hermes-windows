@@ -10,8 +10,7 @@
 
 import type {BaseNode, ESNode} from 'hermes-estree';
 
-import {getVisitorKeys, isNode} from './getVisitorKeys';
-import {SimpleTraverser} from './traverse/SimpleTraverser';
+import {SimpleTraverser, getVisitorKeys, isNode} from 'hermes-parser';
 
 export opaque type DetachedNode<+T> = T;
 export type MaybeDetachedNode<+T> = T | DetachedNode<T>;
@@ -64,7 +63,7 @@ export const asDetachedNode: {
 export function detachedProps<T: BaseNode>(
   parent: ?ESNode,
   props: $ReadOnly<$Partial<{...}>>,
-  config: DetachConfig = {...null},
+  config: DetachConfig = {},
 ): DetachedNode<T> {
   // $FlowExpectedError[incompatible-type]
   const detachedNode: DetachedNode<T> = {
@@ -131,12 +130,17 @@ export function detachedProps<T: BaseNode>(
 export function shallowCloneNode<T: ESNode>(
   node: T,
   newProps: $ReadOnly<$Partial<{...}>>,
-  config?: DetachConfig = {...null},
+  config?: DetachConfig = {},
 ): DetachedNode<T> {
-  return detachedProps(null, (Object.assign({}, node, newProps): $FlowFixMe), {
-    preserveLocation: config.preserveLocation ?? true,
-    originalNode: config.originalNode ?? node,
-  });
+  return detachedProps(
+    null,
+    // $FlowFixMe[cannot-spread-interface]
+    {...node, ...newProps},
+    {
+      preserveLocation: config.preserveLocation ?? true,
+      originalNode: config.originalNode ?? node,
+    },
+  );
 }
 
 /**

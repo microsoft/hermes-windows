@@ -9,6 +9,7 @@
 /// \file
 /// ES5.1 15.4 Initialize the Array constructor.
 //===----------------------------------------------------------------------===//
+
 #include "JSLibInternal.h"
 
 #include "hermes/ADT/SafeInt.h"
@@ -20,7 +21,11 @@
 #include "hermes/VM/StringView.h"
 
 #include "llvh/ADT/ScopeExit.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 

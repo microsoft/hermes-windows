@@ -6,7 +6,6 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-
 #ifndef LLVM_ADT_STRINGREF_H
 #define LLVM_ADT_STRINGREF_H
 
@@ -21,6 +20,12 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+
+#pragma GCC diagnostic push
+
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 
 namespace llvh {
 
@@ -934,4 +939,5 @@ namespace llvh {
 
 } // end namespace llvh
 
+#pragma GCC diagnostic pop
 #endif // LLVM_ADT_STRINGREF_H

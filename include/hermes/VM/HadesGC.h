@@ -281,8 +281,6 @@ class HadesGC final : public GCBase {
   /// succeed.)
   bool canAllocExternalMemory(uint32_t size) override;
 
-  WeakRefSlot *allocWeakSlot(CompressedPointer ptr) override;
-
   /// Iterate over all objects in the heap, and call \p callback on them.
   /// \param callback A function to call on each found object.
   void forAllObjs(const std::function<void(GCCell *)> &callback) override;
@@ -333,6 +331,7 @@ class HadesGC final : public GCBase {
   /// found reachable in a full GC.
   void trackReachable(CellKind kind, unsigned sz) override;
 
+  bool needsWriteBarrier(void *loc, GCCell *value) override;
   /// \}
 #endif
 
@@ -353,13 +352,9 @@ class HadesGC final : public GCBase {
   /// Similar to AlignedHeapSegment except it uses a free list.
   class HeapSegment final : public AlignedHeapSegment {
    public:
-    explicit HeapSegment(AlignedStorage storage);
+    explicit HeapSegment(AlignedStorage storage)
+        : AlignedHeapSegment(std::move(storage)) {}
     HeapSegment() = default;
-
-    /// Allocate space by bumping a level.
-    AllocResult bumpAlloc(uint32_t sz) {
-      return AlignedHeapSegment::alloc(sz);
-    }
 
     /// Record the head of this cell so it can be found by the card scanner.
     static void setCellHead(const GCCell *start, const size_t sz);
@@ -744,8 +739,12 @@ class HadesGC final : public GCBase {
   /// If true, whenever YG fills up immediately put it into the OG.
   bool promoteYGToOG_;
 
-  /// If true, turn off promoteYGToOG_ as soon as the first OG GC occurs.
+  /// If true, turn off promoteYGToOG_ as soon as ttiReached() is called.
   bool revertToYGAtTTI_;
+
+  /// If true, overwrite the allocation region in the YG with kInvalidHeapValue
+  /// at the end of each YG collection.
+  bool overwriteDeadYGObjects_;
 
   /// Target OG occupancy ratio at the end of an OG collection.
   const double occupancyTarget_;
@@ -762,9 +761,9 @@ class HadesGC final : public GCBase {
   /// collection, as well as the time an OG collection takes.
   std::unique_ptr<CollectionStats> ogCollectionStats_;
 
-  /// Pointer to the first free weak reference slot. Free weak refs are chained
-  /// together in a linked list.
-  WeakRefSlot *firstFreeWeak_{nullptr};
+  /// Cumulative stats for each type of collection.
+  CumulativeHeapStats ogCumulativeStats_;
+  CumulativeHeapStats ygCumulativeStats_;
 
   /// The weighted average of the number of bytes that are promoted to the OG in
   /// each YG collection.
@@ -847,6 +846,9 @@ class HadesGC final : public GCBase {
   /// end of sweeping.
   std::shared_ptr<HeapSegment> compacteeHandleForSweep_;
 
+  /// The number of compactions this GC has performed.
+  size_t numCompactions_{0};
+
   struct NativeIDs {
     HeapSnapshot::NodeID ygFinalizables{IDTracker::kInvalidNode};
     HeapSnapshot::NodeID og{IDTracker::kInvalidNode};
@@ -870,9 +872,6 @@ class HadesGC final : public GCBase {
   /// Allocate directly in the old generation (doing a full collection if
   /// necessary to create room).
   void *allocLongLived(uint32_t sz);
-
-  /// Frees the weak slot, so it can be re-used by future WeakRef allocations.
-  void freeWeakSlot(WeakRefSlot *slot);
 
   /// Perform a YG garbage collection. All live objects in YG will be evacuated
   /// to the OG.
@@ -1130,7 +1129,7 @@ void *HadesGC::allocWork(uint32_t sz) {
     youngGenCollection(
         kHandleSanCauseForAnalytics, /*forceOldGenCollection*/ true);
   }
-  AllocResult res = youngGen().bumpAlloc(sz);
+  AllocResult res = youngGen().alloc(sz);
   void *resPtr = LLVM_UNLIKELY(!res.success) ? allocSlow(sz) : res.ptr;
   if (hasFinalizer == HasFinalizer::Yes)
     youngGenFinalizables_.emplace_back(static_cast<GCCell *>(resPtr));

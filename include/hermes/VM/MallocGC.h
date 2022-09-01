@@ -215,6 +215,8 @@ class MallocGC final : public GCBase {
   /// \return true iff the pointer \p p is controlled by this GC.
   bool validPointer(const void *p) const override;
   bool dbgContains(const void *p) const override;
+
+  bool needsWriteBarrier(void *loc, GCCell *value) override;
 #endif
 
 #ifdef HERMES_MEMORY_INSTRUMENTATION
@@ -248,13 +250,6 @@ class MallocGC final : public GCBase {
   void getCrashManagerHeapInfo(CrashManager::HeapInformation &info) override;
   std::string getKindAsStr() const override;
 
-  /// @name Weak references
-  /// @{
-
-  /// Allocate a weak pointer slot for the value given.
-  /// \pre \p init should not be empty or a native value.
-  WeakRefSlot *allocWeakSlot(CompressedPointer ptr) override;
-
   /// The largest the size of this heap could ever grow to.
   size_t maxSize() const {
     return maxSize_;
@@ -267,8 +262,6 @@ class MallocGC final : public GCBase {
   static bool classof(const GCBase *gc) {
     return gc->getKind() == HeapKind::MallocGC;
   }
-
-  /// @}
 
  private:
 #ifdef HERMES_SLOW_DEBUG
@@ -285,9 +278,6 @@ class MallocGC final : public GCBase {
 
   /// Initialize a cell with the required basic data for any cell.
   inline void initCell(GCCell *cell, uint32_t size);
-
-  /// Free a weak pointer slot, which invalidates it.
-  void freeWeakSlot(WeakRefSlot *slot);
 
   /// See \c GCBase::printStats.
   void printStats(JSONEmitter &json) override;

@@ -12,7 +12,6 @@
 // i*.h files...
 //
 //===----------------------------------------------------------------------===//
-
 #ifndef LLVM_IR_INSTRTYPES_H
 #define LLVM_IR_INSTRTYPES_H
 
@@ -42,6 +41,12 @@
 #include <iterator>
 #include <string>
 #include <vector>
+
+#pragma GCC diagnostic push
+
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 
 namespace llvh {
 
@@ -1490,5 +1495,5 @@ protected:
 };
 
 } // end namespace llvh
-
+#pragma GCC diagnostic pop
 #endif // LLVM_IR_INSTRTYPES_H
