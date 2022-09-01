@@ -19,6 +19,11 @@
 #include "hermes/VM/TypesafeFlags.h"
 #include "hermes/VM/VTable.h"
 
+#pragma GCC diagnostic push
+
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -326,7 +331,7 @@ class JSObject : public GCCell {
       NeedsBarriers needsBarriers)
       : parent_(runtime, parent, runtime.getHeap(), needsBarriers),
         clazz_(runtime, clazz, runtime.getHeap(), needsBarriers),
-        propStorage_(runtime, nullptr, runtime.getHeap(), needsBarriers) {
+        propStorage_(nullptr) {
     // Direct property slots are initialized by initDirectPropStorage.
   }
 
@@ -338,7 +343,7 @@ class JSObject : public GCCell {
       NeedsBarriers needsBarriers)
       : parent_(runtime, *parent, runtime.getHeap(), needsBarriers),
         clazz_(runtime, *clazz, runtime.getHeap(), needsBarriers),
-        propStorage_(runtime, nullptr, runtime.getHeap(), needsBarriers) {
+        propStorage_(nullptr) {
     // Direct property slots are initialized by initDirectPropStorage.
   }
 
@@ -1239,11 +1244,11 @@ class JSObject : public GCCell {
   /// There is no one definitive type name for an object. If no heuristic is
   /// able to produce a name, the empty string is returned.
   std::string getHeuristicTypeName(GC &gc);
+#endif
 
   /// Accesses the name property on an object, returns the empty string if it
   /// doesn't exist or isn't a string.
   std::string getNameIfExists(PointerBase &base);
-#endif
 
  protected:
   /// @name Virtual function implementations
@@ -2001,5 +2006,6 @@ inline bool JSObject::shouldCacheForIn(Runtime &runtime) const {
 
 } // namespace vm
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif // HERMES_VM_JSOBJECT_H

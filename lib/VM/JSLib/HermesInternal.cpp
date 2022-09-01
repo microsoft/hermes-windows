@@ -23,7 +23,11 @@
 
 #include <cstring>
 #include <random>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -43,7 +47,9 @@ hermesInternalDetachArrayBuffer(void *, Runtime &runtime, NativeArgs args) {
         "Cannot use detachArrayBuffer on something which "
         "is not an ArrayBuffer foo");
   }
-  buffer->detach(runtime.getHeap());
+  if (LLVM_UNLIKELY(
+          JSArrayBuffer::detach(runtime, buffer) == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
   // "void" return
   return HermesValue::encodeUndefinedValue();
 }

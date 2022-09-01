@@ -8,7 +8,11 @@
 #include <gtest/gtest.h>
 #include <hermes/BCGen/HBC/BytecodeFileFormat.h>
 #include <hermes/CompileJS.h>
+#include <hermes/Public/JSOutOfMemoryError.h>
 #include <hermes/hermes.h>
+#include <jsi/instrumentation.h>
+
+#include <tuple>
 
 using namespace facebook::jsi;
 using namespace facebook::hermes;
@@ -100,6 +104,68 @@ TEST_F(HermesRuntimeTest, ArrayBufferTest) {
   int32_t *buffer = reinterpret_cast<int32_t *>(arrayBuffer.data(*rt));
   EXPECT_EQ(buffer[0], 1234);
   EXPECT_EQ(buffer[1], 5678);
+}
+
+class HermesRuntimeTestMethodsTest : public HermesRuntimeTestBase {
+ public:
+  HermesRuntimeTestMethodsTest()
+      : HermesRuntimeTestBase(::hermes::vm::RuntimeConfig::Builder()
+                                  .withEnableHermesInternalTestMethods(true)
+                                  .build()) {}
+};
+
+TEST_F(HermesRuntimeTestMethodsTest, ExternalArrayBufferTest) {
+  struct FixedBuffer : MutableBuffer {
+    size_t size() const override {
+      return sizeof(arr);
+    }
+    uint8_t *data() override {
+      return reinterpret_cast<uint8_t *>(arr.data());
+    }
+
+    std::array<uint32_t, 256> arr;
+  };
+
+  {
+    auto buf = std::make_shared<FixedBuffer>();
+    for (uint32_t i = 0; i < buf->arr.size(); i++)
+      buf->arr[i] = i;
+    auto arrayBuffer = ArrayBuffer(*rt, buf);
+    auto square = eval(
+        R"#(
+(function (buf) {
+  var view = new Uint32Array(buf);
+  for(var i = 0; i < view.length; i++) view[i] = view[i] * view[i];
+})
+)#");
+    square.asObject(*rt).asFunction(*rt).call(*rt, arrayBuffer);
+    for (uint32_t i = 0; i < 256; i++)
+      EXPECT_EQ(buf->arr[i], i * i);
+  }
+
+  {
+    auto buf = std::make_shared<FixedBuffer>();
+    std::weak_ptr<FixedBuffer> weakBuf(buf);
+    auto arrayBuffer = ArrayBuffer(*rt, std::move(buf));
+    auto detach = eval(
+        R"#(
+(function (buf) {
+  var view = new Uint32Array(buf);
+  HermesInternal.detachArrayBuffer(buf);
+  view[0] = 5;
+})
+)#");
+    try {
+      detach.asObject(*rt).asFunction(*rt).call(*rt, arrayBuffer);
+      FAIL() << "Expected JSIException";
+    } catch (const JSError &ex) {
+      EXPECT_TRUE(
+          strstr(ex.what(), "Cannot set a value into a detached ArrayBuffer") !=
+          nullptr);
+    }
+    rt->instrumentation().collectGarbage("");
+    EXPECT_TRUE(weakBuf.expired());
+  }
 }
 
 TEST_F(HermesRuntimeTest, BytecodeTest) {
@@ -537,6 +603,51 @@ TEST_F(HermesRuntimeTest, HostObjectAsParentTest) {
       eval("var subClass = {__proto__: ho}; subClass.prop1 == 10;").getBool());
 }
 
+TEST_F(HermesRuntimeTest, NativeStateTest) {
+  class C : public facebook::jsi::NativeState {
+   public:
+    int *dtors;
+    C(int *_dtors) : dtors(_dtors) {}
+    virtual ~C() override {
+      ++*dtors;
+    }
+  };
+  int dtors1 = 0;
+  int dtors2 = 0;
+  {
+    Object obj = eval("({one: 1})").getObject(*rt);
+    ASSERT_FALSE(obj.hasNativeState<C>(*rt));
+    {
+      // Set some state.
+      obj.setNativeState(*rt, std::make_shared<C>(&dtors1));
+      ASSERT_TRUE(obj.hasNativeState<C>(*rt));
+      auto ptr = obj.getNativeState<C>(*rt);
+      EXPECT_EQ(ptr->dtors, &dtors1);
+    }
+    {
+      // Overwrite the state.
+      obj.setNativeState(*rt, std::make_shared<C>(&dtors2));
+      ASSERT_TRUE(obj.hasNativeState<C>(*rt));
+      auto ptr = obj.getNativeState<C>(*rt);
+      EXPECT_EQ(ptr->dtors, &dtors2);
+    }
+  } // closing scope -> obj unreachable
+  // should finalize both
+  eval("gc()");
+  EXPECT_EQ(1, dtors1);
+  EXPECT_EQ(1, dtors2);
+
+  // Trying to set native state on frozen object should throw.
+  {
+    Object frozen = eval("Object.freeze({one: 1})").getObject(*rt);
+    ASSERT_THROW(
+        frozen.setNativeState(*rt, std::make_shared<C>(&dtors1)), JSIException);
+  }
+  // Make sure any NativeState cells are finalized before leaving, since they
+  // point to local variables. Otherwise ASAN will complain.
+  eval("gc()");
+}
+
 TEST_F(HermesRuntimeTest, PropNameIDFromSymbol) {
   auto strProp = PropNameID::forAscii(*rt, "a");
   auto secretProp = PropNameID::forSymbol(
@@ -666,5 +777,174 @@ TEST_F(HermesRuntimeTest, DiagnosticHandlerTestWarning) {
   EXPECT_EQ(2, diagHandler.ds[1].ranges[0].first);
   EXPECT_EQ(5, diagHandler.ds[1].ranges[0].second);
 }
+
+TEST_F(HermesRuntimeTest, BigIntJSI) {
+  Function bigintCtor = rt->global().getPropertyAsFunction(*rt, "BigInt");
+  auto BigInt = [&](const char *v) { return bigintCtor.call(*rt, eval(v)); };
+
+  auto v0 = BigInt("0");
+  auto b0 = v0.asBigInt(*rt);
+  EXPECT_EQ(v0.toString(*rt).utf8(*rt), "0");
+  EXPECT_EQ(b0.toString(*rt).utf8(*rt), "0");
+
+  auto vffffffffffffffff = BigInt("0xffffffffffffffffn");
+  auto bffffffffffffffff = vffffffffffffffff.asBigInt(*rt);
+  EXPECT_EQ(vffffffffffffffff.toString(*rt).utf8(*rt), "18446744073709551615");
+  EXPECT_EQ(bffffffffffffffff.toString(*rt, 16).utf8(*rt), "ffffffffffffffff");
+  EXPECT_EQ(bffffffffffffffff.toString(*rt, 36).utf8(*rt), "3w5e11264sgsf");
+
+  auto vNeg1 = BigInt("-1");
+  auto bNeg1 = vNeg1.asBigInt(*rt);
+  EXPECT_EQ(vNeg1.toString(*rt).utf8(*rt), "-1");
+  EXPECT_EQ(bNeg1.toString(*rt, 16).utf8(*rt), "-1");
+  EXPECT_EQ(bNeg1.toString(*rt, 36).utf8(*rt), "-1");
+
+  EXPECT_TRUE(BigInt::strictEquals(*rt, b0, b0));
+  EXPECT_TRUE(BigInt::strictEquals(*rt, bffffffffffffffff, bffffffffffffffff));
+  EXPECT_FALSE(BigInt::strictEquals(*rt, bNeg1, bffffffffffffffff));
+}
+
+TEST_F(HermesRuntimeTest, BigIntJSIFromScalar) {
+  Function bigintCtor = rt->global().getPropertyAsFunction(*rt, "BigInt");
+  auto BigInt = [&](const char *v) {
+    return bigintCtor.call(*rt, eval(v)).asBigInt(*rt);
+  };
+
+  EXPECT_TRUE(
+      BigInt::strictEquals(*rt, BigInt("0"), BigInt::fromUint64(*rt, 0)));
+  EXPECT_TRUE(
+      BigInt::strictEquals(*rt, BigInt("0"), BigInt::fromInt64(*rt, 0)));
+  EXPECT_TRUE(BigInt::strictEquals(
+      *rt, BigInt("0xdeadbeef"), BigInt::fromUint64(*rt, 0xdeadbeef)));
+  EXPECT_TRUE(BigInt::strictEquals(
+      *rt, BigInt("0xc0ffee"), BigInt::fromInt64(*rt, 0xc0ffee)));
+  EXPECT_TRUE(BigInt::strictEquals(
+      *rt, BigInt("0xffffffffffffffffn"), BigInt::fromUint64(*rt, ~0ull)));
+  EXPECT_TRUE(
+      BigInt::strictEquals(*rt, BigInt("-1"), BigInt::fromInt64(*rt, ~0ull)));
+}
+
+TEST_F(HermesRuntimeTest, BigIntJSIToString) {
+  auto b = BigInt::fromUint64(*rt, 1);
+  // Test all possible radixes.
+  for (int radix = 2; radix <= 36; ++radix) {
+    EXPECT_EQ(b.toString(*rt, radix).utf8(*rt), "1") << radix;
+  }
+
+  // Test some invaild radixes.
+  EXPECT_THROW(b.toString(*rt, -1), JSIException);
+  EXPECT_THROW(b.toString(*rt, 0), JSIException);
+  EXPECT_THROW(b.toString(*rt, 1), JSIException);
+  EXPECT_THROW(b.toString(*rt, 37), JSIException);
+  EXPECT_THROW(b.toString(*rt, 100), JSIException);
+
+  Function bigintCtor = rt->global().getPropertyAsFunction(*rt, "BigInt");
+  auto BigInt = [&](int value) {
+    return bigintCtor.call(*rt, value).asBigInt(*rt);
+  };
+
+  // Now test that the radix is being passed to the VM.
+  for (int radix = 2; radix <= 36; ++radix) {
+    EXPECT_EQ(BigInt(radix + 1).toString(*rt, radix).utf8(*rt), "11") << radix;
+    EXPECT_EQ(BigInt(-(radix + 1)).toString(*rt, radix).utf8(*rt), "-11")
+        << radix;
+  }
+}
+
+TEST_F(HermesRuntimeTest, BigIntJSITruncation) {
+  auto lossless = [](uint64_t value) { return std::make_tuple(value, true); };
+  auto lossy = [](uint64_t value) { return std::make_tuple(value, false); };
+
+  auto toInt64 = [this](const BigInt &b) {
+    return std::make_tuple(b.getInt64(*rt), b.isInt64(*rt));
+  };
+
+  auto toUint64 = [this](const BigInt &b) {
+    return std::make_tuple(b.getUint64(*rt), b.isUint64(*rt));
+  };
+
+  Function bigintCtor = rt->global().getPropertyAsFunction(*rt, "BigInt");
+  auto BigInt = [&](const char *v) {
+    return bigintCtor.call(*rt, eval(v)).asBigInt(*rt);
+  };
+
+  // 0n can be truncated losslessly to either int64_t and uint64_t
+  auto b = BigInt::fromUint64(*rt, 0);
+  EXPECT_EQ(toUint64(b), lossless(0));
+  EXPECT_TRUE(
+      BigInt::strictEquals(*rt, BigInt::fromUint64(*rt, b.getUint64(*rt)), b));
+  EXPECT_EQ(toInt64(b), lossless(0));
+  EXPECT_TRUE(
+      BigInt::strictEquals(*rt, BigInt::fromInt64(*rt, b.getInt64(*rt)), b));
+
+  // Creating BigInt from an ~0ull. This value can't be truncated losslessly to
+  // int64_t.
+  b = BigInt::fromUint64(*rt, ~0ull);
+  EXPECT_EQ(toUint64(b), lossless(~0ull));
+  EXPECT_TRUE(
+      BigInt::strictEquals(*rt, BigInt::fromUint64(*rt, b.getUint64(*rt)), b));
+  EXPECT_EQ(toInt64(b), lossy(~0ull));
+
+  // Creating BigInt from an -1ull. This value can't be truncated losslessly to
+  // int64_t.
+  b = BigInt::fromInt64(*rt, -1ull);
+  EXPECT_EQ(toUint64(b), lossy(-1ull));
+  EXPECT_EQ(toInt64(b), lossless(-1ull));
+  EXPECT_TRUE(
+      BigInt::strictEquals(*rt, BigInt::fromInt64(*rt, b.getInt64(*rt)), b));
+
+  // 0x10000000000000000n can't be truncated to int64_t nor uint64_t.
+  b = BigInt("0x10000000000000000n");
+  EXPECT_EQ(toUint64(b), lossy(0));
+  EXPECT_EQ(toInt64(b), lossy(0));
+
+  // -0x10000000000000000n can't be truncated to int64_t nor uint64_t.
+  b = BigInt("-0x10000000000000000n");
+  EXPECT_EQ(toUint64(b), lossy(0));
+  EXPECT_EQ(toInt64(b), lossy(0));
+
+  // (1n << 65n) - 1n can't be truncated to int64_t nor uint64_t.
+  b = BigInt("(1n << 65n) - 1n");
+  EXPECT_EQ(toUint64(b), lossy(~0ull));
+  EXPECT_EQ(toInt64(b), lossy(~0ull));
+}
+
+#ifdef HERMESVM_EXCEPTION_ON_OOM
+class HermesRuntimeTestSmallHeap : public HermesRuntimeTestBase {
+ public:
+  HermesRuntimeTestSmallHeap()
+      : HermesRuntimeTestBase(
+            ::hermes::vm::RuntimeConfig::Builder()
+                .withGCConfig(::hermes::vm::GCConfig::Builder()
+                                  .withInitHeapSize(8 << 20)
+                                  .withMaxHeapSize(8 << 20)
+                                  .build())
+                .build()) {}
+};
+
+TEST_F(HermesRuntimeTestSmallHeap, OOMExceptionTest) {
+  auto func = Function::createFromHostFunction(
+      *rt,
+      PropNameID::forAscii(*rt, ""),
+      1,
+      [](Runtime &rt, const Value &, const Value *args, unsigned long count) {
+        assert(count > 0);
+        auto func = args[0].asObject(rt).asFunction(rt);
+        return func.call(rt, args + 1, count - 1);
+      });
+
+  auto makeOOM = eval(R"#(
+(function (){
+  var outer = [];
+  while(true){
+    var inner = [];
+    for (var i = 0; i < 10000; i++) inner.push({});
+    outer.push(inner);
+  }
+})
+)#");
+  EXPECT_THROW(func.call(*rt, makeOOM), ::hermes::vm::JSOutOfMemoryError);
+}
+#endif
 
 } // namespace

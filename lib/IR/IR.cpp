@@ -61,13 +61,13 @@ void Value::destroy(Value *V) {
   }
 }
 
-StringRef Value::getKindStr() const {
+llvh::StringRef Value::getKindStr() const {
   switch (Kind) {
     default:
       llvm_unreachable("Invalid kind");
 #define DEF_VALUE(XX, PARENT) \
   case ValueKind::XX##Kind:   \
-    return StringRef(#XX);
+    return llvh::StringRef(#XX);
 #include "hermes/IR/ValueKinds.def"
   }
 }
@@ -258,8 +258,8 @@ BasicBlock::BasicBlock(Function *parent)
   Parent->addBlock(this);
 }
 
-void BasicBlock::dump() {
-  IRPrinter D(getParent()->getContext(), llvh::outs());
+void BasicBlock::dump(llvh::raw_ostream &os) const {
+  IRPrinter D(getParent()->getContext(), os);
   D.visit(*this);
 }
 
@@ -269,7 +269,7 @@ void BasicBlock::printAsOperand(llvh::raw_ostream &OS, bool) const {
   OS << "BB#" << std::to_string(Num);
 }
 
-void Instruction::dump(llvh::raw_ostream &os) {
+void Instruction::dump(llvh::raw_ostream &os) const {
   IRPrinter D(getParent()->getContext(), os);
   D.visit(*this);
 }
@@ -406,7 +406,7 @@ void Function::eraseFromParentNoDestroy() {
   getParent()->getFunctionList().remove(getIterator());
 }
 
-StringRef Instruction::getName() {
+llvh::StringRef Instruction::getName() {
   switch (getKind()) {
     default:
       llvm_unreachable("Invalid kind");
@@ -671,8 +671,8 @@ int Parameter::getIndexInParamList() const {
   llvm_unreachable("Cannot find parameter in the function");
 }
 
-void Function::dump() {
-  IRPrinter D(getParent()->getContext(), llvh::outs());
+void Function::dump(llvh::raw_ostream &os) const {
+  IRPrinter D(getParent()->getContext(), os);
   D.visit(*this);
 }
 
@@ -739,10 +739,9 @@ void Module::viewGraph() {
   }
 }
 
-void Module::dump() {
-  for (auto &F : *this) {
-    F.dump();
-  }
+void Module::dump(llvh::raw_ostream &os) const {
+  IRPrinter D(getContext(), os);
+  D.visit(*this);
 }
 
 LiteralNumber *Module::getLiteralNumber(double value) {

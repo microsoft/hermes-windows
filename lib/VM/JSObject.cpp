@@ -13,11 +13,16 @@
 #include "hermes/VM/InternalProperty.h"
 #include "hermes/VM/JSArray.h"
 #include "hermes/VM/JSProxy.h"
+#include "hermes/VM/NativeState.h"
 #include "hermes/VM/Operations.h"
 #include "hermes/VM/PropertyAccessor.h"
 
 #include "llvh/ADT/SmallSet.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -2312,6 +2317,25 @@ CallResult<bool> JSObject::defineOwnComputed(
       selfHandle, runtime, *converted, dpFlags, valueOrAccessor, opFlags);
 }
 
+std::string JSObject::getNameIfExists(PointerBase &base) {
+  // Try "displayName" first, if it is defined.
+  if (auto nameVal = tryGetNamedNoAlloc(
+          this, base, Predefined::getSymbolID(Predefined::displayName))) {
+    if (auto *name = dyn_vmcast<StringPrimitive>(nameVal->unboxToHV(base))) {
+      return converter(name);
+    }
+  }
+  // Next, use "name" if it is defined.
+  if (auto nameVal = tryGetNamedNoAlloc(
+          this, base, Predefined::getSymbolID(Predefined::name))) {
+    if (auto *name = dyn_vmcast<StringPrimitive>(nameVal->unboxToHV(base))) {
+      return converter(name);
+    }
+  }
+  // There is no other way to access the "name" property on an object.
+  return "";
+}
+
 #ifdef HERMES_MEMORY_INSTRUMENTATION
 std::string JSObject::getHeuristicTypeName(GC &gc) {
   PointerBase &base = gc.getPointerBase();
@@ -2390,25 +2414,6 @@ std::string JSObject::getHeuristicTypeName(GC &gc) {
   }
   name += ")";
   return name;
-}
-
-std::string JSObject::getNameIfExists(PointerBase &base) {
-  // Try "displayName" first, if it is defined.
-  if (auto nameVal = tryGetNamedNoAlloc(
-          this, base, Predefined::getSymbolID(Predefined::displayName))) {
-    if (auto *name = dyn_vmcast<StringPrimitive>(nameVal->unboxToHV(base))) {
-      return converter(name);
-    }
-  }
-  // Next, use "name" if it is defined.
-  if (auto nameVal = tryGetNamedNoAlloc(
-          this, base, Predefined::getSymbolID(Predefined::name))) {
-    if (auto *name = dyn_vmcast<StringPrimitive>(nameVal->unboxToHV(base))) {
-      return converter(name);
-    }
-  }
-  // There is no other way to access the "name" property on an object.
-  return "";
 }
 
 std::string JSObject::_snapshotNameImpl(GCCell *cell, GC &gc) {

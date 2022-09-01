@@ -15,7 +15,11 @@
 #include <deque>
 #include <memory>
 #include <string>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace llvh {
 class raw_ostream;
 }
@@ -133,5 +137,6 @@ class UniquingRegExpTable {
 };
 
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif

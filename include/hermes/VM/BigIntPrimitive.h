@@ -17,7 +17,11 @@
 #include "llvh/ADT/ArrayRef.h"
 #include "llvh/Support/MathExtras.h"
 #include "llvh/Support/TrailingObjects.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 /// A variable size GCCell used to store the words that compose the bigint.
@@ -176,6 +180,18 @@ class BigIntPrimitive final
   template <typename T>
   std::enable_if_t<std::is_signed<T>::value, int32_t> compare(T value) const {
     return bigint::compare(this->getImmutableRefUnsafe(), value);
+  }
+
+  /// \return The first this BigInt's first digit.
+  DigitType truncateToSingleDigit() const {
+    return bigint::truncateToSingleDigit(this->getImmutableRefUnsafe());
+  }
+
+  /// \return Whehter truncating this BigInt to a DigitType (signedTruncation ==
+  /// false) or a SignedDigitType (signedTruncation == true) is lossless.
+  bool isTruncationToSingleDigitLossless(bool signedTruncation) {
+    return bigint::isSingleDigitTruncationLossless(
+        this->getImmutableRefUnsafe(), signedTruncation);
   }
 
   // Supported Math Operations
@@ -435,5 +451,6 @@ class BigIntPrimitive final
 };
 } // namespace vm
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif // HERMES_VM_BIGINTPRIMITIVE_H

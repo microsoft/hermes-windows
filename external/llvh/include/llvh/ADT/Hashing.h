@@ -41,7 +41,6 @@
 // under 32-bytes.
 //
 //===----------------------------------------------------------------------===//
-
 #ifndef LLVM_ADT_HASHING_H
 #define LLVM_ADT_HASHING_H
 
@@ -54,6 +53,12 @@
 #include <cstring>
 #include <string>
 #include <utility>
+
+#pragma GCC diagnostic push
+
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 
 namespace llvh {
 
@@ -656,5 +661,7 @@ hash_code hash_value(const std::basic_string<T> &arg) {
 }
 
 } // namespace llvh
+
+#pragma GCC diagnostic pop
 
 #endif

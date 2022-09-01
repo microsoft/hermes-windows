@@ -9,6 +9,7 @@
 #include "hermes/VM/GC.h"
 
 #include "hermes/Platform/Logging.h"
+#include "hermes/Public/JSOutOfMemoryError.h"
 #include "hermes/Support/ErrorHandling.h"
 #include "hermes/Support/OSCompat.h"
 #include "hermes/VM/CellKind.h"
@@ -17,7 +18,6 @@
 #include "hermes/VM/Runtime.h"
 #include "hermes/VM/SmallHermesValue-inline.h"
 #include "hermes/VM/VTable.h"
-#include "hermes/VM/WeakRefSlot-inline.h"
 
 #include "llvh/Support/Debug.h"
 #include "llvh/Support/FileSystem.h"
@@ -29,7 +29,11 @@
 #include <clocale>
 #include <stdexcept>
 #include <system_error>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 using llvh::format;
 
 namespace hermes {
@@ -61,12 +65,7 @@ GCBase::GCBase(
       sanitizeRate_(gcConfig.getSanitizeConfig().getSanitizeRate()),
 #endif
       tripwireCallback_(gcConfig.getTripwireConfig().getCallback()),
-      tripwireLimit_(gcConfig.getTripwireConfig().getLimit())
-#ifndef NDEBUG
-      ,
-      randomizeAllocSpace_(gcConfig.getShouldRandomizeAllocSpace())
-#endif
-{
+      tripwireLimit_(gcConfig.getTripwireConfig().getLimit()) {
   for (unsigned i = 0; i < (unsigned)XorPtrKeyID::_NumKeys; ++i) {
     pointerEncryptionKey_[i] = std::random_device()();
     if constexpr (sizeof(uintptr_t) >= 8) {
@@ -875,6 +874,7 @@ void GCBase::recordGCStats(const GCAnalyticsEvent &event, bool onMutator) {
 }
 
 void GCBase::oom(std::error_code reason) {
+  hasOOMed_ = true;
   char detailBuffer[400];
   oomDetail(detailBuffer, reason);
 #ifdef HERMESVM_EXCEPTION_ON_OOM
@@ -980,6 +980,19 @@ std::vector<detail::WeakRefKey *> GCBase::buildKeyList(
   return res;
 }
 
+WeakRefSlot *GCBase::allocWeakSlot(CompressedPointer ptr) {
+  // The weak ref mutex doesn't need to be held since we are only accessing free
+  // slots, which the background thread cannot access.
+  if (auto *slot = firstFreeWeak_) {
+    assert(slot->state() == WeakSlotState::Free && "invalid free slot state");
+    firstFreeWeak_ = firstFreeWeak_->nextFree();
+    slot->reset(ptr);
+    return slot;
+  }
+  weakSlots_.push_back({ptr});
+  return &weakSlots_.back();
+}
+
 HeapSnapshot::NodeID GCBase::getObjectID(const GCCell *cell) {
   assert(cell && "Called getObjectID on a null pointer");
   return getObjectID(CompressedPointer::encodeNonNull(
@@ -1056,20 +1069,6 @@ uint64_t GCBase::nextObjectID() {
 
 const GCExecTrace &GCBase::getGCExecTrace() const {
   return execTrace_;
-}
-
-/*static*/
-double GCBase::clockDiffSeconds(TimePoint start, TimePoint end) {
-  std::chrono::duration<double> elapsed = (end - start);
-  return elapsed.count();
-}
-
-/*static*/
-double GCBase::clockDiffSeconds(
-    std::chrono::microseconds start,
-    std::chrono::microseconds end) {
-  std::chrono::duration<double> elapsed = (end - start);
-  return elapsed.count();
 }
 
 llvh::raw_ostream &operator<<(

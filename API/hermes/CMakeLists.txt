@@ -73,7 +73,7 @@ target_link_libraries(libhermes
 target_link_options(libhermes PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 
 # Export the required header directory
-target_include_directories(libhermes PUBLIC .. ${HERMES_JSI_DIR})
+target_include_directories(libhermes PUBLIC .. ../../public ${HERMES_JSI_DIR})
 
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
