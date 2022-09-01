@@ -17,7 +17,9 @@ namespace hermes {
 namespace platform_intl {
 
 // convert utf8 string to utf16
-vm::CallResult<std::u16string> UTF8toUTF16(vm::Runtime &runtime, std::string_view in) {
+vm::CallResult<std::u16string> UTF8toUTF16(
+    vm::Runtime &runtime,
+    std::string_view in) {
   std::u16string out;
   size_t length = in.length();
   out.resize(length);
@@ -31,8 +33,7 @@ vm::CallResult<std::u16string> UTF8toUTF16(vm::Runtime &runtime, std::string_vie
       &targetStart,
       targetEnd,
       llvh::lenientConversion);
-  if (convRes != llvh::ConversionResult::conversionOK)
-  {
+  if (convRes != llvh::ConversionResult::conversionOK) {
     return runtime.raiseRangeError("utf8 to utf16 conversion failed");
   }
   out.resize(reinterpret_cast<char16_t *>(targetStart) - &out[0]);
@@ -40,11 +41,14 @@ vm::CallResult<std::u16string> UTF8toUTF16(vm::Runtime &runtime, std::string_vie
 }
 
 // convert utf16 string to utf8
-vm::CallResult<std::string> UTF16toUTF8(vm::Runtime &runtime, std::u16string in) {
+vm::CallResult<std::string> UTF16toUTF8(
+    vm::Runtime &runtime,
+    std::u16string in) {
   std::string out;
   size_t length = in.length();
   out.resize(length);
-  const llvh::UTF16 *sourceStart = reinterpret_cast<const llvh::UTF16 *>(&in[0]);
+  const llvh::UTF16 *sourceStart =
+      reinterpret_cast<const llvh::UTF16 *>(&in[0]);
   const llvh::UTF16 *sourceEnd = sourceStart + length;
   llvh::UTF8 *targetStart = reinterpret_cast<llvh::UTF8 *>(&out[0]);
   llvh::UTF8 *targetEnd = targetStart + out.size();
@@ -54,8 +58,7 @@ vm::CallResult<std::string> UTF16toUTF8(vm::Runtime &runtime, std::u16string in)
       &targetStart,
       targetEnd,
       llvh::lenientConversion);
-  if (convRes != llvh::ConversionResult::conversionOK)
-  {
+  if (convRes != llvh::ConversionResult::conversionOK) {
     return runtime.raiseRangeError("utf16 to utf8 conversion failed");
   }
   out.resize(reinterpret_cast<char *>(targetStart) - &out[0]);
@@ -73,7 +76,7 @@ vm::CallResult<std::u16string> NormalizeLanguageTag(
   }
 
   auto conversion = UTF16toUTF8(runtime, locale);
-  const char * locale8 = conversion.getValue().c_str();
+  const char *locale8 = conversion.getValue().c_str();
 
   // [Comment from ChakreCore] ICU doesn't have a full-fledged canonicalization
   // implementation that correctly replaces all preferred values and
@@ -88,32 +91,25 @@ vm::CallResult<std::u16string> NormalizeLanguageTag(
   char languageTag[ULOC_FULLNAME_CAPACITY] = {0};
 
   int32_t forLangTagResultLength = uloc_forLanguageTag(
-      locale8,
-      localeID,
-      ULOC_FULLNAME_CAPACITY,
-      &parsedLength,
-      &status);
+      locale8, localeID, ULOC_FULLNAME_CAPACITY, &parsedLength, &status);
   if (forLangTagResultLength < 0 || parsedLength < locale.length() ||
       status == U_ILLEGAL_ARGUMENT_ERROR) {
     return runtime.raiseRangeError(
-        vm::TwineChar16("Invalid language tag: ") +
-        vm::TwineChar16(locale8));
+        vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8));
   }
 
   int32_t canonicalizeResultLength =
       uloc_canonicalize(localeID, fullname, ULOC_FULLNAME_CAPACITY, &status);
   if (canonicalizeResultLength <= 0) {
     return runtime.raiseRangeError(
-        vm::TwineChar16("Invalid language tag: ") +
-        vm::TwineChar16(locale8));
+        vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8));
   }
 
   int32_t toLangTagResultLength = uloc_toLanguageTag(
       fullname, languageTag, ULOC_FULLNAME_CAPACITY, true, &status);
-  if (forLangTagResultLength <= 0) {
+  if (toLangTagResultLength <= 0) {
     return runtime.raiseRangeError(
-        vm::TwineChar16("Invalid language tag: ") +
-        vm::TwineChar16(locale8));
+        vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8));
   }
 
   return UTF8toUTF16(runtime, languageTag);
@@ -140,8 +136,9 @@ vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(
   // 5-7. Let len be ? ToLength(? Get(O, "length")). Let k be 0. Repeat, while k
   // < len
   for (size_t k = 0; k < locales.size(); k++) {
-    // minimal tag validation is done with ICU, ChakraCore\V8 does not do tag validation with
-    // ICU, may be missing needed API 7.c.iii.1 Let tag be kValue[[locale]]
+    // minimal tag validation is done with ICU, ChakraCore\V8 does not do tag
+    // validation with ICU, may be missing needed API 7.c.iii.1 Let tag be
+    // kValue[[locale]]
     std::u16string tag = locales[k];
     // 7.c.vi Let canonicalizedTag be CanonicalizeUnicodeLocaleID(tag)
     auto canonicalizedTag = NormalizeLanguageTag(runtime, tag);
@@ -165,7 +162,8 @@ vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
   return CanonicalizeLocaleList(runtime, locales);
 }
 
-// Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
+// Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 vm::CallResult<std::u16string> toLocaleLowerCase(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
@@ -173,7 +171,8 @@ vm::CallResult<std::u16string> toLocaleLowerCase(
   return std::u16string(u"lowered");
 }
 
-// Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
+// Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 vm::CallResult<std::u16string> toLocaleUpperCase(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
@@ -181,7 +180,8 @@ vm::CallResult<std::u16string> toLocaleUpperCase(
   return std::u16string(u"uppered");
 }
 
-// Collator - Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
+// Collator - Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 struct Collator::Impl {
   std::u16string locale;
 };
@@ -217,7 +217,8 @@ double Collator::compare(
   return x.compare(y);
 }
 
-// DateTimeFormat - Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
+// DateTimeFormat - Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 struct DateTimeFormat::Impl {
   std::u16string locale;
 };
@@ -262,7 +263,8 @@ DateTimeFormat::formatToParts(double jsTimeValue) noexcept {
   return std::vector<std::unordered_map<std::u16string, std::u16string>>{part};
 }
 
-// NumberFormat - Not yet implemented. Tracked by https://github.com/microsoft/hermes-windows/issues/87
+// NumberFormat - Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 struct NumberFormat::Impl {
   std::u16string locale;
 };
