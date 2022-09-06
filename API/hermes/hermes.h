@@ -20,11 +20,6 @@
 #include <jsi/jsi.h>
 #include <unordered_map>
 
-// Patch to avoid Compiler Warning (level 2) C4275
-#ifdef CREATE_SHARED_LIBRARY
-#else
-#define HERMES_EXPORT
-#endif // CREATE_SHARED_LIBRARY
 struct HermesTestHelper;
 
 namespace hermes {
@@ -246,12 +241,6 @@ HERMES_EXPORT std::unique_ptr<jsi::ThreadSafeRuntime>
 makeThreadSafeHermesRuntime(
     const ::hermes::vm::RuntimeConfig &runtimeConfig =
         ::hermes::vm::RuntimeConfig());
-
-#if defined(_WIN32)
-HERMES_EXPORT std::unique_ptr<HermesRuntime> __cdecl makeHermesRuntimeWithWER();
-HERMES_EXPORT void __cdecl hermesCrashHandler(HermesRuntime &runtime, int fd);
-#endif
-
 } // namespace hermes
 } // namespace facebook
 

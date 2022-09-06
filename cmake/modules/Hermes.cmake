@@ -124,6 +124,10 @@ function(hermes_update_compile_flags name)
     endif ()
   endif ()
 
+  if (MSVC)
+    set(flags "${flags} /guard:cf /Qspectre /sdl /ZH:SHA_256")
+  endif()
+
   if (update_src_props)
     foreach (fn ${sources})
       get_filename_component(suf ${fn} EXT)

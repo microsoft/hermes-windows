@@ -223,21 +223,6 @@ void convertUTF16ToUTF8WithSingleSurrogates(
     std::string &dest,
     llvh::ArrayRef<char16_t> input);
 
-/// Return length of UTF-8 string after converting a UTF-16 encoded string \p
-/// input to UTF-8, replacing unpaired surrogates halves with the Unicode
-/// replacement character. The length does not include the terminating '\0'
-/// character.
-size_t utf8LengthWithReplacements(llvh::ArrayRef<char16_t> input);
-
-/// Convert a UTF-16 encoded string \p input to UTF-8 stored in \p buf,
-/// replacing unpaired surrogates halves with the Unicode replacement character.
-/// The terminating '\0' is not written.
-/// \return number of bytes written to \p buf.
-size_t convertUTF16ToUTF8WithReplacements(
-    llvh::ArrayRef<char16_t> input,
-    char *buf,
-    size_t bufSize);
-
 /// Convert a UTF-16 encoded string \p input to UTF-8 stored in \p dest,
 /// replacing unpaired surrogates halves with the Unicode replacement character.
 /// \param maxCharacters If non-zero, the maximum number of characters to

@@ -5,9 +5,13 @@
 
 set(api_sources
   hermes.cpp
-  hermes_napi.cpp 
+  hermes_napi.cpp
   DebuggerAPI.cpp
   )
+
+if (WIN32)
+  list(APPEND api_sources hermes_win.cpp)
+endif()
 
 file(GLOB api_headers ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 file(GLOB api_public_headers ${PROJECT_SOURCE_DIR}/public/hermes/Public/*.h)
