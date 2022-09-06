@@ -9,6 +9,7 @@
 /// \file
 /// ES7 22.2 TypedArray
 //===----------------------------------------------------------------------===//
+
 #include "JSLibInternal.h"
 #include "hermes/VM/JSArrayBuffer.h"
 #include "hermes/VM/JSLib/Sorting.h"
@@ -16,7 +17,11 @@
 #include "hermes/VM/Operations.h"
 #include "hermes/VM/StringBuilder.h"
 #include "hermes/VM/StringView.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -1632,7 +1637,12 @@ typedArrayPrototypeToLocaleString(void *, Runtime &runtime, NativeArgs args) {
     }
     if (auto func = Handle<Callable>::dyn_vmcast(
             runtime.makeHandle(std::move(*propRes)))) {
+#ifdef HERMES_ENABLE_INTL
+      auto callRes = Callable::executeCall2(
+          func, runtime, elementObj, args.getArg(0), args.getArg(1));
+#else
       auto callRes = Callable::executeCall0(func, runtime, elementObj);
+#endif
       if (LLVM_UNLIKELY(callRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }

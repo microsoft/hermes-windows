@@ -17,7 +17,11 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -261,6 +265,12 @@ class GCCell {
 #endif
   }
 
+#ifndef NDEBUG
+  void setDebugAllocationIdInGC(uint32_t id) {
+    _debugAllocationId_ = id;
+  }
+#endif
+
   /// Returns whether the cell's mark bit is set.
   bool isMarked() const {
     return forwardingPointer_.getRaw() & 0x1;
@@ -310,5 +320,6 @@ static const char kInvalidHeapValue = (char)0xcc;
 
 } // namespace vm
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif // HERMES_VM_GCCELL_H

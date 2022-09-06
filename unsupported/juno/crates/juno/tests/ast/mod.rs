@@ -126,6 +126,80 @@ fn test_list_elements() {
     }
 }
 
+/// Tests to ensure that list elements allocated off the free list are valid.
+#[test]
+fn test_list_elements_from_freelist() {
+    let mut ctx = Context::new();
+    // First, allocate a two-element list.
+    {
+        let gc = GCLock::new(&mut ctx);
+        let ast = builder::Program::build_template(
+            &gc,
+            template::Program {
+                metadata: Default::default(),
+                body: NodeList::from_iter(
+                    &gc,
+                    [
+                        builder::NullLiteral::build_template(
+                            &gc,
+                            template::NullLiteral {
+                                metadata: Default::default(),
+                            },
+                        ),
+                        builder::BooleanLiteral::build_template(
+                            &gc,
+                            template::BooleanLiteral {
+                                metadata: Default::default(),
+                                value: false,
+                            },
+                        ),
+                    ],
+                ),
+            },
+        );
+        assert_eq!(node_cast!(Node::Program, ast).body.len(), 2);
+    }
+    // Free both elements.
+    ctx.gc();
+    // Allocate two one-element lists to ensure they both have one element
+    // and the old connection between the two elements was not retained.
+    {
+        let gc = GCLock::new(&mut ctx);
+        let ast = builder::Program::build_template(
+            &gc,
+            template::Program {
+                metadata: Default::default(),
+                body: NodeList::from_iter(
+                    &gc,
+                    [builder::NullLiteral::build_template(
+                        &gc,
+                        template::NullLiteral {
+                            metadata: Default::default(),
+                        },
+                    )],
+                ),
+            },
+        );
+        assert_eq!(node_cast!(Node::Program, ast).body.len(), 1);
+        let ast = builder::Program::build_template(
+            &gc,
+            template::Program {
+                metadata: Default::default(),
+                body: NodeList::from_iter(
+                    &gc,
+                    [builder::NullLiteral::build_template(
+                        &gc,
+                        template::NullLiteral {
+                            metadata: Default::default(),
+                        },
+                    )],
+                ),
+            },
+        );
+        assert_eq!(node_cast!(Node::Program, ast).body.len(), 1);
+    }
+}
+
 #[test]
 #[allow(clippy::float_cmp)]
 fn test_visit() {
@@ -134,45 +208,35 @@ fn test_visit() {
         let gc = GCLock::new(&mut ctx);
         NodeRc::from_node(
             &gc,
-            builder::BlockStatement::build_template(
-                &gc,
-                template::BlockStatement {
-                    metadata: Default::default(),
-                    body: NodeList::from_iter(
-                        &gc,
-                        [
-                            builder::ExpressionStatement::build_template(
-                                &gc,
-                                template::ExpressionStatement {
-                                    metadata: Default::default(),
-                                    expression: builder::NumericLiteral::build_template(
-                                        &gc,
-                                        template::NumericLiteral {
-                                            metadata: Default::default(),
-                                            value: 1.0,
-                                        },
-                                    ),
-                                    directive: None,
-                                },
-                            ),
-                            builder::ExpressionStatement::build_template(
-                                &gc,
-                                template::ExpressionStatement {
-                                    metadata: Default::default(),
-                                    expression: builder::NumericLiteral::build_template(
-                                        &gc,
-                                        template::NumericLiteral {
-                                            metadata: Default::default(),
-                                            value: 2.0,
-                                        },
-                                    ),
-                                    directive: None,
-                                },
-                            ),
-                        ],
-                    ),
-                },
-            ),
+            template::BlockStatement {
+                metadata: Default::default(),
+                body: NodeList::from_iter(
+                    &gc,
+                    [
+                        template::ExpressionStatement {
+                            metadata: Default::default(),
+                            expression: template::NumericLiteral {
+                                metadata: Default::default(),
+                                value: 1.0,
+                            }
+                            .build(&gc),
+                            directive: None,
+                        }
+                        .build(&gc),
+                        template::ExpressionStatement {
+                            metadata: Default::default(),
+                            expression: template::NumericLiteral {
+                                metadata: Default::default(),
+                                value: 2.0,
+                            }
+                            .build(&gc),
+                            directive: None,
+                        }
+                        .build(&gc),
+                    ],
+                ),
+            }
+            .build(&gc),
         )
     };
 
@@ -274,11 +338,7 @@ fn test_visit_mut() {
                 let mut builder = builder::BinaryExpression::from_node(e1);
                 builder.operator(BinaryExpressionOperator::Minus);
                 builder.right(e2);
-                return node.replace_with_new(
-                    builder::Builder::BinaryExpression(builder),
-                    ctx,
-                    self,
-                );
+                return node.replace_with_new(builder.into(), ctx, self);
             }
             node.visit_children_mut(ctx, self)
         }

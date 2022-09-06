@@ -20,7 +20,11 @@
 #include <optional>
 #include <string>
 #include <vector>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace bigint {
 
@@ -277,6 +281,18 @@ asIntN(MutableBigIntRef dst, uint64_t n, ImmutableBigIntRef src);
 int compare(ImmutableBigIntRef lhs, ImmutableBigIntRef rhs);
 int compare(ImmutableBigIntRef lhs, SignedBigIntDigitType rhs);
 
+/// \return Whether \p src can be losslessly trucated to a single
+/// SignedBigIntDigitType (if signedTruncation == true) or BigIntDigitType
+/// (signedTruncation == false) digit.
+bool isSingleDigitTruncationLossless(
+    ImmutableBigIntRef src,
+    bool signedTruncation);
+
+/// \return The first digit in \p src, or 0 if src.numDigits == 0.
+inline BigIntDigitType truncateToSingleDigit(ImmutableBigIntRef src) {
+  return src.numDigits == 0 ? 0 : src.digits[0];
+}
+
 /// \return number of digits needed to perform \p - src
 uint32_t unaryMinusResultSize(ImmutableBigIntRef src);
 
@@ -468,5 +484,6 @@ class UniquingBigIntTable {
 
 } // namespace bigint
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif // HERMES_SUPPORT_BIGINT_H

@@ -29,6 +29,7 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
       std::unique_ptr<llvh::raw_ostream> traceStream);
 
   virtual SynthTrace::ObjectID getUniqueID(const jsi::Object &o) = 0;
+  virtual SynthTrace::ObjectID getUniqueID(const jsi::BigInt &s) = 0;
   virtual SynthTrace::ObjectID getUniqueID(const jsi::String &s) = 0;
   virtual SynthTrace::ObjectID getUniqueID(const jsi::PropNameID &pni) = 0;
   virtual SynthTrace::ObjectID getUniqueID(const jsi::Symbol &sym) = 0;
@@ -46,6 +47,13 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
 
   jsi::Object createObject() override;
   jsi::Object createObject(std::shared_ptr<jsi::HostObject> ho) override;
+
+  // Note that the NativeState methods do not need to be traced since they
+  // cannot be observed in JS.
+
+  jsi::BigInt createBigIntFromInt64(int64_t value) override;
+  jsi::BigInt createBigIntFromUint64(uint64_t value) override;
+  jsi::String bigintToString(const jsi::BigInt &bigint, int radix) override;
 
   jsi::String createStringFromAscii(const char *str, size_t length) override;
   jsi::String createStringFromUtf8(const uint8_t *utf8, size_t length) override;
@@ -82,6 +90,8 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
   jsi::Value lockWeakObject(jsi::WeakObject &wo) override;
 
   jsi::Array createArray(size_t length) override;
+  jsi::ArrayBuffer createArrayBuffer(
+      std::shared_ptr<jsi::MutableBuffer> buffer) override;
 
   size_t size(const jsi::Array &arr) override;
   size_t size(const jsi::ArrayBuffer &buf) override;
@@ -142,22 +152,6 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
 
   SynthTrace::TimeSinceStart getTimeSinceStart() const;
 
-  void insertHostForwarder(const std::vector<const char *> &propertyPath);
-
-  jsi::Function *saveFunction(const std::vector<const char *> &propertyChain);
-
-  void setUpWeakRef();
-
-  void setupDate();
-
-  // This function will traverse the properties defined in propertyPath,
-  // starting from the global object in the given runtime. This function can
-  // optionally skip the last \p skipLastAmt of properties in the given path.
-  static jsi::Object walkPropertyPath(
-      jsi::Runtime &runtime,
-      const std::vector<const char *> &propertyPath,
-      size_t skipLastAmt = 0);
-
   std::unique_ptr<jsi::Runtime> runtime_;
   SynthTrace trace_;
   std::deque<jsi::Function> savedFunctions;
@@ -191,6 +185,9 @@ class TracingHermesRuntime final : public TracingRuntime {
 
   SynthTrace::ObjectID getUniqueID(const jsi::Object &o) override {
     return static_cast<SynthTrace::ObjectID>(hermesRuntime().getUniqueID(o));
+  }
+  SynthTrace::ObjectID getUniqueID(const jsi::BigInt &b) override {
+    return static_cast<SynthTrace::ObjectID>(hermesRuntime().getUniqueID(b));
   }
   SynthTrace::ObjectID getUniqueID(const jsi::String &s) override {
     return static_cast<SynthTrace::ObjectID>(hermesRuntime().getUniqueID(s));

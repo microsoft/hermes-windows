@@ -11,7 +11,11 @@
 #include "hermes/VM/JSDataView.h"
 #include "hermes/VM/JSTypedArray.h"
 #include "hermes/VM/StringPrimitive.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 

@@ -109,7 +109,11 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace llvh {
 class raw_ostream;
 }
@@ -708,5 +712,6 @@ struct SafeNumericEncoder<T, true> {
 
 } // end namespace vm
 } // end namespace hermes
+#pragma GCC diagnostic pop
 
 #endif // HERMES_VM_HERMESVALUE_H

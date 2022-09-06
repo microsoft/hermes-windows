@@ -633,6 +633,17 @@ std::u16string getDefaultHourCycle(NSLocale *locale) {
   return u"h24";
 }
 
+/// Helper to lookup a \p key in a map represented as a sorted array of pairs.
+template <typename K, typename V, size_t N>
+std::optional<V> pairMapLookup(const std::pair<K, V> (&arr)[N], const K &key) {
+  HERMES_SLOW_ASSERT(std::is_sorted(std::begin(arr), std::end(arr)));
+  auto it = llvh::lower_bound(
+      arr, key, [](const auto &a, const K &b) { return a.first < b; });
+  if (it != std::end(arr) && it->first == key)
+    return it->second;
+  return std::nullopt;
+}
+
 template <size_t N, size_t P = 0>
 static constexpr bool isSorted(const std::u16string_view (&v)[N]) {
   if constexpr (P < N - 1) {
@@ -703,6 +714,73 @@ bool isWellFormedUnitIdentifier(std::u16string_view unitIdentifier) {
   return true;
 }
 
+/// Helper to convert from a well-formed unit identifier \p id, to one of the
+/// supported built-in NSUnit types provided by Foundation.
+NSUnit *unitIdentifierToNSUnit(const std::u16string &unitId) {
+  static const std::pair<std::u16string_view, NSUnit *> units[] = {
+    {u"acre", NSUnitArea.acres},
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_13_0
+    {u"bit", NSUnitInformationStorage.bits},
+    {u"byte", NSUnitInformationStorage.bytes},
+#endif
+    {u"celsius", NSUnitTemperature.celsius},
+    {u"centimeter", NSUnitLength.centimeters},
+    {u"degree", NSUnitAngle.degrees},
+    {u"fahrenheit", NSUnitTemperature.fahrenheit},
+    {u"fluid-ounce", NSUnitVolume.fluidOunces},
+    {u"foot", NSUnitLength.feet},
+    {u"gallon", NSUnitVolume.gallons},
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_13_0
+    {u"gigabit", NSUnitInformationStorage.gigabits},
+    {u"gigabyte", NSUnitInformationStorage.gigabytes},
+#endif
+    {u"gram", NSUnitMass.grams},
+    {u"gram-per-liter", NSUnitConcentrationMass.gramsPerLiter},
+    {u"hectare", NSUnitArea.hectares},
+    {u"hour", NSUnitDuration.hours},
+    {u"inch", NSUnitLength.inches},
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_13_0
+    {u"kilobit", NSUnitInformationStorage.kilobits},
+    {u"kilobyte", NSUnitInformationStorage.kilobytes},
+#endif
+    {u"kilogram", NSUnitMass.kilograms},
+    {u"kilometer", NSUnitLength.kilometers},
+    {u"kilometer-per-hour", NSUnitSpeed.kilometersPerHour},
+    {u"liter", NSUnitVolume.liters},
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_13_0
+    {u"megabit", NSUnitInformationStorage.megabits},
+    {u"megabyte", NSUnitInformationStorage.megabytes},
+#endif
+    {u"meter", NSUnitLength.meters},
+    {u"meter-per-second", NSUnitSpeed.metersPerSecond},
+    {u"mile", NSUnitLength.miles},
+    {u"mile-per-gallon", NSUnitFuelEfficiency.milesPerGallon},
+    {u"mile-per-hour", NSUnitSpeed.milesPerHour},
+    {u"mile-scandinavian", NSUnitLength.scandinavianMiles},
+    {u"milliliter", NSUnitVolume.milliliters},
+    {u"millimeter", NSUnitLength.millimeters},
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_13_0
+    {u"millisecond", NSUnitDuration.milliseconds},
+#endif
+    {u"minute", NSUnitDuration.minutes},
+    {u"ounce", NSUnitMass.ounces},
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_13_0
+    {u"petabyte", NSUnitInformationStorage.petabytes},
+#endif
+    {u"pound", NSUnitMass.poundsMass},
+    {u"second", NSUnitDuration.seconds},
+    {u"stone", NSUnitMass.stones},
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_13_0
+    {u"terabit", NSUnitInformationStorage.terabits},
+    {u"terabyte", NSUnitInformationStorage.terabytes},
+#endif
+    {u"yard", NSUnitLength.yards}
+  };
+  if (auto nsUnitOpt = pairMapLookup(units, std::u16string_view(unitId)))
+    return *nsUnitOpt;
+  return [[NSUnit alloc] initWithSymbol:u16StringToNSString(unitId)];
+}
+
 // https://402.ecma-international.org/8.0/#sec-iswellformedcurrencycode
 bool isWellFormedCurrencyCode(std::u16string_view currencyCode) {
   //  1. Let normalized be the result of mapping currency to upper case as
@@ -719,22 +797,9 @@ bool isWellFormedCurrencyCode(std::u16string_view currencyCode) {
   return true;
 }
 
-struct CurrencyInfo {
-  std::u16string_view code;
-  uint8_t digits;
-};
-
-template <size_t N, size_t P = 0>
-static constexpr bool isSorted(const CurrencyInfo (&v)[N]) {
-  if constexpr (P < N - 1) {
-    return v[P].code < v[P + 1].code && isSorted<N, P + 1>(v);
-  }
-  return true;
-}
-
 uint8_t getCurrencyDigits(std::u16string_view code) {
   //  https://en.wikipedia.org/wiki/ISO_4217#Active_codes
-  static constexpr CurrencyInfo currencies[] = {
+  static constexpr std::pair<std::u16string_view, uint8_t> currencies[] = {
       {u"BHD", 3}, {u"BIF", 0}, {u"CLF", 4}, {u"CLP", 0}, {u"DJF", 0},
       {u"GNF", 0}, {u"IQD", 3}, {u"ISK", 0}, {u"JOD", 3}, {u"JPY", 0},
       {u"KMF", 0}, {u"KRW", 0}, {u"KWD", 3}, {u"LYD", 3}, {u"OMR", 3},
@@ -744,11 +809,9 @@ uint8_t getCurrencyDigits(std::u16string_view code) {
   //  1. If the ISO 4217 currency and funds code list contains currency as an
   //  alphabetic code, return the minor unit value corresponding to the currency
   //  from the list; otherwise, return 2.
-  static_assert(isSorted(currencies), "keep currencies sorted by their code");
-  auto it = llvh::lower_bound(currencies, code, [](auto currency, auto toFind) {
-    return currency.code < toFind;
-  });
-  return (it != std::end(currencies) && it->code == code) ? it->digits : 2;
+  if (auto digitsOpt = pairMapLookup(currencies, code))
+    return *digitsOpt;
+  return 2;
 }
 }
 
@@ -811,20 +874,35 @@ vm::CallResult<std::u16string> toLocaleUpperCase(
       uppercaseStringWithLocale:[[NSLocale alloc] initWithLocaleIdentifier:L]]);
 }
 
-struct Collator::Impl {
-  NSLocale *nsLocale;
-  NSStringCompareOptions nsCompareOptions;
-  std::u16string locale;
-  std::u16string usage;
-  std::u16string collation;
-  std::u16string caseFirst;
-  std::u16string sensitivity;
-  bool numeric;
-  bool ignorePunctuation;
-};
+namespace {
+class CollatorApple : public Collator {
+ public:
+  CollatorApple() = default;
 
-Collator::Collator() : impl_(std::make_unique<Impl>()) {}
-Collator::~Collator() {}
+  vm::ExecutionStatus initialize(
+      vm::Runtime &runtime,
+      const std::vector<std::u16string> &locales,
+      const Options &options) noexcept;
+
+  Options resolvedOptions() noexcept;
+
+  double compare(const std::u16string &x, const std::u16string &y) noexcept;
+
+ private:
+  NSLocale *nsLocale_;
+  NSStringCompareOptions nsCompareOptions_;
+  std::u16string locale_;
+  std::u16string usage_;
+  std::u16string collation_;
+  std::u16string caseFirst_;
+  std::u16string sensitivity_;
+  bool numeric_;
+  bool ignorePunctuation_;
+};
+} // namespace
+
+Collator::Collator() = default;
+Collator::~Collator() = default;
 
 /// https://402.ecma-international.org/8.0/#sec-intl.collator.supportedlocalesof
 vm::CallResult<std::vector<std::u16string>> Collator::supportedLocalesOf(
@@ -842,7 +920,7 @@ vm::CallResult<std::vector<std::u16string>> Collator::supportedLocalesOf(
 }
 
 /// https://402.ecma-international.org/8.0/#sec-initializecollator
-vm::ExecutionStatus Collator::initialize(
+vm::ExecutionStatus CollatorApple::initialize(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
@@ -859,7 +937,7 @@ vm::ExecutionStatus Collator::initialize(
   if (LLVM_UNLIKELY(usageRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
   // 4. Set collator.[[Usage]] to usage.
-  impl_->usage = std::move(**usageRes);
+  usage_ = std::move(**usageRes);
   // 5. If usage is "sort", then
   // a. Let localeData be %Collator%.[[SortLocaleData]].
   // 6. Else,
@@ -920,30 +998,30 @@ vm::ExecutionStatus Collator::initialize(
   auto r = resolveLocale(
       getAvailableLocales(), *requestedLocalesRes, opt, relevantExtensionKeys);
   // 20. Set collator.[[Locale]] to r.[[locale]].
-  impl_->locale = std::move(r.locale);
+  locale_ = std::move(r.locale);
   // 21. Let collation be r.[[co]].
   auto coIt = r.extensions.find(u"co");
   // 22. If collation is null, let collation be "default".
   // 23. Set collator.[[Collation]] to collation.
   if (coIt == r.extensions.end())
-    impl_->collation = u"default";
+    collation_ = u"default";
   else
-    impl_->collation = std::move(coIt->second);
+    collation_ = std::move(coIt->second);
   // 24. If relevantExtensionKeys contains "kn", then
   // a. Set collator.[[Numeric]] to ! SameValue(r.[[kn]], "true").
   auto knIt = r.extensions.find(u"kn");
   if (knIt == r.extensions.end())
-    impl_->numeric = false;
+    numeric_ = false;
   else
-    impl_->numeric = (knIt->second == u"true");
+    numeric_ = (knIt->second == u"true");
 
   // 25. If relevantExtensionKeys contains "kf", then
   // a. Set collator.[[CaseFirst]] to r.[[kf]].
   auto kfIt = r.extensions.find(u"kf");
   if (kfIt == r.extensions.end())
-    impl_->caseFirst = u"false";
+    caseFirst_ = u"false";
   else
-    impl_->caseFirst = kfIt->second;
+    caseFirst_ = kfIt->second;
 
   // 26. Let sensitivity be ? GetOption(options, "sensitivity", "string", «
   // "base", "accent", "case", "variant" », undefined).
@@ -962,65 +1040,82 @@ vm::ExecutionStatus Collator::initialize(
   // iii. Let sensitivity be dataLocaleData.[[sensitivity]].
   // 28. Set collator.[[Sensitivity]] to sensitivity.
   if (auto &sensitivityOpt = *sensitivityRes)
-    impl_->sensitivity = std::move(*sensitivityOpt);
+    sensitivity_ = std::move(*sensitivityOpt);
   else
-    impl_->sensitivity = u"variant";
+    sensitivity_ = u"variant";
 
   // 29. Let ignorePunctuation be ? GetOption(options, "ignorePunctuation",
   // "boolean", undefined,false).
   auto ignorePunctuationOpt =
       getOptionBool(runtime, options, u"ignorePunctuation", false);
   // 30. Set collator.[[IgnorePunctuation]] to ignorePunctuation.
-  impl_->ignorePunctuation = *ignorePunctuationOpt;
+  ignorePunctuation_ = *ignorePunctuationOpt;
 
   // Set up the state for calling into Obj-C APIs.
   NSStringCompareOptions cmpOpts = 0;
-  if (impl_->numeric)
+  if (numeric_)
     cmpOpts |= NSNumericSearch;
-  if (impl_->sensitivity == u"base")
+  if (sensitivity_ == u"base")
     cmpOpts |= (NSDiacriticInsensitiveSearch | NSCaseInsensitiveSearch);
-  else if (impl_->sensitivity == u"accent")
+  else if (sensitivity_ == u"accent")
     cmpOpts |= NSCaseInsensitiveSearch;
-  else if (impl_->sensitivity == u"case")
+  else if (sensitivity_ == u"case")
     cmpOpts |= NSDiacriticInsensitiveSearch;
-  impl_->nsCompareOptions = cmpOpts;
+  nsCompareOptions_ = cmpOpts;
 
   std::u16string nsLocaleExtensions;
-  if (impl_->collation != u"default")
-    nsLocaleExtensions.append(u"-co-").append(impl_->collation);
-  else if (impl_->usage == u"search")
+  if (collation_ != u"default")
+    nsLocaleExtensions.append(u"-co-").append(collation_);
+  else if (usage_ == u"search")
     nsLocaleExtensions.append(u"-co-search");
-  if (impl_->caseFirst != u"false")
-    nsLocaleExtensions.append(u"-kf-").append(impl_->caseFirst);
+  if (caseFirst_ != u"false")
+    nsLocaleExtensions.append(u"-kf-").append(caseFirst_);
   auto nsLocaleIdentifier = r.dataLocale;
   if (!nsLocaleExtensions.empty())
     nsLocaleIdentifier.append(u"-u").append(nsLocaleExtensions);
-  impl_->nsLocale = [NSLocale
+  nsLocale_ = [NSLocale
       localeWithLocaleIdentifier:u16StringToNSString(nsLocaleIdentifier)];
   // 31. Return collator.
   return vm::ExecutionStatus::RETURNED;
 }
 
+vm::CallResult<std::unique_ptr<Collator>> Collator::create(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const Options &options) noexcept {
+  auto instance = std::make_unique<CollatorApple>();
+  if (LLVM_UNLIKELY(
+          instance->initialize(runtime, locales, options) ==
+          vm::ExecutionStatus::EXCEPTION)) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  return instance;
+}
+
 /// https://402.ecma-international.org/8.0/#sec-intl.collator.prototype.resolvedoptions
-Options Collator::resolvedOptions() noexcept {
+Options CollatorApple::resolvedOptions() noexcept {
   Options options;
-  options.emplace(u"locale", Option(impl_->locale));
-  options.emplace(u"usage", Option(impl_->usage));
-  options.emplace(u"sensitivity", Option(impl_->sensitivity));
-  options.emplace(u"ignorePunctuation", Option(impl_->ignorePunctuation));
-  options.emplace(u"collation", Option(impl_->collation));
-  options.emplace(u"numeric", Option(impl_->numeric));
-  options.emplace(u"caseFirst", Option(impl_->caseFirst));
+  options.emplace(u"locale", Option(locale_));
+  options.emplace(u"usage", Option(usage_));
+  options.emplace(u"sensitivity", Option(sensitivity_));
+  options.emplace(u"ignorePunctuation", Option(ignorePunctuation_));
+  options.emplace(u"collation", Option(collation_));
+  options.emplace(u"numeric", Option(numeric_));
+  options.emplace(u"caseFirst", Option(caseFirst_));
   return options;
 }
 
+Options Collator::resolvedOptions() noexcept {
+  return static_cast<CollatorApple *>(this)->resolvedOptions();
+}
+
 /// https://402.ecma-international.org/8.0/#sec-intl.collator.prototype.compare
-double Collator::compare(
+double CollatorApple::compare(
     const std::u16string &x,
     const std::u16string &y) noexcept {
   NSString *nsX = u16StringToNSString(x);
   NSString *nsY = u16StringToNSString(y);
-  if (impl_->ignorePunctuation) {
+  if (ignorePunctuation_) {
     // Unfortunately, NSLocale does not provide a way to specify alternate
     // handling, so we simulate it by manually stripping punctuation and
     // whitespace.
@@ -1038,14 +1133,38 @@ double Collator::compare(
     nsY = removePunctuation(nsY);
   }
   return [nsX compare:nsY
-              options:impl_->nsCompareOptions
+              options:nsCompareOptions_
                 range:NSMakeRange(0, nsX.length)
-               locale:impl_->nsLocale];
+               locale:nsLocale_];
 }
 
+double Collator::compare(
+    const std::u16string &x,
+    const std::u16string &y) noexcept {
+  return static_cast<CollatorApple *>(this)->compare(x, y);
+}
+
+namespace {
 // Implementation of
 // https://402.ecma-international.org/8.0/#datetimeformat-objects
-struct DateTimeFormat::Impl {
+class DateTimeFormatApple : public DateTimeFormat {
+ public:
+  DateTimeFormatApple() = default;
+
+  vm::ExecutionStatus initialize(
+      vm::Runtime &runtime,
+      const std::vector<std::u16string> &locales,
+      const Options &inputOptions) noexcept;
+
+  Options resolvedOptions() noexcept;
+
+  std::u16string format(double jsTimeValue) noexcept;
+
+  std::vector<Part> formatToParts(double x) noexcept;
+
+ private:
+  void initializeNSDateFormatter() noexcept;
+
   // https://402.ecma-international.org/8.0/#sec-properties-of-intl-datetimeformat-instances
   // Intl.DateTimeFormat instances have an [[InitializedDateTimeFormat]]
   // internal slot.
@@ -1054,10 +1173,10 @@ struct DateTimeFormat::Impl {
   // slots that are computed by the constructor:
   // [[Locale]] is a String value with the language tag of the locale whose
   // localization is used for formatting.
-  std::u16string locale;
+  std::u16string locale_;
   // [[Calendar]] is a String value with the "type" given in Unicode Technical
   // Standard 35 for the calendar used for formatting.
-  std::optional<std::u16string> calendar;
+  std::optional<std::u16string> calendar_;
   // [[NumberingSystem]] is a String value with the "type" given in Unicode
   // Technical Standard 35 for the numbering system used for formatting.
   // NOTE: Even though NSDateFormatter formats date and time using different
@@ -1066,37 +1185,37 @@ struct DateTimeFormat::Impl {
   // unsupported.
   // [[TimeZone]] is a String value with the IANA time zone name of the time
   // zone used for formatting.
-  std::u16string timeZone;
+  std::u16string timeZone_;
   // [[Weekday]], [[Era]], [[Year]], [[Month]], [[Day]], [[DayPeriod]],
   // [[Hour]], [[Minute]], [[Second]], [[TimeZoneName]] are each either
   // undefined, indicating that the component is not used for formatting, or one
   // of the String values given in Table 4, indicating how the component should
   // be presented in the formatted output.
-  std::optional<std::u16string> weekday;
-  std::optional<std::u16string> era;
-  std::optional<std::u16string> year;
-  std::optional<std::u16string> month;
-  std::optional<std::u16string> day;
-  std::optional<std::u16string> dayPeriod;
-  std::optional<std::u16string> hour;
-  std::optional<std::u16string> minute;
-  std::optional<std::u16string> second;
-  std::optional<std::u16string> timeZoneName;
+  std::optional<std::u16string> weekday_;
+  std::optional<std::u16string> era_;
+  std::optional<std::u16string> year_;
+  std::optional<std::u16string> month_;
+  std::optional<std::u16string> day_;
+  std::optional<std::u16string> dayPeriod_;
+  std::optional<std::u16string> hour_;
+  std::optional<std::u16string> minute_;
+  std::optional<std::u16string> second_;
+  std::optional<std::u16string> timeZoneName_;
   // [[FractionalSecondDigits]] is either undefined or a positive, non-zero
   // integer Number value indicating the fraction digits to be used for
   // fractional seconds. Numbers will be rounded or padded with trailing zeroes
   // if necessary.
-  std::optional<uint8_t> fractionalSecondDigits;
+  std::optional<uint8_t> fractionalSecondDigits_;
   // [[HourCycle]] is a String value indicating whether the 12-hour format
   // ("h11", "h12") or the 24-hour format ("h23", "h24") should be used. "h11"
   // and "h23" start with hour 0 and go up to 11 and 23 respectively. "h12" and
   // "h24" start with hour 1 and go up to 12 and 24. [[HourCycle]] is only used
   // when [[Hour]] is not undefined.
-  std::optional<std::u16string> hourCycle;
+  std::optional<std::u16string> hourCycle_;
   // [[DateStyle]], [[TimeStyle]] are each either undefined, or a String value
   // with values "full", "long", "medium", or "short".
-  std::optional<std::u16string> dateStyle;
-  std::optional<std::u16string> timeStyle;
+  std::optional<std::u16string> dateStyle_;
+  std::optional<std::u16string> timeStyle_;
   // [[Pattern]] is a String value as described in 11.3.3.
   // [[RangePatterns]] is a Record as described in 11.3.3.
   // Finally, Intl.DateTimeFormat instances have a [[BoundFormat]]
@@ -1104,11 +1223,12 @@ struct DateTimeFormat::Impl {
   // (11.4.3).
   // NOTE: Pattern and RangePatterns are not implemented. BoundFormat is
   // implemented in Intl.cpp.
-  NSDateFormatter *getNSDateFormatter() noexcept;
+  NSDateFormatter *nsDateFormatter_;
 };
+} // namespace
 
-DateTimeFormat::DateTimeFormat() : impl_(std::make_unique<Impl>()) {}
-DateTimeFormat::~DateTimeFormat() {}
+DateTimeFormat::DateTimeFormat() = default;
+DateTimeFormat::~DateTimeFormat() = default;
 
 // Implementation of
 // https://402.ecma-international.org/8.0/#sec-intl.datetimeformat.supportedlocalesof
@@ -1126,7 +1246,7 @@ vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
 
 // Implementation of
 // https://402.ecma-international.org/8.0/#sec-initializedatetimeformat
-vm::ExecutionStatus DateTimeFormat::initialize(
+vm::ExecutionStatus DateTimeFormatApple::initialize(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &inputOptions) noexcept {
@@ -1211,16 +1331,16 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   auto r = resolveLocale(
       getAvailableLocales(), *requestedLocalesRes, opt, relevantExtensionKeys);
   // 18. Set dateTimeFormat.[[Locale]] to r.[[locale]].
-  impl_->locale = std::move(r.locale);
+  locale_ = std::move(r.locale);
   // 19. Let calendar be r.[[ca]].
   auto caIt = r.extensions.find(u"ca");
   // 20. Set dateTimeFormat.[[Calendar]] to calendar.
   if (caIt != r.extensions.end())
-    impl_->calendar = std::move(caIt->second);
+    calendar_ = std::move(caIt->second);
   // 21. Set dateTimeFormat.[[HourCycle]] to r.[[hc]].
   auto hcIt = r.extensions.find(u"hc");
   if (hcIt != r.extensions.end())
-    impl_->hourCycle = std::move(hcIt->second);
+    hourCycle_ = std::move(hcIt->second);
   // 22. Set dateTimeFormat.[[NumberingSystem]] to r.[[nu]].
   // 23. Let dataLocale be r.[[dataLocale]].
   auto dataLocale = r.dataLocale;
@@ -1244,7 +1364,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
     timeZone = canonicalizeTimeZoneName(timeZone);
   }
   // 27. Set dateTimeFormat.[[TimeZone]] to timeZone.
-  impl_->timeZone = timeZone;
+  timeZone_ = timeZone;
   // 28. Let opt be a new Record.
   // 29. For each row of Table 4, except the header row, in table order, do
   // a. Let prop be the name given in the Property column of the row.
@@ -1268,7 +1388,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (LLVM_UNLIKELY(dateStyleRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
   // 33. Set dateTimeFormat.[[DateStyle]] to dateStyle.
-  impl_->dateStyle = *dateStyleRes;
+  dateStyle_ = *dateStyleRes;
   // 34. Let timeStyle be ? GetOption(options, "timeStyle", "string", « "full",
   // "long", "medium", "short" », undefined).
   static constexpr std::u16string_view timeStyles[] = {
@@ -1278,7 +1398,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (LLVM_UNLIKELY(timeStyleRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
   // 35. Set dateTimeFormat.[[TimeStyle]] to timeStyle.
-  impl_->timeStyle = *timeStyleRes;
+  timeStyle_ = *timeStyleRes;
 
   // Initialize properties using values from the input options.
   static constexpr std::u16string_view weekdayValues[] = {
@@ -1287,21 +1407,21 @@ vm::ExecutionStatus DateTimeFormat::initialize(
       getOptionString(runtime, inputOptions, u"weekday", weekdayValues, {});
   if (LLVM_UNLIKELY(weekdayRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->weekday = *weekdayRes;
+  weekday_ = *weekdayRes;
 
   static constexpr std::u16string_view eraValues[] = {
       u"narrow", u"short", u"long"};
   auto eraRes = getOptionString(runtime, inputOptions, u"era", eraValues, {});
   if (LLVM_UNLIKELY(eraRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->era = *eraRes;
+  era_ = *eraRes;
 
   static constexpr std::u16string_view yearValues[] = {u"2-digit", u"numeric"};
   auto yearRes =
       getOptionString(runtime, inputOptions, u"year", yearValues, {});
   if (LLVM_UNLIKELY(yearRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->year = *yearRes;
+  year_ = *yearRes;
 
   static constexpr std::u16string_view monthValues[] = {
       u"2-digit", u"numeric", u"narrow", u"short", u"long"};
@@ -1309,13 +1429,13 @@ vm::ExecutionStatus DateTimeFormat::initialize(
       getOptionString(runtime, inputOptions, u"month", monthValues, {});
   if (LLVM_UNLIKELY(monthRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->month = *monthRes;
+  month_ = *monthRes;
 
   static constexpr std::u16string_view dayValues[] = {u"2-digit", u"numeric"};
   auto dayRes = getOptionString(runtime, inputOptions, u"day", dayValues, {});
   if (LLVM_UNLIKELY(dayRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->day = *dayRes;
+  day_ = *dayRes;
 
   static constexpr std::u16string_view dayPeriodValues[] = {
       u"narrow", u"short", u"long"};
@@ -1323,14 +1443,14 @@ vm::ExecutionStatus DateTimeFormat::initialize(
       getOptionString(runtime, inputOptions, u"dayPeriod", dayPeriodValues, {});
   if (LLVM_UNLIKELY(dayPeriodRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->dayPeriod = *dayPeriodRes;
+  dayPeriod_ = *dayPeriodRes;
 
   static constexpr std::u16string_view hourValues[] = {u"2-digit", u"numeric"};
   auto hourRes =
       getOptionString(runtime, inputOptions, u"hour", hourValues, {});
   if (LLVM_UNLIKELY(hourRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->hour = *hourRes;
+  hour_ = *hourRes;
 
   static constexpr std::u16string_view minuteValues[] = {
       u"2-digit", u"numeric"};
@@ -1338,7 +1458,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
       getOptionString(runtime, inputOptions, u"minute", minuteValues, {});
   if (LLVM_UNLIKELY(minuteRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->minute = *minuteRes;
+  minute_ = *minuteRes;
 
   static constexpr std::u16string_view secondValues[] = {
       u"2-digit", u"numeric"};
@@ -1346,14 +1466,14 @@ vm::ExecutionStatus DateTimeFormat::initialize(
       getOptionString(runtime, inputOptions, u"second", secondValues, {});
   if (LLVM_UNLIKELY(secondRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->second = *secondRes;
+  second_ = *secondRes;
 
   auto fractionalSecondDigitsRes = getNumberOption(
       runtime, inputOptions, u"fractionalSecondDigits", 1, 3, {});
   if (LLVM_UNLIKELY(
           fractionalSecondDigitsRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->fractionalSecondDigits = *fractionalSecondDigitsRes;
+  fractionalSecondDigits_ = *fractionalSecondDigitsRes;
 
   // NOTE: "shortOffset", "longOffset", "shortGeneric", "longGeneric"
   // are specified here:
@@ -1371,7 +1491,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
       runtime, inputOptions, u"timeZoneName", timeZoneNameValues, {});
   if (LLVM_UNLIKELY(timeZoneNameRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
-  impl_->timeZoneName = *timeZoneNameRes;
+  timeZoneName_ = *timeZoneNameRes;
   // NOTE: We don't have access to localeData, instead we'll defer to NSLocale
   // wherever it is needed.
   // 36. If dateStyle is not undefined or timeStyle is not undefined, then
@@ -1397,9 +1517,9 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   // ii. Set dateTimeFormat's internal slot whose name is the Internal
   // Slot column of the row to p.
   // 39. If dateTimeFormat.[[Hour]] is undefined, then
-  if (!impl_->hour.has_value()) {
+  if (!hour_.has_value()) {
     // a. Set dateTimeFormat.[[HourCycle]] to undefined.
-    impl_->hourCycle = std::nullopt;
+    hourCycle_ = std::nullopt;
     // b. Let pattern be bestFormat.[[pattern]].
     // c. Let rangePatterns be bestFormat.[[rangePatterns]].
     // 40. Else,
@@ -1407,7 +1527,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
     // a. Let hcDefault be dataLocaleData.[[hourCycle]].
     auto hcDefault = getDefaultHourCycle(localeData);
     // b. Let hc be dateTimeFormat.[[HourCycle]].
-    auto hc = impl_->hourCycle;
+    auto hc = hourCycle_;
     // c. If hc is null, then
     if (!hc.has_value())
       // i. Set hc to hcDefault.
@@ -1440,7 +1560,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
       }
     }
     // e. Set dateTimeFormat.[[HourCycle]] to hc.
-    impl_->hourCycle = hc;
+    hourCycle_ = hc;
     // f. If dateTimeformat.[[HourCycle]] is "h11" or "h12", then
     // i. Let pattern be bestFormat.[[pattern12]].
     // ii. Let rangePatterns be bestFormat.[[rangePatterns12]].
@@ -1451,244 +1571,180 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   // 41. Set dateTimeFormat.[[Pattern]] to pattern.
   // 42. Set dateTimeFormat.[[RangePatterns]] to rangePatterns.
   // 43. Return dateTimeFormat.
+  initializeNSDateFormatter();
   return vm::ExecutionStatus::RETURNED;
 }
+
+vm::CallResult<std::unique_ptr<DateTimeFormat>> DateTimeFormat::create(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const Options &inputOptions) noexcept {
+  auto instance = std::make_unique<DateTimeFormatApple>();
+  if (LLVM_UNLIKELY(
+          instance->initialize(runtime, locales, inputOptions) ==
+          vm::ExecutionStatus::EXCEPTION)) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  return instance;
+}
+
 // Implementer note: This method corresponds roughly to
 // https://402.ecma-international.org/8.0/#sec-intl.datetimeformat.prototype.resolvedoptions
-Options DateTimeFormat::resolvedOptions() noexcept {
+Options DateTimeFormatApple::resolvedOptions() noexcept {
   Options options;
-  options.emplace(u"locale", Option(impl_->locale));
-  options.emplace(u"timeZone", Option(impl_->timeZone));
-  if (impl_->calendar)
-    options.emplace(u"calendar", Option(*impl_->calendar));
-  if (impl_->hourCycle.has_value()) {
-    options.emplace(u"hourCycle", *impl_->hourCycle);
-    options.emplace(
-        u"hour12", impl_->hourCycle == u"h11" || impl_->hourCycle == u"h12");
+  options.emplace(u"locale", Option(locale_));
+  options.emplace(u"timeZone", Option(timeZone_));
+  if (calendar_)
+    options.emplace(u"calendar", Option(*calendar_));
+  if (hourCycle_.has_value()) {
+    options.emplace(u"hourCycle", *hourCycle_);
+    options.emplace(u"hour12", hourCycle_ == u"h11" || hourCycle_ == u"h12");
   }
-  if (impl_->weekday.has_value())
-    options.emplace(u"weekday", *impl_->weekday);
-  if (impl_->era.has_value())
-    options.emplace(u"era", *impl_->era);
-  if (impl_->year.has_value())
-    options.emplace(u"year", *impl_->year);
-  if (impl_->month.has_value())
-    options.emplace(u"month", *impl_->month);
-  if (impl_->day.has_value())
-    options.emplace(u"day", *impl_->day);
-  if (impl_->hour.has_value())
-    options.emplace(u"hour", *impl_->hour);
-  if (impl_->minute.has_value())
-    options.emplace(u"minute", *impl_->minute);
-  if (impl_->second.has_value())
-    options.emplace(u"second", *impl_->second);
-  if (impl_->timeZoneName.has_value())
-    options.emplace(u"timeZoneName", *impl_->timeZoneName);
-  if (impl_->dateStyle.has_value())
-    options.emplace(u"dateStyle", *impl_->dateStyle);
-  if (impl_->timeStyle.has_value())
-    options.emplace(u"timeStyle", *impl_->timeStyle);
+  if (weekday_.has_value())
+    options.emplace(u"weekday", *weekday_);
+  if (era_.has_value())
+    options.emplace(u"era", *era_);
+  if (year_.has_value())
+    options.emplace(u"year", *year_);
+  if (month_.has_value())
+    options.emplace(u"month", *month_);
+  if (day_.has_value())
+    options.emplace(u"day", *day_);
+  if (hour_.has_value())
+    options.emplace(u"hour", *hour_);
+  if (minute_.has_value())
+    options.emplace(u"minute", *minute_);
+  if (second_.has_value())
+    options.emplace(u"second", *second_);
+  if (timeZoneName_.has_value())
+    options.emplace(u"timeZoneName", *timeZoneName_);
+  if (dateStyle_.has_value())
+    options.emplace(u"dateStyle", *dateStyle_);
+  if (timeStyle_.has_value())
+    options.emplace(u"timeStyle", *timeStyle_);
   return options;
 }
 
-enum enum_string {
-  eLong,
-  eShort,
-  eNarrow,
-  eMedium,
-  eFull,
-  eBasic,
-  eBestFit,
-  eNumeric,
-  eTwoDigit,
-  eShortOffset,
-  eLongOffset,
-  eShortGeneric,
-  eLongGeneric,
-  eNull
-};
-static enum_string formatDate(std::u16string const &inString) {
-  if (inString == u"long")
-    return eLong;
-  if (inString == u"short")
-    return eShort;
-  if (inString == u"narrow")
-    return eNarrow;
-  if (inString == u"medium")
-    return eMedium;
-  if (inString == u"full")
-    return eFull;
-  if (inString == u"basic")
-    return eBasic;
-  if (inString == u"best fit")
-    return eBestFit;
-  if (inString == u"numeric")
-    return eNumeric;
-  if (inString == u"2-digit")
-    return eTwoDigit;
-  if (inString == u"shortOffset")
-    return eShortOffset;
-  if (inString == u"longOffset")
-    return eLongOffset;
-  if (inString == u"shortGeneric")
-    return eShortGeneric;
-  if (inString == u"longGeneric")
-    return eLongGeneric;
-  return eNull;
-};
+Options DateTimeFormat::resolvedOptions() noexcept {
+  return static_cast<DateTimeFormatApple *>(this)->resolvedOptions();
+}
 
-NSDateFormatter *DateTimeFormat::Impl::getNSDateFormatter() noexcept {
-  NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
-  if (timeStyle.has_value()) {
-    switch (formatDate(*timeStyle)) {
-      case eFull:
-        dateFormatter.timeStyle = NSDateFormatterFullStyle;
-        break;
-      case eLong:
-        dateFormatter.timeStyle = NSDateFormatterLongStyle;
-        break;
-      case eMedium:
-        dateFormatter.timeStyle = NSDateFormatterMediumStyle;
-        break;
-      case eShort:
-        dateFormatter.timeStyle = NSDateFormatterShortStyle;
-        break;
-      default:
-        dateFormatter.timeStyle = NSDateFormatterShortStyle;
+void DateTimeFormatApple::initializeNSDateFormatter() noexcept {
+  static constexpr std::u16string_view kLong = u"long", kShort = u"short",
+                                       kNarrow = u"narrow", kMedium = u"medium",
+                                       kFull = u"full", kNumeric = u"numeric",
+                                       kTwoDigit = u"2-digit",
+                                       kShortOffset = u"shortOffset",
+                                       kLongOffset = u"longOffset",
+                                       kShortGeneric = u"shortGeneric",
+                                       kLongGeneric = u"longGeneric";
+
+  nsDateFormatter_ = [[NSDateFormatter alloc] init];
+  if (timeStyle_.has_value()) {
+    if (*timeStyle_ == kFull) {
+      nsDateFormatter_.timeStyle = NSDateFormatterFullStyle;
+    } else if (*timeStyle_ == kLong) {
+      nsDateFormatter_.timeStyle = NSDateFormatterLongStyle;
+    } else if (*timeStyle_ == kMedium) {
+      nsDateFormatter_.timeStyle = NSDateFormatterMediumStyle;
+    } else {
+      assert(*timeStyle_ == kShort && "No other valid timeStyle.");
+      nsDateFormatter_.timeStyle = NSDateFormatterShortStyle;
     }
   }
-  if (dateStyle.has_value()) {
-    switch (formatDate(*dateStyle)) {
-      case eFull:
-        dateFormatter.dateStyle = NSDateFormatterFullStyle;
-        break;
-      case eLong:
-        dateFormatter.dateStyle = NSDateFormatterLongStyle;
-        break;
-      case eMedium:
-        dateFormatter.dateStyle = NSDateFormatterMediumStyle;
-        break;
-      case eShort:
-        dateFormatter.dateStyle = NSDateFormatterShortStyle;
-        break;
-      default:
-        dateFormatter.dateStyle = NSDateFormatterShortStyle;
+  if (dateStyle_.has_value()) {
+    if (*dateStyle_ == kFull) {
+      nsDateFormatter_.dateStyle = NSDateFormatterFullStyle;
+    } else if (*dateStyle_ == kLong) {
+      nsDateFormatter_.dateStyle = NSDateFormatterLongStyle;
+    } else if (*dateStyle_ == kMedium) {
+      nsDateFormatter_.dateStyle = NSDateFormatterMediumStyle;
+    } else {
+      assert(*dateStyle_ == kShort && "No other valid dateStyle.");
+      nsDateFormatter_.dateStyle = NSDateFormatterShortStyle;
     }
   }
-  dateFormatter.timeZone =
-      [[NSTimeZone alloc] initWithName:u16StringToNSString(timeZone)];
-  dateFormatter.locale =
-      [[NSLocale alloc] initWithLocaleIdentifier:u16StringToNSString(locale)];
-  if (calendar)
-    dateFormatter.calendar = [[NSCalendar alloc]
-        initWithCalendarIdentifier:u16StringToNSString(*calendar)];
-  if (timeStyle.has_value() || dateStyle.has_value())
-    return dateFormatter;
+  nsDateFormatter_.timeZone =
+      [[NSTimeZone alloc] initWithName:u16StringToNSString(timeZone_)];
+  nsDateFormatter_.locale =
+      [[NSLocale alloc] initWithLocaleIdentifier:u16StringToNSString(locale_)];
+  if (calendar_)
+    nsDateFormatter_.calendar = [[NSCalendar alloc]
+        initWithCalendarIdentifier:u16StringToNSString(*calendar_)];
+  if (timeStyle_.has_value() || dateStyle_.has_value())
+    return;
   // The following options cannot be used in conjunction with timeStyle or
   // dateStyle
   // Form a custom format string It will be reordered according to
   // locale later
   NSMutableString *customFormattedDate = [[NSMutableString alloc] init];
-  if (timeZoneName.has_value()) {
-    switch (formatDate(*timeZoneName)) {
-      case eShort:
-        [customFormattedDate appendString:@"z"];
-        break;
-      case eLong:
-        [customFormattedDate appendString:@"zzzz"];
-        break;
-      case eShortOffset:
-        [customFormattedDate appendString:@"O"];
-        break;
-      case eLongOffset:
-        [customFormattedDate appendString:@"OOOO"];
-        break;
-      case eShortGeneric:
-        [customFormattedDate appendString:@"v"];
-        break;
-      case eLongGeneric:
-        [customFormattedDate appendString:@"vvvv"];
-        break;
-      default:
-        [customFormattedDate appendString:@"z"];
+  if (timeZoneName_.has_value()) {
+    if (*timeZoneName_ == kShort) {
+      [customFormattedDate appendString:@"z"];
+    } else if (*timeZoneName_ == kLong) {
+      [customFormattedDate appendString:@"zzzz"];
+    } else if (*timeZoneName_ == kShortOffset) {
+      [customFormattedDate appendString:@"O"];
+    } else if (*timeZoneName_ == kLongOffset) {
+      [customFormattedDate appendString:@"OOOO"];
+    } else if (*timeZoneName_ == kShortGeneric) {
+      [customFormattedDate appendString:@"v"];
+    } else {
+      assert(*timeZoneName_ == kLongGeneric && "No other valid timeZoneName");
+      [customFormattedDate appendString:@"vvvv"];
     }
   }
-  if (era.has_value()) {
-    switch (formatDate(*era)) {
-      case eNarrow:
-        [customFormattedDate appendString:@"GGGGG"];
-        break;
-      case eShort:
-        [customFormattedDate appendString:@"G"];
-        break;
-      case eLong:
-        [customFormattedDate appendString:@"GGGG"];
-        break;
-      default:
-        [customFormattedDate appendString:@"G"];
+  if (era_.has_value()) {
+    if (*era_ == kNarrow) {
+      [customFormattedDate appendString:@"GGGGG"];
+    } else if (*era_ == kShort) {
+      [customFormattedDate appendString:@"G"];
+    } else {
+      assert(*era_ == kLong && "No other valid era.");
+      [customFormattedDate appendString:@"GGGG"];
     }
   }
-  if (year.has_value()) {
-    switch (formatDate(*year)) {
-      case eNumeric:
-        [customFormattedDate appendString:@"yyyy"];
-        break;
-      case eTwoDigit:
-        [customFormattedDate appendString:@"yy"];
-        break;
-      default:
-        [customFormattedDate appendString:@"yyyy"];
+  if (year_.has_value()) {
+    if (*year_ == kNumeric) {
+      [customFormattedDate appendString:@"yyyy"];
+    } else {
+      assert(*year_ == kTwoDigit && "No other valid year.");
+      [customFormattedDate appendString:@"yy"];
     }
   }
-  if (month.has_value()) {
-    switch (formatDate(*month)) {
-      case eNarrow:
-        [customFormattedDate appendString:@"MMMMM"];
-        break;
-      case eNumeric:
-        [customFormattedDate appendString:@"M"];
-        break;
-      case eTwoDigit:
-        [customFormattedDate appendString:@"MM"];
-        break;
-      case eShort:
-        [customFormattedDate appendString:@"MMM"];
-        break;
-      case eLong:
-        [customFormattedDate appendString:@"MMMM"];
-        break;
-      default:
-        [customFormattedDate appendString:@"MMM"];
+  if (month_.has_value()) {
+    if (*month_ == kNarrow) {
+      [customFormattedDate appendString:@"MMMMM"];
+    } else if (*month_ == kNumeric) {
+      [customFormattedDate appendString:@"M"];
+    } else if (*month_ == kTwoDigit) {
+      [customFormattedDate appendString:@"MM"];
+    } else if (*month_ == kShort) {
+      [customFormattedDate appendString:@"MMM"];
+    } else {
+      assert(*month_ == kLong && "No other valid month.");
+      [customFormattedDate appendString:@"MMMM"];
     }
   }
-  if (weekday.has_value()) {
-    switch (formatDate(*weekday)) {
-      case eNarrow:
-        [customFormattedDate appendString:@"EEEEE"];
-        break;
-      case eShort:
-        [customFormattedDate appendString:@"E"];
-        break;
-      case eLong:
-        [customFormattedDate appendString:@"EEEE"];
-        break;
-      default:
-        [customFormattedDate appendString:@"E"];
+  if (weekday_.has_value()) {
+    if (*weekday_ == kNarrow) {
+      [customFormattedDate appendString:@"EEEEE"];
+    } else if (*weekday_ == kShort) {
+      [customFormattedDate appendString:@"E"];
+    } else {
+      assert(*weekday_ == kLong && "No other valid weekday.");
+      [customFormattedDate appendString:@"EEEE"];
     }
   }
-  if (day.has_value()) {
-    switch (formatDate(*day)) {
-      case eNumeric:
-        [customFormattedDate appendString:@"d"];
-        break;
-      case eTwoDigit:
-        [customFormattedDate appendString:@"dd"];
-        break;
-      default:
-        [customFormattedDate appendString:@"dd"];
+  if (day_.has_value()) {
+    if (*day_ == kNumeric) {
+      [customFormattedDate appendString:@"d"];
+    } else {
+      assert(*day_ == kTwoDigit && "No other valid day.");
+      [customFormattedDate appendString:@"dd"];
     }
   }
-  if (hour.has_value()) {
+  if (hour_.has_value()) {
     // Ignore the hour12 bool in the impl_ struct
     // a = AM/PM for 12 hr clocks, automatically added depending on locale
     // AM/PM not multilingual, de-DE should be "03 Uhr" not "3 AM"
@@ -1696,79 +1752,55 @@ NSDateFormatter *DateTimeFormat::Impl::getNSDateFormatter() noexcept {
     // h = h12 = 1-12
     // H = h23 = 0-23
     // k = h24 = 1-24
-    if (hourCycle == u"h12") {
-      switch (formatDate(*hour)) {
-        case eNumeric:
-          [customFormattedDate appendString:@"h"];
-          break;
-        case eTwoDigit:
-          [customFormattedDate appendString:@"hh"];
-          break;
-        default:
-          [customFormattedDate appendString:@"hh"];
+    if (hourCycle_ == u"h12") {
+      if (*hour_ == kNumeric) {
+        [customFormattedDate appendString:@"h"];
+      } else {
+        assert(*hour_ == kTwoDigit && "No other valid hour.");
+        [customFormattedDate appendString:@"hh"];
       }
-    } else if (hourCycle == u"h24") {
-      switch (formatDate(*hour)) {
-        case eNumeric:
-          [customFormattedDate appendString:@"k"];
-          break;
-        case eTwoDigit:
-          [customFormattedDate appendString:@"kk"];
-          break;
-        default:
-          [customFormattedDate appendString:@"kk"];
+    } else if (hourCycle_ == u"h24") {
+      if (*hour_ == kNumeric) {
+        [customFormattedDate appendString:@"k"];
+      } else {
+        assert(*hour_ == kTwoDigit && "No other valid hour.");
+        [customFormattedDate appendString:@"kk"];
       }
-    } else if (hourCycle == u"h11") {
-      switch (formatDate(*hour)) {
-        case eNumeric:
-          [customFormattedDate appendString:@"K"];
-          break;
-        case eTwoDigit:
-          [customFormattedDate appendString:@"KK"];
-          break;
-        default:
-          [customFormattedDate appendString:@"KK"];
+    } else if (hourCycle_ == u"h11") {
+      if (*hour_ == kNumeric) {
+        [customFormattedDate appendString:@"K"];
+      } else {
+        assert(*hour_ == kTwoDigit && "No other valid hour.");
+        [customFormattedDate appendString:@"KK"];
       }
     } else { // h23
-      switch (formatDate(*hour)) {
-        case eNumeric:
-          [customFormattedDate appendString:@"H"];
-          break;
-        case eTwoDigit:
-          [customFormattedDate appendString:@"HH"];
-          break;
-        default:
-          [customFormattedDate appendString:@"HH"];
+      if (*hour_ == kNumeric) {
+        [customFormattedDate appendString:@"H"];
+      } else {
+        assert(*hour_ == kTwoDigit && "No other valid hour.");
+        [customFormattedDate appendString:@"HH"];
       }
     }
   }
-  if (minute.has_value()) {
-    switch (formatDate(*minute)) {
-      case eNumeric:
-        [customFormattedDate appendString:@"m"];
-        break;
-      case eTwoDigit:
-        [customFormattedDate appendString:@"mm"];
-        break;
-      default:
-        [customFormattedDate appendString:@"m"];
+  if (minute_.has_value()) {
+    if (*minute_ == kNumeric) {
+      [customFormattedDate appendString:@"m"];
+    } else {
+      assert(*minute_ == kTwoDigit && "No other valid minute.");
+      [customFormattedDate appendString:@"mm"];
     }
   }
-  if (second.has_value()) {
-    switch (formatDate(*second)) {
-      case eNumeric:
-        [customFormattedDate appendString:@"s"];
-        break;
-      case eTwoDigit:
-        [customFormattedDate appendString:@"ss"];
-        break;
-      default:
-        [customFormattedDate appendString:@"s"];
+  if (second_.has_value()) {
+    if (*second_ == kNumeric) {
+      [customFormattedDate appendString:@"s"];
+    } else {
+      assert(*second_ == kTwoDigit && "No other valid second.");
+      [customFormattedDate appendString:@"ss"];
     }
   }
-  if (fractionalSecondDigits.has_value()) {
+  if (fractionalSecondDigits_.has_value()) {
     // This currently outputs to 3 digits only with the date?
-    switch (*fractionalSecondDigits) {
+    switch (*fractionalSecondDigits_) {
       case 1:
         [customFormattedDate appendString:@"S"];
       case 2:
@@ -1782,19 +1814,20 @@ NSDateFormatter *DateTimeFormat::Impl::getNSDateFormatter() noexcept {
   // automatically separate the order) Only set a template format if it isn't
   // empty
   if (customFormattedDate.length > 0) {
-    [dateFormatter setLocalizedDateFormatFromTemplate:customFormattedDate];
+    [nsDateFormatter_ setLocalizedDateFormatFromTemplate:customFormattedDate];
   } else {
-    dateFormatter.dateStyle = NSDateFormatterShortStyle;
+    nsDateFormatter_.dateStyle = NSDateFormatterShortStyle;
   }
+}
 
-  return dateFormatter;
+std::u16string DateTimeFormatApple::format(double jsTimeValue) noexcept {
+  auto timeInSeconds = jsTimeValue / 1000;
+  NSDate *date = [NSDate dateWithTimeIntervalSince1970:timeInSeconds];
+  return nsStringToU16String([nsDateFormatter_ stringFromDate:date]);
 }
 
 std::u16string DateTimeFormat::format(double jsTimeValue) noexcept {
-  auto timeInSeconds = jsTimeValue / 1000;
-  NSDate *date = [NSDate dateWithTimeIntervalSince1970:timeInSeconds];
-  NSDateFormatter *dateFormatter = impl_->getNSDateFormatter();
-  return nsStringToU16String([dateFormatter stringFromDate:date]);
+  return static_cast<DateTimeFormatApple *>(this)->format(jsTimeValue);
 }
 
 static std::u16string returnTypeOfDate(const char16_t &c16) {
@@ -1825,11 +1858,11 @@ static std::u16string returnTypeOfDate(const char16_t &c16) {
 
 // Implementer note: This method corresponds roughly to
 // https://402.ecma-international.org/8.0/#sec-formatdatetimetoparts
-std::vector<Part> DateTimeFormat::formatToParts(double x) noexcept {
+std::vector<Part> DateTimeFormatApple::formatToParts(double x) noexcept {
   // NOTE: We dont have access to localeData.patterns. Instead we use
   // NSDateFormatter's foramt string, and break it into components.
   // 1. Let parts be ? PartitionDateTimePattern(dateTimeFormat, x).
-  auto fmt = nsStringToU16String(impl_->getNSDateFormatter().dateFormat);
+  auto fmt = nsStringToU16String(nsDateFormatter_.dateFormat);
   std::unique(fmt.begin(), fmt.end());
   auto formattedDate = format(x);
   // 2. Let result be ArrayCreate(0).
@@ -1865,18 +1898,35 @@ std::vector<Part> DateTimeFormat::formatToParts(double x) noexcept {
   return result;
 }
 
-struct NumberFormat::Impl {
+std::vector<Part> DateTimeFormat::formatToParts(double x) noexcept {
+  return static_cast<DateTimeFormatApple *>(this)->formatToParts(x);
+}
+
+class NumberFormatApple : public NumberFormat {
+ public:
+  NumberFormatApple() = default;
+
+  vm::ExecutionStatus initialize(
+      vm::Runtime &runtime,
+      const std::vector<std::u16string> &locales,
+      const Options &options) noexcept;
+
+  Options resolvedOptions() noexcept;
+
+  std::u16string format(double number) noexcept;
+
+ private:
   // https://402.ecma-international.org/8.0/#sec-properties-of-intl-numberformat-instances
   // Intl.NumberFormat instances have an [[InitializedNumberFormat]] internal
   // slot.
   // NOTE: InitializedNumberFormat is not implemented.
   // [[Locale]] is a String value with the language tag of the locale whose
   // localization is used for formatting.
-  std::u16string locale;
+  std::u16string locale_;
   // [[DataLocale]] is a String value with the language tag of the nearest
   // locale for which the implementation has data to perform the formatting
   // operation. It will be a parent locale of [[Locale]].
-  std::u16string dataLocale;
+  std::u16string dataLocale_;
   // [[NumberingSystem]] is a String value with the "type" given in Unicode
   // Technical Standard 35 for the numbering system used for formatting.
   // NOTE: Even though NSNumberFormatter formats numbers and time using
@@ -1885,52 +1935,55 @@ struct NumberFormat::Impl {
   // feature unsupported.
   // [[Style]] is one of the String values "decimal", "currency", "percent", or
   // "unit", identifying the type of quantity being measured.
-  std::u16string style;
+  std::u16string style_;
   // [[Currency]] is a String value with the currency code identifying the
   // currency to be used if formatting with the "currency" unit type. It is only
   // used when [[Style]] has the value "currency".
-  std::u16string currency;
+  std::optional<std::u16string> currency_;
   // [[CurrencyDisplay]] is one of the String values "code", "symbol",
   // "narrowSymbol", or "name", specifying whether to display the currency as an
   // ISO 4217 alphabetic currency code, a localized currency symbol, or a
   // localized currency name if formatting with the "currency" style. It is only
   // used when [[Style]] has the value "currency".
-  std::u16string currencyDisplay;
+  std::optional<std::u16string> currencyDisplay_;
   // [[CurrencySign]] is one of the String values "standard" or "accounting",
   // specifying whether to render negative numbers in accounting format, often
   // signified by parenthesis. It is only used when [[Style]] has the value
   // "currency" and when [[SignDisplay]] is not "never".
-  std::u16string currencySign;
+  std::optional<std::u16string> currencySign_;
   // [[Unit]] is a core unit identifier, as defined by Unicode Technical
   // Standard #35, Part 2, Section 6. It is only used when [[Style]] has the
   // value "unit".
-  std::u16string unit;
+  std::optional<std::u16string> unit_;
   // [[UnitDisplay]] is one of the String values "short", "narrow", or "long",
   // specifying whether to display the unit as a symbol, narrow symbol, or
   // localized long name if formatting with the "unit" style. It is only used
   // when [[Style]] has the value "unit".
-  std::u16string unitDisplay;
+  std::optional<std::u16string> unitDisplay_;
   // [[MinimumIntegerDigits]] is a non-negative integer Number value indicating
   // the minimum integer digits to be used. Numbers will be padded with leading
   // zeroes if necessary.
-  uint8_t minimumIntegerDigits;
+  uint8_t minimumIntegerDigits_;
+
+  struct NumDigits {
+    uint8_t minimum;
+    uint8_t maximum;
+  };
   // [[MinimumFractionDigits]] and [[MaximumFractionDigits]] are non-negative
   // integer Number values indicating the minimum and maximum fraction digits to
   // be used. Numbers will be rounded or padded with trailing zeroes if
   // necessary. These properties are only used when [[RoundingType]] is
   // fractionDigits.
-  uint8_t minimumFractionDigits;
-  uint8_t maximumFractionDigits;
+  std::optional<NumDigits> fractionDigits_;
   // [[MinimumSignificantDigits]] and [[MaximumSignificantDigits]] are positive
   // integer Number values indicating the minimum and maximum fraction digits to
   // be shown. If present, the formatter uses however many fraction digits are
   // required to display the specified number of significant digits. These
   // properties are only used when [[RoundingType]] is significantDigits.
-  uint8_t minimumSignificantDigits;
-  uint8_t maximumSignificantDigits;
+  std::optional<NumDigits> significantDigits_;
   // [[UseGrouping]] is a Boolean value indicating whether a grouping separator
   // should be used.
-  bool useGrouping;
+  bool useGrouping_;
   // [[RoundingType]] is one of the values fractionDigits, significantDigits, or
   // compactRounding, indicating which rounding strategy to use. If
   // fractionDigits, the number is rounded according to
@@ -1940,7 +1993,7 @@ struct NumberFormat::Impl {
   // above. If compactRounding, the number is rounded to 1 maximum fraction
   // digit if there is 1 digit before the decimal separator, and otherwise round
   // to 0 fraction digits.
-  std::u16string roundingType;
+  std::u16string roundingType_;
   // [[Notation]] is one of the String values "standard", "scientific",
   // "engineering", or "compact", specifying whether the number should be
   // displayed without scaling, scaled to the units place with the power of ten
@@ -1948,22 +2001,26 @@ struct NumberFormat::Impl {
   // ten in scientific notation, or scaled to the nearest locale-dependent
   // compact decimal notation power of ten with the corresponding compact
   // decimal notation affix.
-  std::u16string notation;
+  std::u16string notation_;
   // [[CompactDisplay]] is one of the String values "short" or "long",
   // specifying whether to display compact notation affixes in short form ("5K")
   // or long form ("5 thousand") if formatting with the "compact" notation. It
   // is only used when [[Notation]] has the value "compact".
-  std::u16string compactDisplay;
+  std::optional<std::u16string> compactDisplay_;
   // [[SignDisplay]] is one of the String values "auto", "always", "never", or
   // "exceptZero", specifying whether to show the sign on negative numbers only,
   // positive and negative numbers including zero, neither positive nor negative
   // numbers, or positive and negative numbers but not zero. In scientific
   // notation, this slot affects the sign display of the mantissa but not the
   // exponent.
-  std::u16string signDisplay;
+  std::u16string signDisplay_;
   // Finally, Intl.NumberFormat instances have a [[BoundFormat]] internal slot
   // that caches the function returned by the format accessor (15.4.3).
   // NOTE: BoundFormat is not implemented.
+  NSNumberFormatter *nsNumberFormatter_;
+  NSMeasurementFormatter *nsMeasurementFormatter_;
+  NSUnit *nsUnit_;
+
   vm::ExecutionStatus setNumberFormatUnitOptions(
       vm::Runtime &runtime,
       const Options &options) noexcept;
@@ -1973,11 +2030,11 @@ struct NumberFormat::Impl {
       uint8_t mnfdDefault,
       uint8_t mxfdDefault,
       std::u16string_view notation) noexcept;
-  std::u16string format(double number) noexcept;
+  void initializeNSFormatters() noexcept;
 };
 
-NumberFormat::NumberFormat() : impl_(std::make_unique<Impl>()) {}
-NumberFormat::~NumberFormat() {}
+NumberFormat::NumberFormat() = default;
+NumberFormat::~NumberFormat() = default;
 
 // https://402.ecma-international.org/8.0/#sec-intl.numberformat.supportedlocalesof
 vm::CallResult<std::vector<std::u16string>> NumberFormat::supportedLocalesOf(
@@ -1993,7 +2050,7 @@ vm::CallResult<std::vector<std::u16string>> NumberFormat::supportedLocalesOf(
 }
 
 // https://402.ecma-international.org/8.0/#sec-setnumberformatunitoptions
-vm::ExecutionStatus NumberFormat::Impl::setNumberFormatUnitOptions(
+vm::ExecutionStatus NumberFormatApple::setNumberFormatUnitOptions(
     vm::Runtime &runtime,
     const Options &options) noexcept {
   //  1. Assert: Type(intlObj) is Object.
@@ -2008,7 +2065,7 @@ vm::ExecutionStatus NumberFormat::Impl::setNumberFormatUnitOptions(
     return vm::ExecutionStatus::EXCEPTION;
   auto styleOpt = *styleRes;
   //  4. Set intlObj.[[Style]] to style.
-  style = *styleOpt;
+  style_ = *styleOpt;
   //  5. Let currency be ? GetOption(options, "currency", "string", undefined,
   //  undefined).
   auto currencyRes = getOptionString(runtime, options, u"currency", {}, {});
@@ -2018,7 +2075,7 @@ vm::ExecutionStatus NumberFormat::Impl::setNumberFormatUnitOptions(
   //  6. If currency is undefined, then
   if (!currencyOpt) {
     //  a. If style is "currency", throw a TypeError exception.
-    if (style == u"currency")
+    if (style_ == u"currency")
       return runtime.raiseTypeError("Currency is undefined");
     //  7. Else,
   } else {
@@ -2054,7 +2111,7 @@ vm::ExecutionStatus NumberFormat::Impl::setNumberFormatUnitOptions(
   //  11. If unit is undefined, then
   if (!unitOpt) {
     //  a. If style is "unit", throw a TypeError exception.
-    if (style == u"unit")
+    if (style_ == u"unit")
       return runtime.raiseTypeError("Unit is undefined");
     //  12. Else,
   } else {
@@ -2073,27 +2130,28 @@ vm::ExecutionStatus NumberFormat::Impl::setNumberFormatUnitOptions(
     return vm::ExecutionStatus::EXCEPTION;
   auto unitDisplayOpt = *unitDisplayRes;
   //  14. If style is "currency", then
-  if (style == u"currency") {
+  if (style_ == u"currency") {
     //  a. Let currency be the result of converting currency to upper case as
-    //  specified in 6.1. b. Set intlObj.[[Currency]] to currency. c. Set
-    //  intlObj.[[CurrencyDisplay]] to currencyDisplay. d. Set
-    //  intlObj.[[CurrencySign]] to currencySign.
-    currency = toASCIIUppercase(*currencyOpt);
-    currencyDisplay = *currencyDisplayOpt;
-    currencySign = *currencySignOpt;
+    //  specified in 6.1.
+    //  b. Set intlObj.[[Currency]] to currency.
+    currency_ = toASCIIUppercase(*currencyOpt);
+    //  c. Set intlObj.[[CurrencyDisplay]] to currencyDisplay.
+    currencyDisplay_ = *currencyDisplayOpt;
+    //  d. Set intlObj.[[CurrencySign]] to currencySign.
+    currencySign_ = *currencySignOpt;
   }
   //  15. If style is "unit", then
-  if (style == u"unit") {
+  if (style_ == u"unit") {
     //  a. Set intlObj.[[Unit]] to unit.
     //  b. Set intlObj.[[UnitDisplay]] to unitDisplay.
-    unit = unitOpt.value_or(u"");
-    unitDisplay = *unitDisplayOpt;
+    unit_ = *unitOpt;
+    unitDisplay_ = *unitDisplayOpt;
   }
   return vm::ExecutionStatus::RETURNED;
 }
 
 // https://402.ecma-international.org/8.0/#sec-setnfdigitoptions
-vm::ExecutionStatus NumberFormat::Impl::setNumberFormatDigitOptions(
+vm::ExecutionStatus NumberFormatApple::setNumberFormatDigitOptions(
     vm::Runtime &runtime,
     const Options &options,
     uint8_t mnfdDefault,
@@ -2119,11 +2177,11 @@ vm::ExecutionStatus NumberFormat::Impl::setNumberFormatDigitOptions(
   // 9. Let mxsd be ? Get(options, "maximumSignificantDigits").
   auto mxsdIt = options.find(u"maximumSignificantDigits");
   // 10. Set intlObj.[[MinimumIntegerDigits]] to mnid.
-  minimumIntegerDigits = *mnidOpt;
+  minimumIntegerDigits_ = *mnidOpt;
   // 11. If mnsd is not undefined or mxsd is not undefined, then
   if (mnsdIt != options.end() || mxsdIt != options.end()) {
     // a. Set intlObj.[[RoundingType]] to significantDigits.
-    roundingType = u"significantDigits";
+    roundingType_ = u"significantDigits";
     // b. Let mnsd be ? DefaultNumberOption(mnsd, 1, 21, 1).
     auto mnsdValue =
         mnsdIt == options.end() ? std::nullopt : std::optional(mnsdIt->second);
@@ -2141,13 +2199,12 @@ vm::ExecutionStatus NumberFormat::Impl::setNumberFormatDigitOptions(
       return vm::ExecutionStatus::EXCEPTION;
     auto mxsdOpt = *mxsdRes;
     // d. Set intlObj.[[MinimumSignificantDigits]] to mnsd.
-    minimumSignificantDigits = *mnsdOpt;
     // e. Set intlObj.[[MaximumSignificantDigits]] to mxsd.
-    maximumSignificantDigits = *mxsdOpt;
+    significantDigits_ = {*mnsdOpt, *mxsdOpt};
     // 12. Else if mnfd is not undefined or mxfd is not undefined, then
   } else if (mnfdIt != options.end() || mxfdIt != options.end()) {
     // a. Set intlObj.[[RoundingType]] to fractionDigits.
-    roundingType = u"fractionDigits";
+    roundingType_ = u"fractionDigits";
     // b. Let mnfd be ? DefaultNumberOption(mnfd, 0, 20, undefined).
     auto mnfdValue =
         mnfdIt == options.end() ? std::nullopt : std::optional(mnfdIt->second);
@@ -2176,27 +2233,25 @@ vm::ExecutionStatus NumberFormat::Impl::setNumberFormatDigitOptions(
           "minimumFractionDigits is greater than maximumFractionDigits");
     }
     // g. Set intlObj.[[MinimumFractionDigits]] to mnfd.
-    minimumFractionDigits = *mnfdOpt;
     // h. Set intlObj.[[MaximumFractionDigits]] to mxfd.
-    maximumFractionDigits = *mxfdOpt;
+    fractionDigits_ = {*mnfdOpt, *mxfdOpt};
     // 13. Else if notation is "compact", then
-  } else if (notation == u"compact") {
+  } else if (notation_ == u"compact") {
     // a. Set intlObj.[[RoundingType]] to compactRounding.
-    roundingType = u"compactRounding";
+    roundingType_ = u"compactRounding";
     // 14. Else,
   } else {
     // a. Set intlObj.[[RoundingType]] to fractionDigits.
-    roundingType = u"fractionDigits";
+    roundingType_ = u"fractionDigits";
     // b. Set intlObj.[[MinimumFractionDigits]] to mnfdDefault.
-    minimumFractionDigits = mnfdDefault;
     // c. Set intlObj.[[MaximumFractionDigits]] to mxfdDefault.
-    maximumFractionDigits = mxfdDefault;
+    fractionDigits_ = {mnfdDefault, mxfdDefault};
   }
   return vm::ExecutionStatus::RETURNED;
 }
 
 // https://402.ecma-international.org/8.0/#sec-initializenumberformat
-vm::ExecutionStatus NumberFormat::initialize(
+vm::ExecutionStatus NumberFormatApple::initialize(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
@@ -2247,22 +2302,22 @@ vm::ExecutionStatus NumberFormat::initialize(
   auto r = resolveLocale(
       getAvailableLocales(), *requestedLocales, opt, relevantExtensionKeys);
   // 11. Set numberFormat.[[Locale]] to r.[[locale]].
-  impl_->locale = r.locale;
+  locale_ = r.locale;
   // 12. Set numberFormat.[[DataLocale]] to r.[[dataLocale]].
-  impl_->dataLocale = r.dataLocale;
+  dataLocale_ = r.dataLocale;
   // 13. Set numberFormat.[[NumberingSystem]] to r.[[nu]].
   // 14. Perform ? SetNumberFormatUnitOptions(numberFormat, options).
-  auto setUnitOptionsRes = impl_->setNumberFormatUnitOptions(runtime, options);
+  auto setUnitOptionsRes = setNumberFormatUnitOptions(runtime, options);
   if (LLVM_UNLIKELY(setUnitOptionsRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
   // 15. Let style be numberFormat.[[Style]].
-  auto style = impl_->style;
+  auto style = style_;
   uint8_t mnfdDefault, mxfdDefault;
   // 16. If style is "currency", then
   if (style == u"currency") {
     // a. Let currency be numberFormat.[[Currency]].
     // b. Let cDigits be CurrencyDigits(currency).
-    auto cDigits = getCurrencyDigits(impl_->currency);
+    auto cDigits = getCurrencyDigits(*currency_);
     // c. Let mnfdDefault be cDigits.
     mnfdDefault = cDigits;
     // d. Let mxfdDefault be cDigits.
@@ -2291,11 +2346,11 @@ vm::ExecutionStatus NumberFormat::initialize(
     return vm::ExecutionStatus::EXCEPTION;
   auto notationOpt = *notationRes;
   // 19. Set numberFormat.[[Notation]] to notation.
-  impl_->notation = *notationOpt;
+  notation_ = *notationOpt;
   // Perform ? SetNumberFormatDigitOptions(numberFormat, options, mnfdDefault,
   // mxfdDefault, notation).
-  auto setDigitOptionsRes = impl_->setNumberFormatDigitOptions(
-      runtime, options, mnfdDefault, mxfdDefault, impl_->notation);
+  auto setDigitOptionsRes = setNumberFormatDigitOptions(
+      runtime, options, mnfdDefault, mxfdDefault, notation_);
   if (LLVM_UNLIKELY(setDigitOptionsRes == vm::ExecutionStatus::EXCEPTION))
     return vm::ExecutionStatus::EXCEPTION;
   // 21. Let compactDisplay be ? GetOption(options, "compactDisplay", "string",
@@ -2310,12 +2365,12 @@ vm::ExecutionStatus NumberFormat::initialize(
   // 22. If notation is "compact", then
   if (*notationOpt == u"compact")
     //   a. Set numberFormat.[[CompactDisplay]] to compactDisplay.
-    impl_->compactDisplay = *compactDisplayOpt;
+    compactDisplay_ = *compactDisplayOpt;
   // 23. Let useGrouping be ? GetOption(options, "useGrouping", "boolean",
   // undefined, true).
   auto useGroupingOpt = getOptionBool(runtime, options, u"useGrouping", true);
   // 24. Set numberFormat.[[UseGrouping]] to useGrouping.
-  impl_->useGrouping = *useGroupingOpt;
+  useGrouping_ = *useGroupingOpt;
   // 25. Let signDisplay be ? GetOption(options, "signDisplay", "string", «
   // "auto", "never", "always", "exceptZero" », "auto").
   static constexpr std::u16string_view signDisplayValues[] = {
@@ -2326,40 +2381,66 @@ vm::ExecutionStatus NumberFormat::initialize(
     return vm::ExecutionStatus::EXCEPTION;
   auto signDisplayOpt = *signDisplayRes;
   // 26. Set numberFormat.[[SignDisplay]] to signDisplay.
-  impl_->signDisplay = *signDisplayOpt;
+  signDisplay_ = *signDisplayOpt;
+
+  initializeNSFormatters();
   return vm::ExecutionStatus::RETURNED;
 }
 
+vm::CallResult<std::unique_ptr<NumberFormat>> NumberFormat::create(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const Options &inputOptions) noexcept {
+  auto instance = std::make_unique<NumberFormatApple>();
+  if (LLVM_UNLIKELY(
+          instance->initialize(runtime, locales, inputOptions) ==
+          vm::ExecutionStatus::EXCEPTION)) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  return instance;
+}
+
 // https://402.ecma-international.org/8.0/#sec-intl.numberformat.prototype.resolvedoptions
-Options NumberFormat::resolvedOptions() noexcept {
+Options NumberFormatApple::resolvedOptions() noexcept {
   Options options;
-  options.emplace(u"locale", impl_->locale);
-  options.emplace(u"dataLocale", impl_->dataLocale);
-  options.emplace(u"style", impl_->style);
-  options.emplace(u"currency", impl_->currency);
-  options.emplace(u"currencyDisplay", impl_->currencyDisplay);
-  options.emplace(u"currencySign", impl_->currencySign);
-  options.emplace(u"unit", impl_->unit);
-  options.emplace(u"unitDisplay", impl_->unitDisplay);
-  options.emplace(u"minimumIntegerDigits", (double)impl_->minimumIntegerDigits);
-  options.emplace(
-      u"minimumFractionDigits", (double)impl_->minimumFractionDigits);
-  options.emplace(
-      u"maximumFractionDigits", (double)impl_->maximumFractionDigits);
-  options.emplace(
-      u"minimumSignificantDigits", (double)impl_->minimumSignificantDigits);
-  options.emplace(
-      u"maximumSignificantDigits", (double)impl_->maximumSignificantDigits);
-  options.emplace(u"useGrouping", impl_->useGrouping);
-  options.emplace(u"roundingType", impl_->roundingType);
-  options.emplace(u"notation", impl_->notation);
-  options.emplace(u"compactDisplay", impl_->compactDisplay);
-  options.emplace(u"signDisplay", impl_->signDisplay);
+  options.emplace(u"locale", locale_);
+  options.emplace(u"style", style_);
+  if (currency_)
+    options.emplace(u"currency", *currency_);
+  if (currencyDisplay_)
+    options.emplace(u"currencyDisplay", *currencyDisplay_);
+  if (currencySign_)
+    options.emplace(u"currencySign", *currencySign_);
+  if (unit_)
+    options.emplace(u"unit", *unit_);
+  if (unitDisplay_)
+    options.emplace(u"unitDisplay", *unitDisplay_);
+  options.emplace(u"minimumIntegerDigits", (double)minimumIntegerDigits_);
+  if (fractionDigits_) {
+    options.emplace(u"minimumFractionDigits", (double)fractionDigits_->minimum);
+    options.emplace(u"maximumFractionDigits", (double)fractionDigits_->maximum);
+  }
+  if (significantDigits_) {
+    options.emplace(
+        u"minimumSignificantDigits", (double)significantDigits_->minimum);
+    options.emplace(
+        u"maximumSignificantDigits", (double)significantDigits_->maximum);
+  }
+  options.emplace(u"useGrouping", useGrouping_);
+  options.emplace(u"roundingType", roundingType_);
+  options.emplace(u"notation", notation_);
+  if (compactDisplay_)
+    options.emplace(u"compactDisplay", *compactDisplay_);
+  options.emplace(u"signDisplay", signDisplay_);
   return options;
 }
 
+Options NumberFormat::resolvedOptions() noexcept {
+  return static_cast<NumberFormatApple *>(this)->resolvedOptions();
+}
+
 // https://402.ecma-international.org/8.0/#sec-formatnumber
-std::u16string NumberFormat::Impl::format(double number) noexcept {
+void NumberFormatApple::initializeNSFormatters() noexcept {
   // NOTE: NSNumberFormatter has following limitations:
   // - "scientific" notation is supprted, "engineering" and "compact" are not.
   // - roundingType is not supported.
@@ -2367,63 +2448,72 @@ std::u16string NumberFormat::Impl::format(double number) noexcept {
   // - signDisplay is not supported.
   // - NSNumberFormatter has maximumIntegerDigits, which is 42 by default
   auto nsLocale =
-      [NSLocale localeWithLocaleIdentifier:u16StringToNSString(dataLocale)];
-  auto nf = [NSNumberFormatter new];
-  nf.locale = nsLocale;
-  if (style == u"decimal") {
-    nf.numberStyle = NSNumberFormatterDecimalStyle;
-    if (notation == u"scientific") {
-      nf.numberStyle = NSNumberFormatterScientificStyle;
+      [NSLocale localeWithLocaleIdentifier:u16StringToNSString(dataLocale_)];
+  nsNumberFormatter_ = [NSNumberFormatter new];
+  nsNumberFormatter_.locale = nsLocale;
+  if (style_ == u"decimal") {
+    nsNumberFormatter_.numberStyle = NSNumberFormatterDecimalStyle;
+    if (notation_ == u"scientific") {
+      nsNumberFormatter_.numberStyle = NSNumberFormatterScientificStyle;
     }
-  } else if (style == u"currency") {
-    nf.numberStyle = NSNumberFormatterCurrencyStyle;
-    nf.currencyCode = u16StringToNSString(currency);
-    if (currencyDisplay == u"code") {
-      nf.numberStyle = NSNumberFormatterCurrencyISOCodeStyle;
-    } else if (currencyDisplay == u"symbol") {
-      nf.numberStyle = NSNumberFormatterCurrencyStyle;
-    } else if (currencyDisplay == u"narrowSymbol") {
-      nf.numberStyle = NSNumberFormatterCurrencyStyle;
-    } else if (currencyDisplay == u"name") {
-      nf.numberStyle = NSNumberFormatterCurrencyPluralStyle;
+  } else if (style_ == u"currency") {
+    nsNumberFormatter_.numberStyle = NSNumberFormatterCurrencyStyle;
+    nsNumberFormatter_.currencyCode = u16StringToNSString(*currency_);
+    if (currencyDisplay_ == u"code") {
+      nsNumberFormatter_.numberStyle = NSNumberFormatterCurrencyISOCodeStyle;
+    } else if (currencyDisplay_ == u"symbol") {
+      nsNumberFormatter_.numberStyle = NSNumberFormatterCurrencyStyle;
+    } else if (currencyDisplay_ == u"narrowSymbol") {
+      nsNumberFormatter_.numberStyle = NSNumberFormatterCurrencyStyle;
+    } else if (currencyDisplay_ == u"name") {
+      nsNumberFormatter_.numberStyle = NSNumberFormatterCurrencyPluralStyle;
     }
-    if (signDisplay != u"never" && currencySign == u"accounting") {
-      nf.numberStyle = NSNumberFormatterCurrencyAccountingStyle;
+    if (signDisplay_ != u"never" && currencySign_ == u"accounting") {
+      nsNumberFormatter_.numberStyle = NSNumberFormatterCurrencyAccountingStyle;
     }
-  } else if (style == u"percent") {
-    nf.numberStyle = NSNumberFormatterPercentStyle;
-  } else if (style == u"unit") {
-    nf.numberStyle = NSNumberFormatterNoStyle;
+  } else if (style_ == u"percent") {
+    nsNumberFormatter_.numberStyle = NSNumberFormatterPercentStyle;
+  } else if (style_ == u"unit") {
+    nsNumberFormatter_.numberStyle = NSNumberFormatterNoStyle;
   }
-  nf.minimumIntegerDigits = minimumIntegerDigits;
-  nf.minimumFractionDigits = minimumFractionDigits;
-  nf.maximumFractionDigits = maximumFractionDigits;
-  nf.minimumSignificantDigits = minimumSignificantDigits;
-  if (maximumSignificantDigits > 0) {
-    nf.maximumSignificantDigits = maximumSignificantDigits;
+  nsNumberFormatter_.minimumIntegerDigits = minimumIntegerDigits_;
+  if (fractionDigits_) {
+    nsNumberFormatter_.minimumFractionDigits = fractionDigits_->minimum;
+    nsNumberFormatter_.maximumFractionDigits = fractionDigits_->maximum;
   }
-  nf.usesGroupingSeparator = useGrouping;
-  if (style == u"unit") {
-    auto mf = [NSMeasurementFormatter new];
-    mf.numberFormatter = nf;
-    mf.locale = nsLocale;
-    if (unitDisplay == u"short") {
-      mf.unitStyle = NSFormattingUnitStyleShort;
-    } else if (unitDisplay == u"narrow") {
-      mf.unitStyle = NSFormattingUnitStyleMedium;
-    } else if (unitDisplay == u"long") {
-      mf.unitStyle = NSFormattingUnitStyleLong;
+  if (significantDigits_) {
+    nsNumberFormatter_.minimumSignificantDigits = significantDigits_->minimum;
+    nsNumberFormatter_.maximumSignificantDigits = significantDigits_->maximum;
+  }
+  nsNumberFormatter_.usesGroupingSeparator = useGrouping_;
+  if (style_ == u"unit") {
+    nsMeasurementFormatter_ = [NSMeasurementFormatter new];
+    nsMeasurementFormatter_.numberFormatter = nsNumberFormatter_;
+    nsMeasurementFormatter_.locale = nsLocale;
+    if (unitDisplay_ == u"short") {
+      nsMeasurementFormatter_.unitStyle = NSFormattingUnitStyleShort;
+    } else if (unitDisplay_ == u"narrow") {
+      nsMeasurementFormatter_.unitStyle = NSFormattingUnitStyleMedium;
+    } else if (unitDisplay_ == u"long") {
+      nsMeasurementFormatter_.unitStyle = NSFormattingUnitStyleLong;
     }
-    auto u = [[NSUnit alloc] initWithSymbol:u16StringToNSString(unit)];
-    auto m = [[NSMeasurement alloc] initWithDoubleValue:number unit:u];
-    return nsStringToU16String([mf stringFromMeasurement:m]);
+    nsUnit_ = unitIdentifierToNSUnit(*unit_);
+  }
+}
+
+std::u16string NumberFormatApple::format(double number) noexcept {
+  if (nsMeasurementFormatter_) {
+    assert(style_ == u"unit");
+    auto m = [[NSMeasurement alloc] initWithDoubleValue:number unit:nsUnit_];
+    return nsStringToU16String(
+        [nsMeasurementFormatter_ stringFromMeasurement:m]);
   }
   return nsStringToU16String(
-      [nf stringFromNumber:[NSNumber numberWithDouble:number]]);
+      [nsNumberFormatter_ stringFromNumber:[NSNumber numberWithDouble:number]]);
 }
 
 std::u16string NumberFormat::format(double number) noexcept {
-  return impl_->format(number);
+  return static_cast<NumberFormatApple *>(this)->format(number);
 }
 
 std::vector<std::unordered_map<std::u16string, std::u16string>>

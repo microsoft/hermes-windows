@@ -34,6 +34,7 @@ task prepareTests() {
         include("test/intl402/String/**/*.js")
         include("test/intl402/Number/**/*.js")
         include("test/intl402/Array/**/*.js")
+        include("test/intl402/TypedArray/**/*.js")
         include("test/intl402/Date/**/*.js")
         include("test/intl402/Intl/**/*.js")
         include("test/built-ins/String/prototype/toLocale**/*.js")
@@ -102,7 +103,7 @@ android {
     androidTestImplementation 'androidx.test.ext:junit:1.1.1'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
     androidTestImplementation 'org.easytesting:fest-assert-core:2.0M10'
-    androidTestImplementation 'com.facebook.soloader:soloader:0.10.3'
+    androidTestImplementation 'com.facebook.soloader:soloader:0.10.4'
     androidTestImplementation 'com.facebook.yoga:proguard-annotations:1.19.0'
 
     implementation 'com.facebook.fbjni:fbjni:0.2.2'

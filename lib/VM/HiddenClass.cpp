@@ -16,7 +16,11 @@
 #include "hermes/VM/StringView.h"
 
 #include "llvh/Support/Debug.h"
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 using llvh::dbgs;
 
 namespace hermes {
@@ -59,20 +63,6 @@ void TransitionMap::snapshotUntrackMemory(GC &gc) {
   }
 }
 #endif
-
-void TransitionMap::insertUnsafe(
-    Runtime &runtime,
-    const Transition &key,
-    WeakRefSlot *ptr) {
-  if (isClean()) {
-    smallKey_ = key;
-    smallValue() = WeakRef<HiddenClass>(ptr);
-    return;
-  }
-  if (!isLarge())
-    uncleanMakeLarge(runtime);
-  large()->insertUnsafe(key, ptr);
-}
 
 size_t TransitionMap::getMemorySize() const {
   // Inline slot is not counted here (it counts as part of the HiddenClass).

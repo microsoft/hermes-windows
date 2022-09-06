@@ -21,6 +21,12 @@
 #include <functional>
 #include <stack>
 
+#pragma GCC diagnostic push
+
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
+
 namespace hermes {
 namespace vm {
 
@@ -39,12 +45,6 @@ const VTable HadesGC::OldGen::FreelistCell::vt{
 
 void FreelistBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.setVTable(&HadesGC::OldGen::FreelistCell::vt);
-}
-
-HadesGC::HeapSegment::HeapSegment(AlignedStorage storage)
-    : AlignedHeapSegment{std::move(storage)} {
-  // Make sure end() is at the maxSize.
-  growToLimit();
 }
 
 GCCell *HadesGC::OldGen::finishAlloc(GCCell *cell, uint32_t sz) {
@@ -806,9 +806,7 @@ class HadesGC::MarkAcceptor final : public RootAndSlotAcceptor,
     assert(
         slot->state() != WeakSlotState::Free &&
         "marking a freed weak ref slot");
-    if (slot->state() != WeakSlotState::Marked) {
-      slot->mark();
-    }
+    slot->mark();
   }
 
   /// Set the drain rate that'll be used for any future calls to drain APIs.
@@ -1302,6 +1300,7 @@ HadesGC::HadesGC(
           kConcurrentGC ? std::make_unique<Executor>() : nullptr},
       promoteYGToOG_{!gcConfig.getAllocInYoung()},
       revertToYGAtTTI_{gcConfig.getRevertToYGAtTTI()},
+      overwriteDeadYGObjects_{gcConfig.getOverwriteDeadYGObjects()},
       occupancyTarget_(gcConfig.getOccupancyTarget()),
       ygAverageSurvivalBytes_{
           /*weight*/ 0.5,
@@ -1460,6 +1459,7 @@ void HadesGC::printStats(JSONEmitter &json) {
   json.emitKeyValue("collector", getKindAsStr());
   json.emitKey("stats");
   json.openDict();
+  json.emitKeyValue("Num compactions", numCompactions_);
   json.closeDict();
   json.closeDict();
 }
@@ -1547,8 +1547,6 @@ void HadesGC::oldGenCollection(std::string cause, bool forceCompaction) {
 #ifdef HERMES_SLOW_DEBUG
   checkWellFormed();
 #endif
-  if (ogCollectionStats_)
-    recordGCStats(std::move(*ogCollectionStats_).getEvent(), false);
   ogCollectionStats_ =
       std::make_unique<CollectionStats>(*this, std::move(cause), "old");
   // NOTE: Leave CPU time as zero if the collection isn't concurrent, as the
@@ -1559,11 +1557,9 @@ void HadesGC::oldGenCollection(std::string cause, bool forceCompaction) {
   ogCollectionStats_->setBeforeSizes(
       oldGen_.allocatedBytes(), oldGen_.externalBytes(), segmentFootprint());
 
-  if (revertToYGAtTTI_) {
-    // If we've reached the first OG collection, and reverting behavior is
-    // requested, switch back to YG mode.
-    promoteYGToOG_ = false;
-  }
+  // If we've reached the first OG collection, switch back to YG mode.
+  promoteYGToOG_ = false;
+
   // First, clear any mark bits that were set by a previous collection or
   // direct-to-OG allocation, they aren't needed anymore.
   for (HeapSegment &seg : oldGen_)
@@ -1792,12 +1788,6 @@ void HadesGC::finalizeCompactee() {
 }
 
 void HadesGC::updateOldGenThreshold() {
-  // TODO: Dynamic threshold is not used in incremental mode because
-  // getDrainRate computes the mark rate directly based on the threshold. This
-  // means that increasing the threshold would operate like a one way ratchet.
-  if (!kConcurrentGC)
-    return;
-
   const double markedBytes = oldGenMarker_->markedBytes();
   const double preAllocated = ogCollectionStats_->beforeAllocatedBytes();
   assert(markedBytes <= preAllocated && "Cannot mark more than was allocated");
@@ -2127,40 +2117,6 @@ bool HadesGC::canAllocExternalMemory(uint32_t size) {
   return size <= maxHeapSize_;
 }
 
-WeakRefSlot *HadesGC::allocWeakSlot(CompressedPointer ptr) {
-  assert(
-      !calledByBackgroundThread() &&
-      "allocWeakSlot should only be called from the mutator");
-  // The weak ref mutex doesn't need to be held since weakSlots_ and
-  // firstFreeWeak_ are only modified while the world is stopped.
-  WeakRefSlot *slot;
-  if (firstFreeWeak_) {
-    assert(
-        firstFreeWeak_->state() == WeakSlotState::Free &&
-        "invalid free slot state");
-    slot = firstFreeWeak_;
-    firstFreeWeak_ = firstFreeWeak_->nextFree();
-    slot->reset(ptr);
-  } else {
-    weakSlots_.push_back({ptr});
-    slot = &weakSlots_.back();
-  }
-  if (ogMarkingBarriers_) {
-    // During the mark phase, if a WeakRef is created, it might not be marked
-    // if the object holding this new WeakRef has already been visited.
-    // This doesn't need the WeakRefMutex because nothing is using this slot
-    // yet.
-    slot->mark();
-  }
-  return slot;
-}
-
-void HadesGC::freeWeakSlot(WeakRefSlot *slot) {
-  // Sets the given WeakRefSlot to point to firstFreeWeak_ instead of a cell.
-  slot->free(firstFreeWeak_);
-  firstFreeWeak_ = slot;
-}
-
 void HadesGC::forAllObjs(const std::function<void(GCCell *)> &callback) {
   std::lock_guard<Mutex> lk{gcMutex_};
   youngGen().forAllObjs(callback);
@@ -2189,7 +2145,8 @@ void HadesGC::forAllObjs(const std::function<void(GCCell *)> &callback) {
 }
 
 void HadesGC::ttiReached() {
-  promoteYGToOG_ = false;
+  if (revertToYGAtTTI_)
+    promoteYGToOG_ = false;
 }
 
 #ifndef NDEBUG
@@ -2210,6 +2167,10 @@ bool HadesGC::dbgContains(const void *p) const {
 }
 
 void HadesGC::trackReachable(CellKind kind, unsigned sz) {}
+
+bool HadesGC::needsWriteBarrier(void *loc, GCCell *value) {
+  return !inYoungGen(loc);
+}
 #endif
 
 void *HadesGC::allocSlow(uint32_t sz) {
@@ -2217,14 +2178,14 @@ void *HadesGC::allocSlow(uint32_t sz) {
   // Failed to alloc in young gen, do a young gen collection.
   youngGenCollection(
       kNaturalCauseForAnalytics, /*forceOldGenCollection*/ false);
-  res = youngGen().bumpAlloc(sz);
+  res = youngGen().alloc(sz);
   if (res.success)
     return res.ptr;
 
   // Still fails after YG collection, perhaps it is a large alloc, try growing
   // the YG to full size.
   youngGen().clearExternalMemoryCharge();
-  res = youngGen().bumpAlloc(sz);
+  res = youngGen().alloc(sz);
   if (res.success)
     return res.ptr;
 
@@ -2268,7 +2229,7 @@ GCCell *HadesGC::OldGen::alloc(uint32_t sz) {
   llvh::ErrorOr<HeapSegment> seg = gc_.createSegment();
   if (seg) {
     // Complete this allocation using a bump alloc.
-    AllocResult res = seg->bumpAlloc(sz);
+    AllocResult res = seg->alloc(sz);
     assert(
         res.success &&
         "A newly created segment should always be able to allocate");
@@ -2509,6 +2470,10 @@ void HadesGC::youngGenCollection(
     // This was modified by debitExternalMemoryFromFinalizer, called by
     // finalizers. The difference in the value before to now was the swept bytes
     externalBytes.after = getYoungGenExternalBytes();
+
+    if (overwriteDeadYGObjects_)
+      memset(yg.start(), kInvalidHeapValue, yg.used());
+
     // Now the copy list is drained, and all references point to the old
     // gen. Clear the level of the young gen.
     yg.resetLevel();
@@ -2518,6 +2483,7 @@ void HadesGC::youngGenCollection(
         "Young gen segment must have all mark bits set");
 
     if (doCompaction) {
+      numCompactions_++;
       ygCollectionStats_->addCollectionType("compact");
       // We can use the total amount of external memory in the OG before and
       // after running finalizers to measure how much external memory has been
@@ -2617,7 +2583,9 @@ void HadesGC::youngGenCollection(
 #endif
   ygCollectionStats_->setEndTime();
   ygCollectionStats_->endCPUTimeSection();
-  recordGCStats(std::move(*ygCollectionStats_).getEvent(), true);
+  auto statsEvent = std::move(*ygCollectionStats_).getEvent();
+  recordGCStats(statsEvent, true);
+  recordGCStats(statsEvent, &ygCumulativeStats_, true);
   ygCollectionStats_.reset();
 }
 
@@ -2681,7 +2649,9 @@ void HadesGC::checkTripwireAndSubmitStats() {
   // We use the amount of live data from after a GC completed as the minimum
   // bound of what is live.
   checkTripwire(usedBytes);
-  recordGCStats(std::move(*ogCollectionStats_).getEvent(), false);
+  auto event = std::move(*ogCollectionStats_).getEvent();
+  recordGCStats(event, false);
+  recordGCStats(event, &ogCumulativeStats_, false);
   ogCollectionStats_.reset();
 }
 
@@ -3014,7 +2984,7 @@ void HadesGC::OldGen::addSegment(HeapSegment seg) {
   // Add the remainder of the segment to the freelist.
   uint32_t sz = newSeg.available();
   if (sz >= minAllocationSize()) {
-    auto res = newSeg.bumpAlloc(sz);
+    auto res = newSeg.alloc(sz);
     assert(res.success);
     auto bucket = getFreelistBucket(sz);
     addCellToFreelist(res.ptr, sz, &segmentBuckets_.back()[bucket]);
@@ -3087,24 +3057,17 @@ size_t HadesGC::getDrainRate() {
   // OG faster than it fills up.
   assert(!kConcurrentGC);
 
-  // We want to make progress so that we are able to complete marking over all
-  // YG collections before OG fills up.
-  uint64_t totalAllocated = oldGen_.allocatedBytes() + oldGen_.externalBytes();
-  // Must be >0 to avoid division by zero below.
-  uint64_t bytesToFill =
-      std::max(oldGen_.targetSizeBytes(), totalAllocated + 1) - totalAllocated;
-  uint64_t preAllocated = ogCollectionStats_->beforeAllocatedBytes();
-  uint64_t markedBytes = oldGenMarker_->markedBytes();
-  assert(
-      markedBytes <= preAllocated &&
-      "Cannot mark more bytes than were initially allocated");
-  uint64_t bytesToMark = preAllocated - markedBytes;
-  // The drain rate is calculated from:
-  //   bytesToMark / (collections until full)
-  // = bytesToMark / (bytesToFill / ygAverageSurvivalBytes_)
-  uint64_t drainRate = bytesToMark * ygAverageSurvivalBytes_ / bytesToFill;
-  // If any of the above calculations end up being a tiny drain rate, make
-  // the lower limit at least 8 KB, to ensure collections eventually end.
+  // Set a fixed floor on the mark rate, regardless of the pause time budget.
+  // yieldToOldGen may operate in multiples of this drain rate if it fits in the
+  // budget. Pinning the mark rate in this way helps us keep the dynamically
+  // computed OG collection threshold in a reasonable range. On a slow device,
+  // where we can only do one iteration of this drain rate, the OG threshold
+  // will be ~75%. And by not increasing the drain rate when the threshold is
+  // high, we avoid having a one-way ratchet effect that hurts pause times.
+  constexpr size_t baseMarkRate = 3;
+  uint64_t drainRate = baseMarkRate * ygAverageSurvivalBytes_;
+  // In case the allocation rate is extremely low, set a lower bound to ensure
+  // the collection eventually ends.
   constexpr uint64_t byteDrainRateMin = 8192;
   return std::max(drainRate, byteDrainRateMin);
 }

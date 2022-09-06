@@ -16,18 +16,163 @@ using namespace ::hermes;
 namespace hermes {
 namespace platform_intl {
 
+// convert utf8 string to utf16
+vm::CallResult<std::u16string> UTF8toUTF16(
+    vm::Runtime &runtime,
+    std::string_view in) {
+  std::u16string out;
+  size_t length = in.length();
+  out.resize(length);
+  const llvh::UTF8 *sourceStart = reinterpret_cast<const llvh::UTF8 *>(&in[0]);
+  const llvh::UTF8 *sourceEnd = sourceStart + length;
+  llvh::UTF16 *targetStart = reinterpret_cast<llvh::UTF16 *>(&out[0]);
+  llvh::UTF16 *targetEnd = targetStart + out.size();
+  llvh::ConversionResult convRes = ConvertUTF8toUTF16(
+      &sourceStart,
+      sourceEnd,
+      &targetStart,
+      targetEnd,
+      llvh::lenientConversion);
+  if (convRes != llvh::ConversionResult::conversionOK) {
+    return runtime.raiseRangeError("utf8 to utf16 conversion failed");
+  }
+  out.resize(reinterpret_cast<char16_t *>(targetStart) - &out[0]);
+  return out;
+}
+
+// convert utf16 string to utf8
+vm::CallResult<std::string> UTF16toUTF8(
+    vm::Runtime &runtime,
+    std::u16string in) {
+  std::string out;
+  size_t length = in.length();
+  out.resize(length);
+  const llvh::UTF16 *sourceStart =
+      reinterpret_cast<const llvh::UTF16 *>(&in[0]);
+  const llvh::UTF16 *sourceEnd = sourceStart + length;
+  llvh::UTF8 *targetStart = reinterpret_cast<llvh::UTF8 *>(&out[0]);
+  llvh::UTF8 *targetEnd = targetStart + out.size();
+  llvh::ConversionResult convRes = ConvertUTF16toUTF8(
+      &sourceStart,
+      sourceEnd,
+      &targetStart,
+      targetEnd,
+      llvh::lenientConversion);
+  if (convRes != llvh::ConversionResult::conversionOK) {
+    return runtime.raiseRangeError("utf16 to utf8 conversion failed");
+  }
+  out.resize(reinterpret_cast<char *>(targetStart) - &out[0]);
+  return out;
+}
+
+// roughly translates to
+// https://tc39.es/ecma402/#sec-canonicalizeunicodelocaleid while doing some
+// minimal tag validation
+vm::CallResult<std::u16string> NormalizeLanguageTag(
+    vm::Runtime &runtime,
+    const std::u16string &locale) {
+  if (locale.length() == 0) {
+    return runtime.raiseRangeError("RangeError: Invalid language tag");
+  }
+
+  auto conversion = UTF16toUTF8(runtime, locale);
+  const char *locale8 = conversion.getValue().c_str();
+
+  // [Comment from ChakreCore] ICU doesn't have a full-fledged canonicalization
+  // implementation that correctly replaces all preferred values and
+  // grandfathered tags, as required by #sec-canonicalizelanguagetag. However,
+  // passing the locale through uloc_forLanguageTag -> uloc_toLanguageTag gets
+  // us most of the way there by replacing some(?) values, correctly
+  // capitalizing the tag, and re-ordering extensions
+  UErrorCode status = U_ZERO_ERROR;
+  int32_t parsedLength = 0;
+  char localeID[ULOC_FULLNAME_CAPACITY] = {0};
+  char fullname[ULOC_FULLNAME_CAPACITY] = {0};
+  char languageTag[ULOC_FULLNAME_CAPACITY] = {0};
+
+  int32_t forLangTagResultLength = uloc_forLanguageTag(
+      locale8, localeID, ULOC_FULLNAME_CAPACITY, &parsedLength, &status);
+  if (forLangTagResultLength < 0 || parsedLength < locale.length() ||
+      status == U_ILLEGAL_ARGUMENT_ERROR) {
+    return runtime.raiseRangeError(
+        vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8));
+  }
+
+  int32_t canonicalizeResultLength =
+      uloc_canonicalize(localeID, fullname, ULOC_FULLNAME_CAPACITY, &status);
+  if (canonicalizeResultLength <= 0) {
+    return runtime.raiseRangeError(
+        vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8));
+  }
+
+  int32_t toLangTagResultLength = uloc_toLanguageTag(
+      fullname, languageTag, ULOC_FULLNAME_CAPACITY, true, &status);
+  if (toLangTagResultLength <= 0) {
+    return runtime.raiseRangeError(
+        vm::TwineChar16("Invalid language tag: ") + vm::TwineChar16(locale8));
+  }
+
+  return UTF8toUTF16(runtime, languageTag);
+}
+
+// https://tc39.es/ecma402/#sec-canonicalizelocalelist
+vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales) {
+  // 1. If locales is undefined, then a. Return a new empty list
+  if (locales.empty()) {
+    return std::vector<std::u16string>{};
+  }
+  // 2. Let seen be a new empty List
+  std::vector<std::u16string> seen = std::vector<std::u16string>{};
+
+  // 3. If Type(locales) is String or Type(locales) is Object and locales has an
+  // [[InitializedLocale]] internal slot, then
+  // 4. Else
+  //  > Windows/Apple don't support Locale object -
+  //  https://tc39.es/ecma402/#locale-objects > As of now, 'locales' can only be
+  //  a string list/array. Validation occurs in NormalizeLangugeTag for windows.
+  //  > This function just takes a vector of strings.
+  // 5-7. Let len be ? ToLength(? Get(O, "length")). Let k be 0. Repeat, while k
+  // < len
+  for (size_t k = 0; k < locales.size(); k++) {
+    // minimal tag validation is done with ICU, ChakraCore\V8 does not do tag
+    // validation with ICU, may be missing needed API 7.c.iii.1 Let tag be
+    // kValue[[locale]]
+    std::u16string tag = locales[k];
+    // 7.c.vi Let canonicalizedTag be CanonicalizeUnicodeLocaleID(tag)
+    auto canonicalizedTag = NormalizeLanguageTag(runtime, tag);
+    if (LLVM_UNLIKELY(canonicalizedTag == vm::ExecutionStatus::EXCEPTION)) {
+      return vm::ExecutionStatus::EXCEPTION;
+    }
+    // 7.c.vii. If canonicalizedTag is not an element of seen, append
+    // canonicalizedTag as the last element of seen.
+    if (std::find(seen.begin(), seen.end(), canonicalizedTag.getValue()) ==
+        seen.end()) {
+      seen.push_back(std::move(canonicalizedTag.getValue()));
+    }
+  }
+  return seen;
+}
+
+// https://tc39.es/ecma402/#sec-intl.getcanonicallocales
 vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales) {
-  return std::vector<std::u16string>{u"fr-FR", u"es-ES"};
+  return CanonicalizeLocaleList(runtime, locales);
 }
 
+// Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 vm::CallResult<std::u16string> toLocaleLowerCase(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const std::u16string &str) {
   return std::u16string(u"lowered");
 }
+
+// Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 vm::CallResult<std::u16string> toLocaleUpperCase(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
@@ -87,12 +232,17 @@ BoolNull getOptionBool(
   return eFalse;
 }
 
-struct Collator::Impl {
+// Collator - Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
+namespace {
+struct CollatorWindows : Collator {
+  CollatorWindows(const char16_t *l) : locale(l) {}
   std::u16string locale;
 };
+} // namespace
 
-Collator::Collator() : impl_(std::make_unique<Impl>()) {}
-Collator::~Collator() {}
+Collator::Collator() = default;
+Collator::~Collator() = default;
 
 vm::CallResult<std::vector<std::u16string>> Collator::supportedLocalesOf(
     vm::Runtime &runtime,
@@ -101,17 +251,17 @@ vm::CallResult<std::vector<std::u16string>> Collator::supportedLocalesOf(
   return std::vector<std::u16string>{u"en-CA", u"de-DE"};
 }
 
-vm::ExecutionStatus Collator::initialize(
+vm::CallResult<std::unique_ptr<Collator>> Collator::create(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
-  impl_->locale = u"en-US";
-  return vm::ExecutionStatus::RETURNED;
+  return std::make_unique<CollatorWindows>(u"en-US");
 }
 
 Options Collator::resolvedOptions() noexcept {
   Options options;
-  options.emplace(u"locale", Option(impl_->locale));
+  options.emplace(
+      u"locale", Option(static_cast<CollatorWindows *>(this)->locale));
   options.emplace(u"numeric", Option(false));
   return options;
 }
@@ -121,6 +271,7 @@ double Collator::compare(
     const std::u16string &y) noexcept {
   return x.compare(y);
 }
+
 
 // Implementation of
 // https://402.ecma-international.org/8.0/#sec-todatetimeoptions
@@ -205,32 +356,83 @@ Options toDateTimeOptions(
   return options;
 }
 
-struct DateTimeFormat::Impl {
+/**
+namespace {
+// Implementation of
+// https://402.ecma-international.org/8.0/#datetimeformat-objects
+struct DateTimeFormatWindows : DateTimeFormat {
+  DateTimeFormatWindows(const char16_t *l) : locale(l) {}
   // Options used with DateTimeFormat
-  std::u16string locale;
-  std::u16string timeZone;
-  std::u16string weekday;
-  std::u16string era;
-  std::u16string year;
-  std::u16string month;
-  std::u16string day;
-  std::u16string dayPeriod; // Not Supported
-  std::u16string hour;
-  std::u16string minute;
-  std::u16string second;
-  std::u16string timeZoneName;
-  std::u16string dateStyle;
-  std::u16string timeStyle;
-  std::u16string hourCycle;
+  std::u16string locale_;
+  std::u16string timeZone_;
+  std::u16string weekday_;
+  std::u16string era_;
+  std::u16string year_;
+  std::u16string month_;
+  std::u16string day_;
+  std::u16string dayPeriod_; // Not Supported
+  std::u16string hour_;
+  std::u16string minute_;
+  std::u16string second_;
+  std::u16string timeZoneName_;
+  std::u16string dateStyle_;
+  std::u16string timeStyle_;
+  std::u16string hourCycle_;
   // Internal use
-  UDateFormat *dtf;
-  const char *locale8;
+  UDateFormat *dtf_;
+  const char *locale8_;
   UDateFormat *getUDateFormatter(vm::Runtime &runtime);
   vm::CallResult<std::u16string> getDefaultHourCycle(vm::Runtime &runtime);
 };
+} // namespace
+**/
 
-DateTimeFormat::DateTimeFormat() : impl_(std::make_unique<Impl>()) {}
-DateTimeFormat::~DateTimeFormat() {}
+namespace {
+// Implementation of
+// https://402.ecma-international.org/8.0/#datetimeformat-objects
+class DateTimeFormatWindows : public DateTimeFormat {
+ public:
+  DateTimeFormatWindows() = default;
+  ~DateTimeFormatWindows() = default;
+  
+  vm::ExecutionStatus initialize(
+      vm::Runtime &runtime,
+      const std::vector<std::u16string> &locales,
+      const Options &inputOptions) noexcept;
+
+  Options resolvedOptions() noexcept;
+
+  std::u16string format(double jsTimeValue) noexcept;
+
+  std::vector<Part> formatToParts(double x) noexcept;
+
+ private:
+    // Options used with DateTimeFormat
+  std::u16string locale_;
+  std::u16string timeZone_;
+  std::u16string weekday_;
+  std::u16string era_;
+  std::u16string year_;
+  std::u16string month_;
+  std::u16string day_;
+  std::u16string dayPeriod_; // Not Supported
+  std::u16string hour_;
+  std::u16string minute_;
+  std::u16string second_;
+  std::u16string timeZoneName_;
+  std::u16string dateStyle_;
+  std::u16string timeStyle_;
+  std::u16string hourCycle_;
+  // Internal use
+  UDateFormat *dtf_;
+  const char *locale8_;
+  UDateFormat *getUDateFormatter(vm::Runtime &runtime);
+  vm::CallResult<std::u16string> getDefaultHourCycle(vm::Runtime &runtime);
+};
+} // namespace
+
+DateTimeFormat::DateTimeFormat() = default;
+DateTimeFormat::~DateTimeFormat() = default;
 
 // get the supported locales of dateTimeFormat
 vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
@@ -245,8 +447,9 @@ vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
   return result;
 }
 
-// initalize dtf
-vm::ExecutionStatus DateTimeFormat::initialize(
+// Implementation of
+// https://402.ecma-international.org/8.0/#sec-initializedatetimeformat
+vm::ExecutionStatus DateTimeFormatWindows::initialize(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &inputOptions) noexcept {
@@ -254,14 +457,14 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (requestedLocalesRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return requestedLocalesRes.getStatus();
   }
-  impl_->locale = locales.front();
+  locale_ = locales.front();
 
-  auto conversion = UTF16toUTF8(runtime, impl_->locale);
+  auto conversion = UTF16toUTF8(runtime, locale_);
   if (conversion.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return conversion.getStatus();
   }
   const char *locale8 = conversion.getValue().c_str();
-  impl_->locale8 = locale8; // store the UTF8 version of locale since it is used
+  locale8_ = locale8; // store the UTF8 version of locale since it is used
                             // in almost all other functions
 
   // 2. Let options be ? ToDateTimeOptions(options, "any", "date").
@@ -310,7 +513,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   }
   // 15. Set opt.[[hc]] to hourCycle.
   opt.emplace(u"hc", hourCycle);
-  impl_->hourCycle = hourCycle;
+  hourCycle_ = hourCycle;
 
   // 16. Let localeData be %DateTimeFormat%.[[LocaleData]].
   // 17. Let r be ResolveLocale(%DateTimeFormat%.[[AvailableLocales]],
@@ -336,7 +539,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
     // i. Throw a RangeError exception.
     // c. Let timeZone be CanonicalizeTimeZoneName(timeZone).
     // 27. Set dateTimeFormat.[[TimeZone]] to timeZone.
-    impl_->timeZone = timeZone;
+    timeZone_ = timeZone;
   }
 
   // 28. Let opt be a new Record.
@@ -364,7 +567,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
     return dateStyleRes.getStatus();
   }
   // 33. Set dateTimeFormat.[[DateStyle]] to dateStyle.
-  impl_->dateStyle = dateStyleRes.getValue();
+  dateStyle_ = dateStyleRes.getValue();
 
   // 34. Let timeStyle be ? GetOption(options, "timeStyle", "string", « "full",
   // "long", "medium", "short" », undefined).
@@ -376,7 +579,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
     return timeStyleRes.getStatus();
   }
   // 35. Set dateTimeFormat.[[TimeStyle]] to timeStyle.
-  impl_->timeStyle = timeStyleRes.getValue();
+  timeStyle_ = timeStyleRes.getValue();
 
   // Initialize properties using values from the options.
   static const std::vector<std::u16string> weekdayValues = {
@@ -386,7 +589,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (weekdayRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return weekdayRes.getStatus();
   }
-  impl_->weekday = weekdayRes.getValue();
+  weekday_ = weekdayRes.getValue();
 
   static const std::vector<std::u16string> eraValues = {
       u"narrow", u"short", u"long"};
@@ -394,7 +597,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (eraRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return eraRes.getStatus();
   }
-  impl_->era = *eraRes;
+  era_ = *eraRes;
 
   static const std::vector<std::u16string> yearValues = {
       u"2-digit", u"numeric"};
@@ -402,7 +605,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (yearRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return yearRes.getStatus();
   }
-  impl_->year = *yearRes;
+  year_ = *yearRes;
 
   static const std::vector<std::u16string> monthValues = {
       u"2-digit", u"numeric", u"narrow", u"short", u"long"};
@@ -410,14 +613,14 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (monthRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return monthRes.getStatus();
   }
-  impl_->month = *monthRes;
+  month_ = *monthRes;
 
   static const std::vector<std::u16string> dayValues = {u"2-digit", u"numeric"};
   auto dayRes = getOptionString(runtime, options, u"day", dayValues, {});
   if (dayRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return dayRes.getStatus();
   }
-  impl_->day = *dayRes;
+  day_ = *dayRes;
 
   static const std::vector<std::u16string> dayPeriodValues = {
       u"narrow", u"short", u"long"};
@@ -426,7 +629,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (dayPeriodRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return dayPeriodRes.getStatus();
   }
-  impl_->dayPeriod = *dayPeriodRes;
+  dayPeriod_ = *dayPeriodRes;
 
   static const std::vector<std::u16string> hourValues = {
       u"2-digit", u"numeric"};
@@ -434,7 +637,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (hourRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return hourRes.getStatus();
   }
-  impl_->hour = *hourRes;
+  hour_ = *hourRes;
 
   static const std::vector<std::u16string> minuteValues = {
       u"2-digit", u"numeric"};
@@ -443,7 +646,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (minuteRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return minuteRes.getStatus();
   }
-  impl_->minute = *minuteRes;
+  minute_ = *minuteRes;
 
   static const std::vector<std::u16string> secondValues = {
       u"2-digit", u"numeric"};
@@ -452,7 +655,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (secondRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return secondRes.getStatus();
   }
-  impl_->second = *secondRes;
+  second_ = *secondRes;
 
   static const std::vector<std::u16string> timeZoneNameValues = {
       u"short",
@@ -466,7 +669,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   if (timeZoneNameRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return timeZoneNameRes.getStatus();
   }
-  impl_->timeZoneName = *timeZoneNameRes;
+  timeZoneName_ = *timeZoneNameRes;
 
   // 36. If dateStyle is not undefined or timeStyle is not undefined, then
   // a. For each row in Table 4, except the header row, do
@@ -492,17 +695,17 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   // Slot column of the row to p.
 
   // 39. If dateTimeFormat.[[Hour]] is undefined, then
-  if (impl_->hour.empty()) {
+  if (hour_.empty()) {
     // a. Set dateTimeFormat.[[HourCycle]] to undefined.
-    impl_->hourCycle = u"";
+    hourCycle_ = u"";
     // b. Let pattern be bestFormat.[[pattern]].
     // c. Let rangePatterns be bestFormat.[[rangePatterns]].
     // 40. Else,
   } else {
     // a. Let hcDefault be dataLocaleData.[[hourCycle]].
-    std::u16string hcDefault = impl_->getDefaultHourCycle(runtime).getValue();
+    std::u16string hcDefault = getDefaultHourCycle(runtime).getValue();
     // b. Let hc be dateTimeFormat.[[HourCycle]].
-    auto hc = impl_->hourCycle;
+    auto hc = hourCycle_;
     // c. If hc is null, then
     if (hc.empty())
       // i. Set hc to hcDefault.
@@ -535,7 +738,7 @@ vm::ExecutionStatus DateTimeFormat::initialize(
       }
     }
     // e. Set dateTimeFormat.[[HourCycle]] to hc.
-    impl_->hourCycle = hc;
+    hourCycle_ = hc;
     // f. If dateTimeformat.[[HourCycle]] is "h11" or "h12", then
     // i. Let pattern be bestFormat.[[pattern12]].
     // ii. Let rangePatterns be bestFormat.[[rangePatterns12]].
@@ -547,55 +750,73 @@ vm::ExecutionStatus DateTimeFormat::initialize(
   // 42. Set dateTimeFormat.[[RangePatterns]] to rangePatterns.
   // 43. Return dateTimeFormat
 
-  impl_->dtf = impl_->getUDateFormatter(runtime);
+  dtf_ = getUDateFormatter(runtime);
   return vm::ExecutionStatus::RETURNED;
 }
 
-Options DateTimeFormat::resolvedOptions() noexcept {
+
+vm::CallResult<std::unique_ptr<DateTimeFormat>> DateTimeFormat::create(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const Options &inputOptions) noexcept {
+  auto instance = std::make_unique<DateTimeFormatWindows>();
+  if (LLVM_UNLIKELY(
+          instance->initialize(runtime, locales, inputOptions) ==
+          vm::ExecutionStatus::EXCEPTION)) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  return instance;
+}
+
+Options DateTimeFormatWindows::resolvedOptions() noexcept {
   Options options;
-  options.emplace(u"locale", Option(impl_->locale));
+  options.emplace(u"locale", Option(locale_));
   options.emplace(u"numeric", Option(false));
-  options.emplace(u"timeZone", Option(impl_->timeZone));
-  options.emplace(u"weekday", impl_->weekday);
-  options.emplace(u"era", impl_->era);
-  options.emplace(u"year", impl_->year);
-  options.emplace(u"month", impl_->month);
-  options.emplace(u"day", impl_->day);
-  options.emplace(u"hour", impl_->hour);
-  options.emplace(u"minute", impl_->minute);
-  options.emplace(u"second", impl_->second);
-  options.emplace(u"timeZoneName", impl_->timeZoneName);
-  options.emplace(u"timeZone", impl_->timeZone);
-  options.emplace(u"dateStyle", impl_->dateStyle);
-  options.emplace(u"timeStyle", impl_->timeStyle);
+  options.emplace(u"timeZone", Option(timeZone_));
+  options.emplace(u"weekday", weekday_);
+  options.emplace(u"era", era_);
+  options.emplace(u"year", year_);
+  options.emplace(u"month", month_);
+  options.emplace(u"day", day_);
+  options.emplace(u"hour", hour_);
+  options.emplace(u"minute", minute_);
+  options.emplace(u"second", second_);
+  options.emplace(u"timeZoneName", timeZoneName_);
+  options.emplace(u"timeZone", timeZone_);
+  options.emplace(u"dateStyle", dateStyle_);
+  options.emplace(u"timeStyle", timeStyle_);
   return options;
 }
 
-std::u16string DateTimeFormat::format(double jsTimeValue) noexcept {
+Options DateTimeFormat::resolvedOptions() noexcept {
+  return static_cast<DateTimeFormatWindows *>(this)->resolvedOptions();
+}
+
+std::u16string DateTimeFormatWindows::format(double jsTimeValue) noexcept {
   auto timeInSeconds = jsTimeValue;
   UDate *date = new UDate(timeInSeconds);
   UErrorCode status = U_ZERO_ERROR;
   UChar *myString;
   int32_t myStrlen = 0;
 
-  myStrlen = udat_format(impl_->dtf, *date, NULL, myStrlen, NULL, &status);
+  myStrlen = udat_format(dtf_, *date, NULL, myStrlen, NULL, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
     myString = (UChar *)malloc(sizeof(UChar) * (myStrlen + 1));
-    udat_format(impl_->dtf, *date, myString, myStrlen + 1, NULL, &status);
+    udat_format(dtf_, *date, myString, myStrlen + 1, NULL, &status);
     return myString;
   }
 
   return u"";
 }
 
-vm::CallResult<std::u16string> DateTimeFormat::Impl::getDefaultHourCycle(
+vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
     vm::Runtime &runtime) {
   UErrorCode status = U_ZERO_ERROR;
   UChar *myString;
   // open the default UDateFormat and Pattern of locale
   UDateFormat *defaultDTF =
-      udat_open(UDAT_DEFAULT, UDAT_DEFAULT, locale8, 0, -1, NULL, -1, &status);
+      udat_open(UDAT_DEFAULT, UDAT_DEFAULT, locale8_, 0, -1, NULL, -1, &status);
   int32_t size = udat_toPattern(defaultDTF, true, NULL, 0, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
@@ -626,7 +847,7 @@ vm::CallResult<std::u16string> DateTimeFormat::Impl::getDefaultHourCycle(
 }
 
 // gets the UDateFormat with options set in initalize
-UDateFormat *DateTimeFormat::Impl::getUDateFormatter(vm::Runtime &runtime) {
+UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
   static std::u16string eLong = u"long", eShort = u"short", eNarrow = u"narrow",
                         eMedium = u"medium", eFull = u"full",
                         eNumeric = u"numeric", eTwoDigit = u"2-digit",
@@ -637,42 +858,42 @@ UDateFormat *DateTimeFormat::Impl::getUDateFormatter(vm::Runtime &runtime) {
 
   // timeStyle and dateStyle cannot be used in conjunction with the other
   // options.
-  if (!timeStyle.empty() || !dateStyle.empty()) {
+  if (!timeStyle_.empty() || !dateStyle_.empty()) {
     UDateFormatStyle dateStyleRes = UDAT_DEFAULT;
     UDateFormatStyle timeStyleRes = UDAT_DEFAULT;
 
-    if (!dateStyle.empty()) {
-      if (dateStyle == eFull)
+    if (!dateStyle_.empty()) {
+      if (dateStyle_ == eFull)
         dateStyleRes = UDAT_FULL;
-      else if (dateStyle == eLong)
+      else if (dateStyle_ == eLong)
         dateStyleRes = UDAT_LONG;
-      else if (dateStyle == eMedium)
+      else if (dateStyle_ == eMedium)
         dateStyleRes = UDAT_MEDIUM;
-      else if (dateStyle == eShort)
+      else if (dateStyle_ == eShort)
         dateStyleRes = UDAT_SHORT;
     }
 
-    if (!timeStyle.empty()) {
-      if (timeStyle == eFull)
+    if (!timeStyle_.empty()) {
+      if (timeStyle_ == eFull)
         timeStyleRes = UDAT_FULL;
-      else if (timeStyle == eLong)
+      else if (timeStyle_ == eLong)
         timeStyleRes = UDAT_LONG;
-      else if (timeStyle == eMedium)
+      else if (timeStyle_ == eMedium)
         timeStyleRes = UDAT_MEDIUM;
-      else if (timeStyle == eShort)
+      else if (timeStyle_ == eShort)
         timeStyleRes = UDAT_SHORT;
     }
 
     UErrorCode status = U_ZERO_ERROR;
     // if timezone is specified, use that instead, else use default
-    if (!timeZone.empty()) {
+    if (!timeZone_.empty()) {
       const UChar *timeZoneRes =
-          reinterpret_cast<const UChar *>(timeZone.c_str());
-      int32_t timeZoneLength = timeZone.length();
+          reinterpret_cast<const UChar *>(timeZone_.c_str());
+      int32_t timeZoneLength = timeZone_.length();
       return udat_open(
           timeStyleRes,
           dateStyleRes,
-          locale8,
+          locale8_,
           timeZoneRes,
           timeZoneLength,
           NULL,
@@ -680,106 +901,106 @@ UDateFormat *DateTimeFormat::Impl::getUDateFormatter(vm::Runtime &runtime) {
           &status);
     }
     return udat_open(
-        timeStyleRes, dateStyleRes, locale8, 0, -1, NULL, -1, &status);
+        timeStyleRes, dateStyleRes, locale8_, 0, -1, NULL, -1, &status);
   }
 
   // Else: lets create the skeleton
   std::u16string customDate = u"";
-  if (!weekday.empty()) {
-    if (weekday == eNarrow)
+  if (!weekday_.empty()) {
+    if (weekday_ == eNarrow)
       customDate += u"EEEEE";
-    else if (weekday == eLong)
+    else if (weekday_ == eLong)
       customDate += u"EEEE";
-    else if (weekday == eShort)
+    else if (weekday_ == eShort)
       customDate += u"EEE";
   }
 
-  if (!timeZoneName.empty()) {
-    if (timeZoneName == eShort)
+  if (!timeZoneName_.empty()) {
+    if (timeZoneName_ == eShort)
       customDate += u"z";
-    else if (timeZoneName == eLong)
+    else if (timeZoneName_ == eLong)
       customDate += u"zzzz";
-    else if (timeZoneName == eShortOffset)
+    else if (timeZoneName_ == eShortOffset)
       customDate += u"O";
-    else if (timeZoneName == eLongOffset)
+    else if (timeZoneName_ == eLongOffset)
       customDate += u"OOOO";
-    else if (timeZoneName == eShortGeneric)
+    else if (timeZoneName_ == eShortGeneric)
       customDate += u"v";
-    else if (timeZoneName == eLongGeneric)
+    else if (timeZoneName_ == eLongGeneric)
       customDate += u"vvvv";
   }
 
-  if (!era.empty()) {
-    if (era == eNarrow)
+  if (!era_.empty()) {
+    if (era_ == eNarrow)
       customDate += u"GGGGG";
-    else if (era == eShort)
+    else if (era_ == eShort)
       customDate += u"G";
-    else if (era == eLong)
+    else if (era_ == eLong)
       customDate += u"GGGG";
   }
 
-  if (!year.empty()) {
-    if (year == eNumeric)
+  if (!year_.empty()) {
+    if (year_ == eNumeric)
       customDate += u"y";
-    else if (year == eTwoDigit)
+    else if (year_ == eTwoDigit)
       customDate += u"yy";
   }
 
-  if (!month.empty()) {
-    if (month == eTwoDigit)
+  if (!month_.empty()) {
+    if (month_ == eTwoDigit)
       customDate += u"MM";
-    else if (month == eNumeric)
+    else if (month_ == eNumeric)
       customDate += u'M';
-    else if (month == eNarrow)
+    else if (month_ == eNarrow)
       customDate += u"MMMMM";
-    else if (month == eShort)
+    else if (month_ == eShort)
       customDate += u"MMM";
-    else if (month == eLong)
+    else if (month_ == eLong)
       customDate += u"MMMM";
   }
 
-  if (!day.empty()) {
-    if (day == eNumeric)
+  if (!day_.empty()) {
+    if (day_ == eNumeric)
       customDate += u"d";
-    else if (day == eTwoDigit)
+    else if (day_ == eTwoDigit)
       customDate += u"dd";
   }
 
-  if (!hour.empty()) {
-    if (hourCycle == u"h12") {
-      if (hour == eNumeric)
+  if (!hour_.empty()) {
+    if (hourCycle_ == u"h12") {
+      if (hour_ == eNumeric)
         customDate += u"h";
-      else if (hour == eTwoDigit)
+      else if (hour_ == eTwoDigit)
         customDate += u"hh";
-    } else if (hourCycle == u"h24") {
-      if (hour == eNumeric)
+    } else if (hourCycle_ == u"h24") {
+      if (hour_ == eNumeric)
         customDate += u"k";
-      else if (hour == eTwoDigit)
+      else if (hour_ == eTwoDigit)
         customDate += u"kk";
-    } else if (hourCycle == u"h23") {
-      if (hour == eNumeric)
+    } else if (hourCycle_ == u"h23") {
+      if (hour_ == eNumeric)
         customDate += u"k";
-      else if (hour == eTwoDigit)
+      else if (hour_ == eTwoDigit)
         customDate += u"KK";
     } else {
-      if (hour == eNumeric)
+      if (hour_ == eNumeric)
         customDate += u"h";
-      else if (hour == eTwoDigit)
+      else if (hour_ == eTwoDigit)
         customDate += u"HH";
     }
   }
 
-  if (!minute.empty()) {
-    if (minute == eNumeric)
+  if (!minute_.empty()) {
+    if (minute_ == eNumeric)
       customDate += u"m";
-    else if (minute == eTwoDigit)
+    else if (minute_ == eTwoDigit)
       customDate += u"mm";
   }
 
-  if (!second.empty()) {
-    if (second == eNumeric)
+  if (!second_.empty()) {
+    if (second_ == eNumeric)
       customDate += u"s";
-    else if (second == eTwoDigit)
+    else if (second_ == eTwoDigit)
       customDate += u"ss";
   }
 
@@ -788,7 +1009,7 @@ UDateFormat *DateTimeFormat::Impl::getUDateFormatter(vm::Runtime &runtime) {
   UChar *bestpattern;
   int32_t patternLength;
 
-  UDateTimePatternGenerator *dtpGenerator = udatpg_open(locale8, &status);
+  UDateTimePatternGenerator *dtpGenerator = udatpg_open(locale8_, &status);
   patternLength = udatpg_getBestPatternWithOptions(
       dtpGenerator,
       skeleton,
@@ -812,14 +1033,14 @@ UDateFormat *DateTimeFormat::Impl::getUDateFormatter(vm::Runtime &runtime) {
   }
 
   // if timezone is specified, use that instead, else use default
-  if (!timeZone.empty()) {
+  if (!timeZone_.empty()) {
     const UChar *timeZoneRes =
-        reinterpret_cast<const UChar *>(timeZone.c_str());
-    int32_t timeZoneLength = timeZone.length();
+        reinterpret_cast<const UChar *>(timeZone_.c_str());
+    int32_t timeZoneLength = timeZone_.length();
     return udat_open(
         UDAT_PATTERN,
         UDAT_PATTERN,
-        locale8,
+        locale8_,
         timeZoneRes,
         timeZoneLength,
         bestpattern,
@@ -829,7 +1050,7 @@ UDateFormat *DateTimeFormat::Impl::getUDateFormatter(vm::Runtime &runtime) {
     return udat_open(
         UDAT_PATTERN,
         UDAT_PATTERN,
-        locale8,
+        locale8_,
         0,
         -1,
         bestpattern,
@@ -838,8 +1059,12 @@ UDateFormat *DateTimeFormat::Impl::getUDateFormatter(vm::Runtime &runtime) {
   }
 }
 
+std::u16string DateTimeFormat::format(double jsTimeValue) noexcept {
+  return static_cast<DateTimeFormatWindows *>(this)->format(jsTimeValue);
+}
+
 std::vector<std::unordered_map<std::u16string, std::u16string>>
-DateTimeFormat::formatToParts(double jsTimeValue) noexcept {
+DateTimeFormatWindows::formatToParts(double jsTimeValue) noexcept {
   std::unordered_map<std::u16string, std::u16string> part;
   part[u"type"] = u"integer";
   // This isn't right, but I didn't want to do more work for a stub.
@@ -848,12 +1073,21 @@ DateTimeFormat::formatToParts(double jsTimeValue) noexcept {
   return std::vector<std::unordered_map<std::u16string, std::u16string>>{part};
 }
 
-struct NumberFormat::Impl {
+std::vector<Part> DateTimeFormat::formatToParts(double x) noexcept {
+  return static_cast<DateTimeFormatWindows *>(this)->formatToParts(x);
+}
+
+// NumberFormat - Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
+namespace {
+struct NumberFormatDummy : NumberFormat {
+  NumberFormatDummy(const char16_t *l) : locale(l) {}
   std::u16string locale;
 };
+} // namespace
 
-NumberFormat::NumberFormat() : impl_(std::make_unique<Impl>()) {}
-NumberFormat::~NumberFormat() {}
+NumberFormat::NumberFormat() = default;
+NumberFormat::~NumberFormat() = default;
 
 vm::CallResult<std::vector<std::u16string>> NumberFormat::supportedLocalesOf(
     vm::Runtime &runtime,
@@ -862,17 +1096,17 @@ vm::CallResult<std::vector<std::u16string>> NumberFormat::supportedLocalesOf(
   return std::vector<std::u16string>{u"en-CA", u"de-DE"};
 }
 
-vm::ExecutionStatus NumberFormat::initialize(
+vm::CallResult<std::unique_ptr<NumberFormat>> NumberFormat::create(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
-  impl_->locale = u"en-US";
-  return vm::ExecutionStatus::RETURNED;
+  return std::make_unique<NumberFormatDummy>(u"en-US");
 }
 
 Options NumberFormat::resolvedOptions() noexcept {
   Options options;
-  options.emplace(u"locale", Option(impl_->locale));
+  options.emplace(
+      u"locale", Option(static_cast<NumberFormatDummy *>(this)->locale));
   options.emplace(u"numeric", Option(false));
   return options;
 }

@@ -112,7 +112,7 @@ TEST_F(SynthTraceTest, CallAndReturn) {
   auto gprExpect = SynthTrace::GetPropertyRecord(
       dummyTime,
       globalObjID,
-      identityID,
+      SynthTrace::encodeString(identityID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       identityStr,
 #endif
@@ -236,7 +236,7 @@ TEST_F(SynthTraceTest, GetProperty) {
   auto gprExpect0 = SynthTrace::GetPropertyRecord(
       dummyTime,
       objID,
-      aStringID,
+      SynthTrace::encodeString(aStringID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       a,
 #endif
@@ -249,7 +249,7 @@ TEST_F(SynthTraceTest, GetProperty) {
   auto gprExpect1 = SynthTrace::GetPropertyRecord(
       dummyTime,
       objID,
-      aPropID,
+      SynthTrace::encodePropNameID(aPropID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       a,
 #endif
@@ -261,7 +261,7 @@ TEST_F(SynthTraceTest, GetProperty) {
   auto gprExpect2 = SynthTrace::GetPropertyRecord(
       dummyTime,
       objID,
-      bPropID,
+      SynthTrace::encodePropNameID(bPropID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       b,
 #endif
@@ -297,7 +297,7 @@ TEST_F(SynthTraceTest, SetProperty) {
   auto sprExpect0 = SynthTrace::SetPropertyRecord(
       dummyTime,
       objID,
-      aStringID,
+      SynthTrace::encodeString(aStringID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       a,
 #endif
@@ -309,7 +309,7 @@ TEST_F(SynthTraceTest, SetProperty) {
   auto sprExpect1 = SynthTrace::SetPropertyRecord(
       dummyTime,
       objID,
-      bPropID,
+      SynthTrace::encodePropNameID(bPropID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       b,
 #endif
@@ -349,9 +349,9 @@ TEST_F(SynthTraceTest, HasProperty) {
   auto hprExpect0 = SynthTrace::HasPropertyRecord(
       dummyTime,
       objID,
-      aStringID
+      SynthTrace::encodeString(aStringID)
 #ifdef HERMESVM_API_TRACE_DEBUG
-      ,
+          ,
       a
 #endif
   );
@@ -362,9 +362,9 @@ TEST_F(SynthTraceTest, HasProperty) {
   auto hprExpect1 = SynthTrace::HasPropertyRecord(
       dummyTime,
       objID,
-      bPropID
+      SynthTrace::encodePropNameID(bPropID)
 #ifdef HERMESVM_API_TRACE_DEBUG
-      ,
+          ,
       b
 #endif
   );
@@ -495,7 +495,7 @@ TEST_F(SynthTraceTest, CallObjectGetProp) {
   auto gprExpect = SynthTrace::GetPropertyRecord(
       dummyTime,
       objID,
-      aStringID,
+      SynthTrace::encodeString(aStringID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       a,
 #endif
@@ -647,7 +647,7 @@ TEST_F(SynthTraceTest, HostObjectProxy) {
   auto sprExpect0 = SynthTrace::SetPropertyRecord(
       dummyTime,
       globID,
-      getHappenedPropNameID,
+      SynthTrace::encodePropNameID(getHappenedPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.getHappened,
 #endif
@@ -660,7 +660,7 @@ TEST_F(SynthTraceTest, HostObjectProxy) {
   auto gprExpect0 = SynthTrace::GetPropertyRecord(
       dummyTime,
       objID,
-      xPropNameID,
+      SynthTrace::encodePropNameID(xPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.x,
 #endif
@@ -670,7 +670,7 @@ TEST_F(SynthTraceTest, HostObjectProxy) {
   auto sprExpect1 = SynthTrace::SetPropertyRecord(
       dummyTime,
       objID,
-      xPropNameID,
+      SynthTrace::encodePropNameID(xPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.x,
 #endif
@@ -687,7 +687,7 @@ TEST_F(SynthTraceTest, HostObjectProxy) {
   auto sprExpect2 = SynthTrace::SetPropertyRecord(
       dummyTime,
       globID,
-      setHappenedPropNameID,
+      SynthTrace::encodePropNameID(setHappenedPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.setHappened,
 #endif
@@ -702,7 +702,7 @@ TEST_F(SynthTraceTest, HostObjectProxy) {
   auto sprExpect4 = SynthTrace::SetPropertyRecord(
       dummyTime,
       globID,
-      getHappenedPropNameID,
+      SynthTrace::encodePropNameID(getHappenedPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.getHappened,
 #endif
@@ -715,7 +715,7 @@ TEST_F(SynthTraceTest, HostObjectProxy) {
   auto gprExpect1 = SynthTrace::GetPropertyRecord(
       dummyTime,
       objID,
-      xPropNameID,
+      SynthTrace::encodePropNameID(xPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.x,
 #endif
@@ -815,7 +815,7 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   auto sprExpect0 = SynthTrace::SetPropertyRecord(
       dummyTime,
       globID,
-      oPropNameID,
+      SynthTrace::encodePropNameID(oPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.o,
 #endif
@@ -830,7 +830,7 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   auto sprExpect1 = SynthTrace::SetPropertyRecord(
       dummyTime,
       globID,
-      hoPropNameID,
+      SynthTrace::encodePropNameID(hoPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       ho,
 #endif
@@ -852,7 +852,7 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   auto gprExpect0 = SynthTrace::GetPropertyRecord(
       dummyTime,
       globID,
-      oPropNameID,
+      SynthTrace::encodePropNameID(oPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.o,
 #endif
@@ -861,7 +861,7 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   auto gprExpect1 = SynthTrace::GetPropertyRecord(
       dummyTime,
       oObjID,
-      observedXPropNameUID,
+      SynthTrace::encodePropNameID(observedXPropNameUID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       x,
 #endif
@@ -884,7 +884,7 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   auto gprExpect2 = SynthTrace::GetPropertyRecord(
       dummyTime,
       globID,
-      oPropNameID,
+      SynthTrace::encodePropNameID(oPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       cs.o,
 #endif
@@ -893,7 +893,7 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   auto sprExpect = SynthTrace::SetPropertyRecord(
       dummyTime,
       oObjID,
-      observedYPropNameUID,
+      SynthTrace::encodePropNameID(observedYPropNameUID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       y,
 #endif
@@ -915,7 +915,7 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   auto gprExpect3 = SynthTrace::GetPropertyRecord(
       dummyTime,
       globID,
-      xResPropNameID,
+      SynthTrace::encodePropNameID(xResPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       xRes,
 #endif
@@ -924,12 +924,55 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   auto gprExpect4 = SynthTrace::GetPropertyRecord(
       dummyTime,
       globID,
-      yResPropNameID,
+      SynthTrace::encodePropNameID(yResPropNameID),
 #ifdef HERMESVM_API_TRACE_DEBUG
       yRes,
 #endif
       SynthTrace::encodeBool(false));
   EXPECT_EQ_RECORD(gprExpect4, *records[19]);
+}
+
+TEST_F(SynthTraceTest, CreateBigInt) {
+  SynthTrace::ObjectID fromInt64ID =
+      rt->getUniqueID(jsi::BigInt::fromInt64(*rt, 0xffffffffffffffff));
+  SynthTrace::ObjectID fromUint64ID =
+      rt->getUniqueID(jsi::BigInt::fromUint64(*rt, 0xffffffffffffffff));
+
+  const auto &records = rt->trace().records();
+  ASSERT_EQ(2, records.size());
+  EXPECT_EQ_RECORD(
+      SynthTrace::CreateBigIntRecord(
+          dummyTime,
+          fromInt64ID,
+          SynthTrace::CreateBigIntRecord::Method::FromInt64,
+          0xffffffffffffffff),
+      *records[0]);
+  EXPECT_EQ_RECORD(
+      SynthTrace::CreateBigIntRecord(
+          dummyTime,
+          fromUint64ID,
+          SynthTrace::CreateBigIntRecord::Method::FromUint64,
+          0xffffffffffffffff),
+      *records[1]);
+}
+
+TEST_F(SynthTraceTest, BigIntToString) {
+  jsi::BigInt b = jsi::BigInt::fromInt64(*rt, -42);
+  SynthTrace::ObjectID bID = rt->getUniqueID(b);
+  jsi::String str = b.toString(*rt, 16);
+  SynthTrace::ObjectID strID = rt->getUniqueID(str);
+
+  const auto &records = rt->trace().records();
+  ASSERT_EQ(2, records.size());
+  EXPECT_EQ_RECORD(
+      SynthTrace::CreateBigIntRecord(
+          dummyTime,
+          bID,
+          SynthTrace::CreateBigIntRecord::Method::FromInt64,
+          -42),
+      *records[0]);
+  EXPECT_EQ_RECORD(
+      SynthTrace::BigIntToStringRecord(dummyTime, strID, bID, 16), *records[1]);
 }
 
 // These tests fail on Windows.
@@ -981,17 +1024,16 @@ TEST(SynthTraceDeathTest, HostObjectThrowsExceptionFails) {
 
 /// @}
 
-/// @name Synth trace replay tests
-/// @{
-
-struct SynthTraceReplayTest : public ::testing::Test {
+struct SynthTraceRuntimeTest : public ::testing::Test {
   ::hermes::vm::RuntimeConfig config;
   std::string traceResult;
   std::unique_ptr<TracingHermesRuntime> traceRt;
-  std::unique_ptr<jsi::Runtime> replayRt;
 
-  SynthTraceReplayTest(::hermes::vm::RuntimeConfig conf)
-      : config(conf),
+  SynthTraceRuntimeTest()
+      : config(::hermes::vm::RuntimeConfig::Builder()
+                   .withTraceEnabled(true)
+                   .withMicrotaskQueue(true)
+                   .build()),
         traceRt(makeTracingHermesRuntime(
             makeHermesRuntime(config),
             config,
@@ -999,20 +1041,50 @@ struct SynthTraceReplayTest : public ::testing::Test {
             std::make_unique<llvh::raw_string_ostream>(traceResult),
             /* forReplay */ false)) {}
 
-  SynthTraceReplayTest()
-      : SynthTraceReplayTest(::hermes::vm::RuntimeConfig::Builder()
-                                 .withTraceEnabled(true)
-                                 .build()) {}
+  jsi::Value eval(jsi::Runtime &rt, std::string code) {
+    return rt.global().getPropertyAsFunction(rt, "eval").call(rt, code);
+  }
+};
+
+/// @name Synth trace environment tests
+/// @{
+
+/// These tests validate that parts of the environment that were modified by the
+/// TracingRuntime still appear the same to JS.
+struct SynthTraceEnvironmentTest : public SynthTraceRuntimeTest {
+  std::unique_ptr<jsi::Runtime> plainRt;
+
+  SynthTraceEnvironmentTest() : plainRt(makeHermesRuntime(config)) {}
+
+  std::vector<jsi::Runtime *> runtimes() {
+    return {plainRt.get(), traceRt.get()};
+  }
+};
+
+TEST_F(SynthTraceEnvironmentTest, NonDeterministicFunctionNames) {
+  for (auto *rt : runtimes()) {
+    auto getName = [&](std::string fn) {
+      return eval(*rt, fn + ".name").toString(*rt).utf8(*rt);
+    };
+    EXPECT_EQ(getName("Math.random"), "random");
+    EXPECT_EQ(getName("WeakRef"), "WeakRef");
+    EXPECT_EQ(getName("WeakRef.prototype.deref"), "deref");
+    EXPECT_EQ(getName("Date"), "Date");
+    EXPECT_EQ(getName("Date.now"), "now");
+  }
+}
+/// @}
+
+/// @name Synth trace replay tests
+/// @{
+struct SynthTraceReplayTest : public SynthTraceRuntimeTest {
+  std::unique_ptr<jsi::Runtime> replayRt;
 
   void replay() {
     traceRt.reset();
     replayRt = makeHermesRuntime(config);
     tracing::TraceInterpreter::execFromMemoryBuffer(
         llvh::MemoryBuffer::getMemBuffer(traceResult), {}, *replayRt, {});
-  }
-
-  jsi::Value eval(jsi::Runtime &rt, const char *code) {
-    return rt.global().getPropertyAsFunction(rt, "eval").call(rt, code);
   }
 };
 
@@ -1066,14 +1138,34 @@ TEST_F(SynthTraceReplayTest, SetPropertyReplay) {
   }
 }
 
-struct JobQueueReplayTest : public SynthTraceReplayTest {
-  JobQueueReplayTest()
-      : SynthTraceReplayTest(::hermes::vm::RuntimeConfig::Builder()
-                                 .withTraceEnabled(true)
-                                 .withEnableHermesInternal(true)
-                                 .withMicrotaskQueue(true)
-                                 .build()) {}
-};
+TEST_F(SynthTraceReplayTest, BigIntCreate) {
+  {
+    auto &rt = *traceRt;
+
+    auto fromInt64 = jsi::BigInt::fromInt64(rt, -1ll);
+    rt.global().setProperty(rt, "int64BigInt", fromInt64);
+    rt.global().setProperty(rt, "int64String", fromInt64.toString(rt, 16));
+    auto fromUint64 = jsi::BigInt::fromUint64(rt, ~0ull);
+    rt.global().setProperty(rt, "uint64BigInt", fromUint64);
+    rt.global().setProperty(rt, "uint64String", fromUint64.toString(rt, 8));
+  }
+  replay();
+  {
+    auto &rt = *replayRt;
+    auto int64BigInt = rt.global().getProperty(rt, "int64BigInt").asBigInt(rt);
+    auto int64String = rt.global().getProperty(rt, "int64String").asString(rt);
+    auto uint64BigInt =
+        rt.global().getProperty(rt, "uint64BigInt").asBigInt(rt);
+    auto uint64String =
+        rt.global().getProperty(rt, "uint64String").asString(rt);
+    EXPECT_EQ(int64BigInt.getInt64(rt), -1ll);
+    EXPECT_EQ(int64String.utf8(rt), "-1");
+    EXPECT_EQ(uint64BigInt.getUint64(rt), ~0ull);
+    EXPECT_EQ(uint64String.utf8(rt), "1777777777777777777777");
+  }
+}
+
+using JobQueueReplayTest = SynthTraceReplayTest;
 
 TEST_F(JobQueueReplayTest, DrainSingleMicrotask) {
   {
@@ -1109,14 +1201,7 @@ HermesInternal.enqueueJob(inc);
   }
 }
 
-struct NonDeterminismReplayTest : public SynthTraceReplayTest {
-  NonDeterminismReplayTest()
-      : SynthTraceReplayTest(::hermes::vm::RuntimeConfig::Builder()
-                                 .withTraceEnabled(true)
-                                 .withEnableHermesInternal(true)
-                                 .withMicrotaskQueue(true)
-                                 .build()) {}
-};
+using NonDeterminismReplayTest = SynthTraceReplayTest;
 
 TEST_F(NonDeterminismReplayTest, DateNowTest) {
   eval(*traceRt, "var x = Date.now();");
@@ -1156,6 +1241,20 @@ TEST_F(NonDeterminismReplayTest, DateNewWithArgsTest) {
 
   auto replayedTime = eval(*replayRt, "x").asNumber();
   EXPECT_EQ(dateTime, replayedTime);
+}
+
+TEST_F(NonDeterminismReplayTest, DateReplacedTest) {
+  eval(*traceRt, R"(
+var oldDate = Date;
+Date = undefined;
+var x = new oldDate();
+)");
+  auto traceTime = eval(*traceRt, "x.getTime()").asNumber();
+
+  replay();
+
+  auto replayedTime = eval(*replayRt, "x.getTime()").asNumber();
+  EXPECT_EQ(traceTime, replayedTime);
 }
 
 TEST_F(NonDeterminismReplayTest, MathRandomTest) {

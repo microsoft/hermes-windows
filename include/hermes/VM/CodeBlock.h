@@ -23,7 +23,11 @@
 
 #include <memory>
 #include <vector>
+#pragma GCC diagnostic push
 
+#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
+#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#endif
 namespace hermes {
 namespace vm {
 
@@ -93,7 +97,7 @@ class CodeBlock final
   }
 
  public:
-#if defined(HERMESVM_PROFILER_JSFUNCTION) || defined(HERMESVM_PROFILER_EXTERN)
+#if defined(HERMESVM_PROFILER_JSFUNCTION)
   /// ID written/read by JS function profiler on first/later function events.
   ProfilerID profilerID{NO_PROFILER_ID};
 #endif
@@ -311,5 +315,6 @@ class CodeBlock final
 
 } // namespace vm
 } // namespace hermes
+#pragma GCC diagnostic pop
 
 #endif // HERMES_VM_CODEBLOCK_H

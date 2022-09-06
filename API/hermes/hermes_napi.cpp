@@ -1259,7 +1259,7 @@ class NapiEnvironment final {
   // Internal function to add non-finalizing reference.
   void addReference(NapiReference *reference) noexcept;
 
-  // Internal function to add inalizing reference.
+  // Internal function to add finalizing reference.
   void addFinalizingReference(NapiReference *reference) noexcept;
 
   //-----------------------------------------------------------------------------
@@ -5416,7 +5416,8 @@ napi_status NapiEnvironment::createArrayBuffer(
   NapiHandleScope scope{*this, result};
   vm::Handle<vm::JSArrayBuffer> buffer = makeHandle(vm::JSArrayBuffer::create(
       runtime_, makeHandle<vm::JSObject>(runtime_.arrayBufferPrototype)));
-  CHECK_NAPI(checkJSErrorStatus(buffer->createDataBlock(runtime_, byteLength)));
+  CHECK_NAPI(checkJSErrorStatus(
+      vm::JSArrayBuffer::createDataBlock(runtime_, buffer, byteLength, true)));
   if (data != nullptr) {
     *data = buffer->getDataBlock(runtime_);
   }
@@ -5436,7 +5437,16 @@ napi_status NapiEnvironment::createExternalArrayBuffer(
   if (externalData != nullptr) {
     std::unique_ptr<NapiExternalBuffer> externalBuffer{new NapiExternalBuffer(
         env, externalData, byteLength, finalizeCallback, finalizeHint)};
-    buffer->setExternalBuffer(runtime_, std::move(externalBuffer));
+    vm::JSArrayBuffer::setExternalDataBlock(
+        runtime_,
+        buffer,
+        reinterpret_cast<uint8_t *>(externalData),
+        byteLength,
+        externalBuffer.release(),
+        [](void *context) {
+          std::unique_ptr<NapiExternalBuffer> externalBuffer(
+              reinterpret_cast<NapiExternalBuffer *>(context));
+        });
   }
   return scope.setResult(std::move(buffer));
 }
@@ -5471,11 +5481,9 @@ napi_status NapiEnvironment::getArrayBufferInfo(
 napi_status NapiEnvironment::detachArrayBuffer(
     napi_value arrayBuffer) noexcept {
   CHECK_ARG(arrayBuffer);
-  vm::JSArrayBuffer *buffer =
-      vm::dyn_vmcast_or_null<vm::JSArrayBuffer>(*phv(arrayBuffer));
+  vm::Handle<vm::JSArrayBuffer> buffer = makeHandle<vm::JSArrayBuffer>(arrayBuffer);
   RETURN_STATUS_IF_FALSE(buffer, napi_arraybuffer_expected);
-  buffer->detach(runtime_.getHeap());
-  return clearLastNativeError();
+  return checkJSErrorStatus(vm::JSArrayBuffer::detach(runtime_, buffer));
 }
 
 napi_status NapiEnvironment::isDetachedArrayBuffer(
@@ -5647,7 +5655,8 @@ napi_status NapiEnvironment::getTypedArrayInfo(
 
   if (data != nullptr) {
     *data = array->attached(runtime_)
-        ? array->getBuffer(runtime_)->getDataBlock(runtime_) + array->getByteOffset()
+        ? array->getBuffer(runtime_)->getDataBlock(runtime_) +
+            array->getByteOffset()
         : nullptr;
   }
 
