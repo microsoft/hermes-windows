@@ -37,9 +37,7 @@ HERMES_VM_GCOBJECT(DecoratedObject);
 HERMES_VM_GCOBJECT(DictPropertyMap);
 HERMES_VM_GCOBJECT(Domain);
 HERMES_VM_GCOBJECT(Environment);
-HERMES_VM_GCOBJECT(FinalizableNativeConstructor);
 HERMES_VM_GCOBJECT(FinalizableNativeFunction);
-
 HERMES_VM_GCOBJECT(GeneratorInnerFunction);
 HERMES_VM_GCOBJECT(HashMapEntry);
 HERMES_VM_GCOBJECT(HiddenClass);

@@ -675,7 +675,7 @@ class NativeFunction : public Callable {
 
 /// A NativeFunction to be used as a constructor for native objects other than
 /// Object.
-class NativeConstructor : public NativeFunction {
+class NativeConstructor final : public NativeFunction {
  public:
   /// A CreatorFunction is responsible for creating the 'this' object that the
   /// constructor function sees.
@@ -701,10 +701,7 @@ class NativeConstructor : public NativeFunction {
     return CellKind::NativeConstructorKind;
   }
   static bool classof(const GCCell *cell) {
-    return kindInRange(
-        cell->getKind(),
-        CellKind::NativeConstructorKind_first,
-        CellKind::NativeConstructorKind_last);
+    return cell->getKind() == CellKind::NativeConstructorKind;
   }
 
   /// Create an instance of NativeConstructor.
@@ -811,7 +808,7 @@ class NativeConstructor : public NativeFunction {
         creator_(creator) {
   }
 
- protected:
+ private:
   /// Create a an instance of an object from \c creator_ to be passed as the
   /// 'this' argument when invoking the constructor.
   static CallResult<PseudoHandle<JSObject>> _newObjectImpl(
