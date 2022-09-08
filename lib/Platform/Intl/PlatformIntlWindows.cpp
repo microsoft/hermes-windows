@@ -272,7 +272,6 @@ double Collator::compare(
   return x.compare(y);
 }
 
-
 // Implementation of
 // https://402.ecma-international.org/8.0/#sec-todatetimeoptions
 Options toDateTimeOptions(
@@ -356,36 +355,81 @@ Options toDateTimeOptions(
   return options;
 }
 
-/**
-namespace {
-// Implementation of
-// https://402.ecma-international.org/8.0/#datetimeformat-objects
-struct DateTimeFormatWindows : DateTimeFormat {
-  DateTimeFormatWindows(const char16_t *l) : locale(l) {}
-  // Options used with DateTimeFormat
-  std::u16string locale_;
-  std::u16string timeZone_;
-  std::u16string weekday_;
-  std::u16string era_;
-  std::u16string year_;
-  std::u16string month_;
-  std::u16string day_;
-  std::u16string dayPeriod_; // Not Supported
-  std::u16string hour_;
-  std::u16string minute_;
-  std::u16string second_;
-  std::u16string timeZoneName_;
-  std::u16string dateStyle_;
-  std::u16string timeStyle_;
-  std::u16string hourCycle_;
-  // Internal use
-  UDateFormat *dtf_;
-  const char *locale8_;
-  UDateFormat *getUDateFormatter(vm::Runtime &runtime);
-  vm::CallResult<std::u16string> getDefaultHourCycle(vm::Runtime &runtime);
-};
-} // namespace
-**/
+/// https://402.ecma-international.org/8.0/#sec-bestavailablelocale
+std::optional<std::u16string> bestAvailableLocale(
+    const std::vector<std::u16string> &availableLocales,
+    const std::u16string &locale) {
+  // 1. Let candidate be locale
+  std::u16string candidate = locale;
+
+  // 2. Repeat
+  while (true) {
+    // a. If availableLocales contains an element equal to candidate, return
+    // candidate.
+    if (llvh::find(availableLocales, candidate) != availableLocales.end())
+      return candidate;
+    // b. Let pos be the character index of the last occurrence of "-" (U+002D)
+    // within candidate.
+    size_t pos = candidate.rfind(u'-');
+
+    // ...If that character does not occur, return undefined.
+    if (pos == std::u16string::npos)
+      return std::nullopt;
+
+    // c. If pos ≥ 2 and the character "-" occurs at index pos-2 of candidate,
+    // decrease pos by 2.
+    if (pos >= 2 && candidate[pos - 2] == '-')
+      pos -= 2;
+
+    // d. Let candidate be the substring of candidate from position 0,
+    // inclusive, to position pos, exclusive.
+    candidate.resize(pos);
+  }
+}
+
+/// https://402.ecma-international.org/8.0/#sec-lookupsupportedlocales
+std::vector<std::u16string> lookupSupportedLocales(
+    const std::vector<std::u16string> &availableLocales,
+    const std::vector<std::u16string> &requestedLocales) {
+  // 1. Let subset be a new empty List.
+  std::vector<std::u16string> subset;
+  // 2. For each element locale of requestedLocales in List order, do
+  for (const std::u16string &locale : requestedLocales) {
+    // a. Let noExtensionsLocale be the String value that is locale with all
+    // Unicode locale extension sequences removed.
+    // We can skip this step, see the comment in lookupMatcher.
+    // b. Let availableLocale be BestAvailableLocale(availableLocales,
+    // noExtensionsLocale).
+    std::optional<std::u16string> availableLocale =
+        bestAvailableLocale(availableLocales, locale);
+    // c. If availableLocale is not undefined, append locale to the end of
+    // subset.
+    if (availableLocale) {
+      subset.push_back(locale);
+    }
+  }
+  // 3. Return subset.
+  return subset;
+}
+
+/// https://402.ecma-international.org/8.0/#sec-supportedlocales
+std::vector<std::u16string> supportedLocales(
+    const std::vector<std::u16string> &availableLocales,
+    const std::vector<std::u16string> &requestedLocales) {
+  // 1. Set options to ? CoerceOptionsToObject(options).
+  // 2. Let matcher be ? GetOption(options, "localeMatcher", "string", «
+  //    "lookup", "best fit" », "best fit").
+  // 3. If matcher is "best fit", then
+  //   a. Let supportedLocales be BestFitSupportedLocales(availableLocales,
+  //      requestedLocales).
+  // 4. Else,
+  //   a. Let supportedLocales be LookupSupportedLocales(availableLocales,
+  //      requestedLocales).
+  // 5. Return CreateArrayFromList(supportedLocales).
+
+  // We do not implement a BestFitMatcher, so we can just use LookupMatcher.
+  return lookupSupportedLocales(availableLocales, requestedLocales);
+}
 
 namespace {
 // Implementation of
@@ -394,7 +438,7 @@ class DateTimeFormatWindows : public DateTimeFormat {
  public:
   DateTimeFormatWindows() = default;
   ~DateTimeFormatWindows() = default;
-  
+
   vm::ExecutionStatus initialize(
       vm::Runtime &runtime,
       const std::vector<std::u16string> &locales,
@@ -407,7 +451,7 @@ class DateTimeFormatWindows : public DateTimeFormat {
   std::vector<Part> formatToParts(double x) noexcept;
 
  private:
-    // Options used with DateTimeFormat
+  // Options used with DateTimeFormat
   std::u16string locale_;
   std::u16string timeZone_;
   std::u16string weekday_;
@@ -415,7 +459,7 @@ class DateTimeFormatWindows : public DateTimeFormat {
   std::u16string year_;
   std::u16string month_;
   std::u16string day_;
-  std::u16string dayPeriod_; // Not Supported
+  std::u16string dayPeriod_; // Not yet supported
   std::u16string hour_;
   std::u16string minute_;
   std::u16string second_;
@@ -434,17 +478,25 @@ class DateTimeFormatWindows : public DateTimeFormat {
 DateTimeFormat::DateTimeFormat() = default;
 DateTimeFormat::~DateTimeFormat() = default;
 
-// get the supported locales of dateTimeFormat
+// Implementation of
+// https://402.ecma-international.org/8.0/#sec-intl.datetimeformat.supportedlocalesof
+// without options
 vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &options) noexcept {
-  std::vector<std::u16string> result = {};
+  // 1. Let availableLocales be %DateTimeFormat%.[[AvailableLocales]].
+  std::vector<std::u16string> availableLocales = {};
   for (int32_t i = 0; i < uloc_countAvailable(); i++) {
     auto locale = uloc_getAvailable(i);
-    result.push_back(UTF8toUTF16(runtime, locale).getValue());
+    availableLocales.push_back(UTF8toUTF16(runtime, locale).getValue());
   }
-  return result;
+
+  // 2. Let requestedLocales be ? CanonicalizeLocaleList(locales).
+  auto requestedLocales = getCanonicalLocales(runtime, locales).getValue();
+
+  // 3. Return ? SupportedLocales(availableLocales, requestedLocales, options).
+  return supportedLocales(availableLocales, requestedLocales);
 }
 
 // Implementation of
@@ -465,7 +517,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
   }
   const char *locale8 = conversion.getValue().c_str();
   locale8_ = locale8; // store the UTF8 version of locale since it is used
-                            // in almost all other functions
+                      // in almost all other functions
 
   // 2. Let options be ? ToDateTimeOptions(options, "any", "date").
   Options options = toDateTimeOptions(runtime, inputOptions, u"any", u"date");
@@ -754,7 +806,6 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
   return vm::ExecutionStatus::RETURNED;
 }
 
-
 vm::CallResult<std::unique_ptr<DateTimeFormat>> DateTimeFormat::create(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
@@ -771,7 +822,6 @@ vm::CallResult<std::unique_ptr<DateTimeFormat>> DateTimeFormat::create(
 Options DateTimeFormatWindows::resolvedOptions() noexcept {
   Options options;
   options.emplace(u"locale", Option(locale_));
-  options.emplace(u"numeric", Option(false));
   options.emplace(u"timeZone", Option(timeZone_));
   options.emplace(u"weekday", weekday_);
   options.emplace(u"era", era_);
@@ -804,10 +854,9 @@ std::u16string DateTimeFormatWindows::format(double jsTimeValue) noexcept {
     status = U_ZERO_ERROR;
     myString = (UChar *)malloc(sizeof(UChar) * (myStrlen + 1));
     udat_format(dtf_, *date, myString, myStrlen + 1, NULL, &status);
-    return myString;
   }
 
-  return u"";
+  return myString;
 }
 
 vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
@@ -1063,6 +1112,8 @@ std::u16string DateTimeFormat::format(double jsTimeValue) noexcept {
   return static_cast<DateTimeFormatWindows *>(this)->format(jsTimeValue);
 }
 
+// Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 std::vector<std::unordered_map<std::u16string, std::u16string>>
 DateTimeFormatWindows::formatToParts(double jsTimeValue) noexcept {
   std::unordered_map<std::u16string, std::u16string> part;
@@ -1073,6 +1124,8 @@ DateTimeFormatWindows::formatToParts(double jsTimeValue) noexcept {
   return std::vector<std::unordered_map<std::u16string, std::u16string>>{part};
 }
 
+// Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
 std::vector<Part> DateTimeFormat::formatToParts(double x) noexcept {
   return static_cast<DateTimeFormatWindows *>(this)->formatToParts(x);
 }
