@@ -131,6 +131,9 @@ set(compile_flags "${compile_flags} /GR")
 # Generate PDBs
 set(compile_flags "${compile_flags} /Zi")
 
+# Security flags
+set(compile_flags "${compile_flags} /guard:cf /Qspectre /sdl /ZH:SHA_256")
+
 set(link_flags_debug "/DEBUG")
 set(link_flags_release "/DEBUG;/OPT:REF;/OPT:ICF;/INCREMENTAL:NO")
 if(CMAKE_VS_PLATFORM_NAME MATCHES "^(x64|x86|Win32)$")

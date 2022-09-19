@@ -92,6 +92,9 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   # Generate PDBs
   set(compile_flags "${compile_flags} /Zi")
 
+  # Security flags
+  set(compile_flags "${compile_flags} /guard:cf /Qspectre /sdl /ZH:SHA_256")
+
   set(link_flags_debug "/DEBUG")
   # Use /OPT:NOICF because hermes associates function pointer with its name.
   # The optimization that merges functions with the same body breaks that code.
