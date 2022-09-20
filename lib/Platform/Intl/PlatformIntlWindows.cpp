@@ -186,8 +186,8 @@ vm::CallResult<std::u16string> getOptionString(
     vm::Runtime &runtime,
     const Options &options,
     const std::u16string &property,
-    std::vector<std::u16string> values,
-    std::u16string fallback) {
+    const std::vector<std::u16string> &values,
+    const std::u16string &fallback) {
   // 1. Assert type(options) is object
   // 2. Let value be ? Get(options, property).
   auto valueIt = options.find(property);
@@ -212,24 +212,24 @@ vm::CallResult<std::u16string> getOptionString(
 }
 
 // boolean + null option
-enum BoolNull { eFalse, eTrue, eNull };
+enum class BoolNull { False, True, Null };
 BoolNull getOptionBool(
     vm::Runtime &runtime,
     const Options &options,
     const std::u16string &property,
-    bool fallback) {
+    const bool fallback) {
   //  1. Assert: Type(options) is Object.
   //  2. Let value be ? Get(options, property).
   auto value = options.find(property);
   //  3. If value is undefined, return fallback.
   if (value == options.end()) {
-    return eNull;
+    return BoolNull::Null;
   }
   //  8. Return value.
   if (value->second.getBool()) {
-    return eTrue;
+    return BoolNull::True;
   }
-  return eFalse;
+  return BoolNull::False;
 }
 
 // Collator - Not yet implemented. Tracked by
@@ -274,11 +274,11 @@ double Collator::compare(
 
 // Implementation of
 // https://402.ecma-international.org/8.0/#sec-todatetimeoptions
-Options toDateTimeOptions(
+vm::CallResult<Options> toDateTimeOptions(
     vm::Runtime &runtime,
     Options options,
-    std::u16string required,
-    std::u16string defaults) {
+    const std::u16string &required,
+    const std::u16string &defaults) {
   // 1. If options is undefined, let options be null; otherwise let options be ?
   // ToObject(options).
   // 2. Let options be OrdinaryObjectCreate(options).
@@ -326,10 +326,12 @@ Options toDateTimeOptions(
   // 9. If required is "date" and timeStyle is not undefined, then
   if (required == u"date" && timeStyle != options.end()) {
     // a. Throw a TypeError exception.
+    return runtime.raiseTypeError("TimeSyle is defined");
   }
   // 10. If required is "time" and dateStyle is not undefined, then
   if (required == u"time" && dateStyle != options.end()) {
     // a. Throw a TypeError exception.
+    return runtime.raiseTypeError("DateSyle is defined");
   }
   // 11. If needDefaults is true and defaults is either "date" or "all", then
   if (needDefaults && (defaults == u"date" || defaults == u"all")) {
@@ -487,7 +489,7 @@ vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
     const Options &options) noexcept {
   // 1. Let availableLocales be %DateTimeFormat%.[[AvailableLocales]].
   std::vector<std::u16string> availableLocales = {};
-  for (int32_t i = 0; i < uloc_countAvailable(); i++) {
+  for (int32_t i = 0, count = uloc_countAvailable(); i < count; i++) {
     auto locale = uloc_getAvailable(i);
     availableLocales.push_back(UTF8toUTF16(runtime, locale).getValue());
   }
@@ -520,7 +522,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
                       // in almost all other functions
 
   // 2. Let options be ? ToDateTimeOptions(options, "any", "date").
-  Options options = toDateTimeOptions(runtime, inputOptions, u"any", u"date");
+  Options options = toDateTimeOptions(runtime, inputOptions, u"any", u"date").getValue();
   // 3. Let opt be a new Record.
   std::unordered_map<std::u16string, std::u16string> opt;
   // 4. Let matcher be ? GetOption(options, "localeMatcher", "string",
@@ -560,7 +562,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
   std::u16string hourCycle = hourCycleRes.getValue();
 
   // 14. If hour12 is not undefined, then a. Set hourCycle to null.
-  if (!(hour12 == eNull)) {
+  if (!(hour12 == BoolNull::Null)) {
     hourCycle = u"";
   }
   // 15. Set opt.[[hc]] to hourCycle.
@@ -763,9 +765,9 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
       // i. Set hc to hcDefault.
       hc = hcDefault;
     // d. If hour12 is not undefined, then
-    if (!(hour12 == eNull)) {
+    if (!(hour12 == BoolNull::Null)) {
       // i. If hour12 is true, then
-      if ((hour12 == eTrue)) {
+      if ((hour12 == BoolNull::True)) {
         // 1. If hcDefault is "h11" or "h23", then
         if (hcDefault == u"h11" || hcDefault == u"h23") {
           // a. Set hc to "h11".
@@ -846,14 +848,14 @@ std::u16string DateTimeFormatWindows::format(double jsTimeValue) noexcept {
   auto timeInSeconds = jsTimeValue;
   UDate *date = new UDate(timeInSeconds);
   UErrorCode status = U_ZERO_ERROR;
-  UChar *myString;
+  std::u16string myString;
   int32_t myStrlen = 0;
 
-  myStrlen = udat_format(dtf_, *date, NULL, myStrlen, NULL, &status);
+  myStrlen = udat_format(dtf_, *date, 0, myStrlen, 0, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
-    myString = (UChar *)malloc(sizeof(UChar) * (myStrlen + 1));
-    udat_format(dtf_, *date, myString, myStrlen + 1, NULL, &status);
+    myString.resize(myStrlen);
+    udat_format(dtf_, *date, &myString[0], myStrlen + 1, 0, &status);
   }
 
   return myString;
@@ -862,15 +864,15 @@ std::u16string DateTimeFormatWindows::format(double jsTimeValue) noexcept {
 vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
     vm::Runtime &runtime) {
   UErrorCode status = U_ZERO_ERROR;
-  UChar *myString;
+  std::u16string myString;
   // open the default UDateFormat and Pattern of locale
   UDateFormat *defaultDTF =
-      udat_open(UDAT_DEFAULT, UDAT_DEFAULT, locale8_, 0, -1, NULL, -1, &status);
-  int32_t size = udat_toPattern(defaultDTF, true, NULL, 0, &status);
+      udat_open(UDAT_DEFAULT, UDAT_DEFAULT, locale8_, 0, -1, 0, -1, &status);
+  int32_t size = udat_toPattern(defaultDTF, true, 0, 0, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
-    myString = (UChar *)malloc(sizeof(UChar) * (size + 1));
-    udat_toPattern(defaultDTF, true, myString, 40, &status);
+    myString.resize(size + 1);
+    udat_toPattern(defaultDTF, true, &myString[0], 40, &status);
     // find the default hour cycle and return it
     for (int32_t i = 0; i < size; i++) {
       char16_t ch = myString[i];
@@ -945,12 +947,12 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
           locale8_,
           timeZoneRes,
           timeZoneLength,
-          NULL,
+          0,
           -1,
           &status);
     }
     return udat_open(
-        timeStyleRes, dateStyleRes, locale8_, 0, -1, NULL, -1, &status);
+        timeStyleRes, dateStyleRes, locale8_, 0, -1, 0, -1, &status);
   }
 
   // Else: lets create the skeleton
@@ -1055,7 +1057,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
 
   UErrorCode status = U_ZERO_ERROR;
   const UChar *skeleton = reinterpret_cast<const UChar *>(customDate.c_str());
-  UChar *bestpattern;
+  std::u16string bestpattern;
   int32_t patternLength;
 
   UDateTimePatternGenerator *dtpGenerator = udatpg_open(locale8_, &status);
@@ -1064,19 +1066,19 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
       skeleton,
       -1,
       UDATPG_MATCH_ALL_FIELDS_LENGTH,
-      NULL,
+      0,
       0,
       &status);
 
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
-    bestpattern = (UChar *)malloc(sizeof(UChar) * (patternLength + 1));
+    bestpattern.resize(patternLength);
     udatpg_getBestPatternWithOptions(
         dtpGenerator,
         skeleton,
         customDate.length(),
         UDATPG_MATCH_ALL_FIELDS_LENGTH,
-        bestpattern,
+        &bestpattern[0],
         patternLength,
         &status);
   }
@@ -1092,7 +1094,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
         locale8_,
         timeZoneRes,
         timeZoneLength,
-        bestpattern,
+        &bestpattern[0],
         patternLength,
         &status);
   } else {
@@ -1102,7 +1104,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
         locale8_,
         0,
         -1,
-        bestpattern,
+        &bestpattern[0],
         patternLength,
         &status);
   }
