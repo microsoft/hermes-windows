@@ -522,7 +522,8 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
                       // in almost all other functions
 
   // 2. Let options be ? ToDateTimeOptions(options, "any", "date").
-  Options options = toDateTimeOptions(runtime, inputOptions, u"any", u"date").getValue();
+  Options options =
+      toDateTimeOptions(runtime, inputOptions, u"any", u"date").getValue();
   // 3. Let opt be a new Record.
   std::unordered_map<std::u16string, std::u16string> opt;
   // 4. Let matcher be ? GetOption(options, "localeMatcher", "string",
