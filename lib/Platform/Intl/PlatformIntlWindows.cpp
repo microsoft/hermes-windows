@@ -9,6 +9,7 @@
 #include <deque>
 #include <string>
 #include <unordered_map>
+#include <optional>
 #include "llvh/Support/ConvertUTF.h"
 
 using namespace ::hermes;
@@ -417,7 +418,8 @@ std::vector<std::u16string> lookupSupportedLocales(
 /// https://402.ecma-international.org/8.0/#sec-supportedlocales
 std::vector<std::u16string> supportedLocales(
     const std::vector<std::u16string> &availableLocales,
-    const std::vector<std::u16string> &requestedLocales) {
+    const std::vector<std::u16string> &requestedLocales,
+    const Options &options) {
   // 1. Set options to ? CoerceOptionsToObject(options).
   // 2. Let matcher be ? GetOption(options, "localeMatcher", "string", «
   //    "lookup", "best fit" », "best fit").
@@ -498,7 +500,7 @@ vm::CallResult<std::vector<std::u16string>> DateTimeFormat::supportedLocalesOf(
   auto requestedLocales = getCanonicalLocales(runtime, locales).getValue();
 
   // 3. Return ? SupportedLocales(availableLocales, requestedLocales, options).
-  return supportedLocales(availableLocales, requestedLocales);
+  return supportedLocales(availableLocales, requestedLocales, options);
 }
 
 // Implementation of
@@ -533,7 +535,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
       options,
       u"localeMatcher",
       {u"lookup", u"best fit"},
-      u"best fit");
+      u"lookup");
   // 5. Set opt.[[localeMatcher]] to matcher.
   opt.emplace(u"localeMatcher", matcher.getValue());
   // 6. Let calendar be ? GetOption(options, "calendar", "string", undefined,
@@ -868,12 +870,13 @@ vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
   std::u16string myString;
   // open the default UDateFormat and Pattern of locale
   UDateFormat *defaultDTF =
-      udat_open(UDAT_DEFAULT, UDAT_DEFAULT, locale8_, 0, -1, 0, -1, &status);
+      udat_open(UDAT_DEFAULT, UDAT_DEFAULT, locale8_, nullptr, -1, nullptr, -1, &status);
   int32_t size = udat_toPattern(defaultDTF, true, 0, 0, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
     myString.resize(size + 1);
     udat_toPattern(defaultDTF, true, &myString[0], 40, &status);
+    udat_close(defaultDTF);
     // find the default hour cycle and return it
     for (int32_t i = 0; i < size; i++) {
       char16_t ch = myString[i];
@@ -948,12 +951,12 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
           locale8_,
           timeZoneRes,
           timeZoneLength,
-          0,
+          nullptr,
           -1,
           &status);
     }
     return udat_open(
-        timeStyleRes, dateStyleRes, locale8_, 0, -1, 0, -1, &status);
+        timeStyleRes, dateStyleRes, locale8_, nullptr, -1, nullptr, -1, &status);
   }
 
   // Else: lets create the skeleton
@@ -1067,7 +1070,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
       skeleton,
       -1,
       UDATPG_MATCH_ALL_FIELDS_LENGTH,
-      0,
+      nullptr,
       0,
       &status);
 
@@ -1103,7 +1106,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
         UDAT_PATTERN,
         UDAT_PATTERN,
         locale8_,
-        0,
+        nullptr,
         -1,
         &bestpattern[0],
         patternLength,
