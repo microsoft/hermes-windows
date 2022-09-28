@@ -7,9 +7,9 @@
 
 #include <icu.h>
 #include <deque>
+#include <optional>
 #include <string>
 #include <unordered_map>
-#include <optional>
 #include "llvh/Support/ConvertUTF.h"
 
 using namespace ::hermes;
@@ -531,11 +531,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
   // 4. Let matcher be ? GetOption(options, "localeMatcher", "string",
   // «"lookup", "best fit" », "best fit").
   auto matcher = getOptionString(
-      runtime,
-      options,
-      u"localeMatcher",
-      {u"lookup", u"best fit"},
-      u"lookup");
+      runtime, options, u"localeMatcher", {u"lookup", u"best fit"}, u"lookup");
   // 5. Set opt.[[localeMatcher]] to matcher.
   opt.emplace(u"localeMatcher", matcher.getValue());
   // 6. Let calendar be ? GetOption(options, "calendar", "string", undefined,
@@ -854,11 +850,11 @@ std::u16string DateTimeFormatWindows::format(double jsTimeValue) noexcept {
   std::u16string myString;
   int32_t myStrlen = 0;
 
-  myStrlen = udat_format(dtf_, *date, 0, myStrlen, 0, &status);
+  myStrlen = udat_format(dtf_, *date, nullptr, myStrlen, nullptr, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
     myString.resize(myStrlen);
-    udat_format(dtf_, *date, &myString[0], myStrlen + 1, 0, &status);
+    udat_format(dtf_, *date, &myString[0], myStrlen + 1, nullptr, &status);
   }
 
   return myString;
@@ -869,8 +865,8 @@ vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
   UErrorCode status = U_ZERO_ERROR;
   std::u16string myString;
   // open the default UDateFormat and Pattern of locale
-  UDateFormat *defaultDTF =
-      udat_open(UDAT_DEFAULT, UDAT_DEFAULT, locale8_, nullptr, -1, nullptr, -1, &status);
+  UDateFormat *defaultDTF = udat_open(
+      UDAT_DEFAULT, UDAT_DEFAULT, locale8_, nullptr, -1, nullptr, -1, &status);
   int32_t size = udat_toPattern(defaultDTF, true, 0, 0, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
@@ -956,7 +952,14 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
           &status);
     }
     return udat_open(
-        timeStyleRes, dateStyleRes, locale8_, nullptr, -1, nullptr, -1, &status);
+        timeStyleRes,
+        dateStyleRes,
+        locale8_,
+        nullptr,
+        -1,
+        nullptr,
+        -1,
+        &status);
   }
 
   // Else: lets create the skeleton
