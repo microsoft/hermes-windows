@@ -213,24 +213,21 @@ vm::CallResult<std::u16string> getOptionString(
 }
 
 // boolean + null option
-enum class BoolNull { False, True, Null };
-BoolNull getOptionBool(
+//enum class BoolNull { False, True, Null };
+std::optional<bool> getOptionBool(
     vm::Runtime &runtime,
     const Options &options,
     const std::u16string &property,
-    const bool fallback) {
+    const std::optional<bool> fallback) {
   //  1. Assert: Type(options) is Object.
   //  2. Let value be ? Get(options, property).
   auto value = options.find(property);
   //  3. If value is undefined, return fallback.
   if (value == options.end()) {
-    return BoolNull::Null;
+    return fallback;
   }
   //  8. Return value.
-  if (value->second.getBool()) {
-    return BoolNull::True;
-  }
-  return BoolNull::False;
+  return value->second.getBool();
 }
 
 // Collator - Not yet implemented. Tracked by
@@ -550,7 +547,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
 
   // 12. Let hour12 be ? GetOption(options, "hour12", "boolean", undefined,
   // undefined).
-  BoolNull hour12 = getOptionBool(runtime, options, u"hour12", {});
+  auto hour12 = getOptionBool(runtime, options, u"hour12", {});
 
   // 13. Let hourCycle be ? GetOption(options, "hourCycle", "string", «"h11",
   // "h12", "h23", "h24" », undefined).
@@ -561,7 +558,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
   std::u16string hourCycle = hourCycleRes.getValue();
 
   // 14. If hour12 is not undefined, then a. Set hourCycle to null.
-  if (!(hour12 == BoolNull::Null)) {
+  if (hour12.has_value()) {
     hourCycle = u"";
   }
   // 15. Set opt.[[hc]] to hourCycle.
@@ -764,9 +761,9 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
       // i. Set hc to hcDefault.
       hc = hcDefault;
     // d. If hour12 is not undefined, then
-    if (!(hour12 == BoolNull::Null)) {
+    if (hour12.has_value()) {
       // i. If hour12 is true, then
-      if ((hour12 == BoolNull::True)) {
+      if (*hour12 == true) {
         // 1. If hcDefault is "h11" or "h23", then
         if (hcDefault == u"h11" || hcDefault == u"h23") {
           // a. Set hc to "h11".
