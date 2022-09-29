@@ -3,6 +3,7 @@
  * Licensed under the MIT License.
  */
 
+#include "./PlatformIntlShared.cpp"
 #include "hermes/Platform/Intl/PlatformIntl.h"
 
 #include <icu.h>
@@ -16,6 +17,8 @@ using namespace ::hermes;
 
 namespace hermes {
 namespace platform_intl {
+
+namespace {
 
 // convert utf8 string to utf16
 vm::CallResult<std::u16string> UTF8toUTF16(
@@ -156,31 +159,6 @@ vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(
   return seen;
 }
 
-// https://tc39.es/ecma402/#sec-intl.getcanonicallocales
-vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
-    vm::Runtime &runtime,
-    const std::vector<std::u16string> &locales) {
-  return CanonicalizeLocaleList(runtime, locales);
-}
-
-// Not yet implemented. Tracked by
-// https://github.com/microsoft/hermes-windows/issues/87
-vm::CallResult<std::u16string> toLocaleLowerCase(
-    vm::Runtime &runtime,
-    const std::vector<std::u16string> &locales,
-    const std::u16string &str) {
-  return std::u16string(u"lowered");
-}
-
-// Not yet implemented. Tracked by
-// https://github.com/microsoft/hermes-windows/issues/87
-vm::CallResult<std::u16string> toLocaleUpperCase(
-    vm::Runtime &runtime,
-    const std::vector<std::u16string> &locales,
-    const std::u16string &str) {
-  return std::u16string(u"uppered");
-}
-
 /// https://402.ecma-international.org/8.0/#sec-getoption
 /// Split into getOptionString and getOptionBool to help readability
 vm::CallResult<std::u16string> getOptionString(
@@ -212,22 +190,50 @@ vm::CallResult<std::u16string> getOptionString(
   return std::u16string(value);
 }
 
-// boolean + null option
-//enum class BoolNull { False, True, Null };
-std::optional<bool> getOptionBool(
+/// https://402.ecma-international.org/8.0/#sec-supportedlocales
+std::vector<std::u16string> supportedLocales(
+    const std::vector<std::u16string> &availableLocales,
+    const std::vector<std::u16string> &requestedLocales,
+    const Options &options) {
+  // 1. Set options to ? CoerceOptionsToObject(options).
+  // 2. Let matcher be ? GetOption(options, "localeMatcher", "string", «
+  //    "lookup", "best fit" », "best fit").
+  // 3. If matcher is "best fit", then
+  //   a. Let supportedLocales be BestFitSupportedLocales(availableLocales,
+  //      requestedLocales).
+  // 4. Else,
+  //   a. Let supportedLocales be LookupSupportedLocales(availableLocales,
+  //      requestedLocales).
+  // 5. Return CreateArrayFromList(supportedLocales).
+
+  // We do not implement a BestFitMatcher, so we can just use LookupMatcher.
+  return lookupSupportedLocales(availableLocales, requestedLocales);
+}
+} // namespace
+
+// https://tc39.es/ecma402/#sec-intl.getcanonicallocales
+vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
     vm::Runtime &runtime,
-    const Options &options,
-    const std::u16string &property,
-    const std::optional<bool> fallback) {
-  //  1. Assert: Type(options) is Object.
-  //  2. Let value be ? Get(options, property).
-  auto value = options.find(property);
-  //  3. If value is undefined, return fallback.
-  if (value == options.end()) {
-    return fallback;
-  }
-  //  8. Return value.
-  return value->second.getBool();
+    const std::vector<std::u16string> &locales) {
+  return CanonicalizeLocaleList(runtime, locales);
+}
+
+// Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
+vm::CallResult<std::u16string> toLocaleLowerCase(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const std::u16string &str) {
+  return std::u16string(u"lowered");
+}
+
+// Not yet implemented. Tracked by
+// https://github.com/microsoft/hermes-windows/issues/87
+vm::CallResult<std::u16string> toLocaleUpperCase(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales,
+    const std::u16string &str) {
+  return std::u16string(u"uppered");
 }
 
 // Collator - Not yet implemented. Tracked by
@@ -268,168 +274,6 @@ double Collator::compare(
     const std::u16string &x,
     const std::u16string &y) noexcept {
   return x.compare(y);
-}
-
-// Implementation of
-// https://402.ecma-international.org/8.0/#sec-todatetimeoptions
-vm::CallResult<Options> toDateTimeOptions(
-    vm::Runtime &runtime,
-    Options options,
-    const std::u16string &required,
-    const std::u16string &defaults) {
-  // 1. If options is undefined, let options be null; otherwise let options be ?
-  // ToObject(options).
-  // 2. Let options be OrdinaryObjectCreate(options).
-  // 3. Let needDefaults be true.
-  bool needDefaults = true;
-  // 4. If required is "date" or "any", then
-  if (required == u"date" || required == u"any") {
-    // a. For each property name prop of « "weekday", "year", "month", "day" »,
-    // do
-    // TODO(T116352920): Make this a std::u16string props[] once we have
-    // constexpr std::u16string.
-    static const std::vector<std::u16string> props = {
-        u"weekday", u"year", u"month", u"day"};
-    for (const auto &prop : props) {
-      // i. Let value be ? Get(options, prop).
-      if (options.find(std::u16string(prop)) != options.end()) {
-        // ii. If value is not undefined, let needDefaults be false.
-        needDefaults = false;
-      }
-    }
-  }
-  // 5. If required is "time" or "any", then
-  if (required == u"time" || required == u"any") {
-    // a. For each property name prop of « "dayPeriod", "hour", "minute",
-    // "second", "fractionalSecondDigits" », do
-    static const std::vector<std::u16string> props = {
-        u"dayPeriod", u"hour", u"minute", u"second", u"fractionalSecondDigits"};
-    for (const auto &prop : props) {
-      // i. Let value be ? Get(options, prop).
-      if (options.find(std::u16string(prop)) != options.end()) {
-        // ii. If value is not undefined, let needDefaults be false.
-        needDefaults = false;
-      }
-    }
-  }
-  // 6. Let dateStyle be ? Get(options, "dateStyle").
-  auto dateStyle = options.find(u"dateStyle");
-  // 7. Let timeStyle be ? Get(options, "timeStyle").
-  auto timeStyle = options.find(u"timeStyle");
-  // 8. If dateStyle is not undefined or timeStyle is not undefined, let
-  // needDefaults be false.
-  if (dateStyle != options.end() || timeStyle != options.end()) {
-    needDefaults = false;
-  }
-  // 9. If required is "date" and timeStyle is not undefined, then
-  if (required == u"date" && timeStyle != options.end()) {
-    // a. Throw a TypeError exception.
-    return runtime.raiseTypeError("TimeSyle is defined");
-  }
-  // 10. If required is "time" and dateStyle is not undefined, then
-  if (required == u"time" && dateStyle != options.end()) {
-    // a. Throw a TypeError exception.
-    return runtime.raiseTypeError("DateSyle is defined");
-  }
-  // 11. If needDefaults is true and defaults is either "date" or "all", then
-  if (needDefaults && (defaults == u"date" || defaults == u"all")) {
-    // a. For each property name prop of « "year", "month", "day" », do
-    static const std::vector<std::u16string> props = {
-        u"year", u"month", u"day"};
-    for (const auto &prop : props) {
-      // i. Perform ? CreateDataPropertyOrThrow(options, prop, "numeric").
-      options.emplace(prop, Option(std::u16string(u"numeric")));
-    }
-  }
-  // 12. If needDefaults is true and defaults is either "time" or "all", then
-  if (needDefaults && (defaults == u"time" || defaults == u"all")) {
-    // a. For each property name prop of « "hour", "minute", "second" », do
-    static const std::vector<std::u16string> props = {
-        u"hour", u"minute", u"second"};
-    for (const auto &prop : props) {
-      // i. Perform ? CreateDataPropertyOrThrow(options, prop, "numeric").
-      options.emplace(prop, Option(std::u16string(u"numeric")));
-    }
-  }
-  // 13. return options
-  return options;
-}
-
-/// https://402.ecma-international.org/8.0/#sec-bestavailablelocale
-std::optional<std::u16string> bestAvailableLocale(
-    const std::vector<std::u16string> &availableLocales,
-    const std::u16string &locale) {
-  // 1. Let candidate be locale
-  std::u16string candidate = locale;
-
-  // 2. Repeat
-  while (true) {
-    // a. If availableLocales contains an element equal to candidate, return
-    // candidate.
-    if (llvh::find(availableLocales, candidate) != availableLocales.end())
-      return candidate;
-    // b. Let pos be the character index of the last occurrence of "-" (U+002D)
-    // within candidate.
-    size_t pos = candidate.rfind(u'-');
-
-    // ...If that character does not occur, return undefined.
-    if (pos == std::u16string::npos)
-      return std::nullopt;
-
-    // c. If pos ≥ 2 and the character "-" occurs at index pos-2 of candidate,
-    // decrease pos by 2.
-    if (pos >= 2 && candidate[pos - 2] == '-')
-      pos -= 2;
-
-    // d. Let candidate be the substring of candidate from position 0,
-    // inclusive, to position pos, exclusive.
-    candidate.resize(pos);
-  }
-}
-
-/// https://402.ecma-international.org/8.0/#sec-lookupsupportedlocales
-std::vector<std::u16string> lookupSupportedLocales(
-    const std::vector<std::u16string> &availableLocales,
-    const std::vector<std::u16string> &requestedLocales) {
-  // 1. Let subset be a new empty List.
-  std::vector<std::u16string> subset;
-  // 2. For each element locale of requestedLocales in List order, do
-  for (const std::u16string &locale : requestedLocales) {
-    // a. Let noExtensionsLocale be the String value that is locale with all
-    // Unicode locale extension sequences removed.
-    // We can skip this step, see the comment in lookupMatcher.
-    // b. Let availableLocale be BestAvailableLocale(availableLocales,
-    // noExtensionsLocale).
-    std::optional<std::u16string> availableLocale =
-        bestAvailableLocale(availableLocales, locale);
-    // c. If availableLocale is not undefined, append locale to the end of
-    // subset.
-    if (availableLocale) {
-      subset.push_back(locale);
-    }
-  }
-  // 3. Return subset.
-  return subset;
-}
-
-/// https://402.ecma-international.org/8.0/#sec-supportedlocales
-std::vector<std::u16string> supportedLocales(
-    const std::vector<std::u16string> &availableLocales,
-    const std::vector<std::u16string> &requestedLocales,
-    const Options &options) {
-  // 1. Set options to ? CoerceOptionsToObject(options).
-  // 2. Let matcher be ? GetOption(options, "localeMatcher", "string", «
-  //    "lookup", "best fit" », "best fit").
-  // 3. If matcher is "best fit", then
-  //   a. Let supportedLocales be BestFitSupportedLocales(availableLocales,
-  //      requestedLocales).
-  // 4. Else,
-  //   a. Let supportedLocales be LookupSupportedLocales(availableLocales,
-  //      requestedLocales).
-  // 5. Return CreateArrayFromList(supportedLocales).
-
-  // We do not implement a BestFitMatcher, so we can just use LookupMatcher.
-  return lookupSupportedLocales(availableLocales, requestedLocales);
 }
 
 namespace {
@@ -842,16 +686,16 @@ Options DateTimeFormat::resolvedOptions() noexcept {
 
 std::u16string DateTimeFormatWindows::format(double jsTimeValue) noexcept {
   auto timeInSeconds = jsTimeValue;
-  UDate *date = new UDate(timeInSeconds);
+  UDate date = UDate(timeInSeconds);
   UErrorCode status = U_ZERO_ERROR;
   std::u16string myString;
   int32_t myStrlen = 0;
 
-  myStrlen = udat_format(dtf_, *date, nullptr, myStrlen, nullptr, &status);
+  myStrlen = udat_format(dtf_, date, nullptr, myStrlen, nullptr, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
     myString.resize(myStrlen);
-    udat_format(dtf_, *date, &myString[0], myStrlen + 1, nullptr, &status);
+    udat_format(dtf_, date, &myString[0], myStrlen, nullptr, &status);
   }
 
   return myString;
@@ -864,7 +708,7 @@ vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
   // open the default UDateFormat and Pattern of locale
   UDateFormat *defaultDTF = udat_open(
       UDAT_DEFAULT, UDAT_DEFAULT, locale8_, nullptr, -1, nullptr, -1, &status);
-  int32_t size = udat_toPattern(defaultDTF, true, 0, 0, &status);
+  int32_t size = udat_toPattern(defaultDTF, true, nullptr, 0, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
     myString.resize(size + 1);
@@ -933,12 +777,13 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
     }
 
     UErrorCode status = U_ZERO_ERROR;
+    UDateFormat *dtf;
     // if timezone is specified, use that instead, else use default
     if (!timeZone_.empty()) {
       const UChar *timeZoneRes =
           reinterpret_cast<const UChar *>(timeZone_.c_str());
       int32_t timeZoneLength = timeZone_.length();
-      return udat_open(
+      dtf = udat_open(
           timeStyleRes,
           dateStyleRes,
           locale8_,
@@ -947,127 +792,129 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
           nullptr,
           -1,
           &status);
+    } else {
+      dtf = udat_open(
+          timeStyleRes,
+          dateStyleRes,
+          locale8_,
+          nullptr,
+          -1,
+          nullptr,
+          -1,
+          &status);
     }
-    return udat_open(
-        timeStyleRes,
-        dateStyleRes,
-        locale8_,
-        nullptr,
-        -1,
-        nullptr,
-        -1,
-        &status);
+    assert(status == U_ZERO_ERROR);
+    return dtf;
   }
 
   // Else: lets create the skeleton
-  std::u16string customDate = u"";
+  std::u16string skeleton = u"";
   if (!weekday_.empty()) {
     if (weekday_ == eNarrow)
-      customDate += u"EEEEE";
+      skeleton += u"EEEEE";
     else if (weekday_ == eLong)
-      customDate += u"EEEE";
+      skeleton += u"EEEE";
     else if (weekday_ == eShort)
-      customDate += u"EEE";
+      skeleton += u"EEE";
   }
 
   if (!timeZoneName_.empty()) {
     if (timeZoneName_ == eShort)
-      customDate += u"z";
+      skeleton += u"z";
     else if (timeZoneName_ == eLong)
-      customDate += u"zzzz";
+      skeleton += u"zzzz";
     else if (timeZoneName_ == eShortOffset)
-      customDate += u"O";
+      skeleton += u"O";
     else if (timeZoneName_ == eLongOffset)
-      customDate += u"OOOO";
+      skeleton += u"OOOO";
     else if (timeZoneName_ == eShortGeneric)
-      customDate += u"v";
+      skeleton += u"v";
     else if (timeZoneName_ == eLongGeneric)
-      customDate += u"vvvv";
+      skeleton += u"vvvv";
   }
 
   if (!era_.empty()) {
     if (era_ == eNarrow)
-      customDate += u"GGGGG";
+      skeleton += u"GGGGG";
     else if (era_ == eShort)
-      customDate += u"G";
+      skeleton += u"G";
     else if (era_ == eLong)
-      customDate += u"GGGG";
+      skeleton += u"GGGG";
   }
 
   if (!year_.empty()) {
     if (year_ == eNumeric)
-      customDate += u"y";
+      skeleton += u"y";
     else if (year_ == eTwoDigit)
-      customDate += u"yy";
+      skeleton += u"yy";
   }
 
   if (!month_.empty()) {
     if (month_ == eTwoDigit)
-      customDate += u"MM";
+      skeleton += u"MM";
     else if (month_ == eNumeric)
-      customDate += u'M';
+      skeleton += u'M';
     else if (month_ == eNarrow)
-      customDate += u"MMMMM";
+      skeleton += u"MMMMM";
     else if (month_ == eShort)
-      customDate += u"MMM";
+      skeleton += u"MMM";
     else if (month_ == eLong)
-      customDate += u"MMMM";
+      skeleton += u"MMMM";
   }
 
   if (!day_.empty()) {
     if (day_ == eNumeric)
-      customDate += u"d";
+      skeleton += u"d";
     else if (day_ == eTwoDigit)
-      customDate += u"dd";
+      skeleton += u"dd";
   }
 
   if (!hour_.empty()) {
     if (hourCycle_ == u"h12") {
       if (hour_ == eNumeric)
-        customDate += u"h";
+        skeleton += u"h";
       else if (hour_ == eTwoDigit)
-        customDate += u"hh";
+        skeleton += u"hh";
     } else if (hourCycle_ == u"h24") {
       if (hour_ == eNumeric)
-        customDate += u"k";
+        skeleton += u"k";
       else if (hour_ == eTwoDigit)
-        customDate += u"kk";
+        skeleton += u"kk";
     } else if (hourCycle_ == u"h23") {
       if (hour_ == eNumeric)
-        customDate += u"k";
+        skeleton += u"k";
       else if (hour_ == eTwoDigit)
-        customDate += u"KK";
+        skeleton += u"KK";
     } else {
       if (hour_ == eNumeric)
-        customDate += u"h";
+        skeleton += u"h";
       else if (hour_ == eTwoDigit)
-        customDate += u"HH";
+        skeleton += u"HH";
     }
   }
 
   if (!minute_.empty()) {
     if (minute_ == eNumeric)
-      customDate += u"m";
+      skeleton += u"m";
     else if (minute_ == eTwoDigit)
-      customDate += u"mm";
+      skeleton += u"mm";
   }
 
   if (!second_.empty()) {
     if (second_ == eNumeric)
-      customDate += u"s";
+      skeleton += u"s";
     else if (second_ == eTwoDigit)
-      customDate += u"ss";
+      skeleton += u"ss";
   }
 
   UErrorCode status = U_ZERO_ERROR;
-  const UChar *skeleton = reinterpret_cast<const UChar *>(customDate.c_str());
   std::u16string bestpattern;
   int32_t patternLength;
 
   UDateTimePatternGenerator *dtpGenerator = udatpg_open(locale8_, &status);
   patternLength = udatpg_getBestPatternWithOptions(
       dtpGenerator,
-      skeleton,
+      &skeleton[0],
       -1,
       UDATPG_MATCH_ALL_FIELDS_LENGTH,
       nullptr,
@@ -1079,8 +926,8 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
     bestpattern.resize(patternLength);
     udatpg_getBestPatternWithOptions(
         dtpGenerator,
-        skeleton,
-        customDate.length(),
+        &skeleton[0],
+        skeleton.length(),
         UDATPG_MATCH_ALL_FIELDS_LENGTH,
         &bestpattern[0],
         patternLength,
