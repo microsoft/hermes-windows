@@ -62,7 +62,7 @@ endif()
 # - npm/package.json
 # - hermes-engine.podspec
 project(Hermes
-        VERSION 0.71.0.20220906
+        VERSION 0.71.0.20220908
         LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")

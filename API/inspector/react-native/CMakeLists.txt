@@ -48,6 +48,17 @@ if(NOT reactnative_POPULATED)
   )
   file(WRITE ${reactnative_SOURCE_DIR}/ReactCommon/hermes/inspector/chrome/ConnectionDemux.cpp  "${file_text}")
 
+  # Fix for https://github.com/facebook/react-native/issues/34639 (pushed to FB RN per
+  # https://github.com/facebook/react-native/pull/34640).
+  file(READ ${reactnative_SOURCE_DIR}/ReactCommon/hermes/inspector/chrome/Connection.cpp file_text)
+  string(REGEX REPLACE 
+    "\n([ \t]*)// TODO\\(jpporto\\): fix test cases sending invalid context id.\n[ \t]*// note.executionContextId = kHermesExecutionContextId;"
+    "\n\\1note.executionContextId = kHermesExecutionContextId;"
+    file_text
+    "${file_text}"
+  )
+  file(WRITE ${reactnative_SOURCE_DIR}/ReactCommon/hermes/inspector/chrome/Connection.cpp "${file_text}")
+
   file(GLOB_RECURSE YARN_FILES ${reactnative_SOURCE_DIR}/yarn.lock ${reactnative_SOURCE_DIR}/**/yarn.lock)
   message("Removing unused yarn.lock files: ${YARN_FILES}")
   if(YARN_FILES)

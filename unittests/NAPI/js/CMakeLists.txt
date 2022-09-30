@@ -43,23 +43,25 @@ set(testJSFiles
   test_typedarray/test.js
 )
 
+if(WIN32)
+  # "npx" interrupts current shell script execution without the "call"
+  set(npx "call" "npx")
+  set(yarn "call" "yarn")
+else()
+  set(npx "npx")
+  set(yarn "yarn")
+endif()
+
 # run "yarn install"
 add_custom_command(
   OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/node_modules.md5
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/yarn.lock
-  COMMAND yarn install --frozen-lockfile
+  COMMAND ${yarn} install --frozen-lockfile
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_custom_target(installNapiTestJsTools
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/node_modules.md5
 )
-
-if(WIN32)
-  # "npx" interrupts current shell script execution without the "call"
-  set(npx "call" "npx")
-else()
-  set(npx "npx")
-endif()
 
 # add the Babel transform commands for each test JS file
 foreach(testJSFile ${testJSFiles})
