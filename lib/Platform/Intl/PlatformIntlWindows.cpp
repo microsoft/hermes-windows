@@ -282,7 +282,9 @@ namespace {
 class DateTimeFormatWindows : public DateTimeFormat {
  public:
   DateTimeFormatWindows() = default;
-  ~DateTimeFormatWindows() = default;
+  ~DateTimeFormatWindows() {
+    udat_close(dtf_);
+  };
 
   vm::ExecutionStatus initialize(
       vm::Runtime &runtime,

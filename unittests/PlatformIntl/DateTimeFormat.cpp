@@ -26,7 +26,6 @@ TEST(DateTimeFormat, DatesWithoutOptions) {
 
   auto dtf = platform_intl::DateTimeFormat::create(
       *runtime.get(), AmericanEnglish, testOptions);
-  // dtf.initialize(*runtime.get(), AmericanEnglish, testOptions);
   auto result = dtf.getValue().get()->format(1620000000000.00);
   EXPECT_EQ(result, u"5/2/2021");
 
