@@ -316,7 +316,7 @@ class DateTimeFormatWindows : public DateTimeFormat {
   std::u16string hourCycle_;
   // Internal use
   UDateFormat *dtf_;
-  const char *locale8_;
+  std::string locale8_;
   UDateFormat *getUDateFormatter(vm::Runtime &runtime);
   vm::CallResult<std::u16string> getDefaultHourCycle(vm::Runtime &runtime);
 };
@@ -362,9 +362,8 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
   if (conversion.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return conversion.getStatus();
   }
-  const char *locale8 = conversion.getValue().c_str();
-  locale8_ = locale8; // store the UTF8 version of locale since it is used
-                      // in almost all other functions
+  locale8_ = conversion.getValue(); // store the UTF8 version of locale since it
+                                    // is used in almost all other functions
 
   // 2. Let options be ? ToDateTimeOptions(options, "any", "date").
   Options options =
@@ -709,7 +708,14 @@ vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
   std::u16string myString;
   // open the default UDateFormat and Pattern of locale
   UDateFormat *defaultDTF = udat_open(
-      UDAT_DEFAULT, UDAT_DEFAULT, locale8_, nullptr, -1, nullptr, -1, &status);
+      UDAT_DEFAULT,
+      UDAT_DEFAULT,
+      &locale8_[0],
+      nullptr,
+      -1,
+      nullptr,
+      -1,
+      &status);
   int32_t size = udat_toPattern(defaultDTF, true, nullptr, 0, &status);
   if (status == U_BUFFER_OVERFLOW_ERROR) {
     status = U_ZERO_ERROR;
@@ -788,7 +794,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
       dtf = udat_open(
           timeStyleRes,
           dateStyleRes,
-          locale8_,
+          &locale8_[0],
           timeZoneRes,
           timeZoneLength,
           nullptr,
@@ -798,7 +804,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
       dtf = udat_open(
           timeStyleRes,
           dateStyleRes,
-          locale8_,
+          &locale8_[0],
           nullptr,
           -1,
           nullptr,
@@ -913,7 +919,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
   std::u16string bestpattern;
   int32_t patternLength;
 
-  UDateTimePatternGenerator *dtpGenerator = udatpg_open(locale8_, &status);
+  UDateTimePatternGenerator *dtpGenerator = udatpg_open(&locale8_[0], &status);
   patternLength = udatpg_getBestPatternWithOptions(
       dtpGenerator,
       &skeleton[0],
@@ -944,7 +950,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
     return udat_open(
         UDAT_PATTERN,
         UDAT_PATTERN,
-        locale8_,
+        &locale8_[0],
         timeZoneRes,
         timeZoneLength,
         &bestpattern[0],
@@ -954,7 +960,7 @@ UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
     return udat_open(
         UDAT_PATTERN,
         UDAT_PATTERN,
-        locale8_,
+        &locale8_[0],
         nullptr,
         -1,
         &bestpattern[0],
