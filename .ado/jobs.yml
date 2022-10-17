@@ -1,7 +1,15 @@
+parameters:
+  - name: dependsOnSetup
+    type: boolean
+    default : false
+
 jobs:
   - job: Build
     timeoutInMinutes: 120
     displayName: Build Hermes
+    dependsOn: 
+      - ${{ if parameters.dependsOnSetup }}:
+        - Setup
     strategy:
       matrix:
         DebugX64:
@@ -22,7 +30,9 @@ jobs:
         ReleaseARM64:
           BuildConfiguration: release
           BuildPlatform: arm64
-
+    variables:
+      semanticVersion: $[ dependencies.Setup.outputs['setVersions.semanticVersion'] ]
+      fileVersion: $[ dependencies.Setup.outputs['setVersions.fileVersion'] ]
     steps:
       - task: PowerShell@2
         displayName: Run the build script for publish
@@ -35,6 +45,8 @@ jobs:
             -Platform:$(BuildPlatform)
             -Configuration:$(BuildConfiguration)
             -AppPlatform:uwp
+            -ReleaseVersion:"$(semanticVersion)"
+            -FileVersion:"$(fileVersion)"
 
       - script: echo TODO - Add Tests here
         displayName: '[Test] - To be Added via bug #77'

@@ -47,6 +47,11 @@ target_link_libraries(hermes
   ${LIBREADLINE}
 )
 
+if (WIN32)
+  configure_file(version.rc.in version.rc @ONLY)
+  target_sources(hermes PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+endif()
+
 install(TARGETS hermes
   RUNTIME DESTINATION bin
 )

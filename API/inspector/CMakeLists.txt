@@ -108,7 +108,15 @@ file(GLOB inspector_public_headers ${PROJECT_SOURCE_DIR}/public/hermes/Public/*.
 set(HERMES_ENABLE_EH ON)
 set(HERMES_ENABLE_RTTI ON)
 
-add_library(hermesinspector SHARED ${inspector_sources} ${inspector_headers} ${folly_sources} ${inspector_public_headers})
+configure_file(version.rc.in version.rc @ONLY)
+
+add_library(hermesinspector SHARED
+  ${inspector_sources}
+  ${inspector_headers}
+  ${folly_sources}
+  ${inspector_public_headers}
+  ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+
 target_link_libraries(hermesinspector
   hermesPublic
   jsi

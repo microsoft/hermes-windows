@@ -9,6 +9,6 @@ set(HERMES_ENABLE_RTTI ON)
 add_subdirectory(napi)
 add_subdirectory(hermes)
 
-if (HERMES_ENABLE_DEBUGGER)
+if (WIN32 AND HERMES_ENABLE_DEBUGGER)
     add_subdirectory(inspector)
 endif()
