@@ -24,6 +24,10 @@ variables:
 
 jobs:
   - job: Setup
+    variables:
+      # Component Governance is ran as part of the Build Job.
+      - name: "skipComponentGovernanceDetection"
+        value: "true"
     steps:
       - script: node .ado/scripts/setVersionNumber.js
         name: setVersions
