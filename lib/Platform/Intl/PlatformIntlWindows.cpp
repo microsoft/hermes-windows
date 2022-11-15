@@ -160,12 +160,11 @@ vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(
 }
 
 /// https://402.ecma-international.org/8.0/#sec-getoption
-/// Split into getOptionString and getOptionBool to help readability
 vm::CallResult<std::u16string> getOptionString(
     vm::Runtime &runtime,
     const Options &options,
     const std::u16string &property,
-    const std::vector<std::u16string> &values,
+    const std::vector<std::u16string> &validValues,
     const std::u16string &fallback) {
   // 1. Assert type(options) is object
   // 2. Let value be ? Get(options, property).
@@ -182,7 +181,7 @@ vm::CallResult<std::u16string> getOptionString(
   // a. Set value to ? ToString(value).
   // 7. If values is not undefined and values does not contain an element equal
   // to value, throw a RangeError exception.
-  if (!values.empty() && llvh::find(values, value) == values.end())
+  if (!validValues.empty() && llvh::find(validValues, value) == validValues.end())
     return runtime.raiseRangeError(
         vm::TwineChar16(property.c_str()) +
         vm::TwineChar16("Value is invalid."));
@@ -699,6 +698,7 @@ std::u16string DateTimeFormatWindows::format(double jsTimeValue) noexcept {
     udat_format(dtf_, date, &myString[0], myStrlen, nullptr, &status);
   }
 
+  assert(status <= 0); // Check for errors
   return myString;
 }
 
@@ -721,6 +721,7 @@ vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
     status = U_ZERO_ERROR;
     myString.resize(size + 1);
     udat_toPattern(defaultDTF, true, &myString[0], 40, &status);
+    assert(status <= 0); // Check for errors
     udat_close(defaultDTF);
     // find the default hour cycle and return it
     for (int32_t i = 0; i < size; i++) {
@@ -746,7 +747,7 @@ vm::CallResult<std::u16string> DateTimeFormatWindows::getDefaultHourCycle(
   return vm::ExecutionStatus::EXCEPTION;
 }
 
-// gets the UDateFormat with options set in initalize
+// gets the UDateFormat with options set in initialize
 UDateFormat *DateTimeFormatWindows::getUDateFormatter(vm::Runtime &runtime) {
   static std::u16string eLong = u"long", eShort = u"short", eNarrow = u"narrow",
                         eMedium = u"medium", eFull = u"full",
