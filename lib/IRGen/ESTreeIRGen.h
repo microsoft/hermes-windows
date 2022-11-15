@@ -13,6 +13,7 @@
 #include "hermes/AST/SemValidate.h"
 #include "hermes/IR/IRBuilder.h"
 #include "hermes/IRGen/IRGen.h"
+#include "hermes/Support/InternalIdentifierMaker.h"
 
 #include "llvh/ADT/StringRef.h"
 #include "llvh/Support/Debug.h"
@@ -115,9 +116,7 @@ class FunctionContext {
   /// Stack Register that will hold the return value of the global scope.
   AllocStackInst *globalReturnRegister{nullptr};
 
-  /// A running counter for anonymous closure. We append this number to some
-  /// label to create a unique number;
-  size_t anonymousLabelCounter{0};
+  InternalIdentifierMaker anonymousIDs_;
 
   /// This holds the CreateArguments instruction. We always insert it in the
   /// prologue and delete it in the epilogue if it wasn't used.
@@ -356,7 +355,7 @@ class ESTreeIRGen {
 
   /// Lexical scope chain from the runtime, used to resolve identifiers in local
   /// eval.
-  std::shared_ptr<SerializedScope> lexicalScopeChain;
+  SerializedScopePtr lexicalScopeChain;
 
   /// Identifier representing the string "eval".
   const Identifier identEval_;
@@ -1035,33 +1034,30 @@ class ESTreeIRGen {
       Identifier nameHint);
 
  private:
-  /// "Converts" a ScopeChain into a SerializedScope by resolving the
+  /// "Converts" a ScopeChain into a SerializedScopePtr chain by resolving the
   /// identifiers.
-  std::shared_ptr<SerializedScope> resolveScopeIdentifiers(
-      const ScopeChain &chain);
+  SerializedScopePtr resolveScopeIdentifiers(const ScopeChain &chain);
 
   /// Materialize the provided scope.
   void materializeScopesInChain(
       Function *wrapperFunction,
-      const std::shared_ptr<const SerializedScope> &scope,
+      const SerializedScopePtr &scope,
       int depth);
 
   /// Add dummy functions for lexical scope debug info
   void addLexicalDebugInfo(
       Function *child,
       Function *global,
-      const std::shared_ptr<const SerializedScope> &scope);
+      const SerializedScopePtr &scope);
 
   /// Save all variables currently in scope, for lazy compilation.
-  std::shared_ptr<SerializedScope> saveCurrentScope() {
+  SerializedScopePtr saveCurrentScope() {
     return serializeScope(curFunction(), true);
   }
 
   /// Recursively serialize scopes. The global scope is serialized
   /// if and only if it's the first scope and includeGlobal is true.
-  std::shared_ptr<SerializedScope> serializeScope(
-      FunctionContext *ctx,
-      bool includeGlobal);
+  SerializedScopePtr serializeScope(FunctionContext *ctx, bool includeGlobal);
 };
 
 template <typename EB, typename EF, typename EH>

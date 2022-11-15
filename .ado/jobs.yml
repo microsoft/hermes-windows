@@ -87,6 +87,8 @@ jobs:
         condition: and(eq(variables.BuildConfiguration, 'Release'), not(eq(variables.BuildPlatform, 'arm64')))
 
       - task: ComponentGovernanceComponentDetection@0
+        inputs:
+          ignoreDirectories: 'website'
 
   - job: CreateNuGet
     dependsOn:

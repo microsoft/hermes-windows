@@ -26,6 +26,11 @@
       <PreprocessorDefinitions Condition="'$(Configuration)' == 'Debug' Or '$(EnableHermesInspectorInReleaseFlavor)' == 'true'">HERMES_ENABLE_DEBUGGER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(PackageRoot)\build\native\include\hermes\Public\rtti.cpp" Condition="'$(HermesCompileRtti)' != 'false'">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
   <ItemGroup Condition="'$(Configuration)' == 'Debug' And '$(HermesNoDLLCopy)' == ''">
     <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\debug\$(HermesPlatform)\hermes.dll" />
     <ReferenceCopyLocalPaths Include="$(PackageRoot)lib\native\debug\$(HermesPlatform)\hermesinspector.dll" />

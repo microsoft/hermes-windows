@@ -24,7 +24,8 @@ FunctionContext::FunctionContext(
       oldContext_(irGen->functionContext_),
       builderSaveState_(irGen->Builder),
       function(function),
-      scope(irGen->nameTable_) {
+      scope(irGen->nameTable_),
+      anonymousIDs_(function->getContext().getStringTable()) {
   irGen->functionContext_ = this;
 
   // Initialize it to LiteralUndefined by default to avoid corner cases.
@@ -44,10 +45,7 @@ FunctionContext::~FunctionContext() {
 }
 
 Identifier FunctionContext::genAnonymousLabelName(llvh::StringRef hint) {
-  llvh::SmallString<16> buf;
-  llvh::raw_svector_ostream nameBuilder{buf};
-  nameBuilder << "?anon_" << anonymousLabelCounter++ << "_" << hint;
-  return function->getContext().getIdentifier(nameBuilder.str());
+  return anonymousIDs_.next(hint);
 }
 
 //===----------------------------------------------------------------------===//
@@ -494,6 +492,23 @@ void ESTreeIRGen::emitFunctionPrologue(
   // unused.
   curFunction()->createArgumentsInst = Builder.createCreateArgumentsInst();
 
+  // Always create the "this" parameter. It needs to be created before we
+  // initialized the ES5 capture state.
+  Builder.createParameter(newFunc, "this");
+
+  if (doInitES5CaptureState != InitES5CaptureState::No) {
+    initCaptureStateInES5FunctionHelper();
+  }
+
+  if (doEmitParameters != DoEmitParameters::No) {
+    // Create function parameters, register them in the scope, and initialize
+    // them with their income values.
+    emitParameters(funcNode);
+  } else {
+    newFunc->setExpectedParamCountIncludingThis(
+        countExpectedArgumentsIncludingThis(funcNode));
+  }
+
   // Create variable declarations for each of the hoisted variables and
   // functions. Initialize only the variables to undefined.
   for (auto decl : semInfo->varDecls) {
@@ -513,22 +528,6 @@ void ESTreeIRGen::emitFunctionPrologue(
   for (auto *fd : semInfo->closures) {
     declareVariableOrGlobalProperty(
         newFunc, VarDecl::Kind::Var, getNameFieldFromID(fd->_id));
-  }
-
-  // Always create the "this" parameter. It needs to be created before we
-  // initialized the ES5 capture state.
-  Builder.createParameter(newFunc, "this");
-
-  if (doInitES5CaptureState != InitES5CaptureState::No)
-    initCaptureStateInES5FunctionHelper();
-
-  // Construct the parameter list. Create function parameters and register
-  // them in the scope.
-  if (doEmitParameters == DoEmitParameters::Yes) {
-    emitParameters(funcNode);
-  } else {
-    newFunc->setExpectedParamCountIncludingThis(
-        countExpectedArgumentsIncludingThis(funcNode));
   }
 
   // Generate the code for import declarations before generating the rest of the

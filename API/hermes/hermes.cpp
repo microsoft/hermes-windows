@@ -250,12 +250,10 @@ class HermesRuntimeImpl final : public HermesRuntime,
 #endif
   }
 
-#ifdef HERMES_ENABLE_DEBUGGER
   // This should only be called once by the factory.
   void setDebugger(std::unique_ptr<debugger::Debugger> d) {
     debugger_ = std::move(d);
   }
-#endif
 
   struct CountedPointerValue : PointerValue {
     CountedPointerValue() : refCount(1) {}
@@ -1054,10 +1052,8 @@ class HermesRuntimeImpl final : public HermesRuntime,
   ManagedValues<WeakRefPointerValue> weakHermesValues_;
   std::shared_ptr<::hermes::vm::Runtime> rt_;
   ::hermes::vm::Runtime &runtime_;
-#ifdef HERMES_ENABLE_DEBUGGER
   friend class debugger::Debugger;
   std::unique_ptr<debugger::Debugger> debugger_;
-#endif
   ::hermes::vm::experiments::VMExperimentFlags vmExperimentFlags_{0};
 
   /// Compilation flags used by prepareJavaScript().
@@ -1319,11 +1315,11 @@ void HermesRuntime::dumpOpcodeStats(std::ostream &stream) const {
 }
 #endif
 
-#ifdef HERMES_ENABLE_DEBUGGER
-
 debugger::Debugger &HermesRuntime::getDebugger() {
   return *(impl(this)->debugger_);
 }
+
+#ifdef HERMES_ENABLE_DEBUGGER
 
 void HermesRuntime::debugJavaScript(
     const std::string &src,
@@ -1335,6 +1331,7 @@ void HermesRuntime::debugJavaScript(
       runtime.run(src, sourceURL, impl(this)->compileFlags_).getStatus();
   impl(this)->checkStatus(res);
 }
+
 #endif
 
 void HermesRuntime::registerForProfiling() {
@@ -1356,17 +1353,22 @@ void HermesRuntime::unregisterForProfiling() {
 }
 
 void HermesRuntime::watchTimeLimit(uint32_t timeoutInMs) {
-  impl(this)->compileFlags_.emitAsyncBreakCheck = true;
-  ::hermes::vm::TimeLimitMonitor::getInstance().watchRuntime(
-      impl(this)->runtime_, timeoutInMs);
+  HermesRuntimeImpl &concrete = *impl(this);
+  vm::Runtime &runtime = concrete.runtime_;
+  auto &runtimeTimeLimitMonitor = runtime.timeLimitMonitor;
+  if (!runtimeTimeLimitMonitor) {
+    concrete.compileFlags_.emitAsyncBreakCheck = true;
+    runtimeTimeLimitMonitor = ::hermes::vm::TimeLimitMonitor::getOrCreate();
+  }
+  runtimeTimeLimitMonitor->watchRuntime(
+      runtime, std::chrono::milliseconds(timeoutInMs));
 }
 
 void HermesRuntime::unwatchTimeLimit() {
-  // Restore the default state.
-  impl(this)->compileFlags_.emitAsyncBreakCheck =
-      impl(this)->defaultEmitAsyncBreakCheck_;
-  ::hermes::vm::TimeLimitMonitor::getInstance().unwatchRuntime(
-      impl(this)->runtime_);
+  vm::Runtime &runtime = impl(this)->runtime_;
+  if (auto &runtimeTimeLimitMonitor = runtime.timeLimitMonitor) {
+    runtimeTimeLimitMonitor->unwatchRuntime(runtime);
+  }
 }
 
 jsi::Value HermesRuntime::evaluateJavaScriptWithSourceMap(
@@ -2388,6 +2390,8 @@ std::unique_ptr<HermesRuntime> makeHermesRuntime(
   // in this function, which is a friend of debugger::Debugger.
   ret->setDebugger(std::unique_ptr<debugger::Debugger>(
       new debugger::Debugger(ret.get(), &(ret->runtime_.getDebugger()))));
+#else
+  ret->setDebugger(std::make_unique<debugger::Debugger>());
 #endif
 
   return ret;
@@ -2411,13 +2415,15 @@ std::unique_ptr<jsi::ThreadSafeRuntime> makeThreadSafeHermesRuntime(
       jsi::detail::ThreadSafeRuntimeImpl<HermesRuntimeImpl, HermesMutex>>(
       actualRuntimeConfig);
 
-#ifdef HERMES_ENABLE_DEBUGGER
   auto &hermesRt = ret->getUnsafeRuntime();
+#ifdef HERMES_ENABLE_DEBUGGER
   // Only HermesRuntime can create a debugger instance.  This requires
   // the setter and not using make_unique, so the call to new is here
   // in this function, which is a friend of debugger::Debugger.
   hermesRt.setDebugger(std::unique_ptr<debugger::Debugger>(
       new debugger::Debugger(&hermesRt, &(hermesRt.runtime_.getDebugger()))));
+#else
+  hermesRt.setDebugger(std::make_unique<debugger::Debugger>());
 #endif
 
   return ret;

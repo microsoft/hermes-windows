@@ -9,6 +9,7 @@
 #include <hermes/BCGen/HBC/BytecodeFileFormat.h>
 #include <hermes/CompileJS.h>
 #include <hermes/Public/JSOutOfMemoryError.h>
+#include <hermes/VM/TimeLimitMonitor.h>
 #include <hermes/hermes.h>
 #include <jsi/instrumentation.h>
 
@@ -200,6 +201,65 @@ TEST_F(HermesRuntimeTest, PreparedJavaScriptBytecodeTest) {
   EXPECT_EQ(rt->global().getProperty(*rt, "q").getNumber(), 2);
 }
 
+TEST_F(HermesRuntimeTest, CompileWithSourceMapTest) {
+  /* original source:
+  const a: number = 12;
+  class MyClass {
+    val: number;
+    constructor(val: number) {
+      this.val = val;
+    }
+    doSomething(a: number, b: number) {
+      invalidRef.sum = a + b + this.val;
+    }
+  }
+  const c = new MyClass(3);
+  c.doSomething(a, 15);*/
+  const char *TestSource = R"#('use strict';
+var a = 12;
+var MyClass = /** @class */ (function () {
+    function MyClass(val) {
+        this.val = val;
+    }
+    MyClass.prototype.doSomething = function (a, b) {
+        invalidRef.sum = a + b + this.val;
+    };
+    return MyClass;
+}());
+var c = new MyClass(3);
+c.doSomething(a, 15);
+//# sourceMappingURL=script.js.map)#";
+  const char *TestSourceMap = R"#({
+    "version":3,
+    "file":"script.js",
+    "sourceRoot":"",
+    "sources":["script.ts"],
+    "names":[],
+    "mappings": ";AAAA,IAAM,CAAC,GAAW,EAAE,CAAC;AACrB;IAEI,iBAAY,GAAW;QACnB,IAAI,CAAC,GAAG,GAAG,GAAG,CAAC;IACnB,CAAC;IACD,6BAAW,GAAX,UAAY,CAAS,EAAE,CAAS;QAC5B,UAAU,CAAC,GAAG,GAAG,CAAC,GAAG,CAAC,GAAG,IAAI,CAAC,GAAG,CAAC;IACtC,CAAC;IACL,cAAC;AAAD,CAAC,AARD,IAQC;AACD,IAAM,CAAC,GAAG,IAAI,OAAO,CAAC,CAAC,CAAC,CAAC;AACzB,CAAC,CAAC,WAAW,CAAC,CAAC,EAAE,EAAE,CAAC,CAAC"
+  })#";
+
+  std::string bytecode;
+  ASSERT_TRUE(hermes::compileJS(
+      TestSource,
+      "script.js",
+      bytecode,
+      true,
+      true,
+      nullptr,
+      std::optional<std::string_view>(TestSourceMap)));
+  EXPECT_TRUE(HermesRuntime::isHermesBytecode(
+      reinterpret_cast<const uint8_t *>(bytecode.data()), bytecode.size()));
+  try {
+    rt->evaluateJavaScript(
+        std::unique_ptr<StringBuffer>(new StringBuffer(bytecode)), "");
+    FAIL() << "Expected JSIException";
+  } catch (const facebook::jsi::JSIException &err) {
+    EXPECT_STREQ(
+        "Property 'invalidRef' doesn't exist\n\nReferenceError: Property 'invalidRef' doesn't exist\n    at anonymous (script.ts:8:9)\n    at global (script.ts:12:14)",
+        err.what());
+  }
+}
+
 TEST_F(HermesRuntimeTest, JumpTableBytecodeTest) {
   std::string code = R"xyz(
     (function(){
@@ -228,13 +288,10 @@ var i = 0;
 
 TEST_F(HermesRuntimeTest, PreparedJavaScriptInvalidSourceThrows) {
   const char *badSource = "this is definitely not valid javascript";
-  bool caught = false;
-  try {
-    rt->prepareJavaScript(std::make_unique<StringBuffer>(badSource), "");
-  } catch (const facebook::jsi::JSIException &err) {
-    caught = true;
-  }
-  EXPECT_TRUE(caught) << "prepareJavaScript should have thrown an exception";
+  EXPECT_THROW(
+      rt->prepareJavaScript(std::make_unique<StringBuffer>(badSource), ""),
+      facebook::jsi::JSIException)
+      << "prepareJavaScript should have thrown an exception";
 }
 
 TEST_F(HermesRuntimeTest, PreparedJavaScriptInvalidSourceBufferPrefix) {
@@ -338,30 +395,59 @@ TEST(HermesWatchTimeLimitTest, WatchTimeLimit) {
   // Some code that exercies the async break checks.
   const char *forABit = "var t = Date.now(); while (Date.now() < t + 100) {}";
   const char *forEver = "for (;;){}";
+  uint32_t Around20MinsMS = 1234567;
+  uint32_t ShortTimeoutMS = 123;
   {
     // Single runtime with ~20 minute limit that will not be reached.
     auto rt = makeHermesRuntime();
-    rt->watchTimeLimit(1234567);
+    rt->watchTimeLimit(Around20MinsMS);
     rt->evaluateJavaScript(std::make_unique<StringBuffer>(forABit), "");
+  }
+  {
+    // Single runtime with timeout reset -- first a very long time out, then a
+    // short one.
+    auto rt = makeHermesRuntime();
+    rt->watchTimeLimit(Around20MinsMS);
+    rt->watchTimeLimit(ShortTimeoutMS);
+    ASSERT_THROW(
+        rt->evaluateJavaScript(std::make_unique<StringBuffer>(forEver), ""),
+        JSIException);
   }
   {
     // Multiple runtimes, but neither will time out.
     auto rt1 = makeHermesRuntime();
-    rt1->watchTimeLimit(1234567);
+    rt1->watchTimeLimit(Around20MinsMS);
     auto rt2 = makeHermesRuntime();
-    rt2->watchTimeLimit(1234567 / 2);
+    rt2->watchTimeLimit(Around20MinsMS / 2);
     rt1->evaluateJavaScript(std::make_unique<StringBuffer>(forABit), "");
     rt2->evaluateJavaScript(std::make_unique<StringBuffer>(forABit), "");
   }
   {
-    // Timeout in one of the runtimes.
+    // Timeout in one of the runtimes. Make sure the first watchTimeLimit is the
+    // "infinite one" as time TimeLimitMonitor could sleep for the given timeout
+    // without properly handle the next timeouts.
     auto rt1 = makeHermesRuntime();
-    rt1->watchTimeLimit(1234567);
+    rt1->watchTimeLimit(Around20MinsMS);
     auto rt2 = makeHermesRuntime();
-    rt2->watchTimeLimit(123);
+    rt2->watchTimeLimit(ShortTimeoutMS);
     ASSERT_THROW(
         rt2->evaluateJavaScript(std::make_unique<StringBuffer>(forEver), ""),
         JSIException);
+  }
+  {
+    auto timeLimitMonitor = hermes::vm::TimeLimitMonitor::getOrCreate();
+    const auto &watchedRuntimes = timeLimitMonitor->getWatchedRuntimes();
+
+    auto rt1 = makeHermesRuntime();
+    rt1->watchTimeLimit(Around20MinsMS);
+    auto rt2 = makeHermesRuntime();
+    rt2->watchTimeLimit(Around20MinsMS);
+    auto rt3 = makeHermesRuntime();
+    rt3->watchTimeLimit(Around20MinsMS);
+    EXPECT_EQ(watchedRuntimes.size(), 3);
+
+    rt2 = nullptr;
+    EXPECT_EQ(watchedRuntimes.size(), 2);
   }
 }
 
@@ -705,27 +791,24 @@ class HermesRuntimeTestWithDisableGenerator : public HermesRuntimeTestBase {
 };
 
 TEST_F(HermesRuntimeTestWithDisableGenerator, WithDisableGenerator) {
-  try {
-    rt->evaluateJavaScript(
-        std::make_unique<StringBuffer>("function* foo() {}"), "");
-    FAIL() << "Expected JSIException";
-  } catch (const facebook::jsi::JSIException &err) {
-  }
+  EXPECT_THROW(
+      rt->evaluateJavaScript(
+          std::make_unique<StringBuffer>("function* foo() {}"), ""),
+      facebook::jsi::JSIException)
+      << "Expected JSIException";
 
-  try {
-    rt->evaluateJavaScript(
-        std::make_unique<StringBuffer>("obj = {*foo() {}}"), "");
-    FAIL() << "Expected JSIException";
-  } catch (const facebook::jsi::JSIException &err) {
-  }
+  EXPECT_THROW(
+      rt->evaluateJavaScript(
+          std::make_unique<StringBuffer>("obj = {*foo() {}}"), ""),
+      facebook::jsi::JSIException)
+      << "Expected JSIException";
 
   // async function depends on generator.
-  try {
-    rt->evaluateJavaScript(
-        std::make_unique<StringBuffer>("async function foo() {}"), "");
-    FAIL() << "Expected JSIException";
-  } catch (const facebook::jsi::JSIException &err) {
-  }
+  EXPECT_THROW(
+      rt->evaluateJavaScript(
+          std::make_unique<StringBuffer>("async function foo() {}"), ""),
+      facebook::jsi::JSIException)
+      << "Expected JSIException";
 }
 
 TEST_F(HermesRuntimeTest, DiagnosticHandlerTestError) {

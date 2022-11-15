@@ -286,7 +286,7 @@ void ESTreeIRGen::doCJSModule(
       segmentID, id, Builder.createIdentifier(filename), newFunc);
 }
 
-static int getDepth(const std::shared_ptr<SerializedScope> chain) {
+static int getDepth(const SerializedScopePtr &chain) {
   int depth = 0;
   const SerializedScope *current = chain.get();
   while (current) {
@@ -382,25 +382,12 @@ std::pair<Value *, bool> ESTreeIRGen::declareVariableOrGlobalProperty(
   if (inFunc->isGlobalScope() && declKind == VarDecl::Kind::Var) {
     res = Builder.createGlobalObjectProperty(name, true);
   } else {
-    Variable::DeclKind vdc;
-    if (declKind == VarDecl::Kind::Let)
-      vdc = Variable::DeclKind::Let;
-    else if (declKind == VarDecl::Kind::Const)
-      vdc = Variable::DeclKind::Const;
-    else {
-      assert(declKind == VarDecl::Kind::Var);
-      vdc = Variable::DeclKind::Var;
+    if (!Mod->getContext().getCodeGenerationSettings().enableTDZ) {
+      // short-circuit all declarations to be Var. TDZ dies here.
+      declKind = Variable::DeclKind::Var;
     }
 
-    auto *var = Builder.createVariable(inFunc->getFunctionScope(), vdc, name);
-
-    // For "let" and "const" create the related TDZ flag.
-    if (Variable::declKindNeedsTDZ(vdc) &&
-        Mod->getContext().getCodeGenerationSettings().enableTDZ) {
-      var->setObeysTDZ(true);
-    }
-
-    res = var;
+    res = Builder.createVariable(inFunc->getFunctionScope(), declKind, name);
   }
 
   // Register the variable in the scoped hash table.
@@ -1171,16 +1158,17 @@ Value *ESTreeIRGen::emitOptionalInitialization(
       {value, defaultValue}, {currentBlock, defaultResultBlock});
 }
 
-std::shared_ptr<SerializedScope> ESTreeIRGen::resolveScopeIdentifiers(
+SerializedScopePtr ESTreeIRGen::resolveScopeIdentifiers(
     const ScopeChain &chain) {
-  std::shared_ptr<SerializedScope> current{};
+  SerializedScopePtr current{};
   for (auto it = chain.functions.rbegin(), end = chain.functions.rend();
        it < end;
        it++) {
     auto next = std::make_shared<SerializedScope>();
     next->variables.reserve(it->variables.size());
     for (auto var : it->variables) {
-      next->variables.push_back(std::move(Builder.createIdentifier(var)));
+      next->variables.push_back(SerializedScope::Declaration{
+          Builder.createIdentifier(var), Variable::DeclKind::Var});
     }
     next->parentScope = current;
     current = next;
@@ -1190,7 +1178,7 @@ std::shared_ptr<SerializedScope> ESTreeIRGen::resolveScopeIdentifiers(
 
 void ESTreeIRGen::materializeScopesInChain(
     Function *wrapperFunction,
-    const std::shared_ptr<const SerializedScope> &scope,
+    const SerializedScopePtr &scope,
     int depth) {
   if (!scope)
     return;
@@ -1221,10 +1209,9 @@ void ESTreeIRGen::materializeScopesInChain(
 
   // Create an external scope.
   ExternalScope *ES = Builder.createExternalScope(wrapperFunction, depth);
-  for (auto variableId : scope->variables) {
-    auto *variable =
-        Builder.createVariable(ES, Variable::DeclKind::Var, variableId);
-    nameTable_.insert(variableId, variable);
+  for (const auto &var : scope->variables) {
+    auto *variable = Builder.createVariable(ES, var.declKind, var.name);
+    nameTable_.insert(var.name, variable);
   }
 }
 
@@ -1250,7 +1237,7 @@ void buildDummyLexicalParent(
 void ESTreeIRGen::addLexicalDebugInfo(
     Function *child,
     Function *global,
-    const std::shared_ptr<const SerializedScope> &scope) {
+    const SerializedScopePtr &scope) {
   if (!scope || !scope->parentScope) {
     buildDummyLexicalParent(Builder, global, child);
     return;
@@ -1264,16 +1251,15 @@ void ESTreeIRGen::addLexicalDebugInfo(
       {},
       false);
 
-  for (auto &var : scope->variables) {
-    Builder.createVariable(
-        current->getFunctionScope(), Variable::DeclKind::Var, var);
+  for (const auto &var : scope->variables) {
+    Builder.createVariable(current->getFunctionScope(), var.declKind, var.name);
   }
 
   buildDummyLexicalParent(Builder, current, child);
   addLexicalDebugInfo(current, global, scope->parentScope);
 }
 
-std::shared_ptr<SerializedScope> ESTreeIRGen::serializeScope(
+SerializedScopePtr ESTreeIRGen::serializeScope(
     FunctionContext *ctx,
     bool includeGlobal) {
   // Serialize the global scope if and only if it's the only scope.
@@ -1291,7 +1277,8 @@ std::shared_ptr<SerializedScope> ESTreeIRGen::serializeScope(
     scope->closureAlias = closure->getName();
   }
   for (auto *var : func->getFunctionScope()->getVariables()) {
-    scope->variables.push_back(var->getName());
+    scope->variables.push_back(
+        SerializedScope::Declaration{var->getName(), var->getDeclKind()});
   }
   scope->parentScope = serializeScope(ctx->getPreviousContext(), false);
   return scope;

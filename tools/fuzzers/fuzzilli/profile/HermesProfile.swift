@@ -22,13 +22,13 @@ let hermesProfile = Profile(
 
     ecmaVersion: ECMAScriptVersion.es6,
 
-    crashTests: ["fuzzilli('FUZZILLI_CRASH', 0)", "fuzzilli('FUZZILLI_CRASH', 1)"],
+    crashTests: ["fuzzilli('FUZZILLI_CRASH', 0)", "fuzzilli('FUZZILLI_CRASH', 1)", "fuzzilli('FUZZILLI_CRASH', 2)"],
 
     additionalCodeGenerators: WeightedList<CodeGenerator>([]),
 
     additionalProgramTemplates: WeightedList<ProgramTemplate>([]),
 
-    disabledCodeGenerators: ["ClassGenerator", "WithStatementGenerator"],
+    disabledCodeGenerators: ["AsyncArrowFunctionGenerator", "AsyncGeneratorFunctionGenerator", "ClassGenerator", "WithStatementGenerator"],
 
     additionalBuiltins: [
         "gc"                : .function([] => .undefined),

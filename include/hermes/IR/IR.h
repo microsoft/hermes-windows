@@ -10,6 +10,7 @@
 
 #include "hermes/ADT/WordBitSet.h"
 #include "hermes/AST/Context.h"
+#include "hermes/FrontEndDefs/JavaScriptDeclKind.h"
 #include "hermes/Support/Conversions.h"
 #include "hermes/Support/ScopeChain.h"
 
@@ -393,8 +394,14 @@ static inline bool kindIsA(ValueKind kind, ValueKind base) {
 /// should be captured from a function two levels down the lexical stack.
 class SerializedScope {
  public:
+  using Ptr = std::shared_ptr<const SerializedScope>;
+  /// A declaration (const/let/var) in this scope.
+  struct Declaration {
+    Identifier name;
+    JavaScriptDeclKind declKind;
+  };
   /// Parent scope, if any.
-  std::shared_ptr<const SerializedScope> parentScope;
+  Ptr parentScope;
   /// Original name of the function, if any.
   Identifier originalName;
   /// The generated name of the variable holding the function in the parent's
@@ -404,8 +411,10 @@ class SerializedScope {
   /// generated). Function::lazyClosureAlias_.
   Identifier closureAlias;
   /// List of variable names in the frame.
-  llvh::SmallVector<Identifier, 16> variables;
+  llvh::SmallVector<Declaration, 16> variables;
 };
+
+using SerializedScopePtr = SerializedScope::Ptr;
 
 #ifndef HERMESVM_LEAN
 /// The source of a lazy AST node.
@@ -891,16 +900,7 @@ class GlobalObject : public Literal {
 /// This represents a JavaScript variable, that's allocated in the function.
 class Variable : public Value {
  public:
-  enum class DeclKind {
-    Var,
-    Let,
-    Const,
-  };
-
-  /// Return true if this DeclKind needs to track TDZ.
-  static bool declKindNeedsTDZ(DeclKind dk) {
-    return dk != DeclKind::Var;
-  }
+  using DeclKind = JavaScriptDeclKind;
 
  private:
   Variable(const Variable &) = delete;
@@ -914,9 +914,6 @@ class Variable : public Value {
 
   /// The scope that owns the variable.
   VariableScope *parent;
-
-  /// If true, this variable obeys the TDZ rules.
-  bool obeysTDZ_ = false;
 
  protected:
   explicit Variable(
@@ -943,10 +940,7 @@ class Variable : public Value {
   }
 
   bool getObeysTDZ() const {
-    return obeysTDZ_;
-  }
-  void setObeysTDZ(bool value) {
-    obeysTDZ_ = value;
+    return declKind != DeclKind::Var;
   }
 
   /// Return the index of this variable in the function's variable list.
@@ -1445,7 +1439,7 @@ class Function : public llvh::ilist_node_with_parent<Function, Module>,
   LazySource lazySource_;
 
   /// The SerializedScope of the lazyCompilationAst.
-  std::shared_ptr<SerializedScope> lazyScope_{};
+  SerializedScopePtr lazyScope_{};
 
   /// The parent's generated closure variable for this function. It is non-null
   /// only if there is an alias binding from \c originalOrInferredName_ (which
@@ -1653,10 +1647,10 @@ class Function : public llvh::ilist_node_with_parent<Function, Module>,
     return lazySource_;
   }
 
-  void setLazyScope(std::shared_ptr<SerializedScope> vars) {
+  void setLazyScope(SerializedScopePtr vars) {
     lazyScope_ = std::move(vars);
   }
-  std::shared_ptr<SerializedScope> getLazyScope() const {
+  SerializedScopePtr getLazyScope() const {
     return lazyScope_;
   }
 

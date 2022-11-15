@@ -34,6 +34,9 @@ function computeVersion() {
     if (sourceBranch === "refs/heads/main") {
       return computeMainVersion();
     }
+    if (sourceBranch === "refs/heads/rnw/canary") {
+      return computeMainVersion();
+    }
     if (sourceBranch.startsWith("refs/heads/rnw/0.")) {
       return computeReleaseVersion();
     }

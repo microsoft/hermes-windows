@@ -21,6 +21,7 @@ add_hermes_library(hermesSupport
         CheckedMalloc.cpp
         Conversions.cpp
         ErrorHandling.cpp
+        InternalIdentifierMaker.cpp
         JSONEmitter.cpp
         OSCompatEmscripten.cpp
         OSCompatPosix.cpp
