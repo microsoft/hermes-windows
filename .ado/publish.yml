@@ -1,3 +1,9 @@
+# The release branch versions start with the release number
+# such as "0.69." or "0.70." and follow the revision number.
+# name: 0.70.$(Rev:r)
+#
+# The main branch pre-release versions start with "0.0."
+# and follow the date and revision number.
 name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
 
 pr: none
@@ -17,4 +23,12 @@ variables:
     value: production,externalfacing
 
 jobs:
+  - job: Setup
+    steps:
+      - script: node .ado/scripts/setVersionNumber.js
+        name: setVersions
+        displayName: Compute version numbers
+
   - template: jobs.yml
+    parameters:
+      dependsOnSetup: true

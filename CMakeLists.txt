@@ -62,7 +62,7 @@ endif()
 # - npm/package.json
 # - hermes-engine.podspec
 project(Hermes
-        VERSION 0.71.0.20220908
+        VERSION 0.12.0
         LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
@@ -77,6 +77,15 @@ include(Lit)
 if(NOT DEFINED HERMES_RELEASE_VERSION)
   set(HERMES_RELEASE_VERSION ${PROJECT_VERSION})
 endif()
+
+# The version that we put inside of DLL files
+if(NOT DEFINED HERMES_FILE_VERSION)
+  set(HERMES_FILE_VERSION "${PROJECT_VERSION}.0")
+endif()
+
+# The file version convertible to number representation.
+# We must replace dots with commas.
+string(REPLACE "." "," HERMES_FILE_VERSION_BIN ${HERMES_FILE_VERSION})
 
 find_package(Python COMPONENTS Interpreter)
 if (NOT Python_Interpreter_FOUND)
@@ -324,6 +333,11 @@ endif()
 # Make the HERMES_RELEASE_VERSION accessible for version printing in C++.
 if(HERMES_RELEASE_VERSION)
     add_definitions(-DHERMES_RELEASE_VERSION="${HERMES_RELEASE_VERSION}")
+endif()
+
+# Make the HERMES_FILE_VERSION accessible for version printing in C++.
+if(HERMES_FILE_VERSION)
+    add_definitions(-DHERMES_FILE_VERSION="${HERMES_FILE_VERSION}")
 endif()
 
 if(HERMES_ENABLE_IR_INSTRUMENTATION)

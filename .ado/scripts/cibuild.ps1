@@ -20,7 +20,13 @@ param(
 
     # e.g. "10.0.17763.0"
     [String]$SDKVersion = "",
-   
+
+    # e.g. "0.0.0-2209.28001-8af7870c" for pre-release or "0.70.2" for release
+    [String]$ReleaseVersion = "",
+
+    # e.g. "0.0.2209.28001" for pre-release or "0.70.2.0" for release
+    [String]$FileVersion = "",
+
     [switch]$RunTests,
     [switch]$Incremental,
     [switch]$UseVS,
@@ -47,9 +53,9 @@ function Find-VS-Path() {
     }
 
     if (Test-Path $vsWhere) {
-        $versionJson = & $vsWhere -format json 
+        $versionJson = & $vsWhere -format json
         $versionJson = & $vsWhere -format json -version 16
-        $versionJson = $versionJson | ConvertFrom-Json 
+        $versionJson = $versionJson | ConvertFrom-Json
     } else {
         $versionJson = @()
     }
@@ -112,6 +118,34 @@ function Invoke-Environment($Command, $arg) {
     }}
 }
 
+function Invoke-UpdateReleaseVersion($SourcesPath, $ReleaseVersion, $FileVersion) {
+    if ([String]::IsNullOrWhiteSpace($ReleaseVersion)) {
+        return
+    }
+
+    $ProjectVersion = $ReleaseVersion
+    if ($ReleaseVersion.StartsWith("0.0.0")) {
+        # Use file version as a project version for pre-release builds
+        # because CMake does not accept our pre-release version format.
+        $ProjectVersion = $FileVersion
+    }
+
+    $filePath1 = Join-Path $SourcesPath "CMakeLists.txt"
+    $versionRegex1 = '        VERSION .*'
+    $versionStr1 = '        VERSION ' + $ProjectVersion
+    $content1 = (Get-Content $filePath1) -replace $versionRegex1, $versionStr1 -join "`r`n"
+    [IO.File]::WriteAllText($filePath1, $content1)
+
+    $filePath2 = Join-Path (Join-Path $SourcesPath "npm") "package.json"
+    $versionRegex2 = '"version": ".*",'
+    $versionStr2 = '"version": "' + $ReleaseVersion + '",'
+    $content2 = (Get-Content $filePath2) -replace $versionRegex2, $versionStr2 -join "`r`n"
+    [IO.File]::WriteAllText($filePath2, $content2)
+
+    Write-Host "Release version set to $ReleaseVersion"
+    Write-Host "Project version set to $ProjectVersion"
+}
+
 function get-CommonArgs($Platform, $Configuration, $AppPlatform, [ref]$genArgs) {
     if ($UseVS.IsPresent) {
         # TODO: use VS version chosen before
@@ -130,6 +164,12 @@ function get-CommonArgs($Platform, $Configuration, $AppPlatform, [ref]$genArgs) 
 
     $genArgs.Value += '-DHERMESVM_PLATFORM_LOGGING=On'
     $genArgs.Value += '-DHERMESJSI_DISABLE_STATS_TIMER=On'
+
+    if (![String]::IsNullOrWhiteSpace($FileVersion)) {
+        $genArgs.Value += '-DHERMES_FILE_VERSION=' + $FileVersion
+    }
+
+    Write-Host "HERMES_FILE_VERSION is $FileVersion"
 }
 
 function Invoke-BuildImpl($SourcesPath, $buildPath, $genArgs, $targets, $incrementalBuild, $Platform, $Configuration, $AppPlatform) {
@@ -425,6 +465,8 @@ if (!(Test-Path -Path $WorkSpacePath)) {
 
 Push-Location $WorkSpacePath
 try {
+    Invoke-UpdateReleaseVersion -SourcesPath $SourcesPath -ReleaseVersion $ReleaseVersion -FileVersion $FileVersion
+
     # run the actual builds and copy artefacts
     foreach ($Plat in $Platform) {
         foreach ($Config in $Configuration) {

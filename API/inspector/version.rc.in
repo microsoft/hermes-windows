@@ -17,10 +17,10 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "FileDescription", "Hermes JavaScript Engine Library"
+            VALUE "FileDescription", "Hermes JavaScript Engine Inspector"
             VALUE "FileVersion", "@HERMES_FILE_VERSION@"
-            VALUE "InternalName", "hermes.dll"
-            VALUE "OriginalFilename", "hermes.dll"
+            VALUE "InternalName", "inspector.dll"
+            VALUE "OriginalFilename", "inspector.dll"
             VALUE "ProductName", "Hermes JavaScript Engine"
             VALUE "ProductVersion", "@HERMES_RELEASE_VERSION@"
         END
