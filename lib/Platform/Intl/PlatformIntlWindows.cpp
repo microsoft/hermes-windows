@@ -120,7 +120,7 @@ vm::CallResult<std::u16string> NormalizeLanguageTag(
 }
 
 // https://tc39.es/ecma402/#sec-canonicalizelocalelist
-vm::CallResult<std::vector<std::u16string>> CanonicalizeLocaleList(
+vm::CallResult<std::vector<std::u16string>> canonicalizeLocaleList(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales) {
   // 1. If locales is undefined, then a. Return a new empty list
@@ -214,7 +214,7 @@ std::vector<std::u16string> supportedLocales(
 vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales) {
-  return CanonicalizeLocaleList(runtime, locales);
+  return canonicalizeLocaleList(runtime, locales);
 }
 
 // Not yet implemented. Tracked by
@@ -351,7 +351,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales,
     const Options &inputOptions) noexcept {
-  auto requestedLocalesRes = CanonicalizeLocaleList(runtime, locales);
+  auto requestedLocalesRes = canonicalizeLocaleList(runtime, locales);
   if (requestedLocalesRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return requestedLocalesRes.getStatus();
   }
@@ -644,6 +644,8 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
   // 42. Set dateTimeFormat.[[RangePatterns]] to rangePatterns.
   // 43. Return dateTimeFormat
 
+  //UDateFormat *test = getUDateFormatter(runtime);
+  //dtf_ = std::make_unique<UDateFormat>(test);
   dtf_ = getUDateFormatter(runtime);
   return vm::ExecutionStatus::RETURNED;
 }
