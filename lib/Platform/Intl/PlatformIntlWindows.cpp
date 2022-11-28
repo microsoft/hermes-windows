@@ -643,9 +643,7 @@ vm::ExecutionStatus DateTimeFormatWindows::initialize(
   // 41. Set dateTimeFormat.[[Pattern]] to pattern.
   // 42. Set dateTimeFormat.[[RangePatterns]] to rangePatterns.
   // 43. Return dateTimeFormat
-
-  //UDateFormat *test = getUDateFormatter(runtime);
-  //dtf_ = std::make_unique<UDateFormat>(test);
+  
   dtf_ = getUDateFormatter(runtime);
   return vm::ExecutionStatus::RETURNED;
 }
