@@ -30,7 +30,7 @@ std::shared_ptr<ChromeStackFrameNode> ChromeStackFrameNode::findOrAddNewChild(
 /*static*/ ChromeTraceFormat ChromeTraceFormat::create(
     uint32_t pid,
     const SamplingProfiler::ThreadNamesMap &threadNames,
-    const std::vector<SamplingProfiler::StackTrace> &sampledStacks) {
+    const llvh::SmallVector<SamplingProfiler::StackTrace, 8> &sampledStacks) {
   ChromeFrameIdGenerator frameIdGen;
   ChromeTraceFormat trace{
       pid,

@@ -28,7 +28,9 @@ struct SamplingProfilerWindows : SamplingProfiler {
         GetCurrentThreadId());
   }
 
-  ~SamplingProfilerWindows() override = default;
+  ~SamplingProfilerWindows() override {
+    CloseHandle(currentThread_);
+  }
 
   /// Thread that this profiler instance represents. This can currently only be
   /// set from the constructor of SamplingProfiler, so we need to construct a

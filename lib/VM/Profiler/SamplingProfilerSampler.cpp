@@ -190,9 +190,11 @@ bool Sampler::disable() {
     }
     // Telling timer thread to exit.
     enabled_ = false;
+
+    // Notify the timer thread that it has been disabled.
+    enabledCondVar_.notify_all();
   }
-  // Notify the timer thread that it has been disabled.
-  enabledCondVar_.notify_all();
+
   // Wait for timer thread to exit. This avoids the timer thread reading from
   // memory that is freed after a main thread exits. This is outside the lock
   // on profilerLock_ since the timer thread needs to acquire that lock.
