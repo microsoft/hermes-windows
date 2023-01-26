@@ -64,6 +64,12 @@ if(NOT reactnative_POPULATED)
   if(YARN_FILES)
     file(REMOVE ${YARN_FILES})
   endif()
+
+  file(GLOB_RECURSE GEMFILES ${reactnative_SOURCE_DIR}/Gemfile.lock ${reactnative_SOURCE_DIR}/**/Gemfile.lock)
+  message("Removing unused Gemfile.lock files: ${GEMFILES}")
+  if(GEMFILES)
+    file(REMOVE ${GEMFILES})
+  endif()
 endif()
 
 set(REACT_NATIVE_SOURCE ${reactnative_SOURCE_DIR} PARENT_SCOPE)
