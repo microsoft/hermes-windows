@@ -4191,7 +4191,7 @@ napi_status NapiEnvironment::getProperty(
     napi_value key,
     napi_value *result) noexcept {
   CHECK_NAPI(checkPendingJSError());
-  NapiHandleScope scope{*this};
+  NapiHandleScope scope{*this, result};
   CHECK_ARG(key);
   napi_value objValue;
   CHECK_NAPI(coerceToObject(object, &objValue));
@@ -6222,7 +6222,7 @@ napi_status NapiEnvironment::serializeScript(
           napiEnv(this),
           napi_ext_buffer{
               buffer.release(),
-              sourceSize + 1,
+              sourceSize,
               [](napi_env /*env*/, void *data, void * /*finalizeHint*/) {
                 std::unique_ptr<char[]> buf(reinterpret_cast<char *>(data));
               },
