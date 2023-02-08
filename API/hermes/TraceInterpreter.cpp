@@ -370,8 +370,11 @@ Value traceValueToJSIValue(
   if (value.isBool()) {
     return Value(value.getBool());
   }
-  if (value.isObject() || value.isBigInt() || value.isString() ||
-      value.isSymbol()) {
+  if (value.isObject() ||
+#if JSI_VERSION >= 8
+      value.isBigInt() ||
+#endif
+      value.isString() || value.isSymbol()) {
     return getJSIValueForUse(value.getUID());
   }
   llvm_unreachable("Unrecognized value type encountered");
@@ -1022,8 +1025,11 @@ Value TraceInterpreter::execFunction(
         // Satisfiable locally
         Value val{rt_, it->second};
         assert(
-            val.isObject() || val.isBigInt() || val.isString() ||
-            val.isSymbol());
+            val.isObject() ||
+#if JSI_VERSION >= 8
+            val.isBigInt() ||
+#endif
+            val.isString() || val.isSymbol());
         // If it was the last local use, delete that object id from locals.
         auto defAndUse = call.locals.find(obj);
         if (defAndUse != call.locals.end() &&
@@ -1166,6 +1172,7 @@ Value TraceInterpreter::execFunction(
             break;
           }
           case RecordType::CreateBigInt: {
+#if JSI_VERSION >= 8
             const auto &cbr =
                 static_cast<const SynthTrace::CreateBigIntRecord &>(*rec);
             Value bigint;
@@ -1184,9 +1191,13 @@ Value TraceInterpreter::execFunction(
             }
             addJSIValueToDefs(
                 call, cbr.objID_, globalRecordNum, std::move(bigint), locals);
+#else
+            throw std::runtime_error("jsi::BigInt is not supported");
+#endif
             break;
           }
           case RecordType::BigIntToString: {
+#if JSI_VERSION >= 8
             const auto &bts =
                 static_cast<const SynthTrace::BigIntToStringRecord &>(*rec);
             BigInt obj = getJSIValueForUse(bts.bigintID_).asBigInt(rt_);
@@ -1196,6 +1207,9 @@ Value TraceInterpreter::execFunction(
                 globalRecordNum,
                 obj.toString(rt_, bts.radix_),
                 locals);
+#else
+            throw std::runtime_error("jsi::BigInt is not supported");
+#endif
             break;
           }
           case RecordType::CreateString: {
@@ -1234,7 +1248,12 @@ Value TraceInterpreter::execFunction(
                   auto val = traceValueToJSIValue(
                       rt_, trace_, getJSIValueForUse, cpnr.traceValue_);
                   if (val.isSymbol())
+#if JSI_VERSION >= 5
                     return PropNameID::forSymbol(rt_, val.getSymbol(rt_));
+#else
+                    throw std::runtime_error(
+                        "PropNameID::forSymbol is not supported");
+#endif
                   return PropNameID::forString(rt_, val.getString(rt_));
                 }
               }
@@ -1284,9 +1303,13 @@ Value TraceInterpreter::execFunction(
             break;
           }
           case RecordType::DrainMicrotasks: {
+#if JSI_VERSION >= 4
             const auto &drainRecord =
                 static_cast<const SynthTrace::DrainMicrotasksRecord &>(*rec);
             rt_.drainMicrotasks(drainRecord.maxMicrotasksHint_);
+#else
+            throw std::runtime_error("drainMicrotasks is not supported");
+#endif
             break;
           }
           case RecordType::GetProperty: {

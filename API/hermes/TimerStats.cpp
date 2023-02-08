@@ -263,10 +263,12 @@ class TimedRuntime final : public jsi::RuntimeDecorator<jsi::Runtime> {
     return RD::callAsConstructor(func, args, count);
   }
 
+#if JSI_VERSION >= 4
   bool drainMicrotasks(int maxMicrotasksHint) override {
     auto timer = rts_.incomingTimer("drainMicrotasks");
     return RD::drainMicrotasks(maxMicrotasksHint);
   }
+#endif
   /// @}
 
  private:

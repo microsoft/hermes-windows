@@ -125,12 +125,14 @@ jsi::Value TracingRuntime::evaluateJavaScript(
   return res;
 }
 
+#if JSI_VERSION >= 4
 bool TracingRuntime::drainMicrotasks(int maxMicrotasksHint) {
   auto res = RD::drainMicrotasks(maxMicrotasksHint);
   trace_.emplace_back<SynthTrace::DrainMicrotasksRecord>(
       getTimeSinceStart(), maxMicrotasksHint);
   return res;
 };
+#endif
 
 jsi::Object TracingRuntime::createObject() {
   auto obj = RD::createObject();
@@ -256,6 +258,7 @@ jsi::Object TracingRuntime::createObject(std::shared_ptr<jsi::HostObject> ho) {
   return obj;
 }
 
+#if JSI_VERSION >= 8
 jsi::BigInt TracingRuntime::createBigIntFromInt64(int64_t value) {
   jsi::BigInt res = RD::createBigIntFromInt64(value);
   trace_.emplace_back<SynthTrace::CreateBigIntRecord>(
@@ -284,6 +287,7 @@ jsi::String TracingRuntime::bigintToString(
       getTimeSinceStart(), getUniqueID(res), getUniqueID(bigint), radix);
   return res;
 }
+#endif
 
 jsi::String TracingRuntime::createStringFromAscii(
     const char *str,
@@ -331,6 +335,7 @@ jsi::PropNameID TracingRuntime::createPropNameIDFromString(
   return res;
 }
 
+#if JSI_VERSION >= 5
 jsi::PropNameID TracingRuntime::createPropNameIDFromSymbol(
     const jsi::Symbol &sym) {
   jsi::PropNameID res = RD::createPropNameIDFromSymbol(sym);
@@ -340,6 +345,7 @@ jsi::PropNameID TracingRuntime::createPropNameIDFromSymbol(
       SynthTrace::encodeSymbol(getUniqueID(sym)));
   return res;
 }
+#endif
 
 jsi::Value TracingRuntime::getProperty(
     const jsi::Object &obj,
@@ -402,7 +408,7 @@ bool TracingRuntime::hasProperty(
 }
 
 void TracingRuntime::setPropertyValue(
-    const jsi::Object &obj,
+    JSI_CONST_10 jsi::Object &obj,
     const jsi::String &name,
     const jsi::Value &value) {
   trace_.emplace_back<SynthTrace::SetPropertyRecord>(
@@ -417,7 +423,7 @@ void TracingRuntime::setPropertyValue(
 }
 
 void TracingRuntime::setPropertyValue(
-    const jsi::Object &obj,
+    JSI_CONST_10 jsi::Object &obj,
     const jsi::PropNameID &name,
     const jsi::Value &value) {
   trace_.emplace_back<SynthTrace::SetPropertyRecord>(
@@ -462,7 +468,8 @@ jsi::WeakObject TracingRuntime::createWeakObject(const jsi::Object &o) {
   return RD::createWeakObject(o);
 }
 
-jsi::Value TracingRuntime::lockWeakObject(const jsi::WeakObject &wo) {
+jsi::Value TracingRuntime::lockWeakObject(
+    JSI_NO_CONST_3 JSI_CONST_10 jsi::WeakObject &wo) {
   // See comment in TracingRuntime::createWeakObject for why this function isn't
   // traced.
   return RD::lockWeakObject(wo);
@@ -475,10 +482,12 @@ jsi::Array TracingRuntime::createArray(size_t length) {
   return arr;
 }
 
+#if JSI_VERSION >= 9
 jsi::ArrayBuffer TracingRuntime::createArrayBuffer(
     std::shared_ptr<jsi::MutableBuffer> buffer) {
   throw std::logic_error("Cannot create external ArrayBuffers in trace mode.");
 }
+#endif
 
 size_t TracingRuntime::size(const jsi::Array &arr) {
   // Array size inquiries read from the length property, which is
@@ -505,7 +514,7 @@ jsi::Value TracingRuntime::getValueAtIndex(const jsi::Array &arr, size_t i) {
 }
 
 void TracingRuntime::setValueAtIndexImpl(
-    const jsi::Array &arr,
+    JSI_CONST_10 jsi::Array &arr,
     size_t i,
     const jsi::Value &value) {
   trace_.emplace_back<SynthTrace::ArrayWriteRecord>(
@@ -633,8 +642,10 @@ SynthTrace::TraceValue TracingRuntime::toTraceValue(const jsi::Value &value) {
     return SynthTrace::encodeBool(value.getBool());
   } else if (value.isNumber()) {
     return SynthTrace::encodeNumber(value.getNumber());
+#if JSI_VERSION >= 8
   } else if (value.isBigInt()) {
     return trace_.encodeBigInt(getUniqueID(value.getBigInt(*this)));
+#endif
   } else if (value.isString()) {
     return trace_.encodeString(getUniqueID(value.getString(*this)));
   } else if (value.isObject()) {
