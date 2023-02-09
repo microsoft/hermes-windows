@@ -9,8 +9,8 @@
 #define HERMES_AST_CONTEXT_H
 
 #include "hermes/Parser/PreParser.h"
+#include "hermes/Regex/RegexSerialization.h"
 #include "hermes/Support/Allocator.h"
-#include "hermes/Support/RegExpSerialization.h"
 #include "hermes/Support/SourceErrorManager.h"
 #include "hermes/Support/StringTable.h"
 
@@ -39,6 +39,8 @@ struct CodeGenerationSettings {
   bool dumpSourceLocation{false};
   /// Print the original scope for each instruction.
   bool dumpSourceLevelScope{false};
+  /// Print the textified callee of call instructions.
+  bool dumpTextifiedCallee{false};
   /// Print the use list if the instruction has any users.
   bool dumpUseList{false};
   /// Dump IR after every pass.

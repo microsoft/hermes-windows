@@ -20,10 +20,10 @@
 #include "hermes/BCGen/HBC/UniquingFilenameTable.h"
 #include "hermes/BCGen/HBC/UniquingStringLiteralTable.h"
 #include "hermes/IR/IR.h"
+#include "hermes/Regex/RegexSerialization.h"
 #include "hermes/Support/BigIntSupport.h"
 #include "hermes/Support/Conversions.h"
 #include "hermes/Support/OptValue.h"
-#include "hermes/Support/RegExpSerialization.h"
 #include "llvh/ADT/StringRef.h"
 
 namespace hermes {
@@ -79,7 +79,10 @@ class BytecodeFunctionGenerator : public BytecodeInstructionGenerator {
   std::vector<DebugSourceLocation> debugLocations_{};
 
   /// Table mapping variable names to frame locations.
-  std::vector<Identifier> debugVariableNames_;
+  std::vector<Identifier> debugVariableNamesUTF8_;
+
+  /// Table mapping addresses to textified callees.
+  std::vector<DebugTextifiedCallee> textifiedCallees_;
 
   /// Lexical parent function ID, i.e. the lexically containing function.
   OptValue<uint32_t> lexicalParentID_{};
@@ -178,20 +181,29 @@ class BytecodeFunctionGenerator : public BytecodeInstructionGenerator {
 
   bool hasDebugInfo() const {
     return !debugLocations_.empty() || lexicalParentID_ ||
-        !debugVariableNames_.empty();
+        !debugVariableNamesUTF8_.empty() || !textifiedCallees_.empty();
+  }
+
+  // Add the textified callee string for the callable in a given location.
+  void addDebugTextfiedCallee(const DebugTextifiedCallee &tCallee) {
+    textifiedCallees_.emplace_back(tCallee);
+  }
+
+  llvh::ArrayRef<DebugTextifiedCallee> getTextifiedCallees() const {
+    return textifiedCallees_;
   }
 
   /// Add a debug variable named \name.
-  void setDebugVariableNames(std::vector<Identifier> names) {
+  void setDebugVariableNamesUTF8(std::vector<Identifier> names) {
     assert(
         !complete_ &&
         "Cannot modify BytecodeFunction after call to bytecodeGenerationComplete.");
-    debugVariableNames_ = std::move(names);
+    debugVariableNamesUTF8_ = std::move(names);
   }
 
   /// \return the list of debug variable names.
-  llvh::ArrayRef<Identifier> getDebugVariableNames() const {
-    return debugVariableNames_;
+  llvh::ArrayRef<Identifier> getDebugVariableNamesUTF8() const {
+    return debugVariableNamesUTF8_;
   }
 
   /// Set the lexical parent ID to \p parentId.

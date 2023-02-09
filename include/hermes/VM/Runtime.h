@@ -196,9 +196,9 @@ using CrashTrace = CrashTraceNoop;
 
 /// The Runtime encapsulates the entire context of a VM. Multiple instances can
 /// exist and are completely independent from each other.
-class Runtime : public PointerBase,
-                public HandleRootOwner,
-                private GCBase::GCCallbacks {
+class HERMES_EMPTY_BASES Runtime : public PointerBase,
+                                   public HandleRootOwner,
+                                   private GCBase::GCCallbacks {
  public:
   static std::shared_ptr<Runtime> create(const RuntimeConfig &runtimeConfig);
 
@@ -635,6 +635,11 @@ class Runtime : public PointerBase,
   uint32_t getCurrentFrameOffset() const;
 #endif
 
+  /// Flag the interpreter that an error with the specified \p msg must be
+  /// thrown when execution resumes.
+  /// \return ExecutionResult::EXCEPTION
+  LLVM_NODISCARD ExecutionStatus raiseError(const TwineChar16 &msg);
+
   /// Flag the interpreter that a type error with the specified message must be
   /// thrown when execution resumes.
   /// If the message is not a string, it is converted using toString().
@@ -658,9 +663,16 @@ class Runtime : public PointerBase,
   /// resumes. The string thrown concatenates \p msg1, a description of \p
   /// value, and \p msg2. \return ExecutionResult::EXCEPTION
   LLVM_NODISCARD ExecutionStatus raiseTypeErrorForValue(
-      llvh::StringRef msg1,
+      const TwineChar16 &msg1,
       Handle<> value,
-      llvh::StringRef msg2);
+      const TwineChar16 &msg2);
+
+  /// Flag the interpreter that a type error must be thrown when execution
+  /// resumes. The string thrown concatenates either the textified callable for
+  /// \p callable (if it is available) with " is not a function"; or a
+  /// description of \p callable with " is not a function". \return
+  /// ExecutionResult::EXCEPTION
+  LLVM_NODISCARD ExecutionStatus raiseTypeErrorForCallable(Handle<> callable);
 
   /// Flag the interpreter that a syntax error must be thrown.
   /// \return ExecutionStatus::EXCEPTION

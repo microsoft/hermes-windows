@@ -10,8 +10,8 @@
 #include "hermes/BCGen/HBC/Bytecode.h"
 #include "hermes/BCGen/HBC/SerializedLiteralGenerator.h"
 #include "hermes/FrontEndDefs/Builtins.h"
+#include "hermes/Regex/RegexSerialization.h"
 #include "hermes/Support/JenkinsHash.h"
-#include "hermes/Support/RegExpSerialization.h"
 #include "hermes/Support/SHA1.h"
 
 #include <cstdint>
@@ -1277,6 +1277,13 @@ void BytecodeDisassembler::disassemble(raw_ostream &OS) {
         OS << "none";
       } else {
         OS << llvh::format_hex(debugLexicalOffset, 6);
+      }
+      OS << ", textified callees ";
+      uint32_t textifiedCalleeOffset = funcDebugOffsets->textifiedCallees;
+      if (textifiedCalleeOffset == DebugOffsets::NO_OFFSET) {
+        OS << "none";
+      } else {
+        OS << llvh::format_hex(textifiedCalleeOffset, 6);
       }
       OS << '\n';
     }

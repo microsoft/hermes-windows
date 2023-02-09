@@ -132,6 +132,9 @@ void HBCISel::resolveRelocations() {
         case Relocation::DebugInfo:
           // Nothing, just keep track of the location.
           break;
+        case Relocation::TextifiedCallee:
+          // Nothing to update.
+          break;
         case Relocation::JumpTableDispatch:
           auto &switchImmInfo = switchImmInfo_[cast<SwitchImmInst>(pointer)];
           // update default target jmp
@@ -277,6 +280,46 @@ void HBCISel::addDebugSourceLocationInfo(SourceMapGenerator *outSourceMap) {
   }
 }
 
+void HBCISel::addDebugTextifiedCalleeInfo() {
+  for (auto &reloc : relocations_) {
+    if (reloc.type != Relocation::TextifiedCallee)
+      continue;
+    BCFGen_->addDebugTextfiedCallee(
+        {reloc.loc, llvh::cast<LiteralString>(reloc.pointer)->getValue()});
+  }
+}
+
+namespace {
+/// \return the UTF8 encoding for \p name, replacing surrogates if any is
+/// present.
+static Identifier ensureUTF8Identifer(
+    StringTable &st,
+    Identifier name,
+    std::string &nameUTF8Buffer) {
+  // Check if name has any surrogates. If it doesn't, then it already is a valid
+  // UTF8 string, and as such can be written to the debug info.
+  bool hasSurrogate = false;
+  const char *it = name.str().begin();
+  const char *nameEnd = name.str().end();
+  while (it < nameEnd && !hasSurrogate) {
+    constexpr bool allowSurrogates = false;
+    decodeUTF8<allowSurrogates>(
+        it, [&hasSurrogate](const llvh::Twine &) { hasSurrogate = true; });
+  }
+
+  if (hasSurrogate) {
+    nameUTF8Buffer.clear();
+
+    // name has surrogates, meaning it is not a valid UTF8 string (these strings
+    // are still valid within Hermes itself).
+    convertUTF8WithSurrogatesToUTF8WithReplacements(nameUTF8Buffer, name.str());
+    name = st.getIdentifier(nameUTF8Buffer);
+  }
+
+  return name;
+}
+} // namespace
+
 void HBCISel::addDebugLexicalInfo() {
   // Only emit if debug info is enabled.
   if (F_->getContext().getDebugInfoSetting() != DebugInfoSetting::ALL)
@@ -287,10 +330,16 @@ void HBCISel::addDebugLexicalInfo() {
   if (parent)
     BCFGen_->setLexicalParentID(BCFGen_->getFunctionID(parent));
 
+  // Add variable names to the lexical info table. All strings in the debug
+  // table mutex be valid UTF8, so the names may have to be converted to valid
+  // UTF8 strings.
   std::vector<Identifier> names;
-  for (const Variable *var : F_->getFunctionScopeDesc()->getVariables())
-    names.push_back(var->getName());
-  BCFGen_->setDebugVariableNames(std::move(names));
+  std::string nameUTF8Buffer;
+  for (const Variable *var : F_->getFunctionScopeDesc()->getVariables()) {
+    names.push_back(ensureUTF8Identifer(
+        F_->getContext().getStringTable(), var->getName(), nameUTF8Buffer));
+  }
+  BCFGen_->setDebugVariableNamesUTF8(std::move(names));
 }
 
 void HBCISel::populatePropertyCachingInfo() {
@@ -1676,11 +1725,13 @@ void HBCISel::generate(Instruction *ii, BasicBlock *next) {
   LLVM_DEBUG(dbgs() << "Generating the instruction " << ii->getName() << "\n");
 
   // Generate the debug info.
+  bool isDebugInfoLevelThrowing = false;
   switch (F_->getContext().getDebugInfoSetting()) {
     case DebugInfoSetting::THROWING:
       if (!ii->mayExecute()) {
         break;
       }
+      isDebugInfoLevelThrowing = true;
     // Falls through - if ii can execute.
     case DebugInfoSetting::SOURCE_MAP:
     case DebugInfoSetting::ALL:
@@ -1689,6 +1740,16 @@ void HBCISel::generate(Instruction *ii, BasicBlock *next) {
             {BCFGen_->getCurrentLocation(),
              Relocation::RelocationType::DebugInfo,
              ii});
+      }
+      if (!isDebugInfoLevelThrowing) {
+        if (auto *call = llvh::dyn_cast<CallInst>(ii)) {
+          if (LiteralString *textifiedCallee = call->getTextifiedCallee()) {
+            relocations_.push_back(
+                {BCFGen_->getCurrentLocation(),
+                 Relocation::RelocationType::TextifiedCallee,
+                 textifiedCallee});
+          }
+        }
       }
       break;
   }
@@ -1731,6 +1792,7 @@ void HBCISel::generate(SourceMapGenerator *outSourceMap) {
   resolveRelocations();
   resolveExceptionHandlers();
   addDebugSourceLocationInfo(outSourceMap);
+  addDebugTextifiedCalleeInfo();
   generateJumpTable();
   addDebugLexicalInfo();
   populatePropertyCachingInfo();

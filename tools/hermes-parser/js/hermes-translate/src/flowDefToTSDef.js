@@ -19,10 +19,13 @@ import {
   translationError as translationErrorBase,
   unexpectedTranslationError as unexpectedTranslationErrorBase,
 } from './utils/ErrorUtils';
+import {removeAtFlowFromDocblock} from './utils/DocblockUtils';
 
 const cloneJSDocCommentsToNewNode =
   // $FlowExpectedError[incompatible-cast] - trust me this re-type is 100% safe
   (cloneJSDocCommentsToNewNodeOriginal: (mixed, mixed) => void);
+
+const VALID_REACT_IMPORTS = new Set(['React', 'react']);
 
 export function flowDefToTSDef(
   originalCode: string,
@@ -34,7 +37,8 @@ export function flowDefToTSDef(
     type: 'Program',
     body: tsBody,
     sourceType: ast.sourceType,
-    docblock: ast.docblock,
+    docblock:
+      ast.docblock == null ? null : removeAtFlowFromDocblock(ast.docblock),
   };
 
   const transform = getTransforms(originalCode, scopeManager);
@@ -86,6 +90,53 @@ const getTransforms = (code: string, scopeManager: ScopeManager) => {
     }
     return globalScope;
   })();
+
+  function isReactImport(id: FlowESTree.Identifier): boolean {
+    let currentScope = scopeManager.acquire(id);
+
+    const variableDef = (() => {
+      while (currentScope != null) {
+        for (const variable of currentScope.variables) {
+          if (variable.defs.length && variable.name === id.name) {
+            return variable;
+          }
+        }
+        currentScope = currentScope.upper;
+      }
+    })();
+
+    // No variable found, it must be global. Using the `React` variable is enough in this case.
+    if (variableDef == null) {
+      return VALID_REACT_IMPORTS.has(id.name);
+    }
+
+    const def = variableDef.defs[0];
+    // Detect:
+    switch (def.type) {
+      // import React from 'react';
+      // import * as React from 'react';
+      case 'ImportBinding': {
+        if (
+          def.node.type === 'ImportDefaultSpecifier' ||
+          def.node.type === 'ImportNamespaceSpecifier'
+        ) {
+          return VALID_REACT_IMPORTS.has(def.parent.source);
+        }
+        return false;
+      }
+
+      // Globals
+      case 'ImplicitGlobalVariable': {
+        return VALID_REACT_IMPORTS.has(id.name);
+      }
+
+      // TODO Handle:
+      // const React = require('react');
+      // const Something = React;
+    }
+
+    return false;
+  }
 
   const transform = {
     AnyTypeAnnotation(
@@ -409,66 +460,63 @@ const getTransforms = (code: string, scopeManager: ScopeManager) => {
           //   so we need to create an intermediate variable to hold the type.
 
           case 'GenericTypeAnnotation': {
-            const annotationId = declaration.id;
-            const referencedId = (() => {
-              let current = annotationId;
-              while (current.type !== 'Identifier') {
-                current = current.qualification;
+            const referencedId = declaration.id;
+
+            // QualifiedTypeIdentifiers are types so cannot be handled without the intermediate variable so
+            // only Identifiers can be handled here.
+            if (referencedId.type === 'Identifier') {
+              const exportedVar = topScope.set.get(referencedId.name);
+              if (exportedVar == null || exportedVar.defs.length !== 1) {
+                throw unexpectedTranslationError(
+                  referencedId,
+                  `Unable to find exported variable ${referencedId.name}`,
+                );
               }
-              return current;
-            })();
 
-            const exportedVar = topScope.set.get(referencedId.name);
-            if (exportedVar == null || exportedVar.defs.length !== 1) {
-              throw unexpectedTranslationError(
-                referencedId,
-                `Unable to find exported variable ${referencedId.name}`,
-              );
-            }
+              const def = exportedVar.defs[0];
+              switch (def.type) {
+                case 'ImportBinding': {
+                  // `import type { Wut } from 'mod'; declare export default Wut;`
+                  // `import { type Wut } from 'mod'; declare export default Wut;`
+                  // these cases should be wrapped in a variable because they're exporting a type, not a value
+                  const specifier = def.node;
+                  if (
+                    specifier.importKind === 'type' ||
+                    specifier.parent.importKind === 'type'
+                  ) {
+                    // fallthrough to the "default" handling
+                    break;
+                  }
 
-            const def = exportedVar.defs[0];
-            switch (def.type) {
-              case 'ImportBinding': {
-                // `import type { Wut } from 'mod'; declare export default Wut;`
-                // `import { type Wut } from 'mod'; declare export default Wut;`
-                // these cases should be wrapped in a variable because they're exporting a type, not a value
-                const specifier = def.node;
-                if (
-                  specifier.importKind === 'type' ||
-                  specifier.parent.importKind === 'type'
-                ) {
+                  // intentional fallthrough to the "value" handling
+                }
+                case 'ClassName':
+                case 'Enum':
+                case 'FunctionName':
+                case 'ImplicitGlobalVariable':
+                case 'Variable':
+                  // there's already a variable defined to hold the type
+                  return {
+                    type: 'ExportDefaultDeclaration',
+                    declaration: {
+                      type: 'Identifier',
+                      name: referencedId.name,
+                    },
+                    exportKind: 'value',
+                  };
+
+                case 'CatchClause':
+                case 'Parameter':
+                case 'TypeParameter':
+                  throw translationError(
+                    def.node,
+                    `Unexpected variable def type: ${def.type}`,
+                  );
+
+                case 'Type':
                   // fallthrough to the "default" handling
                   break;
-                }
-
-                // intentional fallthrough to the "value" handling
               }
-              case 'ClassName':
-              case 'Enum':
-              case 'FunctionName':
-              case 'ImplicitGlobalVariable':
-              case 'Variable':
-                // there's already a variable defined to hold the type
-                return {
-                  type: 'ExportDefaultDeclaration',
-                  declaration: {
-                    type: 'Identifier',
-                    name: referencedId.name,
-                  },
-                  exportKind: 'value',
-                };
-
-              case 'CatchClause':
-              case 'Parameter':
-              case 'TypeParameter':
-                throw translationError(
-                  def.node,
-                  `Unexpected variable def type: ${def.type}`,
-                );
-
-              case 'Type':
-                // fallthrough to the "default" handling
-                break;
             }
 
             // intentional fallthrough to the "default" handling
@@ -1014,6 +1062,11 @@ const getTransforms = (code: string, scopeManager: ScopeManager) => {
           },
         },
       ];
+    },
+    DeclareModuleExports(
+      node: FlowESTree.DeclareModuleExports,
+    ): TSESTree.TypeNode {
+      throw translationError(node, 'CommonJS exports are not supported.');
     },
     ExistsTypeAnnotation(
       node: FlowESTree.ExistsTypeAnnotation,
@@ -2058,12 +2111,46 @@ const getTransforms = (code: string, scopeManager: ScopeManager) => {
     QualifiedTypeIdentifier(
       node: FlowESTree.QualifiedTypeIdentifier,
     ): TSESTree.TSQualifiedName {
+      const qual = node.qualification;
+
+      // React special conversion:
+      if (qual.type === 'Identifier' && isReactImport(qual)) {
+        switch (node.id.name) {
+          // React.Something -> React.ReactSomething
+          case 'Element':
+          case 'Node': {
+            return {
+              type: 'TSQualifiedName',
+              left: transform.Identifier(qual, false),
+              right: {
+                type: 'Identifier',
+                name: `React${node.id.name}`,
+              },
+            };
+          }
+          // React.MixedElement -> JSX.Element
+          case 'MixedElement': {
+            return {
+              type: 'TSQualifiedName',
+              left: {
+                type: 'Identifier',
+                name: 'JSX',
+              },
+              right: {
+                type: 'Identifier',
+                name: 'Element',
+              },
+            };
+          }
+        }
+      }
+
       return {
         type: 'TSQualifiedName',
         left:
-          node.qualification.type === 'Identifier'
-            ? transform.Identifier(node.qualification, false)
-            : transform.QualifiedTypeIdentifier(node.qualification),
+          qual.type === 'Identifier'
+            ? transform.Identifier(qual, false)
+            : transform.QualifiedTypeIdentifier(qual),
         right: transform.Identifier(node.id, false),
       };
     },

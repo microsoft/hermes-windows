@@ -5,6 +5,7 @@
 <PROJECT_ROOT>/.*/dist
 <PROJECT_ROOT>/.*/node_modules
 <PROJECT_ROOT>/hermes-translate/__tests__/flowDefToTSDef/fixtures
+<PROJECT_ROOT>/hermes-translate/__tests__/flowToJS/fixtures
 
 [options]
 name=hermes-parser
@@ -25,7 +26,7 @@ enums=true
 inference_mode=constrain_writes
 
 [version]
-^0.195.2
+^0.198.2
 
 [lints]
 untyped-type-import=error
