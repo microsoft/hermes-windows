@@ -70,9 +70,11 @@ inline T Runtime::make(Runtime::PointerValue* pv) {
   return T(pv);
 }
 
+#if JSI_VERSION >= 3
 inline Runtime::PointerValue* Runtime::getPointerValue(jsi::Pointer& pointer) {
   return pointer.ptr_;
 }
+#endif
 
 inline const Runtime::PointerValue* Runtime::getPointerValue(
     const jsi::Pointer& pointer) {
@@ -111,21 +113,22 @@ inline bool Object::hasProperty(Runtime& runtime, const PropNameID& name)
 }
 
 template <typename T>
-void Object::setProperty(Runtime& runtime, const char* name, T&& value) const {
+void Object::setProperty(Runtime& runtime, const char* name, T&& value)
+    JSI_CONST_10 {
   setProperty(
       runtime, String::createFromAscii(runtime, name), std::forward<T>(value));
 }
 
 template <typename T>
 void Object::setProperty(Runtime& runtime, const String& name, T&& value)
-    const {
+    JSI_CONST_10 {
   setPropertyValue(
       runtime, name, detail::toValue(runtime, std::forward<T>(value)));
 }
 
 template <typename T>
 void Object::setProperty(Runtime& runtime, const PropNameID& name, T&& value)
-    const {
+    JSI_CONST_10 {
   setPropertyValue(
       runtime, name, detail::toValue(runtime, std::forward<T>(value)));
 }
@@ -204,6 +207,7 @@ inline std::shared_ptr<HostObject> Object::getHostObject<HostObject>(
   return runtime.getHostObject(*this);
 }
 
+#if JSI_VERSION >= 7
 template <typename T>
 inline bool Object::hasNativeState(Runtime& runtime) const {
   return runtime.hasNativeState(*this) &&
@@ -226,17 +230,19 @@ inline void Object::setNativeState(
     std::shared_ptr<NativeState> state) const {
   runtime.setNativeState(*this, state);
 }
+#endif
 
 inline Array Object::getPropertyNames(Runtime& runtime) const {
   return runtime.getPropertyNames(*this);
 }
 
-inline Value WeakObject::lock(Runtime& runtime) const {
+inline Value WeakObject::lock(Runtime& runtime) JSI_CONST_10 {
   return runtime.lockWeakObject(*this);
 }
 
 template <typename T>
-void Array::setValueAtIndex(Runtime& runtime, size_t i, T&& value) const {
+void Array::setValueAtIndex(Runtime& runtime, size_t i, T&& value)
+    JSI_CONST_10 {
   setValueAtIndexImpl(
       runtime, i, detail::toValue(runtime, std::forward<T>(value)));
 }
@@ -314,7 +320,7 @@ inline std::vector<PropNameID> PropNameID::names(
 
 template <size_t N>
 inline std::vector<PropNameID> PropNameID::names(
-    PropNameID(&&propertyNames)[N]) {
+    PropNameID (&&propertyNames)[N]) {
   std::vector<PropNameID> result;
   result.reserve(N);
   for (auto& name : propertyNames) {
@@ -343,9 +349,11 @@ inline Value Function::callAsConstructor(Runtime& runtime, Args&&... args)
       runtime, {detail::toValue(runtime, std::forward<Args>(args))...});
 }
 
+#if JSI_VERSION >= 8
 String BigInt::toString(Runtime& runtime, int radix) const {
   return runtime.bigintToString(*this, radix);
 }
+#endif
 
 } // namespace jsi
 } // namespace facebook

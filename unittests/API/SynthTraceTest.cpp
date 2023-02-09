@@ -512,6 +512,7 @@ TEST_F(SynthTraceTest, CallObjectGetProp) {
       *records[8]);
 }
 
+#if JSI_VERSION >= 4
 TEST_F(SynthTraceTest, DrainMicrotasks) {
   {
     rt->drainMicrotasks();
@@ -523,6 +524,7 @@ TEST_F(SynthTraceTest, DrainMicrotasks) {
   EXPECT_EQ_RECORD(
       SynthTrace::DrainMicrotasksRecord(dummyTime, 5), *records[1]);
 }
+#endif
 
 TEST_F(SynthTraceTest, HostObjectProxy) {
   // This allows us to share the constant strings between the outer scope
@@ -932,6 +934,7 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
   EXPECT_EQ_RECORD(gprExpect4, *records[19]);
 }
 
+#if JSI_VERSION >= 8
 TEST_F(SynthTraceTest, CreateBigInt) {
   SynthTrace::ObjectID fromInt64ID =
       rt->getUniqueID(jsi::BigInt::fromInt64(*rt, 0xffffffffffffffff));
@@ -974,6 +977,7 @@ TEST_F(SynthTraceTest, BigIntToString) {
   EXPECT_EQ_RECORD(
       SynthTrace::BigIntToStringRecord(dummyTime, strID, bID, 16), *records[1]);
 }
+#endif
 
 // These tests fail on Windows.
 #if defined(EXPECT_DEATH_IF_SUPPORTED) && !defined(_WINDOWS)
@@ -1116,14 +1120,18 @@ TEST_F(SynthTraceReplayTest, SetPropertyReplay) {
         jsi::PropNameID::forString(rt, jsi::String::createFromAscii(rt, "c"));
     rt.global().setProperty(rt, "symD", eval(rt, "Symbol('d')"));
     rt.global().setProperty(rt, "symE", eval(rt, "Symbol('e')"));
+#if JSI_VERSION >= 5
     auto symProp = jsi::PropNameID::forSymbol(
         rt, rt.global().getProperty(rt, "symE").asSymbol(rt));
+#endif
 
     jsi::Object x(rt);
     x.setProperty(rt, asciiProp, "apple");
     x.setProperty(rt, utf8Prop, "banana");
     x.setProperty(rt, strProp, "coconut");
+#if JSI_VERSION >= 5
     x.setProperty(rt, symProp, "eggplant");
+#endif
     rt.global().setProperty(rt, "x", x);
     eval(rt, "x[symD] = 'durian'");
   }
@@ -1134,10 +1142,13 @@ TEST_F(SynthTraceReplayTest, SetPropertyReplay) {
     EXPECT_EQ(eval(rt, "x.b").asString(rt).utf8(rt), "banana");
     EXPECT_EQ(eval(rt, "x.c").asString(rt).utf8(rt), "coconut");
     EXPECT_EQ(eval(rt, "x[symD]").asString(rt).utf8(rt), "durian");
+#if JSI_VERSION >= 5
     EXPECT_EQ(eval(rt, "x[symE]").asString(rt).utf8(rt), "eggplant");
+#endif
   }
 }
 
+#if JSI_VERSION >= 8
 TEST_F(SynthTraceReplayTest, BigIntCreate) {
   {
     auto &rt = *traceRt;
@@ -1164,7 +1175,9 @@ TEST_F(SynthTraceReplayTest, BigIntCreate) {
     EXPECT_EQ(uint64String.utf8(rt), "1777777777777777777777");
   }
 }
+#endif
 
+#if JSI_VERSION >= 4
 using JobQueueReplayTest = SynthTraceReplayTest;
 
 TEST_F(JobQueueReplayTest, DrainSingleMicrotask) {
@@ -1200,6 +1213,7 @@ HermesInternal.enqueueJob(inc);
     EXPECT_EQ(eval(rt, "x").asNumber(), 3);
   }
 }
+#endif
 
 using NonDeterminismReplayTest = SynthTraceReplayTest;
 
@@ -1282,6 +1296,7 @@ var x = ref.deref().x;
   EXPECT_EQ(traceX, replayX);
 }
 
+#if JSI_VERSION >= 4
 TEST_F(NonDeterminismReplayTest, WeakRefTest) {
   eval(*traceRt, R"(
 var obj = {x: 5};
@@ -1303,6 +1318,7 @@ var secondDeref = ref.deref();
   EXPECT_EQ(replayedFirst, 5);
   EXPECT_EQ(secondDeref, replayedSecond);
 }
+#endif
 
 /// @}
 

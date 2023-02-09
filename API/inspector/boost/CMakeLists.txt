@@ -29,7 +29,7 @@ foreach(component ${boostComponents})
   FetchContent_Declare(
     boost_${component}
     GIT_REPOSITORY https://github.com/boostorg/${component}.git
-    GIT_TAG        boost-1.72.0
+    GIT_TAG        boost-1.76.0
     GIT_SHALLOW    1
     GIT_PROGRESS   1
   )

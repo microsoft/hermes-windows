@@ -107,6 +107,7 @@ TEST_F(HermesRuntimeTest, ArrayBufferTest) {
   EXPECT_EQ(buffer[1], 5678);
 }
 
+#if JSI_VERSION >= 9
 class HermesRuntimeTestMethodsTest : public HermesRuntimeTestBase {
  public:
   HermesRuntimeTestMethodsTest()
@@ -168,6 +169,7 @@ TEST_F(HermesRuntimeTestMethodsTest, ExternalArrayBufferTest) {
     EXPECT_TRUE(weakBuf.expired());
   }
 }
+#endif
 
 TEST_F(HermesRuntimeTest, BytecodeTest) {
   const uint8_t shortBytes[] = {1, 2, 3};
@@ -695,6 +697,7 @@ TEST_F(HermesRuntimeTest, HostObjectAsParentTest) {
       eval("var subClass = {__proto__: ho}; subClass.prop1 == 10;").getBool());
 }
 
+#if JSI_VERSION >= 7
 TEST_F(HermesRuntimeTest, NativeStateTest) {
   class C : public facebook::jsi::NativeState {
    public:
@@ -739,7 +742,9 @@ TEST_F(HermesRuntimeTest, NativeStateTest) {
   // point to local variables. Otherwise ASAN will complain.
   eval("gc()");
 }
+#endif
 
+#if JSI_VERSION >= 5
 TEST_F(HermesRuntimeTest, PropNameIDFromSymbol) {
   auto strProp = PropNameID::forAscii(*rt, "a");
   auto secretProp = PropNameID::forSymbol(
@@ -754,6 +759,7 @@ TEST_F(HermesRuntimeTest, PropNameIDFromSymbol) {
   EXPECT_EQ(x.getProperty(*rt, secretProp).getString(*rt).utf8(*rt), "secret");
   EXPECT_EQ(x.getProperty(*rt, globalProp).getString(*rt).utf8(*rt), "global");
 }
+#endif
 
 TEST_F(HermesRuntimeTest, HasComputedTest) {
   // The only use of JSObject::hasComputed() is in HermesRuntimeImpl,
@@ -867,6 +873,7 @@ TEST_F(HermesRuntimeTest, DiagnosticHandlerTestWarning) {
   EXPECT_EQ(5, diagHandler.ds[1].ranges[0].second);
 }
 
+#if JSI_VERSION >= 8
 TEST_F(HermesRuntimeTest, BigIntJSI) {
   Function bigintCtor = rt->global().getPropertyAsFunction(*rt, "BigInt");
   auto BigInt = [&](const char *v) { return bigintCtor.call(*rt, eval(v)); };
@@ -997,6 +1004,7 @@ TEST_F(HermesRuntimeTest, BigIntJSITruncation) {
   EXPECT_EQ(toUint64(b), lossy(~0ull));
   EXPECT_EQ(toInt64(b), lossy(~0ull));
 }
+#endif
 
 #ifdef HERMESVM_EXCEPTION_ON_OOM
 class HermesRuntimeTestSmallHeap : public HermesRuntimeTestBase {
