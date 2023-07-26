@@ -109,7 +109,7 @@ function Get-CMakeConfiguration($config) {
 }
 
 function Invoke-RemoveUnusedFilesForComponentGovernance() {
-    Remove-Item -Path ".\unsupported" -Force -Recurse
+    Remove-Item -Path ".\unsupported\juno" -Force -Recurse
 }
 
 function Invoke-Environment($Command, $arg) {
