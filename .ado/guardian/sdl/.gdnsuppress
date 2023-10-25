@@ -1,0 +1,236 @@
+{
+    "hydrated": false,
+    "properties": {
+      "helpUri": "https://eng.ms/docs/microsoft-security/security/azure-security/cloudai-security-fundamentals-engineering/security-integration/guardian-wiki/microsoft-guardian/general/suppressions",
+      "hydrationStatus": "This file does not contain identifying data. It is safe to check into your repo. To hydrate this file with identifying data, run `guardian hydrate --help` and follow the guidance."
+    },
+    "version": "1.0.0",
+    "suppressionSets": {
+      "default": {
+        "name": "default",
+        "createdDate": "2023-10-20 17:35:00Z",
+        "lastUpdatedDate": "2023-10-20 17:35:00Z"
+      }
+    },
+    "results": {
+      "1e706b5c61ae1d4e5529f54425953c7c38662516e57a38da3bb16a5836570342": {
+        "signature": "1e706b5c61ae1d4e5529f54425953c7c38662516e57a38da3bb16a5836570342",
+        "alternativeSignatures": [
+          "1e0c330b266a141b24783cd448754909c079d77778ca719a87d9103054dc5304"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "5d79e092f586c922e055f72258151b91f377cd1c2c78e27e4fc598c606366f4d": {
+        "signature": "5d79e092f586c922e055f72258151b91f377cd1c2c78e27e4fc598c606366f4d",
+        "alternativeSignatures": [
+          "ffaa4d06391e23afd801662f1d6de75f8533a71ef7624e514a782edf7f3ae625"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "49e8e7ad781283ae8802319892250a4006856d9c3852fee3697782c64ad464a9": {
+        "signature": "49e8e7ad781283ae8802319892250a4006856d9c3852fee3697782c64ad464a9",
+        "alternativeSignatures": [
+          "c56a6292e222ac02fd89569ff3e2c6c8bf5502be01951dfb4501f2d8ce74020f"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "68e113701e747b4059a9049f61fd8a252a85dc5237831c3cfd68f2927d4d2256": {
+        "signature": "68e113701e747b4059a9049f61fd8a252a85dc5237831c3cfd68f2927d4d2256",
+        "alternativeSignatures": [
+          "71cd99f14c24f620a431311e1cafccc72cacd7d672b83b70c0f218274b92e759"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "c70524081a73c41715cdab46358fe6327ff159007354e5b4a668a2425d553824": {
+        "signature": "c70524081a73c41715cdab46358fe6327ff159007354e5b4a668a2425d553824",
+        "alternativeSignatures": [
+          "fad6825e3d348d034b8c80dfd092a0c793840691779fd2243155f28bb06c3900"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "07953f4ddc3f088bdf3148d3ef909fb06cb7007c1a67b6413cb5717c5f331796": {
+        "signature": "07953f4ddc3f088bdf3148d3ef909fb06cb7007c1a67b6413cb5717c5f331796",
+        "alternativeSignatures": [
+          "51ce3ef8dc0762ca60e45a3c8f1c1894ac03fc7d27a43f7436dd4f0247214b53"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "4c903a862062b6c0be808cb40c7f8ee384614c58318daaa672338064cfd03324": {
+        "signature": "4c903a862062b6c0be808cb40c7f8ee384614c58318daaa672338064cfd03324",
+        "alternativeSignatures": [
+          "20e7ffffcaaace21514fb625484e14a3cf8daccd4e0f12d7a2c00ed129dd3656"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "226aba214fcf3af558dcc286091032167a40dcd9e4c2d8725c168e3c8a5c1e98": {
+        "signature": "226aba214fcf3af558dcc286091032167a40dcd9e4c2d8725c168e3c8a5c1e98",
+        "alternativeSignatures": [
+          "615ead8b5e5d4ff04de0c80af408c27b8485e3b35ec3c55c5ba453cb41c72a9e"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "1538e6b629cdd2299dc82c2723cfbb755a6fa56216d3fe0d655c2d5a6f622482": {
+        "signature": "1538e6b629cdd2299dc82c2723cfbb755a6fa56216d3fe0d655c2d5a6f622482",
+        "alternativeSignatures": [
+          "69950da114241fd6f7edc61463e507ab88cea6469fa81e1c14d0448d4ea48eb0"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "3fd4c5fdc46555312b6aaf8fe930019de805bb6a73ab965b90e3f00e14de9b65": {
+        "signature": "3fd4c5fdc46555312b6aaf8fe930019de805bb6a73ab965b90e3f00e14de9b65",
+        "alternativeSignatures": [
+          "3d53fb5648e0e3b2b72d1b885dcac1c080971ae4b8082d375fefe2f3c11157be"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "5f64b8ac17a34721b5915740211a309fd52a362e731d42b8f9824a47bff88b3d": {
+        "signature": "5f64b8ac17a34721b5915740211a309fd52a362e731d42b8f9824a47bff88b3d",
+        "alternativeSignatures": [
+          "8bf4d73f799b5d471656d83f8ad117683febe9a7e6b0ae4acbf50f50c14aca25"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "c053d62182cdc4e98a11591709656e51e8a8e15e1575fd7ea9efad4d6b90f263": {
+        "signature": "c053d62182cdc4e98a11591709656e51e8a8e15e1575fd7ea9efad4d6b90f263",
+        "alternativeSignatures": [
+          "2c9b4f290bde7944441df059c8d642fe2a5c908f68b8e86ead581d35579a988a"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z"
+      },
+      "13faa3c5ffc9880b2599203ad7bc43c2ec9f2d0a0d2c12d0aa49f1e4bdbbea7c": {
+        "signature": "13faa3c5ffc9880b2599203ad7bc43c2ec9f2d0a0d2c12d0aa49f1e4bdbbea7c",
+        "alternativeSignatures": [
+          "c1631e5b06233fc330efe7fba22e1eae575acb04fb3e557b555aaed0661335fd"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "80aced9c74ae9ecbea4507ccac7908a6d0e7e561e47a4c18dc345827fad2718f": {
+        "signature": "80aced9c74ae9ecbea4507ccac7908a6d0e7e561e47a4c18dc345827fad2718f",
+        "alternativeSignatures": [
+          "acd565d11ec7a28950f6630a382b96fc02115d86bde66e71d836a24b225090b2"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "b6d4de22b27b8403bf63595fc6eece5e664fe8e281934736ac86e691f4fddf47": {
+        "signature": "b6d4de22b27b8403bf63595fc6eece5e664fe8e281934736ac86e691f4fddf47",
+        "alternativeSignatures": [
+          "883cc9db2f0d107e990bee4744b3b7dcfc83cd921dac03ff0e55c38543f5a5e5"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "74f956449cb4fae0f37a6c8bcf28f810fac689f0b2ae1e42225d95641b5a78e9": {
+        "signature": "74f956449cb4fae0f37a6c8bcf28f810fac689f0b2ae1e42225d95641b5a78e9",
+        "alternativeSignatures": [
+          "2ca924dd7d234325df80a91257f2b9daa6d6f978ae92ea0ab9c0d004af02c37b"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "702d8a2510ae52f9c3b607a70e73d5b32f2d70318d1a7fec3aa900003f5ddee7": {
+        "signature": "702d8a2510ae52f9c3b607a70e73d5b32f2d70318d1a7fec3aa900003f5ddee7",
+        "alternativeSignatures": [
+          "def4caac6859d9f39bf0dccf329cf9b05ff41f0a65ad003c74c6308a0f24b246"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "ffd5c5d68309dce8c77fd724eb3a73e7cad37b4c065e178f1f88300eb9ed38c1": {
+        "signature": "ffd5c5d68309dce8c77fd724eb3a73e7cad37b4c065e178f1f88300eb9ed38c1",
+        "alternativeSignatures": [
+          "4157adef9e4d056227e0725f6c73b3c9fce8fcc9c0361619c2af4f7059cc4b0f"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "8baaf5ff767c62341270c2de8d59ce1d7284d063c4ff3b465a4a2d0b0954985a": {
+        "signature": "8baaf5ff767c62341270c2de8d59ce1d7284d063c4ff3b465a4a2d0b0954985a",
+        "alternativeSignatures": [
+          "1dd2e0d0f5128da019d184163a991fb56a626cdd2efe9676a4fc3d534f5c92d1"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      },
+      "9d9ea76d83b635307eae485dfd93d1fc26d49c4b4d582b5eafb1f47fb2c7d2a3": {
+        "signature": "9d9ea76d83b635307eae485dfd93d1fc26d49c4b4d582b5eafb1f47fb2c7d2a3",
+        "alternativeSignatures": [
+          "1813c9a83be034c91c85fbebe615f6a7a885a5e4c7138e4939b9b5d802b928e5"
+        ],
+        "memberOf": [
+          "default"
+        ],
+        "createdDate": "2023-10-20 17:35:00Z",
+        "justification": "Issue is with externally supplied runtime files"
+      }
+    }
+  }

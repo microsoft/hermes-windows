@@ -39,6 +39,12 @@ jobs:
     variables:
       semanticVersion: $[ dependencies.Setup.outputs['setVersions.semanticVersion'] ]
       fileVersion: $[ dependencies.Setup.outputs['setVersions.fileVersion'] ]
+    ${{ if parameters.isPublish }}:
+      templateContext:
+        outputs:
+          - output: buildArtifacts
+            PathtoPublish: $(Build.ArtifactStagingDirectory)
+            ArtifactName: HermesArtifacts
     steps:
       - task: PowerShell@2
         displayName: Run the build script for publish
@@ -95,6 +101,7 @@ jobs:
       - script: echo TODO - Add Tests here
         displayName: '[Test] - To be Added via bug #77'
 
+<<<<<<< HEAD
       - ${{ if parameters.isPublish }}:
         - script: mkdir $(Build.ArtifactStagingDirectory)\_manifest\$(BuildPlatform)\$(BuildFlavor)
           displayName: 📒 Prep for Manifest
@@ -104,7 +111,16 @@ jobs:
           inputs:
             BuildDropPath: $(Build.ArtifactStagingDirectory)
             ManifestDirPath: $(Build.ArtifactStagingDirectory)/_manifest/$(BuildPlatform)/$(BuildFlavor)
+||||||| parent of dc4a6f7e5 (🧪)
+      - script: mkdir $(Build.ArtifactStagingDirectory)\_manifest\$(BuildPlatform)\$(BuildFlavor)
+        displayName: 📒 Prep for Manifest
+=======
+      - ${{ if not(parameters.isPublish) }}:
+        - script: mkdir $(Build.ArtifactStagingDirectory)\_manifest\$(BuildPlatform)\$(BuildFlavor)
+          displayName: 📒 Prep for Manifest
+>>>>>>> dc4a6f7e5 (🧪)
 
+<<<<<<< HEAD
         # Make symbols available through http://symweb.
         - task: PublishSymbols@2
           displayName: Publish symbols
@@ -112,12 +128,25 @@ jobs:
           inputs:
             SearchPattern: $(Build.ArtifactStagingDirectory)/**/*.pdb
             SymbolServerType: TeamServices
-
-      - task: PublishBuildArtifacts@1
-        displayName: "Publish artifacts"
+||||||| parent of dc4a6f7e5 (🧪)
+      - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+        displayName: 📒 Generate Manifest
         inputs:
-          artifactName: HermesArtifacts
-          pathtoPublish: $(Build.ArtifactStagingDirectory)
+          BuildDropPath: $(Build.ArtifactStagingDirectory)
+          ManifestDirPath: $(Build.ArtifactStagingDirectory)/_manifest/$(BuildPlatform)/$(BuildFlavor)
+=======
+        - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+          displayName: 📒 Generate Manifest
+          inputs:
+            BuildDropPath: $(Build.ArtifactStagingDirectory)
+            ManifestDirPath: $(Build.ArtifactStagingDirectory)/_manifest/$(BuildPlatform)/$(BuildFlavor)
+>>>>>>> dc4a6f7e5 (🧪)
+
+        - task: PublishBuildArtifacts@1
+          displayName: "Publish artifacts"
+          inputs:
+            artifactName: HermesArtifacts
+            pathtoPublish: $(Build.ArtifactStagingDirectory)
 
       # Guardian does not handle cmake, so manually running Binskim
       - task: BinSkim@3
@@ -139,6 +168,12 @@ jobs:
     dependsOn:
       - Build
     displayName: Create Nuget packages
+    ${{ if parameters.isPublish }}:
+      templateContext:
+        outputs:
+          - output: pipelineArtifact
+            targetPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+            artifactName: "Hermes-final-nuget"
     steps:
       - checkout: none
 
@@ -180,6 +215,7 @@ jobs:
           versioningScheme: byEnvVar
           versionEnvVar: Version
 
+<<<<<<< HEAD
       - ${{ if parameters.isPublish }}:
         - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@2
           displayName: CodeSign NuGets
@@ -221,3 +257,28 @@ jobs:
           inputs:
             PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
             ArtifactName: "Hermes-final-nuget"
+||||||| parent of dc4a6f7e5 (🧪)
+      - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+        displayName: 📒 Generate Manifest NuGet
+        condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+        inputs:
+          BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+
+      - task: PublishBuildArtifacts@1
+        displayName: "Publish final nuget artifacts"
+        inputs:
+          PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
+          ArtifactName: "Hermes-final-nuget"
+=======
+      - ${{ if not(parameters.isPublish) }}:
+        - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+          displayName: 📒 Generate Manifest NuGet
+          condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+          inputs:
+            BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+        - task: PublishBuildArtifacts@1
+          displayName: "Publish final nuget artifacts"
+          inputs:
+            PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
+            ArtifactName: "Hermes-final-nuget"
+>>>>>>> dc4a6f7e5 (🧪)

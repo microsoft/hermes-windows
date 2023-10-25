@@ -564,7 +564,7 @@ endif()
 
 # If we have no ICU, then error out.
 if (NOT ICU_FOUND)
-  message(FATAL_ERROR "Unable to find ICU.")
+message(FATAL_ERROR "Unable to find ICU for ${CMAKE_SYSTEM_VERSION}.")
 endif()
 
 # Declare a function that links ICU for the given target.

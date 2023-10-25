@@ -10,11 +10,15 @@ pr: none
 trigger:
   - main
 
-pool: OE-OfficePublic
+resources:
+  repositories:
+  - repository: OfficePipelineTemplates
+    type: git
+    name: 1ESPipelineTemplates/OfficePipelineTemplates
+    ref: refs/tags/release
 
 variables:
   - group: Hermes-Windows Secrets
-  - group: InfoSec-SecurityResults
   - name: ArtifactServices.Symbol.AccountName
     value: microsoft
   - name: ArtifactServices.Symbol.PAT
@@ -22,17 +26,33 @@ variables:
   - name: tags
     value: production,externalfacing
 
-jobs:
-  - job: Setup
-    variables:
-      # Component Governance is ran as part of the Build Job.
-      - name: "skipComponentGovernanceDetection"
-        value: "true"
-    steps:
-      - script: node .ado/scripts/setVersionNumber.js
-        name: setVersions
-        displayName: Compute version numbers
-
-  - template: jobs.yml
-    parameters:
-      isPublish: true
+extends:
+  template: v1/Office.Official.PipelineTemplate.yml@OfficePipelineTemplates
+  parameters:
+    pool:
+      name: Azure-Pipelines-1ESPT-ExDShared
+      image: windows-latest
+      os: windows
+    sdl:
+      suppression:
+        suppressionFile: $(Build.SourcesDirectory)\.ado\guardian\SDL\.gdnsuppress
+      eslint:
+        enableExclusions: true
+        # This repo does not ship any javascript code. But has many test cases for the js engine that fail parsing, have code considered insecure and crash eslint.
+        exclusionPatterns: |
+          '**/*.*'
+    stages:
+    - stage: main
+      jobs:
+      - job: Setup
+        variables:
+          # Component Governance is ran as part of the Build Job.
+          - name: "skipComponentGovernanceDetection"
+            value: "true"
+        steps:
+          - script: node .ado/scripts/setVersionNumber.js
+            name: setVersions
+            displayName: Compute version numbers
+      - template: .ado/jobs.yml@self
+        parameters:
+          isPublish: true
