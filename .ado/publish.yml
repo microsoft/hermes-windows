@@ -35,4 +35,4 @@ jobs:
 
   - template: jobs.yml
     parameters:
-      dependsOnSetup: true
+      isPublish: true
