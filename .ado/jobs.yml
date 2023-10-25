@@ -1,5 +1,5 @@
 parameters:
-  - name: dependsOnSetup
+  - name: isPublish
     type: boolean
     default : false
 
@@ -8,7 +8,7 @@ jobs:
     timeoutInMinutes: 120
     displayName: Build Hermes
     dependsOn: 
-      - ${{ if parameters.dependsOnSetup }}:
+      - ${{ if parameters.isPublish }}:
         - Setup
     strategy:
       matrix:
@@ -54,68 +54,70 @@ jobs:
             -ReleaseVersion:"$(semanticVersion)"
             -FileVersion:"$(fileVersion)"
 
-      - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@2
-        displayName: CodeSign Binaries
-        condition: not(eq(variables['Build.Reason'], 'PullRequest'))
-        inputs:
-          ConnectedServiceName: ESRP-JsHost
-          FolderPath: $(Build.ArtifactStagingDirectory)
-          # Recursively finds files matching these patterns:
-          Pattern: |
-            **/hermes.dll
-            **/hermes.exe
-            **/hermesc.exe
-          UseMinimatch: true
-          signConfigType: inlineSignParams
-          inlineOperation: |
-            [
-              {
-                "KeyCode" : "CP-230012",
-                "OperationCode" : "SigntoolSign",
-                "Parameters" : {
-                  "OpusName" : "Microsoft",
-                  "OpusInfo" : "http://www.microsoft.com",
-                  "FileDigest" : "/fd \"SHA256\"",
-                  "PageHash" : "/NPH",
-                  "TimeStamp" : "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+      - ${{ if parameters.isPublish }}:
+        - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@2
+          displayName: CodeSign Binaries
+          condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+          inputs:
+            ConnectedServiceName: ESRP-JsHost
+            FolderPath: $(Build.ArtifactStagingDirectory)
+            # Recursively finds files matching these patterns:
+            Pattern: |
+              **/hermes.dll
+              **/hermes.exe
+              **/hermesc.exe
+            UseMinimatch: true
+            signConfigType: inlineSignParams
+            inlineOperation: |
+              [
+                {
+                  "KeyCode" : "CP-230012",
+                  "OperationCode" : "SigntoolSign",
+                  "Parameters" : {
+                    "OpusName" : "Microsoft",
+                    "OpusInfo" : "http://www.microsoft.com",
+                    "FileDigest" : "/fd \"SHA256\"",
+                    "PageHash" : "/NPH",
+                    "TimeStamp" : "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+                  },
+                  "ToolName" : "sign",
+                  "ToolVersion" : "1.0"
                 },
-                "ToolName" : "sign",
-                "ToolVersion" : "1.0"
-              },
-              {
-                "KeyCode" : "CP-230012",
-                "OperationCode" : "SigntoolVerify",
-                "Parameters" : {},
-                "ToolName" : "sign",
-                "ToolVersion" : "1.0"
-              }
-            ]
+                {
+                  "KeyCode" : "CP-230012",
+                  "OperationCode" : "SigntoolVerify",
+                  "Parameters" : {},
+                  "ToolName" : "sign",
+                  "ToolVersion" : "1.0"
+                }
+              ]
 
       - script: echo TODO - Add Tests here
         displayName: '[Test] - To be Added via bug #77'
 
-      - script: mkdir $(Build.ArtifactStagingDirectory)\_manifest\$(BuildPlatform)\$(BuildFlavor)
-        displayName: 📒 Prep for Manifest
+      - ${{ if parameters.isPublish }}:
+        - script: mkdir $(Build.ArtifactStagingDirectory)\_manifest\$(BuildPlatform)\$(BuildFlavor)
+          displayName: 📒 Prep for Manifest
+  
+        - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+          displayName: 📒 Generate Manifest
+          inputs:
+            BuildDropPath: $(Build.ArtifactStagingDirectory)
+            ManifestDirPath: $(Build.ArtifactStagingDirectory)/_manifest/$(BuildPlatform)/$(BuildFlavor)
 
-      - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
-        displayName: 📒 Generate Manifest
-        inputs:
-          BuildDropPath: $(Build.ArtifactStagingDirectory)
-          ManifestDirPath: $(Build.ArtifactStagingDirectory)/_manifest/$(BuildPlatform)/$(BuildFlavor)
+        # Make symbols available through http://symweb.
+        - task: PublishSymbols@2
+          displayName: Publish symbols
+          condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+          inputs:
+            SearchPattern: $(Build.ArtifactStagingDirectory)/**/*.pdb
+            SymbolServerType: TeamServices
 
       - task: PublishBuildArtifacts@1
         displayName: "Publish artifacts"
         inputs:
           artifactName: HermesArtifacts
           pathtoPublish: $(Build.ArtifactStagingDirectory)
-
-      # Make symbols available through http://symweb.
-      - task: PublishSymbols@2
-        displayName: Publish symbols
-        condition: not(eq(variables['Build.Reason'], 'PullRequest'))
-        inputs:
-          SearchPattern: $(Build.ArtifactStagingDirectory)/**/*.pdb
-          SymbolServerType: TeamServices
 
       # Guardian does not handle cmake, so manually running Binskim
       - task: BinSkim@3
@@ -168,42 +170,43 @@ jobs:
           versioningScheme: byEnvVar
           versionEnvVar: Version
 
-      - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@2
-        displayName: CodeSign NuGets
-        condition: not(eq(variables['Build.Reason'], 'PullRequest'))
-        inputs:
-          ConnectedServiceName: ESRP-JsHost
-          FolderPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
-          Pattern: |
-            **/Microsoft.JavaScript.Hermes.*.nupkg
-          UseMinimatch: true
-          signConfigType: inlineSignParams
-          inlineOperation: |
-            [
-              {
-                "KeyCode" : "CP-401405",
-                "OperationCode" : "NuGetSign",
-                "Parameters" : {},
-                "ToolName" : "sign",
-                "ToolVersion" : "1.0"
-              },
-              {
-                "KeyCode" : "CP-401405",
-                "OperationCode" : "NuGetVerify",
-                "Parameters" : {},
-                "ToolName" : "sign",
-                "ToolVersion" : "1.0"
-              }
-            ]
+      - ${{ if parameters.isPublish }}:
+        - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@2
+          displayName: CodeSign NuGets
+          condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+          inputs:
+            ConnectedServiceName: ESRP-JsHost
+            FolderPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+            Pattern: |
+              **/Microsoft.JavaScript.Hermes.*.nupkg
+            UseMinimatch: true
+            signConfigType: inlineSignParams
+            inlineOperation: |
+              [
+                {
+                  "KeyCode" : "CP-401405",
+                  "OperationCode" : "NuGetSign",
+                  "Parameters" : {},
+                  "ToolName" : "sign",
+                  "ToolVersion" : "1.0"
+                },
+                {
+                  "KeyCode" : "CP-401405",
+                  "OperationCode" : "NuGetVerify",
+                  "Parameters" : {},
+                  "ToolName" : "sign",
+                  "ToolVersion" : "1.0"
+                }
+              ]
 
-      - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
-        displayName: 📒 Generate Manifest NuGet
-        condition: not(eq(variables['Build.Reason'], 'PullRequest'))
-        inputs:
-          BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
-
-      - task: PublishBuildArtifacts@1
-        displayName: "Publish final nuget artifacts"
-        inputs:
-          PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
-          ArtifactName: "Hermes-final-nuget"
+        - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+          displayName: 📒 Generate Manifest NuGet
+          condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+          inputs:
+            BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+  
+        - task: PublishBuildArtifacts@1
+          displayName: "Publish final nuget artifacts"
+          inputs:
+            PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
+            ArtifactName: "Hermes-final-nuget"
