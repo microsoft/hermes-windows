@@ -4,7 +4,7 @@
     <!-- Fix platform name (win32 should be x86) -->
     <HermesPlatform Condition="'$(HermesPlatform)' == 'Win32'">x86</HermesPlatform>
 
-    <HermesAppPlatform Condition="'$(HermesAppPlatform)' == ''and '$(AppContainerApplication)' == 'true'">uwp</HermesAppPlatform>
+    <HermesAppPlatform Condition="'$(HermesAppPlatform)' == '' and '$(AppContainerApplication)' == 'true'">uwp</HermesAppPlatform>
     <HermesAppPlatform Condition="'$(HermesAppPlatform)' == ''">win32</HermesAppPlatform>
 
     <NugetRoot>$(MSBuildThisFileDirectory)..\..\</NugetRoot>
