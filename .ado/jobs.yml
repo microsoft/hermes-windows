@@ -170,6 +170,16 @@ jobs:
           versioningScheme: byEnvVar
           versionEnvVar: Version
 
+      - task: NuGetCommand@2
+        displayName: 'NuGet Fat Pack'
+        inputs:
+          command: pack
+          packagesToPack: $(System.DefaultWorkingDirectory)\HermesArtifacts\Microsoft.JavaScript.Hermes.Fat.nuspec
+          packDestination: $(System.DefaultWorkingDirectory)\NugetRootFinal
+          buildProperties: CommitId=$(Build.SourceVersion);nugetroot=$(System.DefaultWorkingDirectory)\HermesArtifacts;RepoUri=$(Build.Repository.Uri)
+          versioningScheme: byEnvVar
+          versionEnvVar: Version
+
       - ${{ if parameters.isPublish }}:
         - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@2
           displayName: CodeSign NuGets
@@ -179,6 +189,7 @@ jobs:
             FolderPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
             Pattern: |
               **/Microsoft.JavaScript.Hermes.*.nupkg
+              **/Microsoft.JavaScript.Hermes.Fat.*.nupkg
             UseMinimatch: true
             signConfigType: inlineSignParams
             inlineOperation: |
@@ -204,7 +215,7 @@ jobs:
           condition: not(eq(variables['Build.Reason'], 'PullRequest'))
           inputs:
             BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
-  
+
         - task: PublishBuildArtifacts@1
           displayName: "Publish final nuget artifacts"
           inputs:

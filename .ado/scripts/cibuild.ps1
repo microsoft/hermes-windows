@@ -384,7 +384,8 @@ function Invoke-PrepareNugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $
     $npmPackage = (Get-Content (Join-Path $SourcesPath "npm\package.json") | Out-String | ConvertFrom-Json).version
 
     (Get-Content "$SourcesPath\.ado\Microsoft.JavaScript.Hermes.nuspec") -replace ('VERSION_DETAILS', "Hermes version: $npmPackage; Git revision: $gitRevision") | Set-Content "$OutputPath\Microsoft.JavaScript.Hermes.nuspec"
-
+    (Get-Content "$SourcesPath\.ado\Microsoft.JavaScript.Hermes.Fat.nuspec") -replace ('VERSION_DETAILS', "Hermes version: $npmPackage; Git revision: $gitRevision") | Set-Content "$OutputPath\Microsoft.JavaScript.Hermes.Fat.nuspec"
+    
     $npmPackage | Set-Content "$OutputPath\version"
 }
 
