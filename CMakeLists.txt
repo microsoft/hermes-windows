@@ -547,8 +547,11 @@ endif()
 # Therefore, use it only as fallback.
 if (NOT ICU_FOUND AND HERMES_ENABLE_WIN10_ICU_FALLBACK AND
     WIN32 AND # Windows 32 or 64 bit
-    # At least Windows 10 version 1703 (aka Creators Update)
-    NOT ${CMAKE_SYSTEM_VERSION} VERSION_LESS "10.0.15063")
+    # We used to check for at least Windows 10 version 1703 (aka Creators Update)
+    # but the new compliant images return 6.2. Everybody should be running
+    # the right version of windows now.
+    # NOT ${CMAKE_SYSTEM_VERSION} VERSION_LESS "10.0.15063"
+    )
   add_definitions(-DUSE_WIN10_ICU)
   set(ICU_FOUND 1)
   set(ICU_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/icu_decls)
