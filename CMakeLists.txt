@@ -546,7 +546,7 @@ endif()
 # ICU is available on Windows, but only since Windows 10 v1703.
 # Therefore, use it only as fallback.
 if (NOT ICU_FOUND AND HERMES_ENABLE_WIN10_ICU_FALLBACK AND
-    WIN32 AND # Windows 32 or 64 bit
+    WIN32 # Windows 32 or 64 bit
     # We used to check for at least Windows 10 version 1703 (aka Creators Update)
     # but the new compliant images return 6.2. Everybody should be running
     # the right version of windows now.
