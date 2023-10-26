@@ -197,7 +197,7 @@ jobs:
           displayName: CodeSign NuGets
           condition: not(eq(variables['Build.Reason'], 'PullRequest'))
           inputs:
-            ConnectedServiceName: ESRP-JsHost
+            ConnectedServiceName: ESRP-JsHost2
             FolderPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
             Pattern: |
               **/Microsoft.JavaScript.Hermes.*.nupkg
