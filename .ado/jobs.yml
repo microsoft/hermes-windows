@@ -222,6 +222,7 @@ jobs:
                 }
               ]
 
+      - ${{ if not(parameters.isPublish) }}:
           - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
             displayName: 📒 Generate Manifest NuGet
             condition: not(eq(variables['Build.Reason'], 'PullRequest'))
