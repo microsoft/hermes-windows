@@ -222,15 +222,15 @@ jobs:
                 }
               ]
 
-        - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
-          displayName: 📒 Generate Manifest NuGet
-          condition: not(eq(variables['Build.Reason'], 'PullRequest'))
-          inputs:
-            BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
-
-        - task: PublishBuildArtifacts@1
-          displayName: "Publish final nuget artifacts"
-          inputs:
-            PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
-            ArtifactName: "Hermes-final-nuget"
+          - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+            displayName: 📒 Generate Manifest NuGet
+            condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+            inputs:
+              BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+  
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish final nuget artifacts"
+            inputs:
+              PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
+              ArtifactName: "Hermes-final-nuget"
 
