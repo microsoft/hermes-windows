@@ -39,6 +39,12 @@ jobs:
     variables:
       semanticVersion: $[ dependencies.Setup.outputs['setVersions.semanticVersion'] ]
       fileVersion: $[ dependencies.Setup.outputs['setVersions.fileVersion'] ]
+    ${{ if parameters.isPublish }}:
+      templateContext:
+        outputs:
+          - output: buildArtifacts
+            PathtoPublish: $(Build.ArtifactStagingDirectory)
+            ArtifactName: HermesArtifacts
     steps:
       - task: PowerShell@2
         displayName: Run the build script for publish
@@ -59,7 +65,7 @@ jobs:
           displayName: CodeSign Binaries
           condition: not(eq(variables['Build.Reason'], 'PullRequest'))
           inputs:
-            ConnectedServiceName: ESRP-JsHost
+            ConnectedServiceName: ESRP-JsHost2
             FolderPath: $(Build.ArtifactStagingDirectory)
             # Recursively finds files matching these patterns:
             Pattern: |
@@ -95,10 +101,10 @@ jobs:
       - script: echo TODO - Add Tests here
         displayName: '[Test] - To be Added via bug #77'
 
-      - ${{ if parameters.isPublish }}:
+      - ${{ if not(parameters.isPublish) }}:
         - script: mkdir $(Build.ArtifactStagingDirectory)\_manifest\$(BuildPlatform)\$(BuildFlavor)
           displayName: 📒 Prep for Manifest
-  
+
         - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
           displayName: 📒 Generate Manifest
           inputs:
@@ -113,11 +119,11 @@ jobs:
             SearchPattern: $(Build.ArtifactStagingDirectory)/**/*.pdb
             SymbolServerType: TeamServices
 
-      - task: PublishBuildArtifacts@1
-        displayName: "Publish artifacts"
-        inputs:
-          artifactName: HermesArtifacts
-          pathtoPublish: $(Build.ArtifactStagingDirectory)
+        - task: PublishBuildArtifacts@1
+          displayName: "Publish artifacts"
+          inputs:
+            artifactName: HermesArtifacts
+            pathtoPublish: $(Build.ArtifactStagingDirectory)
 
       # Guardian does not handle cmake, so manually running Binskim
       - task: BinSkim@3
@@ -139,6 +145,12 @@ jobs:
     dependsOn:
       - Build
     displayName: Create Nuget packages
+    ${{ if parameters.isPublish }}:
+      templateContext:
+        outputs:
+          - output: pipelineArtifact
+            targetPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+            artifactName: "Hermes-final-nuget"
     steps:
       - checkout: none
 
@@ -185,7 +197,7 @@ jobs:
           displayName: CodeSign NuGets
           condition: not(eq(variables['Build.Reason'], 'PullRequest'))
           inputs:
-            ConnectedServiceName: ESRP-JsHost
+            ConnectedServiceName: ESRP-JsHost2
             FolderPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
             Pattern: |
               **/Microsoft.JavaScript.Hermes.*.nupkg
@@ -210,14 +222,16 @@ jobs:
                 }
               ]
 
-        - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
-          displayName: 📒 Generate Manifest NuGet
-          condition: not(eq(variables['Build.Reason'], 'PullRequest'))
-          inputs:
-            BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+      - ${{ if not(parameters.isPublish) }}:
+          - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
+            displayName: 📒 Generate Manifest NuGet
+            condition: not(eq(variables['Build.Reason'], 'PullRequest'))
+            inputs:
+              BuildDropPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
+  
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish final nuget artifacts"
+            inputs:
+              PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
+              ArtifactName: "Hermes-final-nuget"
 
-        - task: PublishBuildArtifacts@1
-          displayName: "Publish final nuget artifacts"
-          inputs:
-            PathtoPublish: $(System.DefaultWorkingDirectory)\NugetRootFinal
-            ArtifactName: "Hermes-final-nuget"
