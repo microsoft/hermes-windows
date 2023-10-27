@@ -65,7 +65,7 @@ jobs:
           displayName: CodeSign Binaries
           condition: not(eq(variables['Build.Reason'], 'PullRequest'))
           inputs:
-            ConnectedServiceName: ESRP-JsHost
+            ConnectedServiceName: ESRP-JsHost2
             FolderPath: $(Build.ArtifactStagingDirectory)
             # Recursively finds files matching these patterns:
             Pattern: |
@@ -197,7 +197,7 @@ jobs:
           displayName: CodeSign NuGets
           condition: not(eq(variables['Build.Reason'], 'PullRequest'))
           inputs:
-            ConnectedServiceName: 'ESRP-JsHost2'
+            ConnectedServiceName: ESRP-JsHost2
             FolderPath: $(System.DefaultWorkingDirectory)\NugetRootFinal
             Pattern: |
               **/Microsoft.JavaScript.Hermes.*.nupkg
