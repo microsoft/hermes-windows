@@ -111,35 +111,36 @@ jobs:
             BuildDropPath: $(Build.ArtifactStagingDirectory)
             ManifestDirPath: $(Build.ArtifactStagingDirectory)/_manifest/$(BuildPlatform)/$(BuildFlavor)
 
-        # Make symbols available through http://symweb.
-        - task: PublishSymbols@2
-          displayName: Publish symbols
-          condition: not(eq(variables['Build.Reason'], 'PullRequest'))
-          inputs:
-            SearchPattern: $(Build.ArtifactStagingDirectory)/**/*.pdb
-            SymbolServerType: TeamServices
-
         - task: PublishBuildArtifacts@1
           displayName: "Publish artifacts"
           inputs:
             artifactName: HermesArtifacts
             pathtoPublish: $(Build.ArtifactStagingDirectory)
 
-      # Guardian does not handle cmake, so manually running Binskim
-      - task: BinSkim@3
-        displayName: Run Binskim Analysis
-        inputs:
-            InputType: 'Basic'
-            Function: 'analyze'
-            AnalyzeTarget: $(Build.ArtifactStagingDirectory)/**/*.dll
-            AnalyzeVerbose: true
-            toolVersion: 'LatestPreRelease'
-        continueOnError: true
-        condition: and(eq(variables.BuildConfiguration, 'Release'), not(eq(variables.BuildPlatform, 'arm64')))
+        - task: ComponentGovernanceComponentDetection@0
+          inputs:
+            ignoreDirectories: 'website'
 
-      - task: ComponentGovernanceComponentDetection@0
+        # Guardian does not handle cmake, so manually running Binskim
+        - task: BinSkim@3
+          displayName: Run Binskim Analysis
+          inputs:
+              InputType: 'Basic'
+              Function: 'analyze'
+              AnalyzeTarget: $(Build.ArtifactStagingDirectory)/**/*.dll
+              AnalyzeVerbose: true
+              toolVersion: 'LatestPreRelease'
+          continueOnError: true
+          condition: and(eq(variables.BuildConfiguration, 'Release'), not(eq(variables.BuildPlatform, 'arm64')))
+
+      # Make symbols available through http://symweb.
+      - task: PublishSymbols@2
+        displayName: Publish symbols
+        condition: not(eq(variables['Build.Reason'], 'PullRequest'))
         inputs:
-          ignoreDirectories: 'website'
+          SearchPattern: $(Build.ArtifactStagingDirectory)/**/*.pdb
+          SymbolServerType: TeamServices
+          UseNetCoreClientTool: true
 
   - job: CreateNuGet
     dependsOn:
