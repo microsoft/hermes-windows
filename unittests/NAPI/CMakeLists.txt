@@ -30,6 +30,7 @@ set(NAPITests
   test_error.cpp
   test_exception.cpp
   test_ext.cpp
+  test_finalizer.cpp
   test_function.cpp
   test_general.cpp
   test_handle_scope.cpp

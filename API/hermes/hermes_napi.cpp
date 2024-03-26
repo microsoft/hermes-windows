@@ -224,6 +224,9 @@ class NapiHandleScope;
 class NapiHostFunctionContext;
 template <class T>
 class NapiOrderedSet;
+class NapiPendingFinalizers;
+template <class T>
+class NapiRefCountedPtr;
 class NapiScriptModel;
 template <class T>
 class NapiStableAddressStack;
@@ -352,6 +355,69 @@ size_t convertUTF16ToUTF8WithReplacements(
 //=============================================================================
 // Definitions of classes and structs.
 //=============================================================================
+
+struct NapiAttachTag {
+} attachTag;
+
+// A smart pointer for types that implement intrusive ref count using
+// methods incRefCount and decRefCount.
+template <typename T>
+class NapiRefCountedPtr final {
+ public:
+  NapiRefCountedPtr() noexcept = default;
+
+  explicit NapiRefCountedPtr(T *ptr, NapiAttachTag) noexcept : ptr_(ptr) {}
+
+  NapiRefCountedPtr(const NapiRefCountedPtr &other) noexcept
+      : ptr_(other.ptr_) {
+    if (ptr_ != nullptr) {
+      ptr_->incRefCount();
+    }
+  }
+
+  NapiRefCountedPtr(NapiRefCountedPtr &&other)
+      : ptr_(std::exchange(other.ptr_, nullptr)) {}
+
+  ~NapiRefCountedPtr() noexcept {
+    if (ptr_ != nullptr) {
+      ptr_->decRefCount();
+    }
+  }
+
+  NapiRefCountedPtr &operator=(std::nullptr_t) noexcept {
+    if (ptr_ != nullptr) {
+      ptr_->decRefCount();
+    }
+    ptr_ = nullptr;
+    return *this;
+  }
+
+  NapiRefCountedPtr &operator=(const NapiRefCountedPtr &other) noexcept {
+    if (this != &other) {
+      NapiRefCountedPtr temp(std::move(*this));
+      ptr_ = other.ptr_;
+      if (ptr_ != nullptr) {
+        ptr_->incRefCount();
+      }
+    }
+    return *this;
+  }
+
+  NapiRefCountedPtr &operator=(NapiRefCountedPtr &&other) noexcept {
+    if (this != &other) {
+      NapiRefCountedPtr temp(std::move(*this));
+      ptr_ = std::exchange(other.ptr_, nullptr);
+    }
+    return *this;
+  }
+
+  T *operator->() noexcept {
+    return ptr_;
+  }
+
+ private:
+  T *ptr_{};
+};
 
 // Stack of elements where the address of items is not changed as we add new
 // values. It is achieved by keeping a SmallVector of the ChunkSize arrays
@@ -1658,6 +1724,9 @@ class NapiEnvironment final {
   // Controls the lifetime of this class instances.
   std::atomic<int> refCount_{1};
 
+  // Used for safe update of finalizer queue.
+  NapiRefCountedPtr<NapiPendingFinalizers> pendingFinalizers_;
+
   // Reference to the wrapped Hermes runtime.
   vm::Runtime &runtime_;
 
@@ -1746,6 +1815,73 @@ class NapiEnvironment final {
   static constexpr int32_t kExternalTagSlotIndex = 0;
 };
 
+// NapiPendingFinalizers is used to update the pending finalizer list in a
+// thread safe way when a NapiExternalValue is destroyed from a GC background
+// thread.
+class NapiPendingFinalizers {
+ public:
+  // Create new instance of NapiPendingFinalizers.
+  static NapiRefCountedPtr<NapiPendingFinalizers> create() noexcept {
+    return NapiRefCountedPtr<NapiPendingFinalizers>(
+        new NapiPendingFinalizers(), attachTag);
+  }
+
+  // Add pending finalizers from a NapiExternalValue destructor.
+  // It can be called from JS or GC background threads.
+  void addPendingFinalizers(
+      std::unique_ptr<NapiLinkedList<NapiFinalizer>> &&finalizers) noexcept {
+    std::scoped_lock lock{mutex_};
+    finalizers_.push_back(std::move(finalizers));
+  }
+
+  // Apply pending finalizers to the finalizer queue.
+  // It must be called from a JS thread.
+  void applyPendingFinalizers(NapiEnvironment *env) noexcept {
+    std::vector<std::unique_ptr<NapiLinkedList<NapiFinalizer>>> finalizers;
+    {
+      std::scoped_lock lock{mutex_};
+      if (finalizers_.empty()) {
+        return;
+      }
+      // Move to a local variable to unlock the mutex earlier.
+      finalizers = std::move(finalizers_);
+    }
+
+    for (auto &finalizerList : finalizers) {
+      finalizerList->forEach([env](NapiFinalizer *finalizer) {
+        env->addToFinalizerQueue(finalizer);
+      });
+    }
+  }
+
+ private:
+  friend class NapiRefCountedPtr<NapiPendingFinalizers>;
+
+  NapiPendingFinalizers() noexcept = default;
+
+  void incRefCount() noexcept {
+    int refCount = refCount_.fetch_add(1, std::memory_order_relaxed) + 1;
+    CRASH_IF_FALSE(refCount > 1 && "The ref count cannot bounce from zero.");
+    CRASH_IF_FALSE(
+        refCount < std::numeric_limits<int>::max() &&
+        "The ref count is too big.");
+  }
+
+  void decRefCount() noexcept {
+    int refCount = refCount_.fetch_sub(1, std::memory_order_release) - 1;
+    CRASH_IF_FALSE(refCount >= 0 && "The ref count must not be negative.");
+    if (refCount == 0) {
+      std::atomic_thread_fence(std::memory_order_acquire);
+      delete this;
+    }
+  }
+
+ private:
+  std::atomic<int> refCount_{1};
+  std::recursive_mutex mutex_;
+  std::vector<std::unique_ptr<NapiLinkedList<NapiFinalizer>>> finalizers_;
+};
+
 // RAII class to control scope of napi_value variables and return values.
 class NapiHandleScope final {
  public:
@@ -1795,16 +1931,22 @@ class NapiHandleScope final {
 // Keep external data with an object.
 class NapiExternalValue final : public vm::DecoratedObject::Decoration {
  public:
-  NapiExternalValue(NapiEnvironment &env) noexcept : env_(env) {}
-  NapiExternalValue(NapiEnvironment &env, void *nativeData) noexcept
-      : env_(env), nativeData_(nativeData) {}
+  NapiExternalValue(const NapiRefCountedPtr<NapiPendingFinalizers>
+                        &pendingFinalizers) noexcept
+      : pendingFinalizers_(pendingFinalizers) {}
+  NapiExternalValue(
+      const NapiRefCountedPtr<NapiPendingFinalizers> &pendingFinalizers,
+      void *nativeData) noexcept
+      : pendingFinalizers_(pendingFinalizers), nativeData_(nativeData) {}
 
   NapiExternalValue(const NapiExternalValue &other) = delete;
   NapiExternalValue &operator=(const NapiExternalValue &other) = delete;
 
+  // The destructor is called by GC. It can be called either from JS or GC
+  // threads. We move the finalizers to NapiPendingFinalizers to be accessed
+  // only from JS thread.
   ~NapiExternalValue() override {
-    finalizers_.forEach(
-        [&](NapiFinalizer *finalizer) { env_.addToFinalizerQueue(finalizer); });
+    pendingFinalizers_->addPendingFinalizers(std::move(finalizers_));
   }
 
   size_t getMallocSize() const override {
@@ -1812,7 +1954,7 @@ class NapiExternalValue final : public vm::DecoratedObject::Decoration {
   }
 
   void addFinalizer(NapiFinalizer *finalizer) noexcept {
-    finalizers_.pushBack(finalizer);
+    finalizers_->pushBack(finalizer);
   }
 
   void *nativeData() noexcept {
@@ -1824,9 +1966,10 @@ class NapiExternalValue final : public vm::DecoratedObject::Decoration {
   }
 
  private:
-  NapiEnvironment &env_;
+  NapiRefCountedPtr<NapiPendingFinalizers> pendingFinalizers_;
   void *nativeData_{};
-  NapiLinkedList<NapiFinalizer> finalizers_;
+  std::unique_ptr<NapiLinkedList<NapiFinalizer>> finalizers_{
+      std::make_unique<NapiLinkedList<NapiFinalizer>>()};
 };
 
 // Keep native data associated with a function.
@@ -3108,7 +3251,8 @@ NapiEnvironment::NapiEnvironment(
     const vm::RuntimeConfig &runtimeConfig) noexcept
     : runtime_(runtime),
       isInspectable_(isInspectable),
-      scriptCache_(std::move(scriptCache)) {
+      scriptCache_(std::move(scriptCache)),
+      pendingFinalizers_(NapiPendingFinalizers::create()) {
   switch (runtimeConfig.getCompilationMode()) {
     case vm::SmartCompilation:
       compileFlags_.lazy = true;
@@ -3217,6 +3361,9 @@ NapiEnvironment::NapiEnvironment(
 }
 
 NapiEnvironment::~NapiEnvironment() {
+  pendingFinalizers_->applyPendingFinalizers(this);
+  pendingFinalizers_ = nullptr;
+
   isShuttingDown_ = true;
   if (instanceData_) {
     instanceData_->finalize(*this);
@@ -5339,7 +5486,7 @@ vm::Handle<vm::DecoratedObject> NapiEnvironment::createExternalObject(
       makeHandle(vm::DecoratedObject::create(
           runtime_,
           makeHandle<vm::JSObject>(&runtime_.objectPrototype),
-          std::make_unique<NapiExternalValue>(*this, nativeData),
+          std::make_unique<NapiExternalValue>(pendingFinalizers_, nativeData),
           /*additionalSlotCount:*/ 1));
 
   // Add a special tag to differentiate from other decorated objects.
@@ -5441,6 +5588,7 @@ void NapiEnvironment::addToFinalizerQueue(NapiFinalizer *finalizer) noexcept {
 napi_status NapiEnvironment::processFinalizerQueue() noexcept {
   if (!isRunningFinalizers_) {
     isRunningFinalizers_ = true;
+    pendingFinalizers_->applyPendingFinalizers(this);
     NapiReference::finalizeAll(*this, finalizerQueue_);
     isRunningFinalizers_ = false;
   }

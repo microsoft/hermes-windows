@@ -92,14 +92,14 @@ struct NapiTest : ::testing::TestWithParam<NapiTestData> {
       std::function<void(NapiTestContext *, napi_env)> code) noexcept;
 };
 
-// Properies from JavaScript Error object.
+// Properties from JavaScript Error object.
 struct NapiErrorInfo {
   std::string Name;
   std::string Message;
   std::string Stack;
 };
 
-// Properies from JavaScript AssertionError object.
+// Properties from JavaScript AssertionError object.
 struct NapiAssertionErrorInfo {
   std::string Method;
   std::string Expected;
