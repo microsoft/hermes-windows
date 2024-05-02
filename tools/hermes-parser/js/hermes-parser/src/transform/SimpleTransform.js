@@ -4,7 +4,7 @@
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  *
- * @flow strict-local
+ * @flow strict
  * @format
  */
 
@@ -98,7 +98,7 @@ export class SimpleTransform {
    * @return Either the orginal node if the properties matched the existing node or a new node with
    *         the new properties.
    */
-  static nodeWith<T: ESNode>(node: T, overrideProps: $Partial<T>): T {
+  static nodeWith<T: ESNode>(node: T, overrideProps: Partial<T>): T {
     return nodeWith<T>(node, overrideProps);
   }
 }

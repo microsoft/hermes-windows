@@ -984,6 +984,12 @@ std::string TraceInterpreter::execEntryFunction(
   return stats_;
 }
 
+#if JSI_VERSION >= 8
+#define VAL_IS_BIGINT val.isBigInt() ||
+#else
+#define VAL_IS_BIGINT
+#endif
+
 Value TraceInterpreter::execFunction(
     const TraceInterpreter::Call &call,
     const Value &thisVal,
@@ -1026,9 +1032,7 @@ Value TraceInterpreter::execFunction(
         Value val{rt_, it->second};
         assert(
             val.isObject() ||
-#if JSI_VERSION >= 8
-            val.isBigInt() ||
-#endif
+            VAL_IS_BIGINT
             val.isString() || val.isSymbol());
         // If it was the last local use, delete that object id from locals.
         auto defAndUse = call.locals.find(obj);

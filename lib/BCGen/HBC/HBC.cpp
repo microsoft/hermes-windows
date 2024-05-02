@@ -51,39 +51,39 @@ void lowerIR(Module *M, const BytecodeGenerationOptions &options) {
   if (M->isLowered())
     return;
 
-  PassManager PM;
-  PM.addPass(new LowerLoadStoreFrameInst());
+  PassManager PM{M->getContext().getCodeGenerationSettings()};
+  PM.addPass<LowerLoadStoreFrameInst>();
   if (options.optimizationEnabled) {
     // OptEnvironmentInit needs to run before LowerConstants.
-    PM.addPass(new OptEnvironmentInit());
+    PM.addPass<OptEnvironmentInit>();
   }
   // LowerExponentiationOperator needs to run before LowerBuiltinCalls because
   // it introduces calls to HermesInternal.
-  PM.addPass(new LowerExponentiationOperator());
+  PM.addPass<LowerExponentiationOperator>();
   // LowerBuiltinCalls needs to run before the rest of the lowering.
-  PM.addPass(new LowerBuiltinCalls());
+  PM.addPass<LowerBuiltinCalls>();
   // It is important to run LowerNumericProperties before LoadConstants
   // as LowerNumericProperties could generate new constants.
-  PM.addPass(new LowerNumericProperties());
+  PM.addPass<LowerNumericProperties>();
   // Lower AllocObjectLiteral into a mixture of HBCAllocObjectFromBufferInst,
   // AllocObjectInst, StoreNewOwnPropertyInst and StorePropertyInst.
-  PM.addPass(new LowerAllocObjectLiteral());
-  PM.addPass(new LowerConstruction());
-  PM.addPass(new LowerArgumentsArray());
-  PM.addPass(new LimitAllocArray(UINT16_MAX));
-  PM.addPass(new DedupReifyArguments());
-  PM.addPass(new LowerSwitchIntoJumpTables());
-  PM.addPass(new SwitchLowering());
-  PM.addPass(new LoadConstants(options.optimizationEnabled));
-  PM.addPass(new LoadParameters());
+  PM.addPass<LowerAllocObjectLiteral>();
+  PM.addPass<LowerConstruction>();
+  PM.addPass<LowerArgumentsArray>();
+  PM.addPass<LimitAllocArray>(UINT16_MAX);
+  PM.addPass<DedupReifyArguments>();
+  PM.addPass<LowerSwitchIntoJumpTables>();
+  PM.addPass<SwitchLowering>();
+  PM.addPass<LoadConstants>(options.optimizationEnabled);
+  PM.addPass<LoadParameters>();
   if (options.optimizationEnabled) {
     // Lowers AllocObjects and its sequential literal properties into a single
     // HBCAllocObjectFromBufferInst
-    PM.addPass(new LowerAllocObject());
+    PM.addPass<LowerAllocObject>();
     // Reduce comparison and conditional jump to single comparison jump
-    PM.addPass(new LowerCondBranch());
+    PM.addPass<LowerCondBranch>();
     // Turn Calls into CallNs.
-    PM.addPass(new FuncCallNOpts());
+    PM.addPass<FuncCallNOpts>();
     // Move loads to child blocks if possible.
     PM.addCodeMotion();
     // Eliminate common HBCLoadConstInsts.
@@ -101,7 +101,7 @@ void lowerIR(Module *M, const BytecodeGenerationOptions &options) {
   if (options.verifyIR &&
       verifyModule(*M, &llvh::errs(), VerificationMode::IR_VALID)) {
     M->dump();
-    llvm_unreachable("IR verification failed");
+    hermes_fatal("IR verification failed");
   }
 }
 
@@ -513,6 +513,7 @@ std::unique_ptr<BytecodeModule> hbc::generateBytecodeModule(
       funcGen = BytecodeFunctionGenerator::create(BMGen, 0);
     } else {
       HVMRegisterAllocator RA(&F);
+      ScopeRegisterAnalysis SRA(&F, RA);
       if (!options.optimizationEnabled) {
         RA.setFastPassThreshold(kFastRegisterAllocationThreshold);
         RA.setMemoryLimit(kRegisterAllocationMemoryLimit);
@@ -527,19 +528,19 @@ std::unique_ptr<BytecodeModule> hbc::generateBytecodeModule(
         RA.dump();
       }
 
-      PassManager PM;
-      PM.addPass(new LowerStoreInstrs(RA));
-      PM.addPass(new LowerCalls(RA));
+      PassManager PM{M->getContext().getCodeGenerationSettings()};
+      PM.addPass<LowerStoreInstrs>(RA);
+      PM.addPass<LowerCalls>(RA);
       if (options.optimizationEnabled) {
-        PM.addPass(new MovElimination(RA));
-        PM.addPass(new RecreateCheapValues(RA));
-        PM.addPass(new LoadConstantValueNumbering(RA));
+        PM.addPass<MovElimination>(RA);
+        PM.addPass<RecreateCheapValues>(RA);
+        PM.addPass<LoadConstantValueNumbering>(RA);
       }
-      PM.addPass(new SpillRegisters(RA));
+      PM.addPass<SpillRegisters>(RA);
       if (options.basicBlockProfiling) {
         // Insert after all other passes so that it sees final basic block
         // list.
-        PM.addPass(new InsertProfilePoint());
+        PM.addPass<InsertProfilePoint>();
       }
       PM.run(&F);
 
@@ -551,7 +552,7 @@ std::unique_ptr<BytecodeModule> hbc::generateBytecodeModule(
 
       funcGen =
           BytecodeFunctionGenerator::create(BMGen, RA.getMaxRegisterUsage());
-      HBCISel hbciSel(&F, funcGen.get(), RA, scopeAnalysis, options);
+      HBCISel hbciSel(&F, funcGen.get(), RA, scopeAnalysis, SRA, options);
       hbciSel.populateDebugCache(debugCache);
       hbciSel.generate(sourceMapGen);
       debugCache = hbciSel.getDebugCache();

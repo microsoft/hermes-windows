@@ -48,32 +48,29 @@
 //   - NapiReference finalizers are run in JS thread by processFinalizerQueue
 //     method which is called by NapiHandleScope::setResult.
 // - Each returned error status is backed up by the extended error message
-//   stored in lastError_ that can be retrived by napi_get_last_error_info.
+//   stored in lastError_ that can be retrieved by napi_get_last_error_info.
 // - We use macros to handle error statuses. It is done to reduce extensive use
 //   of "if-return" statements, and to report failing expressions along with the
 //   file name and code line number.
 
-// TODO: Add unit tests for the external JSArrayBuffer
-// TODO: Add unit tests for FinalizableNativeConstructor
-// TODO: Add unit tests for the TypedArray length and byteLength changes
 // TODO: Allow DebugBreak in unexpected cases - add functions to indicate
 //       expected errors
 // TODO: Create NapiEnvironment with JSI Runtime
 // TODO: Fix Inspector CMake definitions
 
-// Current issues with Hermes VM vs V8
 // TODO: Cannot use functions as a base class
 // TODO: NativeFunction vs NativeConstructor
 // TODO: Different error messages
-// TODO: Arrays with 2^32-1 elements
-// TODO: BigInt support
+// TODO: Arrays with 2^32-1 elements (sparse arrays?)
 // TODO: How to provide detailed error messages without breaking tests?
 // TODO: Why console.log compiles in V8_JSI?
 
 #define NAPI_VERSION 8
 #define NAPI_EXPERIMENTAL
 
-#include "napi/hermes_napi.h"
+#include "MurmurHash.h"
+#include "ScriptStore.h"
+#include "hermes_api.h"
 
 #include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
 #include "hermes/DebuggerAPI.h"
@@ -202,6 +199,18 @@ extern "C" __declspec(dllimport) void __stdcall DebugBreak();
 namespace hermes {
 namespace napi {
 
+union HermesBuildVersionInfo {
+  struct {
+    uint16_t major;
+    uint16_t minor;
+    uint16_t patch;
+    uint16_t revision;
+  };
+  uint64_t version;
+};
+
+constexpr HermesBuildVersionInfo HermesBuildVersion = {HERMES_FILE_VERSION_BIN};
+
 //=============================================================================
 // Forward declaration of all classes.
 //=============================================================================
@@ -215,6 +224,9 @@ class NapiHandleScope;
 class NapiHostFunctionContext;
 template <class T>
 class NapiOrderedSet;
+class NapiPendingFinalizers;
+template <class T>
+class NapiRefCountedPtr;
 class NapiScriptModel;
 template <class T>
 class NapiStableAddressStack;
@@ -304,8 +316,6 @@ const vm::PinnedHermesValue *phv(napi_value value) noexcept;
 // Useful in templates and macros
 const vm::PinnedHermesValue *phv(const vm::PinnedHermesValue *value) noexcept;
 
-// Reinterpret cast napi_ext_ref to NapiReference pointer
-NapiReference *asReference(napi_ext_ref ref) noexcept;
 // Reinterpret cast napi_ref to NapiReference pointer
 NapiReference *asReference(napi_ref ref) noexcept;
 // Reinterpret cast void* to NapiReference pointer
@@ -345,6 +355,69 @@ size_t convertUTF16ToUTF8WithReplacements(
 //=============================================================================
 // Definitions of classes and structs.
 //=============================================================================
+
+struct NapiAttachTag {
+} attachTag;
+
+// A smart pointer for types that implement intrusive ref count using
+// methods incRefCount and decRefCount.
+template <typename T>
+class NapiRefCountedPtr final {
+ public:
+  NapiRefCountedPtr() noexcept = default;
+
+  explicit NapiRefCountedPtr(T *ptr, NapiAttachTag) noexcept : ptr_(ptr) {}
+
+  NapiRefCountedPtr(const NapiRefCountedPtr &other) noexcept
+      : ptr_(other.ptr_) {
+    if (ptr_ != nullptr) {
+      ptr_->incRefCount();
+    }
+  }
+
+  NapiRefCountedPtr(NapiRefCountedPtr &&other)
+      : ptr_(std::exchange(other.ptr_, nullptr)) {}
+
+  ~NapiRefCountedPtr() noexcept {
+    if (ptr_ != nullptr) {
+      ptr_->decRefCount();
+    }
+  }
+
+  NapiRefCountedPtr &operator=(std::nullptr_t) noexcept {
+    if (ptr_ != nullptr) {
+      ptr_->decRefCount();
+    }
+    ptr_ = nullptr;
+    return *this;
+  }
+
+  NapiRefCountedPtr &operator=(const NapiRefCountedPtr &other) noexcept {
+    if (this != &other) {
+      NapiRefCountedPtr temp(std::move(*this));
+      ptr_ = other.ptr_;
+      if (ptr_ != nullptr) {
+        ptr_->incRefCount();
+      }
+    }
+    return *this;
+  }
+
+  NapiRefCountedPtr &operator=(NapiRefCountedPtr &&other) noexcept {
+    if (this != &other) {
+      NapiRefCountedPtr temp(std::move(*this));
+      ptr_ = std::exchange(other.ptr_, nullptr);
+    }
+    return *this;
+  }
+
+  T *operator->() noexcept {
+    return ptr_;
+  }
+
+ private:
+  T *ptr_{};
+};
 
 // Stack of elements where the address of items is not changed as we add new
 // values. It is achieved by keeping a SmallVector of the ChunkSize arrays
@@ -533,6 +606,9 @@ class NapiEnvironment final {
  public:
   // Initializes a new instance of NapiEnvironment.
   explicit NapiEnvironment(
+      vm::Runtime &runtime,
+      bool isInspectable,
+      std::shared_ptr<facebook::jsi::PreparedScriptStore> preparedScript,
       const vm::RuntimeConfig &runtimeConfig = {}) noexcept;
 
  private:
@@ -767,17 +843,6 @@ class NapiEnvironment final {
       size_t length,
       std::u16string &out) noexcept;
 
-  // Exported function to get or create unique UTF-8 string reference.
-  napi_status getUniqueStringRef(
-      const char *utf8,
-      size_t length,
-      napi_ext_ref *result) noexcept;
-
-  // Exported function to get or create unique UTF-8 string reference.
-  napi_status getUniqueStringRef(
-      napi_value strValue,
-      napi_ext_ref *result) noexcept;
-
   // Internal function to get or create unique UTF-8 string SymbolID.
   // Note that unique SymbolID is used by Hermes for string-based identifiers,
   // and non-unique SymbolID is for the JS Symbols.
@@ -797,6 +862,32 @@ class NapiEnvironment final {
  public:
   // Exported function to create a JS symbol object.
   napi_status createSymbol(napi_value description, napi_value *result) noexcept;
+
+  //-----------------------------------------------------------------------------
+  // Methods to work with BigInt
+  //-----------------------------------------------------------------------------
+ public:
+  napi_status createBigIntFromInt64(int64_t value, napi_value *result);
+
+  napi_status createBigIntFromUint64(uint64_t value, napi_value *result);
+
+  napi_status createBigIntFromWords(
+      int signBit,
+      size_t wordCount,
+      const uint64_t *words,
+      napi_value *result);
+
+  napi_status
+  getBigIntValueInt64(napi_value value, int64_t *result, bool *lossless);
+
+  napi_status
+  getBigIntValueUint64(napi_value value, uint64_t *result, bool *lossless);
+
+  napi_status getBigIntValueWords(
+      napi_value value,
+      int *signBit,
+      size_t *wordCount,
+      uint64_t *words);
 
   //-----------------------------------------------------------------------------
   // Methods to coerce values using JS coercion rules
@@ -1243,34 +1334,6 @@ class NapiEnvironment final {
   // Exported function to get JS value from a complex reference.
   napi_status getReferenceValue(napi_ref ref, napi_value *result) noexcept;
 
-  // Exported function to create a strong reference.
-  napi_status createStrongReference(
-      napi_value value,
-      napi_ext_ref *result) noexcept;
-
-  // Exported function to create a strong reference with native data.
-  napi_status createStrongReferenceWithData(
-      napi_value value,
-      void *nativeData,
-      napi_finalize finalizeCallback,
-      void *finalizeHint,
-      napi_ext_ref *result) noexcept;
-
-  // Exported function to create a weak reference.
-  napi_status createWeakReference(
-      napi_value value,
-      napi_ext_ref *result) noexcept;
-
-  // Exported function to increment ref count for strong or weak reference.
-  napi_status incReference(napi_ext_ref ref) noexcept;
-
-  // Exported function to decrement ref count for strong or weak reference.
-  // When the ref count becomes zero, the reference is removed.
-  napi_status decReference(napi_ext_ref ref) noexcept;
-
-  // Exported function to get JS value from the strong or weak reference.
-  napi_status getReferenceValue(napi_ext_ref ref, napi_value *result) noexcept;
-
   // Internal function to add non-finalizing reference.
   void addReference(NapiReference *reference) noexcept;
 
@@ -1371,8 +1434,7 @@ class NapiEnvironment final {
 
   // Exported function to create JS TypedArray object instance for the
   // arrayBuffer. The TypedArray is an array-like view of an underlying binary
-  // data buffer. Hermes does not support BigInt and thus cannot create
-  // BigInt64Array and BigUint64Array objects.
+  // data buffer.
   napi_status createTypedArray(
       napi_typedarray_type type,
       size_t length,
@@ -1422,6 +1484,14 @@ class NapiEnvironment final {
       void **data,
       napi_value *arrayBuffer,
       size_t *byteOffset) noexcept;
+
+  //-----------------------------------------------------------------------------
+  // Runtime info
+  //-----------------------------------------------------------------------------
+ public:
+  napi_status getDescription(const char **result) noexcept;
+
+  napi_status isInspectable(bool *result) noexcept;
 
   //-----------------------------------------------------------------------------
   // Version management
@@ -1477,12 +1547,18 @@ class NapiEnvironment final {
           int32_t id,
           vm::HermesValue error)) noexcept;
 
+  napi_status openEnvScope(jsr_napi_env_scope *scope) noexcept;
+
+  napi_status closeEnvScope(jsr_napi_env_scope scope) noexcept;
+
   // Exported function to check if there is an unhandled Promise rejection.
   napi_status hasUnhandledPromiseRejection(bool *result) noexcept;
 
   // Exported function to get an clear last unhandled Promise rejection.
   napi_status getAndClearLastUnhandledPromiseRejection(
       napi_value *result) noexcept;
+
+  napi_status drainMicrotasks(int32_t maxCountHint, bool *result) noexcept;
 
   //-----------------------------------------------------------------------------
   // Memory management
@@ -1530,7 +1606,7 @@ class NapiEnvironment final {
   //---------------------------------------------------------------------------
   // Script running
   //---------------------------------------------------------------------------
- public:
+
   // Exported function to run script from a string value.
   // The sourceURL is used only for error reporting.
   napi_status runScript(
@@ -1538,52 +1614,19 @@ class NapiEnvironment final {
       const char *sourceURL,
       napi_value *result) noexcept;
 
-  // Exported function to run script from a buffer.
-  // The buffer may contain script string or bytecode.
-  // The sourceURL is used only for error reporting.
-  napi_status runScript(
-      std::unique_ptr<hermes::Buffer> script,
-      std::unique_ptr<hermes::Buffer> sourceMap,
+  napi_status createPreparedScript(
+      const uint8_t *scriptData,
+      size_t scriptLength,
+      jsr_data_delete_cb scriptDeleteCallback,
+      void *deleterData,
       const char *sourceURL,
+      jsr_prepared_script *result) noexcept;
+
+  napi_status deletePreparedScript(jsr_prepared_script preparedScript) noexcept;
+
+  napi_status runPreparedScript(
+      jsr_prepared_script preparedScript,
       napi_value *result) noexcept;
-
-  // [DEPRECATED] Exported function to run byte code.
-  // The sourceURL is used only for error reporting.
-  napi_status runSerializedScript(
-      const uint8_t *buffer,
-      size_t bufferLength,
-      napi_value source,
-      const char *sourceURL,
-      napi_value *result) noexcept;
-
-  // [DEPRECATED] Exported function to convert script to bytecode and to
-  // serialize it.
-  napi_status serializeScript(
-      napi_value source,
-      const char *sourceURL,
-      napi_ext_buffer_callback bufferCallback,
-      void *bufferHint) noexcept;
-
-  // Exported function to create script model.
-  napi_status createScriptModel(
-      std::unique_ptr<hermes::Buffer> script,
-      std::unique_ptr<hermes::Buffer> sourceMap,
-      const char *sourceURL,
-      napi_ext_prepared_script *scriptModel) noexcept;
-
-  // Exported function to run JavaScript represented by the script model.
-  napi_status runScriptModel(
-      napi_ext_prepared_script scriptModel,
-      napi_value *result) noexcept;
-
-  // Exported function to delete script model.
-  napi_status deleteScriptModel(napi_ext_prepared_script scriptModel) noexcept;
-
-  // Exported function to serialize script model.
-  napi_status serializeScriptModel(
-      napi_ext_prepared_script scriptModel,
-      napi_ext_buffer_callback bufferCallback,
-      void *bufferHint) noexcept;
 
   // Internal function to check if buffer contains Hermes VM bytecode.
   static bool isHermesBytecode(const uint8_t *data, size_t length) noexcept;
@@ -1681,8 +1724,10 @@ class NapiEnvironment final {
   // Controls the lifetime of this class instances.
   std::atomic<int> refCount_{1};
 
+  // Used for safe update of finalizer queue.
+  NapiRefCountedPtr<NapiPendingFinalizers> pendingFinalizers_;
+
   // Reference to the wrapped Hermes runtime.
-  std::shared_ptr<vm::Runtime> rt_;
   vm::Runtime &runtime_;
 
   // Reference to itself for convenient use in macros.
@@ -1690,6 +1735,12 @@ class NapiEnvironment final {
 
   // Flags used by byte code compiler.
   hbc::CompileFlags compileFlags_{};
+
+  // Optional prepared script store.
+  std::shared_ptr<facebook::jsi::PreparedScriptStore> scriptCache_{};
+
+  // Can we run a debugger?
+  bool isInspectable_{};
 
   // Collection of all predefined values.
   std::array<
@@ -1721,7 +1772,7 @@ class NapiEnvironment final {
 
   // Helps to change the behaviour of finalizers when the environment is
   // shutting down.
-  bool isShuttingdown_{false};
+  bool isShuttingDown_{false};
 
   // Temporary GC roots for ordered sets used to collect property names.
   llvh::SmallVector<NapiOrderedSet<vm::HermesValue> *, 16> orderedSets_;
@@ -1762,6 +1813,73 @@ class NapiEnvironment final {
   // These are the first four ASCII letters of word "External".
   static constexpr uint32_t kExternalValueTag = 0x45787465;
   static constexpr int32_t kExternalTagSlotIndex = 0;
+};
+
+// NapiPendingFinalizers is used to update the pending finalizer list in a
+// thread safe way when a NapiExternalValue is destroyed from a GC background
+// thread.
+class NapiPendingFinalizers {
+ public:
+  // Create new instance of NapiPendingFinalizers.
+  static NapiRefCountedPtr<NapiPendingFinalizers> create() noexcept {
+    return NapiRefCountedPtr<NapiPendingFinalizers>(
+        new NapiPendingFinalizers(), attachTag);
+  }
+
+  // Add pending finalizers from a NapiExternalValue destructor.
+  // It can be called from JS or GC background threads.
+  void addPendingFinalizers(
+      std::unique_ptr<NapiLinkedList<NapiFinalizer>> &&finalizers) noexcept {
+    std::scoped_lock lock{mutex_};
+    finalizers_.push_back(std::move(finalizers));
+  }
+
+  // Apply pending finalizers to the finalizer queue.
+  // It must be called from a JS thread.
+  void applyPendingFinalizers(NapiEnvironment *env) noexcept {
+    std::vector<std::unique_ptr<NapiLinkedList<NapiFinalizer>>> finalizers;
+    {
+      std::scoped_lock lock{mutex_};
+      if (finalizers_.empty()) {
+        return;
+      }
+      // Move to a local variable to unlock the mutex earlier.
+      finalizers = std::move(finalizers_);
+    }
+
+    for (auto &finalizerList : finalizers) {
+      finalizerList->forEach([env](NapiFinalizer *finalizer) {
+        env->addToFinalizerQueue(finalizer);
+      });
+    }
+  }
+
+ private:
+  friend class NapiRefCountedPtr<NapiPendingFinalizers>;
+
+  NapiPendingFinalizers() noexcept = default;
+
+  void incRefCount() noexcept {
+    int refCount = refCount_.fetch_add(1, std::memory_order_relaxed) + 1;
+    CRASH_IF_FALSE(refCount > 1 && "The ref count cannot bounce from zero.");
+    CRASH_IF_FALSE(
+        refCount < std::numeric_limits<int>::max() &&
+        "The ref count is too big.");
+  }
+
+  void decRefCount() noexcept {
+    int refCount = refCount_.fetch_sub(1, std::memory_order_release) - 1;
+    CRASH_IF_FALSE(refCount >= 0 && "The ref count must not be negative.");
+    if (refCount == 0) {
+      std::atomic_thread_fence(std::memory_order_acquire);
+      delete this;
+    }
+  }
+
+ private:
+  std::atomic<int> refCount_{1};
+  std::recursive_mutex mutex_;
+  std::vector<std::unique_ptr<NapiLinkedList<NapiFinalizer>>> finalizers_;
 };
 
 // RAII class to control scope of napi_value variables and return values.
@@ -1813,16 +1931,22 @@ class NapiHandleScope final {
 // Keep external data with an object.
 class NapiExternalValue final : public vm::DecoratedObject::Decoration {
  public:
-  NapiExternalValue(NapiEnvironment &env) noexcept : env_(env) {}
-  NapiExternalValue(NapiEnvironment &env, void *nativeData) noexcept
-      : env_(env), nativeData_(nativeData) {}
+  NapiExternalValue(const NapiRefCountedPtr<NapiPendingFinalizers>
+                        &pendingFinalizers) noexcept
+      : pendingFinalizers_(pendingFinalizers) {}
+  NapiExternalValue(
+      const NapiRefCountedPtr<NapiPendingFinalizers> &pendingFinalizers,
+      void *nativeData) noexcept
+      : pendingFinalizers_(pendingFinalizers), nativeData_(nativeData) {}
 
   NapiExternalValue(const NapiExternalValue &other) = delete;
   NapiExternalValue &operator=(const NapiExternalValue &other) = delete;
 
+  // The destructor is called by GC. It can be called either from JS or GC
+  // threads. We move the finalizers to NapiPendingFinalizers to be accessed
+  // only from JS thread.
   ~NapiExternalValue() override {
-    finalizers_.forEach(
-        [&](NapiFinalizer *finalizer) { env_.addToFinalizerQueue(finalizer); });
+    pendingFinalizers_->addPendingFinalizers(std::move(finalizers_));
   }
 
   size_t getMallocSize() const override {
@@ -1830,7 +1954,7 @@ class NapiExternalValue final : public vm::DecoratedObject::Decoration {
   }
 
   void addFinalizer(NapiFinalizer *finalizer) noexcept {
-    finalizers_.pushBack(finalizer);
+    finalizers_->pushBack(finalizer);
   }
 
   void *nativeData() noexcept {
@@ -1842,9 +1966,10 @@ class NapiExternalValue final : public vm::DecoratedObject::Decoration {
   }
 
  private:
-  NapiEnvironment &env_;
+  NapiRefCountedPtr<NapiPendingFinalizers> pendingFinalizers_;
   void *nativeData_{};
-  NapiLinkedList<NapiFinalizer> finalizers_;
+  std::unique_ptr<NapiLinkedList<NapiFinalizer>> finalizers_{
+      std::make_unique<NapiLinkedList<NapiFinalizer>>()};
 };
 
 // Keep native data associated with a function.
@@ -2414,11 +2539,13 @@ class NapiFinalizingAnonymousReference : public NapiReference,
       napi_finalize finalizeCallback,
       void *finalizeHint,
       /*optional*/ NapiFinalizingAnonymousReference **result) noexcept {
-    CHECK_OBJECT_ARG(value);
     NapiFinalizingAnonymousReference *ref =
         NapiFinalizingReferenceFactory<NapiFinalizingAnonymousReference>::
             create(nativeData, finalizeCallback, finalizeHint);
-    env.addObjectFinalizer(value, ref);
+    if (value != nullptr) {
+      CHECK_OBJECT_ARG(value);
+      env.addObjectFinalizer(value, ref);
+    }
     env.addFinalizingReference(ref);
     return env.setOptionalResult(std::move(ref), result);
   }
@@ -2684,40 +2811,154 @@ class NapiStringBuilder final {
   llvh::raw_string_ostream stream_;
 };
 
+class NapiExternalBufferCore {
+ public:
+  NapiExternalBufferCore(
+      NapiEnvironment &env,
+      void *data,
+      napi_finalize finalizeCallback,
+      void *finalizeHint)
+      : env_(&env),
+        finalizeCallback_(finalizeCallback),
+        data_(data),
+        finalizeHint_(finalizeHint) {}
+
+  void setFinalizer(NapiFinalizer *finalizer) {
+    finalizer_ = finalizer;
+  }
+
+  void onBufferDeleted() {
+    if (finalizer_ != nullptr) {
+      env_->addToFinalizerQueue(finalizer_);
+      env_ = nullptr;
+    } else {
+      delete this;
+    }
+  }
+
+  static void
+  finalize(napi_env env, void * /*finalizeData*/, void *finalizeHint) {
+    NapiExternalBufferCore *core =
+        reinterpret_cast<NapiExternalBufferCore *>(finalizeHint);
+    if (core->finalizeCallback_ != nullptr) {
+      core->finalizeCallback_(env, core->data_, core->finalizeHint_);
+    }
+
+    core->finalizer_ = nullptr;
+    if (core->env_ == nullptr) {
+      delete core;
+    }
+  }
+
+  NapiExternalBufferCore(const NapiExternalBufferCore &) = delete;
+  NapiExternalBufferCore &operator=(const NapiExternalBufferCore &) = delete;
+
+ private:
+  NapiFinalizer *finalizer_{};
+  NapiEnvironment *env_;
+  napi_finalize finalizeCallback_;
+  void *data_;
+  void *finalizeHint_;
+};
+
 // The external buffer that implements hermes::Buffer
 class NapiExternalBuffer final : public hermes::Buffer {
  public:
   static std::unique_ptr<NapiExternalBuffer> make(
       napi_env env,
-      const napi_ext_buffer &buffer) noexcept {
-    return buffer.data ? std::make_unique<NapiExternalBuffer>(
-                             *reinterpret_cast<NapiEnvironment *>(env),
-                             buffer.data,
-                             buffer.byte_length,
-                             buffer.finalize_cb,
-                             buffer.finalize_hint)
-                       : nullptr;
+      void *bufferData,
+      size_t bufferSize,
+      napi_finalize finalizeCallback,
+      void *finalizeHint) noexcept {
+    return bufferData ? std::make_unique<NapiExternalBuffer>(
+                            *reinterpret_cast<NapiEnvironment *>(env),
+                            bufferData,
+                            bufferSize,
+                            finalizeCallback,
+                            finalizeHint)
+                      : nullptr;
   }
 
   NapiExternalBuffer(
       NapiEnvironment &env,
-      void *externalData,
-      size_t byteLength,
+      void *bufferData,
+      size_t bufferSize,
       napi_finalize finalizeCallback,
       void *finalizeHint) noexcept
-      : Buffer(reinterpret_cast<uint8_t *>(externalData), byteLength),
-        env_(env),
-        finalizer_(
-            NapiFinalizingReferenceFactory<NapiFinalizingAnonymousReference>::
-                create(externalData, finalizeCallback, finalizeHint)) {}
+      : Buffer(reinterpret_cast<uint8_t *>(bufferData), bufferSize),
+        core_(new NapiExternalBufferCore(
+            env,
+            bufferData,
+            finalizeCallback,
+            finalizeHint)) {
+    NapiFinalizingAnonymousReference *ref =
+        NapiFinalizingReferenceFactory<NapiFinalizingAnonymousReference>::
+            create(nullptr, &NapiExternalBufferCore::finalize, core_);
+    core_->setFinalizer(ref);
+    env.addFinalizingReference(ref);
+  }
 
   ~NapiExternalBuffer() noexcept override {
-    env_.addToFinalizerQueue(finalizer_);
+    core_->onBufferDeleted();
+  }
+
+  NapiExternalBuffer(const NapiExternalBuffer &) = delete;
+  NapiExternalBuffer &operator=(const NapiExternalBuffer &) = delete;
+
+ private:
+  NapiExternalBufferCore *core_;
+};
+
+// Wraps script data as hermes::Buffer
+class ScriptDataBuffer final : public hermes::Buffer {
+ public:
+  ScriptDataBuffer(
+      const uint8_t *scriptData,
+      size_t scriptLength,
+      jsr_data_delete_cb scriptDeleteCallback,
+      void *deleterData) noexcept
+      : Buffer(scriptData, scriptLength),
+        scriptDeleteCallback_(scriptDeleteCallback),
+        deleterData_(deleterData) {}
+
+  ~ScriptDataBuffer() noexcept override {
+    if (scriptDeleteCallback_ != nullptr) {
+      scriptDeleteCallback_(const_cast<uint8_t *>(data()), deleterData_);
+    }
+  }
+
+  ScriptDataBuffer(const ScriptDataBuffer &) = delete;
+  ScriptDataBuffer &operator=(const ScriptDataBuffer &) = delete;
+
+ private:
+  jsr_data_delete_cb scriptDeleteCallback_{};
+  void *deleterData_{};
+};
+
+class JsiBuffer final : public hermes::Buffer {
+ public:
+  JsiBuffer(std::shared_ptr<const facebook::jsi::Buffer> buffer) noexcept
+      : Buffer(buffer->data(), buffer->size()), buffer_(std::move(buffer)) {}
+
+ private:
+  std::shared_ptr<const facebook::jsi::Buffer> buffer_;
+};
+
+class JsiSmallVectorBuffer final : public facebook::jsi::Buffer {
+ public:
+  JsiSmallVectorBuffer(llvh::SmallVector<char, 0> data) noexcept
+      : data_(std::move(data)) {}
+
+  size_t size() const override {
+    return data_.size();
+  }
+
+  const uint8_t *data() const override {
+    return reinterpret_cast<const uint8_t *>(data_.data());
   }
 
  private:
-  NapiEnvironment &env_;
-  NapiFinalizingAnonymousReference *finalizer_;
+  llvh::SmallVector<char, 0> data_;
 };
 
 // An implementation of PreparedJavaScript that wraps a BytecodeProvider.
@@ -2889,10 +3130,6 @@ const vm::PinnedHermesValue *phv(const vm::PinnedHermesValue *value) noexcept {
   return value;
 }
 
-NapiReference *asReference(napi_ext_ref ref) noexcept {
-  return reinterpret_cast<NapiReference *>(ref);
-}
-
 NapiReference *asReference(napi_ref ref) noexcept {
   return reinterpret_cast<NapiReference *>(ref);
 }
@@ -3008,12 +3245,14 @@ size_t convertUTF16ToUTF8WithReplacements(
 //=============================================================================
 
 NapiEnvironment::NapiEnvironment(
+    vm::Runtime &runtime,
+    bool isInspectable,
+    std::shared_ptr<facebook::jsi::PreparedScriptStore> scriptCache,
     const vm::RuntimeConfig &runtimeConfig) noexcept
-    : rt_(vm::Runtime::create(runtimeConfig.rebuild()
-                                  .withRegisterStack(nullptr)
-                                  .withMaxNumRegisters(kMaxNumRegisters)
-                                  .build())),
-      runtime_(*rt_) {
+    : runtime_(runtime),
+      isInspectable_(isInspectable),
+      scriptCache_(std::move(scriptCache)),
+      pendingFinalizers_(NapiPendingFinalizers::create()) {
   switch (runtimeConfig.getCompilationMode()) {
     case vm::SmartCompilation:
       compileFlags_.lazy = true;
@@ -3122,7 +3361,10 @@ NapiEnvironment::NapiEnvironment(
 }
 
 NapiEnvironment::~NapiEnvironment() {
-  isShuttingdown_ = true;
+  pendingFinalizers_->applyPendingFinalizers(this);
+  pendingFinalizers_ = nullptr;
+
+  isShuttingDown_ = true;
   if (instanceData_) {
     instanceData_->finalize(*this);
     instanceData_ = nullptr;
@@ -3159,8 +3401,8 @@ vm::Runtime &NapiEnvironment::runtime() noexcept {
   return runtime_;
 }
 
-NapiStableAddressStack<vm::PinnedHermesValue>
-    &NapiEnvironment::napiValueStack() noexcept {
+NapiStableAddressStack<vm::PinnedHermesValue> &
+NapiEnvironment::napiValueStack() noexcept {
   return napiValueStack_;
 }
 
@@ -3437,7 +3679,6 @@ napi_status NapiEnvironment::typeOf(
 
   const vm::PinnedHermesValue *hv = phv(value);
 
-  // BigInt is not supported by Hermes yet.
   if (hv->isNumber()) {
     *result = napi_number;
   } else if (hv->isString()) {
@@ -3458,6 +3699,8 @@ napi_status NapiEnvironment::typeOf(
     *result = napi_symbol;
   } else if (hv->isNull()) {
     *result = napi_null;
+  } else if (hv->isBigInt()) {
+    *result = napi_bigint;
   } else {
     // Should not get here unless Hermes has added some new kind of value.
     return ERROR_STATUS(napi_invalid_arg, "Unknown value type");
@@ -3755,61 +3998,6 @@ napi_status NapiEnvironment::convertUTF8ToUTF16(
   return clearLastNativeError();
 }
 
-napi_status NapiEnvironment::getUniqueStringRef(
-    const char *utf8,
-    size_t length,
-    napi_ext_ref *result) noexcept {
-  NapiHandleScope handleScope(*this);
-  CHECK_ARG(utf8);
-  napi_value strValue;
-  CHECK_NAPI(createStringUTF8(utf8, length, &strValue));
-  return getUniqueStringRef(strValue, result);
-}
-
-napi_status NapiEnvironment::getUniqueStringRef(
-    napi_value strValue,
-    napi_ext_ref *result) noexcept {
-  CHECK_STRING_ARG(strValue);
-  CHECK_ARG(result);
-  NapiHandleScope handleScope(*this);
-
-  vm::Handle<vm::StringPrimitive> strPrimitive =
-      makeHandle<vm::StringPrimitive>(strValue);
-  vm::CallResult<vm::Handle<vm::SymbolID>> symbolHandle =
-      runtime_.getIdentifierTable().getSymbolHandleFromPrimitive(
-          runtime_, strPrimitive);
-  CHECK_NAPI(checkJSErrorStatus(symbolHandle));
-  auto it = uniqueStrings_.find(symbolHandle->get().unsafeGetRaw());
-  if (it != uniqueStrings_.end()) {
-    uint32_t refCount;
-    it->second->incRefCount(*this, refCount);
-    *result = reinterpret_cast<napi_ext_ref>(it->second);
-  } else {
-    vm::PinnedHermesValue primitiveStrValue =
-        vm::HermesValue::encodeStringValue(
-            runtime_.getIdentifierTable().getStringPrim(
-                runtime_, symbolHandle->get()));
-    NapiFinalizingStrongReference *ref;
-    CHECK_NAPI(NapiFinalizingStrongReference::create(
-        *this,
-        &primitiveStrValue,
-        reinterpret_cast<void *>(
-            static_cast<size_t>(symbolHandle->get().unsafeGetRaw())),
-        [](napi_env env, void *finalizeData, void *finalizeHint) {
-          vm::SymbolID::RawType symbolRawValue =
-              static_cast<vm::SymbolID::RawType>(
-                  reinterpret_cast<size_t>(finalizeData));
-          NapiEnvironment *napiEnv = reinterpret_cast<NapiEnvironment *>(env);
-          napiEnv->uniqueStrings_.erase(symbolRawValue);
-        },
-        nullptr,
-        &ref));
-    uniqueStrings_.emplace(symbolHandle->get().unsafeGetRaw(), ref);
-    *result = reinterpret_cast<napi_ext_ref>(ref);
-  }
-  return clearLastNativeError();
-}
-
 napi_status NapiEnvironment::getUniqueSymbolID(
     const char *utf8,
     size_t length,
@@ -3847,6 +4035,123 @@ napi_status NapiEnvironment::createSymbol(
   }
   return scope.setResult(runtime_.getIdentifierTable().createNotUniquedSymbol(
       runtime_, descString));
+}
+
+//-----------------------------------------------------------------------------
+// Methods to work with BigInt
+//-----------------------------------------------------------------------------
+
+napi_status NapiEnvironment::createBigIntFromInt64(
+    int64_t value,
+    napi_value *result) {
+  NapiHandleScope scope{*this, result};
+  return scope.setResult(vm::BigIntPrimitive::fromSigned(runtime_, value));
+}
+
+napi_status NapiEnvironment::createBigIntFromUint64(
+    uint64_t value,
+    napi_value *result) {
+  NapiHandleScope scope{*this, result};
+  return scope.setResult(vm::BigIntPrimitive::fromUnsigned(runtime_, value));
+}
+
+napi_status NapiEnvironment::createBigIntFromWords(
+    int signBit,
+    size_t wordCount,
+    const uint64_t *words,
+    napi_value *result) {
+  NapiHandleScope scope{*this, result};
+  CHECK_ARG(words);
+  RETURN_STATUS_IF_FALSE(wordCount <= INT_MAX, napi_invalid_arg);
+
+  if (signBit) {
+    // Use 2's complement algorithm to represent negative numbers.
+    llvh::SmallVector<uint64_t, 16> negativeValue{words, words + wordCount};
+
+    // a. flip all bits
+    for (uint64_t &entry : negativeValue) {
+      entry = ~entry;
+    }
+    // b. add 1
+    for (size_t i = 0; i < negativeValue.size(); ++i) {
+      if (++negativeValue[i] >= 1) {
+        break; // No need to carry so exit early.
+      }
+    }
+    words = negativeValue.data();
+  }
+
+  const uint8_t *ptr = reinterpret_cast<const uint8_t *>(words);
+  const uint32_t size = static_cast<uint32_t>(wordCount * sizeof(uint64_t));
+  return scope.setResult(
+      vm::BigIntPrimitive::fromBytes(runtime_, llvh::makeArrayRef(ptr, size)));
+}
+
+napi_status NapiEnvironment::getBigIntValueInt64(
+    napi_value value,
+    int64_t *result,
+    bool *lossless) {
+  CHECK_ARG(value);
+  CHECK_ARG(result);
+  CHECK_ARG(lossless);
+  RETURN_STATUS_IF_FALSE(phv(value)->isBigInt(), napi_bigint_expected);
+  vm::BigIntPrimitive *bigInt = phv(value)->getBigInt();
+  *lossless =
+      bigInt->isTruncationToSingleDigitLossless(/*signedTruncation:*/ true);
+  *result = static_cast<int64_t>(bigInt->truncateToSingleDigit());
+  return clearLastNativeError();
+}
+
+napi_status NapiEnvironment::getBigIntValueUint64(
+    napi_value value,
+    uint64_t *result,
+    bool *lossless) {
+  CHECK_ARG(value);
+  CHECK_ARG(result);
+  CHECK_ARG(lossless);
+  RETURN_STATUS_IF_FALSE(phv(value)->isBigInt(), napi_bigint_expected);
+  vm::BigIntPrimitive *bigInt = phv(value)->getBigInt();
+  *lossless =
+      bigInt->isTruncationToSingleDigitLossless(/*signedTruncation:*/ false);
+  *result = bigInt->truncateToSingleDigit();
+  return clearLastNativeError();
+}
+
+napi_status NapiEnvironment::getBigIntValueWords(
+    napi_value value,
+    int *signBit,
+    size_t *wordCount,
+    uint64_t *words) {
+  CHECK_ARG(value);
+  CHECK_ARG(wordCount);
+  RETURN_STATUS_IF_FALSE(phv(value)->isBigInt(), napi_bigint_expected);
+  vm::BigIntPrimitive *bigInt = phv(value)->getBigInt();
+
+  if (signBit == nullptr && words == nullptr) {
+    *wordCount = bigInt->getDigits().size();
+  } else {
+    CHECK_ARG(signBit);
+    CHECK_ARG(words);
+    llvh::ArrayRef<uint64_t> digits = bigInt->getDigits();
+    *wordCount = std::min(*wordCount, digits.size());
+    std::memcpy(words, digits.begin(), *wordCount * sizeof(uint64_t));
+    *signBit = bigInt->sign() ? 1 : 0;
+    if (*signBit) {
+      // negate negative numbers, and then add a "-" to the output.
+      // a. flip all bits
+      for (size_t i = 0; i < *wordCount; ++i) {
+        words[i] = ~words[i];
+      }
+      // b. add 1
+      for (size_t i = 0; i < *wordCount; ++i) {
+        if (++words[i] >= 1) {
+          break; // No need to carry so exit early.
+        }
+      }
+    }
+  }
+
+  return clearLastNativeError();
 }
 
 //-----------------------------------------------------------------------------
@@ -4152,11 +4457,11 @@ napi_status NapiEnvironment::convertKeyStorageToArray(
 napi_status NapiEnvironment::convertToStringKeys(
     vm::Handle<vm::JSArray> array) noexcept {
   vm::GCScopeMarkerRAII marker{runtime_};
-  vm::MutableHandle<> strKey{runtime_};
   size_t length = vm::JSArray::getLength(array.get(), runtime_);
   for (size_t i = 0; i < length; ++i) {
     vm::HermesValue key = array->at(runtime_, i).unboxToHV(runtime_);
     if (LLVM_UNLIKELY(key.isNumber())) {
+      vm::MutableHandle<> strKey{runtime_};
       CHECK_NAPI(convertIndexToString(key.getNumber(), &strKey));
       vm::JSArray::setElementAt(array, runtime_, i, strKey);
       marker.flush();
@@ -4597,7 +4902,7 @@ napi_status NapiEnvironment::createNewInstance(
   //
   // Note that 13.2.2.1-4 are also handled by the call to newObject.
   vm::CallResult<vm::PseudoHandle<vm::JSObject>> thisRes =
-      vm::Callable::createThisForConstruct(ctorHandle, runtime_);
+      vm::Callable::createThisForConstruct_RJS(ctorHandle, runtime_);
   CHECK_NAPI(checkJSErrorStatus(thisRes));
   // We need to capture this in case the ctor doesn't return an object,
   // we need to return this object.
@@ -4620,7 +4925,7 @@ napi_status NapiEnvironment::createNewInstance(
     CHECK_NAPI(checkJSErrorStatus(runtime_.raiseStackOverflow(
         vm::Runtime::StackOverflowKind::NativeStack)));
   }
-  for (size_t i = 0; i != argCount; ++i) {
+  for (size_t i = 0; i < argCount; ++i) {
     newFrame->getArgRef(static_cast<int32_t>(i)) = *phv(args[i]);
   }
   // The last parameter indicates that this call should construct an object.
@@ -4894,6 +5199,9 @@ napi_status NapiEnvironment::strictEquals(
     } else {
       return setResult(phv(lhs)->getBool() == phv(rhs)->getBool(), result);
     }
+  } else if (lhsTag == vm::HermesValue::Tag::BigInt) {
+    return setResult(
+        phv(lhs)->getBigInt()->compare(phv(rhs)->getBigInt()) == 0, result);
   } else {
     return setResult(phv(lhs)->getRaw() == phv(rhs)->getRaw(), result);
   }
@@ -5178,7 +5486,7 @@ vm::Handle<vm::DecoratedObject> NapiEnvironment::createExternalObject(
       makeHandle(vm::DecoratedObject::create(
           runtime_,
           makeHandle<vm::JSObject>(&runtime_.objectPrototype),
-          std::make_unique<NapiExternalValue>(*this, nativeData),
+          std::make_unique<NapiExternalValue>(pendingFinalizers_, nativeData),
           /*additionalSlotCount:*/ 1));
 
   // Add a special tag to differentiate from other decorated objects.
@@ -5280,6 +5588,7 @@ void NapiEnvironment::addToFinalizerQueue(NapiFinalizer *finalizer) noexcept {
 napi_status NapiEnvironment::processFinalizerQueue() noexcept {
   if (!isRunningFinalizers_) {
     isRunningFinalizers_ = true;
+    pendingFinalizers_->applyPendingFinalizers(this);
     NapiReference::finalizeAll(*this, finalizerQueue_);
     isRunningFinalizers_ = false;
   }
@@ -5303,7 +5612,7 @@ napi_status NapiEnvironment::createReference(
 
 napi_status NapiEnvironment::deleteReference(napi_ref ref) noexcept {
   CHECK_ARG(ref);
-  if (isShuttingdown_) {
+  if (isShuttingDown_) {
     // During shutdown all references are going to be deleted by finalizers.
     return clearLastNativeError();
   }
@@ -5336,55 +5645,6 @@ napi_status NapiEnvironment::getReferenceValue(
   const vm::PinnedHermesValue &value = asReference(ref)->value(env);
   *result = !value.isUndefined() ? pushNewNapiValue(value) : nullptr;
   return clearLastNativeError();
-}
-
-napi_status NapiEnvironment::createStrongReference(
-    napi_value value,
-    napi_ext_ref *result) noexcept {
-  CHECK_ARG(value);
-  return NapiStrongReference::create(
-      *this, *phv(value), reinterpret_cast<NapiStrongReference **>(result));
-}
-
-napi_status NapiEnvironment::createStrongReferenceWithData(
-    napi_value value,
-    void *nativeData,
-    napi_finalize finalizeCallback,
-    void *finalizeHint,
-    napi_ext_ref *result) noexcept {
-  return NapiFinalizingStrongReference::create(
-      *this,
-      phv(value),
-      nativeData,
-      finalizeCallback,
-      finalizeHint,
-      reinterpret_cast<NapiFinalizingStrongReference **>(result));
-}
-
-napi_status NapiEnvironment::createWeakReference(
-    napi_value value,
-    napi_ext_ref *result) noexcept {
-  return NapiWeakReference::create(
-      *this, phv(value), reinterpret_cast<NapiWeakReference **>(result));
-}
-
-napi_status NapiEnvironment::incReference(napi_ext_ref ref) noexcept {
-  CHECK_ARG(ref);
-  uint32_t refCount{};
-  return asReference(ref)->incRefCount(*this, /*ref*/ refCount);
-}
-
-napi_status NapiEnvironment::decReference(napi_ext_ref ref) noexcept {
-  CHECK_ARG(ref);
-  uint32_t refCount{};
-  return asReference(ref)->decRefCount(*this, /*ref*/ refCount);
-}
-
-napi_status NapiEnvironment::getReferenceValue(
-    napi_ext_ref ref,
-    napi_value *result) noexcept {
-  CHECK_ARG(ref);
-  return setResult(asReference(ref)->value(*this), result);
 }
 
 void NapiEnvironment::addReference(NapiReference *reference) noexcept {
@@ -5557,8 +5817,9 @@ napi_status NapiEnvironment::createExternalArrayBuffer(
   vm::Handle<vm::JSArrayBuffer> buffer = makeHandle(vm::JSArrayBuffer::create(
       runtime_, makeHandle<vm::JSObject>(&runtime_.arrayBufferPrototype)));
   if (externalData != nullptr) {
-    std::unique_ptr<NapiExternalBuffer> externalBuffer{new NapiExternalBuffer(
-        env, externalData, byteLength, finalizeCallback, finalizeHint)};
+    std::unique_ptr<NapiExternalBuffer> externalBuffer =
+        std::make_unique<NapiExternalBuffer>(
+            env, externalData, byteLength, finalizeCallback, finalizeHint);
     vm::JSArrayBuffer::setExternalDataBlock(
         runtime_,
         buffer,
@@ -5706,9 +5967,13 @@ napi_status NapiEnvironment::createTypedArray(
           length, buffer, byteOffset, &typedArray));
       break;
     case napi_bigint64_array:
-      return GENERIC_FAILURE("BigInt64Array is not implemented in Hermes yet");
+      CHECK_NAPI(createTypedArray<int64_t, vm::CellKind::BigInt64ArrayKind>(
+          length, buffer, byteOffset, &typedArray));
+      break;
     case napi_biguint64_array:
-      return GENERIC_FAILURE("BigUint64Array is not implemented in Hermes yet");
+      CHECK_NAPI(createTypedArray<uint64_t, vm::CellKind::BigUint64ArrayKind>(
+          length, buffer, byteOffset, &typedArray));
+      break;
     default:
       return ERROR_STATUS(
           napi_invalid_arg, "Unsupported TypedArray type: ", type);
@@ -5767,6 +6032,10 @@ napi_status NapiEnvironment::getTypedArrayInfo(
       *type = napi_float32_array;
     } else if (vm::vmisa<vm::Float64Array>(array)) {
       *type = napi_float64_array;
+    } else if (vm::vmisa<vm::BigInt64Array>(array)) {
+      *type = napi_bigint64_array;
+    } else if (vm::vmisa<vm::BigUint64Array>(array)) {
+      *type = napi_biguint64_array;
     } else {
       return GENERIC_FAILURE("Unknown TypedArray type");
     }
@@ -5861,6 +6130,22 @@ napi_status NapiEnvironment::getDataViewInfo(
   }
 
   return clearLastNativeError();
+}
+
+//-----------------------------------------------------------------------------
+// Runtime info
+//-----------------------------------------------------------------------------
+
+napi_status NapiEnvironment::getDescription(const char **result) noexcept {
+  CHECK_ARG(result);
+  *result = "Hermes";
+  return napi_ok;
+}
+
+napi_status NapiEnvironment::isInspectable(bool *result) noexcept {
+  CHECK_ARG(result);
+  *result = isInspectable_;
+  return napi_ok;
 }
 
 //-----------------------------------------------------------------------------
@@ -6065,6 +6350,18 @@ NapiEnvironment::handleRejectionNotification(
   return env->getUndefined();
 }
 
+napi_status NapiEnvironment::openEnvScope(jsr_napi_env_scope *scope) noexcept {
+  CHECK_ARG(scope);
+  *scope = reinterpret_cast<jsr_napi_env_scope>(new int(0));
+  return napi_ok;
+}
+
+napi_status NapiEnvironment::closeEnvScope(jsr_napi_env_scope scope) noexcept {
+  CHECK_ARG(scope);
+  delete reinterpret_cast<int *>(scope);
+  return napi_ok;
+}
+
 napi_status NapiEnvironment::hasUnhandledPromiseRejection(
     bool *result) noexcept {
   return setResult(lastUnhandledRejectionId_ != -1, result);
@@ -6075,6 +6372,19 @@ napi_status NapiEnvironment::getAndClearLastUnhandledPromiseRejection(
   lastUnhandledRejectionId_ = -1;
   return setResult(
       std::exchange(lastUnhandledRejection_, EmptyHermesValue), result);
+}
+
+napi_status NapiEnvironment::drainMicrotasks(
+    int32_t maxCountHint,
+    bool *result) noexcept {
+  CHECK_ARG(result);
+  if (runtime_.hasMicrotaskQueue()) {
+    CHECK_NAPI(checkJSErrorStatus(runtime_.drainJobs()));
+  }
+
+  runtime_.clearKeptObjects();
+  *result = true;
+  return napi_ok;
 }
 
 //-----------------------------------------------------------------------------
@@ -6160,97 +6470,33 @@ napi_status NapiEnvironment::runScript(
   std::unique_ptr<char[]> buffer =
       std::unique_ptr<char[]>(new char[sourceSize + 1]);
   CHECK_NAPI(getStringValueUTF8(source, buffer.get(), sourceSize + 1, nullptr));
-  return scope.setResult(runScript(
-      NapiExternalBuffer::make(
-          napiEnv(this),
-          napi_ext_buffer{
-              buffer.release(),
-              sourceSize,
-              [](napi_env /*env*/, void *data, void * /*finalizeHint*/) {
-                std::unique_ptr<char[]> buf(reinterpret_cast<char *>(data));
-              },
-              nullptr}),
+
+  jsr_prepared_script preparedScript{};
+  CHECK_NAPI(createPreparedScript(
+      reinterpret_cast<uint8_t *>(buffer.release()),
+      sourceSize,
+      [](void *data, void * /*deleterData*/) {
+        std::unique_ptr<char[]> buf(reinterpret_cast<char *>(data));
+      },
       nullptr,
       sourceURL,
-      result));
+      &preparedScript));
+  // To delete prepared script after execution.
+  std::unique_ptr<NapiScriptModel> scriptModel{
+      reinterpret_cast<NapiScriptModel *>(preparedScript)};
+  return scope.setResult(runPreparedScript(preparedScript, result));
 }
 
-napi_status NapiEnvironment::runSerializedScript(
-    const uint8_t *buffer,
-    size_t bufferLength,
-    napi_value /*source*/,
+napi_status NapiEnvironment::createPreparedScript(
+    const uint8_t *scriptData,
+    size_t scriptLength,
+    jsr_data_delete_cb scriptDeleteCallback,
+    void *deleterData,
     const char *sourceURL,
-    napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
-  NapiHandleScope scope{*this, result};
+    jsr_prepared_script *result) noexcept {
+  std::unique_ptr<ScriptDataBuffer> buffer = std::make_unique<ScriptDataBuffer>(
+      scriptData, scriptLength, scriptDeleteCallback, deleterData);
 
-  std::unique_ptr<uint8_t[]> bufferCopy =
-      std::unique_ptr<uint8_t[]>(new uint8_t[bufferLength]);
-  std::copy(buffer, buffer + bufferLength, bufferCopy.get());
-  return scope.setResult(runScript(
-      NapiExternalBuffer::make(
-          napiEnv(this),
-          napi_ext_buffer{
-              bufferCopy.release(),
-              bufferLength,
-              [](napi_env /*env*/, void *data, void * /*finalizeHint*/) {
-                std::unique_ptr<uint8_t[]> buf(
-                    reinterpret_cast<uint8_t *>(data));
-              },
-              nullptr}),
-      nullptr,
-      sourceURL,
-      result));
-}
-
-napi_status NapiEnvironment::serializeScript(
-    napi_value source,
-    const char *sourceURL,
-    napi_ext_buffer_callback bufferCallback,
-    void *bufferHint) noexcept {
-  CHECK_NAPI(checkPendingJSError());
-  NapiHandleScope scope{*this};
-
-  size_t sourceSize{};
-  CHECK_NAPI(getStringValueUTF8(source, nullptr, 0, &sourceSize));
-  std::unique_ptr<char[]> buffer =
-      std::unique_ptr<char[]>(new char[sourceSize + 1]);
-  CHECK_NAPI(getStringValueUTF8(source, buffer.get(), sourceSize + 1, nullptr));
-  napi_ext_prepared_script scriptModel{};
-  CHECK_NAPI(createScriptModel(
-      NapiExternalBuffer::make(
-          napiEnv(this),
-          napi_ext_buffer{
-              buffer.release(),
-              sourceSize,
-              [](napi_env /*env*/, void *data, void * /*finalizeHint*/) {
-                std::unique_ptr<char[]> buf(reinterpret_cast<char *>(data));
-              },
-              nullptr}),
-      nullptr,
-      sourceURL,
-      &scriptModel));
-  return serializeScriptModel(scriptModel, bufferCallback, bufferHint);
-}
-
-napi_status NapiEnvironment::runScript(
-    std::unique_ptr<hermes::Buffer> script,
-    std::unique_ptr<hermes::Buffer> sourceMap,
-    const char *sourceURL,
-    napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
-  NapiHandleScope scope{*this, result};
-  napi_ext_prepared_script scriptModel{nullptr};
-  CHECK_NAPI(createScriptModel(
-      std::move(script), std::move(sourceMap), sourceURL, &scriptModel));
-  return scope.setResult(runScriptModel(scriptModel, result));
-}
-
-napi_status NapiEnvironment::createScriptModel(
-    std::unique_ptr<hermes::Buffer> buffer,
-    std::unique_ptr<hermes::Buffer> sourceMapBuf,
-    const char *sourceURL,
-    napi_ext_prepared_script *scriptModel) noexcept {
   CHECK_NAPI(checkPendingJSError());
   NapiHandleScope scope{*this};
 
@@ -6267,36 +6513,78 @@ napi_status NapiEnvironment::createScriptModel(
 
   // Construct the BC provider either from buffer or source.
   if (isBytecode) {
-    if (sourceMapBuf) {
-      return GENERIC_FAILURE("Source map cannot be specified with bytecode");
-    }
     bcErr = hbc::BCProviderFromBuffer::createBCProviderFromBuffer(
         std::move(buffer));
   } else {
 #if defined(HERMESVM_LEAN)
     bcErr.second = "prepareJavaScript source compilation not supported";
 #else
-    std::unique_ptr<SourceMap> sourceMap{};
-    if (sourceMapBuf) {
-      // Convert the buffer into a form the parser needs.
-      llvh::MemoryBufferRef mbref(
-          llvh::StringRef(
-              (const char *)sourceMapBuf->data(), sourceMapBuf->size()),
-          "");
-      SimpleDiagHandler diag;
-      SourceErrorManager sm;
-      diag.installInto(sm);
-      sourceMap = SourceMapParser::parse(mbref, sm);
-      if (!sourceMap) {
-        return GENERIC_FAILURE(
-            "Error parsing source map: ", diag.getErrorString());
-      }
+
+    facebook::jsi::ScriptSignature scriptSignature;
+    facebook::jsi::JSRuntimeSignature runtimeSignature;
+    const char *prepareTag = "perf";
+
+    if (scriptCache_) {
+      uint64_t hash{};
+      bool isAscii = murmurhash(buffer->data(), buffer->size(), /*ref*/ hash);
+      facebook::jsi::JSRuntimeVersion_t runtimeVersion =
+          HermesBuildVersion.version;
+      scriptSignature = {std::string(sourceURL ? sourceURL : ""), hash};
+      runtimeSignature = {"Hermes", runtimeVersion};
     }
-    bcErr = hbc::BCProviderFromSrc::createBCProviderFromSrc(
-        std::move(buffer),
-        std::string(sourceURL ? sourceURL : ""),
-        std::move(sourceMap),
-        compileFlags_);
+
+    std::shared_ptr<const facebook::jsi::Buffer> cache;
+    if (scriptCache_) {
+      cache = scriptCache_->tryGetPreparedScript(
+          scriptSignature, runtimeSignature, prepareTag);
+      bcErr = hbc::BCProviderFromBuffer::createBCProviderFromBuffer(
+          std::make_unique<JsiBuffer>(move(cache)));
+    }
+
+    hbc::BCProviderFromSrc *bytecodeProviderFromSrc{};
+    if (!bcErr.first) {
+      std::pair<std::unique_ptr<hbc::BCProviderFromSrc>, std::string>
+          bcFromSrcErr = hbc::BCProviderFromSrc::createBCProviderFromSrc(
+              std::move(buffer),
+              std::string(sourceURL ? sourceURL : ""),
+              nullptr,
+              compileFlags_);
+      bytecodeProviderFromSrc = bcFromSrcErr.first.get();
+      bcErr = std::move(bcFromSrcErr);
+    }
+
+    if (scriptCache_ && bytecodeProviderFromSrc) {
+      hbc::BytecodeModule *bcModule =
+          bytecodeProviderFromSrc->getBytecodeModule();
+
+      // Serialize/deserialize can't handle lazy compilation as of now. Do a
+      // check to make sure there is no lazy BytecodeFunction in module_.
+      for (uint32_t i = 0; i < bcModule->getNumFunctions(); i++) {
+        if (bytecodeProviderFromSrc->isFunctionLazy(i)) {
+          goto CannotSerialize;
+        }
+      }
+
+      // Serialize the bytecode. Call BytecodeSerializer to do the heavy
+      // lifting. Write to a SmallVector first, so we can know the total bytes
+      // and write it first and make life easier for Deserializer. This is going
+      // to be slower than writing to Serializer directly but it's OK to slow
+      // down serialization if it speeds up Deserializer.
+      BytecodeGenerationOptions bytecodeGenOpts =
+          BytecodeGenerationOptions::defaults();
+      llvh::SmallVector<char, 0> bytecodeVector;
+      llvh::raw_svector_ostream outStream(bytecodeVector);
+      hbc::BytecodeSerializer bcSerializer{outStream, bytecodeGenOpts};
+      bcSerializer.serialize(
+          *bcModule, bytecodeProviderFromSrc->getSourceHash());
+
+      scriptCache_->persistPreparedScript(
+          std::shared_ptr<const facebook::jsi::Buffer>(
+              new JsiSmallVectorBuffer(std::move(bytecodeVector))),
+          scriptSignature,
+          runtimeSignature,
+          prepareTag);
+    }
 #endif
   }
   if (!bcErr.first) {
@@ -6306,7 +6594,11 @@ napi_status NapiEnvironment::createScriptModel(
     }
     return GENERIC_FAILURE("Compiling JS failed: ", bcErr.second, sb.str());
   }
-  *scriptModel = reinterpret_cast<napi_ext_prepared_script>(new NapiScriptModel(
+
+#if !defined(HERMESVM_LEAN)
+CannotSerialize:
+#endif
+  *result = reinterpret_cast<jsr_prepared_script>(new NapiScriptModel(
       std::move(bcErr.first),
       runtimeFlags,
       sourceURL ? sourceURL : "",
@@ -6314,87 +6606,27 @@ napi_status NapiEnvironment::createScriptModel(
   return clearLastNativeError();
 }
 
-napi_status NapiEnvironment::runScriptModel(
-    napi_ext_prepared_script scriptModel,
+napi_status NapiEnvironment::deletePreparedScript(
+    jsr_prepared_script preparedScript) noexcept {
+  CHECK_ARG(preparedScript);
+  delete reinterpret_cast<NapiScriptModel *>(preparedScript);
+  return napi_ok;
+}
+
+napi_status NapiEnvironment::runPreparedScript(
+    jsr_prepared_script preparedScript,
     napi_value *result) noexcept {
   CHECK_NAPI(checkPendingJSError());
   NapiHandleScope scope{*this, result};
-  CHECK_ARG(scriptModel);
+  CHECK_ARG(preparedScript);
   const NapiScriptModel *hermesPrep =
-      reinterpret_cast<NapiScriptModel *>(scriptModel);
+      reinterpret_cast<NapiScriptModel *>(preparedScript);
   vm::CallResult<vm::HermesValue> res = runtime_.runBytecode(
       hermesPrep->bytecodeProvider(),
       hermesPrep->runtimeFlags(),
       hermesPrep->sourceURL(),
       vm::Runtime::makeNullHandle<vm::Environment>());
   return scope.setResult(std::move(res));
-}
-
-napi_status NapiEnvironment::deleteScriptModel(
-    napi_ext_prepared_script scriptModel) noexcept {
-  CHECK_ARG(scriptModel);
-  delete reinterpret_cast<NapiScriptModel *>(scriptModel);
-  return clearLastNativeError();
-}
-
-napi_status NapiEnvironment::serializeScriptModel(
-    napi_ext_prepared_script scriptModel,
-    napi_ext_buffer_callback bufferCallback,
-    void *bufferHint) noexcept {
-  CHECK_NAPI(checkPendingJSError());
-  NapiHandleScope scope{*this};
-
-  CHECK_ARG(scriptModel);
-  CHECK_ARG(bufferCallback);
-
-  NapiScriptModel *hermesPreparedScript =
-      reinterpret_cast<NapiScriptModel *>(scriptModel);
-
-  if (hermesPreparedScript->isBytecode()) {
-    std::shared_ptr<hbc::BCProviderFromBuffer> bytecodeProvider =
-        std::static_pointer_cast<hbc::BCProviderFromBuffer>(
-            hermesPreparedScript->bytecodeProvider());
-    llvh::ArrayRef<uint8_t> bufferRef = bytecodeProvider->getRawBuffer();
-    bufferCallback(
-        napiEnv(this), bufferRef.data(), bufferRef.size(), bufferHint);
-  } else {
-#if defined(HERMESVM_LEAN)
-    return GENERIC_FAILURE(
-        "serializeScriptModel source compilation not supported");
-#else
-    std::shared_ptr<hbc::BCProviderFromSrc> bytecodeProvider =
-        std::static_pointer_cast<hbc::BCProviderFromSrc>(
-            hermesPreparedScript->bytecodeProvider());
-    hbc::BytecodeModule *bcModule = bytecodeProvider->getBytecodeModule();
-
-    // Serialize/deserialize can't handle lazy compilation as of now. Do a
-    // check to make sure there is no lazy BytecodeFunction in module_.
-    for (uint32_t i = 0; i < bcModule->getNumFunctions(); i++) {
-      if (bytecodeProvider->isFunctionLazy(i)) {
-        hermes_fatal("Cannot serialize lazy functions");
-      }
-    }
-
-    // Serialize the bytecode. Call BytecodeSerializer to do the heavy
-    // lifting. Write to a SmallVector first, so we can know the total bytes
-    // and write it first and make life easier for Deserializer. This is going
-    // to be slower than writing to Serializer directly but it's OK to slow
-    // down serialization if it speeds up Deserializer.
-    BytecodeGenerationOptions bytecodeGenOpts =
-        BytecodeGenerationOptions::defaults();
-    llvh::SmallVector<char, 0> bytecodeVector;
-    llvh::raw_svector_ostream OS(bytecodeVector);
-    hbc::BytecodeSerializer BS{OS, bytecodeGenOpts};
-    BS.serialize(*bcModule, bytecodeProvider->getSourceHash());
-    bufferCallback(
-        napiEnv(this),
-        reinterpret_cast<uint8_t *>(bytecodeVector.data()),
-        bytecodeVector.size(),
-        bufferHint);
-#endif
-  }
-
-  return clearLastNativeError();
 }
 
 /*static*/ bool NapiEnvironment::isHermesBytecode(
@@ -6595,7 +6827,7 @@ napi_status NapiEnvironment::setResultUnsafe(
 // Native error handling functions
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_get_last_error_info(
+napi_status NAPI_CDECL napi_get_last_error_info(
     napi_env env,
     const napi_extended_error_info **result) {
   return CHECKED_ENV(env)->getLastNativeError(result);
@@ -6605,22 +6837,20 @@ napi_status __cdecl napi_get_last_error_info(
 // Getters for defined singletons
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_get_undefined(napi_env env, napi_value *result) {
+napi_status NAPI_CDECL napi_get_undefined(napi_env env, napi_value *result) {
   return CHECKED_ENV(env)->getUndefined(result);
 }
 
-napi_status __cdecl napi_get_null(napi_env env, napi_value *result) {
+napi_status NAPI_CDECL napi_get_null(napi_env env, napi_value *result) {
   return CHECKED_ENV(env)->getNull(result);
 }
 
-napi_status __cdecl napi_get_global(napi_env env, napi_value *result) {
+napi_status NAPI_CDECL napi_get_global(napi_env env, napi_value *result) {
   return CHECKED_ENV(env)->getGlobal(result);
 }
 
-napi_status __cdecl napi_get_boolean(
-    napi_env env,
-    bool value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_get_boolean(napi_env env, bool value, napi_value *result) {
   return CHECKED_ENV(env)->getBoolean(value, result);
 }
 
@@ -6628,50 +6858,40 @@ napi_status __cdecl napi_get_boolean(
 // Methods to create Primitive types/Objects
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_create_object(napi_env env, napi_value *result) {
+napi_status NAPI_CDECL napi_create_object(napi_env env, napi_value *result) {
   return CHECKED_ENV(env)->createObject(result);
 }
 
-napi_status __cdecl napi_create_array(napi_env env, napi_value *result) {
+napi_status NAPI_CDECL napi_create_array(napi_env env, napi_value *result) {
   return CHECKED_ENV(env)->createArray(/*length:*/ 0, result);
 }
 
-napi_status __cdecl napi_create_array_with_length(
-    napi_env env,
-    size_t length,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_create_array_with_length(napi_env env, size_t length, napi_value *result) {
   return CHECKED_ENV(env)->createArray(length, result);
 }
 
-napi_status __cdecl napi_create_double(
-    napi_env env,
-    double value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_create_double(napi_env env, double value, napi_value *result) {
   return CHECKED_ENV(env)->createNumber(value, result);
 }
 
-napi_status __cdecl napi_create_int32(
-    napi_env env,
-    int32_t value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_create_int32(napi_env env, int32_t value, napi_value *result) {
   return CHECKED_ENV(env)->createNumber(value, result);
 }
 
-napi_status __cdecl napi_create_uint32(
-    napi_env env,
-    uint32_t value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_create_uint32(napi_env env, uint32_t value, napi_value *result) {
   return CHECKED_ENV(env)->createNumber(value, result);
 }
 
-napi_status __cdecl napi_create_int64(
-    napi_env env,
-    int64_t value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_create_int64(napi_env env, int64_t value, napi_value *result) {
   return CHECKED_ENV(env)->createNumber(value, result);
 }
 
-napi_status __cdecl napi_create_string_latin1(
+napi_status NAPI_CDECL napi_create_string_latin1(
     napi_env env,
     const char *str,
     size_t length,
@@ -6679,7 +6899,7 @@ napi_status __cdecl napi_create_string_latin1(
   return CHECKED_ENV(env)->createStringLatin1(str, length, result);
 }
 
-napi_status __cdecl napi_create_string_utf8(
+napi_status NAPI_CDECL napi_create_string_utf8(
     napi_env env,
     const char *str,
     size_t length,
@@ -6687,7 +6907,7 @@ napi_status __cdecl napi_create_string_utf8(
   return CHECKED_ENV(env)->createStringUTF8(str, length, result);
 }
 
-napi_status __cdecl napi_create_string_utf16(
+napi_status NAPI_CDECL napi_create_string_utf16(
     napi_env env,
     const char16_t *str,
     size_t length,
@@ -6695,14 +6915,12 @@ napi_status __cdecl napi_create_string_utf16(
   return CHECKED_ENV(env)->createStringUTF16(str, length, result);
 }
 
-napi_status __cdecl napi_create_symbol(
-    napi_env env,
-    napi_value description,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_create_symbol(napi_env env, napi_value description, napi_value *result) {
   return CHECKED_ENV(env)->createSymbol(description, result);
 }
 
-napi_status __cdecl napi_create_function(
+napi_status NAPI_CDECL napi_create_function(
     napi_env env,
     const char *utf8name,
     size_t length,
@@ -6713,7 +6931,7 @@ napi_status __cdecl napi_create_function(
       utf8name, length, cb, callback_data, result);
 }
 
-napi_status __cdecl napi_create_error(
+napi_status NAPI_CDECL napi_create_error(
     napi_env env,
     napi_value code,
     napi_value msg,
@@ -6721,7 +6939,7 @@ napi_status __cdecl napi_create_error(
   return CHECKED_ENV(env)->createJSError(code, msg, result);
 }
 
-napi_status __cdecl napi_create_type_error(
+napi_status NAPI_CDECL napi_create_type_error(
     napi_env env,
     napi_value code,
     napi_value msg,
@@ -6729,7 +6947,7 @@ napi_status __cdecl napi_create_type_error(
   return CHECKED_ENV(env)->createJSTypeError(code, msg, result);
 }
 
-napi_status __cdecl napi_create_range_error(
+napi_status NAPI_CDECL napi_create_range_error(
     napi_env env,
     napi_value code,
     napi_value msg,
@@ -6741,45 +6959,33 @@ napi_status __cdecl napi_create_range_error(
 // Methods to get the native napi_value from Primitive type
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_typeof(
-    napi_env env,
-    napi_value value,
-    napi_valuetype *result) {
+napi_status NAPI_CDECL
+napi_typeof(napi_env env, napi_value value, napi_valuetype *result) {
   return CHECKED_ENV(env)->typeOf(value, result);
 }
 
-napi_status __cdecl napi_get_value_double(
-    napi_env env,
-    napi_value value,
-    double *result) {
+napi_status NAPI_CDECL
+napi_get_value_double(napi_env env, napi_value value, double *result) {
   return CHECKED_ENV(env)->getNumberValue(value, result);
 }
 
-napi_status __cdecl napi_get_value_int32(
-    napi_env env,
-    napi_value value,
-    int32_t *result) {
+napi_status NAPI_CDECL
+napi_get_value_int32(napi_env env, napi_value value, int32_t *result) {
   return CHECKED_ENV(env)->getNumberValue(value, result);
 }
 
-napi_status __cdecl napi_get_value_uint32(
-    napi_env env,
-    napi_value value,
-    uint32_t *result) {
+napi_status NAPI_CDECL
+napi_get_value_uint32(napi_env env, napi_value value, uint32_t *result) {
   return CHECKED_ENV(env)->getNumberValue(value, result);
 }
 
-napi_status __cdecl napi_get_value_int64(
-    napi_env env,
-    napi_value value,
-    int64_t *result) {
+napi_status NAPI_CDECL
+napi_get_value_int64(napi_env env, napi_value value, int64_t *result) {
   return CHECKED_ENV(env)->getNumberValue(value, result);
 }
 
-napi_status __cdecl napi_get_value_bool(
-    napi_env env,
-    napi_value value,
-    bool *result) {
+napi_status NAPI_CDECL
+napi_get_value_bool(napi_env env, napi_value value, bool *result) {
   return CHECKED_ENV(env)->getBooleanValue(value, result);
 }
 
@@ -6791,7 +6997,7 @@ napi_status __cdecl napi_get_value_bool(
 // If buf is NULL, this method returns the length of the string (in bytes)
 // via the result parameter.
 // The result argument is optional unless buf is NULL.
-napi_status __cdecl napi_get_value_string_latin1(
+napi_status NAPI_CDECL napi_get_value_string_latin1(
     napi_env env,
     napi_value value,
     char *buf,
@@ -6808,7 +7014,7 @@ napi_status __cdecl napi_get_value_string_latin1(
 // If buf is NULL, this method returns the length of the string (in bytes)
 // via the result parameter.
 // The result argument is optional unless buf is NULL.
-napi_status __cdecl napi_get_value_string_utf8(
+napi_status NAPI_CDECL napi_get_value_string_utf8(
     napi_env env,
     napi_value value,
     char *buf,
@@ -6825,7 +7031,7 @@ napi_status __cdecl napi_get_value_string_utf8(
 // If buf is NULL, this method returns the length of the string (in 2-byte
 // code units) via the result parameter.
 // The result argument is optional unless buf is NULL.
-napi_status __cdecl napi_get_value_string_utf16(
+napi_status NAPI_CDECL napi_get_value_string_utf16(
     napi_env env,
     napi_value value,
     char16_t *buf,
@@ -6839,31 +7045,23 @@ napi_status __cdecl napi_get_value_string_utf16(
 // These APIs may execute user scripts
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_coerce_to_bool(
-    napi_env env,
-    napi_value value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_coerce_to_bool(napi_env env, napi_value value, napi_value *result) {
   return CHECKED_ENV(env)->coerceToBoolean(value, result);
 }
 
-napi_status __cdecl napi_coerce_to_number(
-    napi_env env,
-    napi_value value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_coerce_to_number(napi_env env, napi_value value, napi_value *result) {
   return CHECKED_ENV(env)->coerceToNumber(value, result);
 }
 
-napi_status __cdecl napi_coerce_to_object(
-    napi_env env,
-    napi_value value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_coerce_to_object(napi_env env, napi_value value, napi_value *result) {
   return CHECKED_ENV(env)->coerceToObject(value, result);
 }
 
-napi_status __cdecl napi_coerce_to_string(
-    napi_env env,
-    napi_value value,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_coerce_to_string(napi_env env, napi_value value, napi_value *result) {
   return CHECKED_ENV(env)->coerceToString(value, result);
 }
 
@@ -6871,21 +7069,17 @@ napi_status __cdecl napi_coerce_to_string(
 // Methods to work with Objects
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_get_prototype(
-    napi_env env,
-    napi_value object,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_get_prototype(napi_env env, napi_value object, napi_value *result) {
   return CHECKED_ENV(env)->getPrototype(object, result);
 }
 
-napi_status __cdecl napi_get_property_names(
-    napi_env env,
-    napi_value object,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_get_property_names(napi_env env, napi_value object, napi_value *result) {
   return CHECKED_ENV(env)->getForInPropertyNames(object, result);
 }
 
-napi_status __cdecl napi_has_property(
+napi_status NAPI_CDECL napi_has_property(
     napi_env env,
     napi_value object,
     napi_value key,
@@ -6893,7 +7087,7 @@ napi_status __cdecl napi_has_property(
   return CHECKED_ENV(env)->hasProperty(object, key, result);
 }
 
-napi_status __cdecl napi_get_property(
+napi_status NAPI_CDECL napi_get_property(
     napi_env env,
     napi_value object,
     napi_value key,
@@ -6901,7 +7095,7 @@ napi_status __cdecl napi_get_property(
   return CHECKED_ENV(env)->getProperty(object, key, result);
 }
 
-napi_status __cdecl napi_set_property(
+napi_status NAPI_CDECL napi_set_property(
     napi_env env,
     napi_value object,
     napi_value key,
@@ -6909,7 +7103,7 @@ napi_status __cdecl napi_set_property(
   return CHECKED_ENV(env)->setProperty(object, key, value);
 }
 
-napi_status __cdecl napi_delete_property(
+napi_status NAPI_CDECL napi_delete_property(
     napi_env env,
     napi_value object,
     napi_value key,
@@ -6917,7 +7111,7 @@ napi_status __cdecl napi_delete_property(
   return CHECKED_ENV(env)->deleteProperty(object, key, result);
 }
 
-napi_status __cdecl napi_has_named_property(
+napi_status NAPI_CDECL napi_has_named_property(
     napi_env env,
     napi_value object,
     const char *utf8name,
@@ -6925,7 +7119,7 @@ napi_status __cdecl napi_has_named_property(
   return CHECKED_ENV(env)->hasNamedProperty(object, utf8name, result);
 }
 
-napi_status __cdecl napi_get_named_property(
+napi_status NAPI_CDECL napi_get_named_property(
     napi_env env,
     napi_value object,
     const char *utf8name,
@@ -6933,7 +7127,7 @@ napi_status __cdecl napi_get_named_property(
   return CHECKED_ENV(env)->getNamedProperty(object, utf8name, result);
 }
 
-napi_status __cdecl napi_set_named_property(
+napi_status NAPI_CDECL napi_set_named_property(
     napi_env env,
     napi_value object,
     const char *utf8name,
@@ -6941,7 +7135,7 @@ napi_status __cdecl napi_set_named_property(
   return CHECKED_ENV(env)->setNamedProperty(object, utf8name, value);
 }
 
-napi_status __cdecl napi_has_element(
+napi_status NAPI_CDECL napi_has_element(
     napi_env env,
     napi_value object,
     uint32_t index,
@@ -6949,7 +7143,7 @@ napi_status __cdecl napi_has_element(
   return CHECKED_ENV(env)->hasElement(object, index, result);
 }
 
-napi_status __cdecl napi_get_element(
+napi_status NAPI_CDECL napi_get_element(
     napi_env env,
     napi_value object,
     uint32_t index,
@@ -6957,7 +7151,7 @@ napi_status __cdecl napi_get_element(
   return CHECKED_ENV(env)->getElement(object, index, result);
 }
 
-napi_status __cdecl napi_set_element(
+napi_status NAPI_CDECL napi_set_element(
     napi_env env,
     napi_value object,
     uint32_t index,
@@ -6965,7 +7159,7 @@ napi_status __cdecl napi_set_element(
   return CHECKED_ENV(env)->setElement(object, index, value);
 }
 
-napi_status __cdecl napi_delete_element(
+napi_status NAPI_CDECL napi_delete_element(
     napi_env env,
     napi_value object,
     uint32_t index,
@@ -6973,7 +7167,7 @@ napi_status __cdecl napi_delete_element(
   return CHECKED_ENV(env)->deleteElement(object, index, result);
 }
 
-napi_status __cdecl napi_has_own_property(
+napi_status NAPI_CDECL napi_has_own_property(
     napi_env env,
     napi_value object,
     napi_value key,
@@ -6981,7 +7175,7 @@ napi_status __cdecl napi_has_own_property(
   return CHECKED_ENV(env)->hasOwnProperty(object, key, result);
 }
 
-napi_status __cdecl napi_define_properties(
+napi_status NAPI_CDECL napi_define_properties(
     napi_env env,
     napi_value object,
     size_t property_count,
@@ -6993,17 +7187,13 @@ napi_status __cdecl napi_define_properties(
 // Methods to work with Arrays
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_is_array(
-    napi_env env,
-    napi_value value,
-    bool *result) {
+napi_status NAPI_CDECL
+napi_is_array(napi_env env, napi_value value, bool *result) {
   return CHECKED_ENV(env)->isArray(value, result);
 }
 
-napi_status __cdecl napi_get_array_length(
-    napi_env env,
-    napi_value value,
-    uint32_t *result) {
+napi_status NAPI_CDECL
+napi_get_array_length(napi_env env, napi_value value, uint32_t *result) {
   return CHECKED_ENV(env)->getArrayLength(value, result);
 }
 
@@ -7011,11 +7201,8 @@ napi_status __cdecl napi_get_array_length(
 // Methods to compare values
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_strict_equals(
-    napi_env env,
-    napi_value lhs,
-    napi_value rhs,
-    bool *result) {
+napi_status NAPI_CDECL
+napi_strict_equals(napi_env env, napi_value lhs, napi_value rhs, bool *result) {
   return CHECKED_ENV(env)->strictEquals(lhs, rhs, result);
 }
 
@@ -7023,7 +7210,7 @@ napi_status __cdecl napi_strict_equals(
 // Methods to work with Functions
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_call_function(
+napi_status NAPI_CDECL napi_call_function(
     napi_env env,
     napi_value recv,
     napi_value func,
@@ -7033,7 +7220,7 @@ napi_status __cdecl napi_call_function(
   return CHECKED_ENV(env)->callFunction(recv, func, argc, argv, result);
 }
 
-napi_status __cdecl napi_new_instance(
+napi_status NAPI_CDECL napi_new_instance(
     napi_env env,
     napi_value constructor,
     size_t argc,
@@ -7042,7 +7229,7 @@ napi_status __cdecl napi_new_instance(
   return CHECKED_ENV(env)->createNewInstance(constructor, argc, argv, result);
 }
 
-napi_status __cdecl napi_instanceof(
+napi_status NAPI_CDECL napi_instanceof(
     napi_env env,
     napi_value object,
     napi_value constructor,
@@ -7054,7 +7241,7 @@ napi_status __cdecl napi_instanceof(
 // Methods to work with napi_callbacks
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_get_cb_info(
+napi_status NAPI_CDECL napi_get_cb_info(
     napi_env env,
     napi_callback_info cbinfo,
     size_t *argc,
@@ -7064,7 +7251,7 @@ napi_status __cdecl napi_get_cb_info(
   return CHECKED_ENV(env)->getCallbackInfo(cbinfo, argc, argv, this_arg, data);
 }
 
-napi_status __cdecl napi_get_new_target(
+napi_status NAPI_CDECL napi_get_new_target(
     napi_env env,
     napi_callback_info cbinfo,
     napi_value *result) {
@@ -7075,7 +7262,7 @@ napi_status __cdecl napi_get_new_target(
 // Methods to work with external data objects
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_define_class(
+napi_status NAPI_CDECL napi_define_class(
     napi_env env,
     const char *utf8name,
     size_t length,
@@ -7094,7 +7281,7 @@ napi_status __cdecl napi_define_class(
       result);
 }
 
-napi_status __cdecl napi_wrap(
+napi_status NAPI_CDECL napi_wrap(
     napi_env env,
     napi_value js_object,
     void *native_object,
@@ -7105,20 +7292,19 @@ napi_status __cdecl napi_wrap(
       js_object, native_object, finalize_cb, finalize_hint, result);
 }
 
-napi_status __cdecl napi_unwrap(napi_env env, napi_value obj, void **result) {
+napi_status NAPI_CDECL
+napi_unwrap(napi_env env, napi_value obj, void **result) {
   return CHECKED_ENV(env)
       ->unwrapObject<hermes::napi::NapiUnwrapAction::KeepWrap>(obj, result);
 }
 
-napi_status __cdecl napi_remove_wrap(
-    napi_env env,
-    napi_value obj,
-    void **result) {
+napi_status NAPI_CDECL
+napi_remove_wrap(napi_env env, napi_value obj, void **result) {
   return CHECKED_ENV(env)
       ->unwrapObject<hermes::napi::NapiUnwrapAction::RemoveWrap>(obj, result);
 }
 
-napi_status __cdecl napi_create_external(
+napi_status NAPI_CDECL napi_create_external(
     napi_env env,
     void *data,
     napi_finalize finalize_cb,
@@ -7128,10 +7314,8 @@ napi_status __cdecl napi_create_external(
       data, finalize_cb, finalize_hint, result);
 }
 
-napi_status __cdecl napi_get_value_external(
-    napi_env env,
-    napi_value value,
-    void **result) {
+napi_status NAPI_CDECL
+napi_get_value_external(napi_env env, napi_value value, void **result) {
   return CHECKED_ENV(env)->getValueExternal(value, result);
 }
 
@@ -7139,7 +7323,7 @@ napi_status __cdecl napi_get_value_external(
 // Methods to control object lifespan
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_create_reference(
+napi_status NAPI_CDECL napi_create_reference(
     napi_env env,
     napi_value value,
     uint32_t initial_refcount,
@@ -7147,56 +7331,48 @@ napi_status __cdecl napi_create_reference(
   return CHECKED_ENV(env)->createReference(value, initial_refcount, result);
 }
 
-napi_status __cdecl napi_delete_reference(napi_env env, napi_ref ref) {
+napi_status NAPI_CDECL napi_delete_reference(napi_env env, napi_ref ref) {
   return CHECKED_ENV(env)->deleteReference(ref);
 }
 
-napi_status __cdecl napi_reference_ref(
-    napi_env env,
-    napi_ref ref,
-    uint32_t *result) {
+napi_status NAPI_CDECL
+napi_reference_ref(napi_env env, napi_ref ref, uint32_t *result) {
   return CHECKED_ENV(env)->incReference(ref, result);
 }
 
-napi_status __cdecl napi_reference_unref(
-    napi_env env,
-    napi_ref ref,
-    uint32_t *result) {
+napi_status NAPI_CDECL
+napi_reference_unref(napi_env env, napi_ref ref, uint32_t *result) {
   return CHECKED_ENV(env)->decReference(ref, result);
 }
 
-napi_status __cdecl napi_get_reference_value(
-    napi_env env,
-    napi_ref ref,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_get_reference_value(napi_env env, napi_ref ref, napi_value *result) {
   return CHECKED_ENV(env)->getReferenceValue(ref, result);
 }
 
-napi_status __cdecl napi_open_handle_scope(
-    napi_env env,
-    napi_handle_scope *result) {
+napi_status NAPI_CDECL
+napi_open_handle_scope(napi_env env, napi_handle_scope *result) {
   return CHECKED_ENV(env)->openNapiValueScope(result);
 }
 
-napi_status __cdecl napi_close_handle_scope(
-    napi_env env,
-    napi_handle_scope scope) {
+napi_status NAPI_CDECL
+napi_close_handle_scope(napi_env env, napi_handle_scope scope) {
   return CHECKED_ENV(env)->closeNapiValueScope(scope);
 }
 
-napi_status __cdecl napi_open_escapable_handle_scope(
+napi_status NAPI_CDECL napi_open_escapable_handle_scope(
     napi_env env,
     napi_escapable_handle_scope *result) {
   return CHECKED_ENV(env)->openEscapableNapiValueScope(result);
 }
 
-napi_status __cdecl napi_close_escapable_handle_scope(
+napi_status NAPI_CDECL napi_close_escapable_handle_scope(
     napi_env env,
     napi_escapable_handle_scope scope) {
   return CHECKED_ENV(env)->closeEscapableNapiValueScope(scope);
 }
 
-napi_status __cdecl napi_escape_handle(
+napi_status NAPI_CDECL napi_escape_handle(
     napi_env env,
     napi_escapable_handle_scope scope,
     napi_value escapee,
@@ -7208,35 +7384,27 @@ napi_status __cdecl napi_escape_handle(
 // Methods to support JS error handling
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_throw(napi_env env, napi_value error) {
+napi_status NAPI_CDECL napi_throw(napi_env env, napi_value error) {
   return CHECKED_ENV(env)->throwJSError(error);
 }
 
-napi_status __cdecl napi_throw_error(
-    napi_env env,
-    const char *code,
-    const char *msg) {
+napi_status NAPI_CDECL
+napi_throw_error(napi_env env, const char *code, const char *msg) {
   return CHECKED_ENV(env)->throwJSError(code, msg);
 }
 
-napi_status __cdecl napi_throw_type_error(
-    napi_env env,
-    const char *code,
-    const char *msg) {
+napi_status NAPI_CDECL
+napi_throw_type_error(napi_env env, const char *code, const char *msg) {
   return CHECKED_ENV(env)->throwJSTypeError(code, msg);
 }
 
-napi_status __cdecl napi_throw_range_error(
-    napi_env env,
-    const char *code,
-    const char *msg) {
+napi_status NAPI_CDECL
+napi_throw_range_error(napi_env env, const char *code, const char *msg) {
   return CHECKED_ENV(env)->throwJSRangeError(code, msg);
 }
 
-napi_status __cdecl napi_is_error(
-    napi_env env,
-    napi_value value,
-    bool *result) {
+napi_status NAPI_CDECL
+napi_is_error(napi_env env, napi_value value, bool *result) {
   return CHECKED_ENV(env)->isJSError(value, result);
 }
 
@@ -7244,13 +7412,12 @@ napi_status __cdecl napi_is_error(
 // Methods to support catching exceptions
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_is_exception_pending(napi_env env, bool *result) {
+napi_status NAPI_CDECL napi_is_exception_pending(napi_env env, bool *result) {
   return CHECKED_ENV(env)->isJSErrorPending(result);
 }
 
-napi_status __cdecl napi_get_and_clear_last_exception(
-    napi_env env,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_get_and_clear_last_exception(napi_env env, napi_value *result) {
   return CHECKED_ENV(env)->getAndClearPendingJSError(result);
 }
 
@@ -7258,14 +7425,12 @@ napi_status __cdecl napi_get_and_clear_last_exception(
 // Methods to work with array buffers and typed arrays
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_is_arraybuffer(
-    napi_env env,
-    napi_value value,
-    bool *result) {
+napi_status NAPI_CDECL
+napi_is_arraybuffer(napi_env env, napi_value value, bool *result) {
   return CHECKED_ENV(env)->isArrayBuffer(value, result);
 }
 
-napi_status __cdecl napi_create_arraybuffer(
+napi_status NAPI_CDECL napi_create_arraybuffer(
     napi_env env,
     size_t byte_length,
     void **data,
@@ -7273,7 +7438,7 @@ napi_status __cdecl napi_create_arraybuffer(
   return CHECKED_ENV(env)->createArrayBuffer(byte_length, data, result);
 }
 
-napi_status __cdecl napi_create_external_arraybuffer(
+napi_status NAPI_CDECL napi_create_external_arraybuffer(
     napi_env env,
     void *external_data,
     size_t byte_length,
@@ -7284,7 +7449,7 @@ napi_status __cdecl napi_create_external_arraybuffer(
       external_data, byte_length, finalize_cb, finalize_hint, result);
 }
 
-napi_status __cdecl napi_get_arraybuffer_info(
+napi_status NAPI_CDECL napi_get_arraybuffer_info(
     napi_env env,
     napi_value arraybuffer,
     void **data,
@@ -7292,14 +7457,12 @@ napi_status __cdecl napi_get_arraybuffer_info(
   return CHECKED_ENV(env)->getArrayBufferInfo(arraybuffer, data, byte_length);
 }
 
-napi_status __cdecl napi_is_typedarray(
-    napi_env env,
-    napi_value value,
-    bool *result) {
+napi_status NAPI_CDECL
+napi_is_typedarray(napi_env env, napi_value value, bool *result) {
   return CHECKED_ENV(env)->isTypedArray(value, result);
 }
 
-napi_status __cdecl napi_create_typedarray(
+napi_status NAPI_CDECL napi_create_typedarray(
     napi_env env,
     napi_typedarray_type type,
     size_t length,
@@ -7310,7 +7473,7 @@ napi_status __cdecl napi_create_typedarray(
       type, length, arraybuffer, byte_offset, result);
 }
 
-napi_status __cdecl napi_get_typedarray_info(
+napi_status NAPI_CDECL napi_get_typedarray_info(
     napi_env env,
     napi_value typedarray,
     napi_typedarray_type *type,
@@ -7322,7 +7485,7 @@ napi_status __cdecl napi_get_typedarray_info(
       typedarray, type, length, data, arraybuffer, byte_offset);
 }
 
-napi_status __cdecl napi_create_dataview(
+napi_status NAPI_CDECL napi_create_dataview(
     napi_env env,
     size_t byte_length,
     napi_value arraybuffer,
@@ -7332,14 +7495,12 @@ napi_status __cdecl napi_create_dataview(
       byte_length, arraybuffer, byte_offset, result);
 }
 
-napi_status __cdecl napi_is_dataview(
-    napi_env env,
-    napi_value value,
-    bool *result) {
+napi_status NAPI_CDECL
+napi_is_dataview(napi_env env, napi_value value, bool *result) {
   return CHECKED_ENV(env)->isDataView(value, result);
 }
 
-napi_status __cdecl napi_get_dataview_info(
+napi_status NAPI_CDECL napi_get_dataview_info(
     napi_env env,
     napi_value dataview,
     size_t *byte_length,
@@ -7354,7 +7515,7 @@ napi_status __cdecl napi_get_dataview_info(
 // Version management
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_get_version(napi_env env, uint32_t *result) {
+napi_status NAPI_CDECL napi_get_version(napi_env env, uint32_t *result) {
   return CHECKED_ENV(env)->getVersion(result);
 }
 
@@ -7362,31 +7523,29 @@ napi_status __cdecl napi_get_version(napi_env env, uint32_t *result) {
 // Promises
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_create_promise(
+napi_status NAPI_CDECL napi_create_promise(
     napi_env env,
     napi_deferred *deferred,
     napi_value *promise) {
   return CHECKED_ENV(env)->createPromise(deferred, promise);
 }
 
-napi_status __cdecl napi_resolve_deferred(
+napi_status NAPI_CDECL napi_resolve_deferred(
     napi_env env,
     napi_deferred deferred,
     napi_value resolution) {
   return CHECKED_ENV(env)->resolveDeferred(deferred, resolution);
 }
 
-napi_status __cdecl napi_reject_deferred(
+napi_status NAPI_CDECL napi_reject_deferred(
     napi_env env,
     napi_deferred deferred,
     napi_value resolution) {
   return CHECKED_ENV(env)->rejectDeferred(deferred, resolution);
 }
 
-napi_status __cdecl napi_is_promise(
-    napi_env env,
-    napi_value value,
-    bool *is_promise) {
+napi_status NAPI_CDECL
+napi_is_promise(napi_env env, napi_value value, bool *is_promise) {
   return CHECKED_ENV(env)->isPromise(value, is_promise);
 }
 
@@ -7394,10 +7553,8 @@ napi_status __cdecl napi_is_promise(
 // Running a script
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_run_script(
-    napi_env env,
-    napi_value script,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_run_script(napi_env env, napi_value script, napi_value *result) {
   return CHECKED_ENV(env)->runScript(script, nullptr, result);
 }
 
@@ -7405,7 +7562,7 @@ napi_status __cdecl napi_run_script(
 // Memory management
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_adjust_external_memory(
+napi_status NAPI_CDECL napi_adjust_external_memory(
     napi_env env,
     int64_t change_in_bytes,
     int64_t *adjusted_value) {
@@ -7419,24 +7576,18 @@ napi_status __cdecl napi_adjust_external_memory(
 // Dates
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_create_date(
-    napi_env env,
-    double time,
-    napi_value *result) {
+napi_status NAPI_CDECL
+napi_create_date(napi_env env, double time, napi_value *result) {
   return CHECKED_ENV(env)->createDate(time, result);
 }
 
-napi_status __cdecl napi_is_date(
-    napi_env env,
-    napi_value value,
-    bool *is_date) {
+napi_status NAPI_CDECL
+napi_is_date(napi_env env, napi_value value, bool *is_date) {
   return CHECKED_ENV(env)->isDate(value, is_date);
 }
 
-napi_status __cdecl napi_get_date_value(
-    napi_env env,
-    napi_value value,
-    double *result) {
+napi_status NAPI_CDECL
+napi_get_date_value(napi_env env, napi_value value, double *result) {
   return CHECKED_ENV(env)->getDateValue(value, result);
 }
 
@@ -7444,7 +7595,7 @@ napi_status __cdecl napi_get_date_value(
 // Add finalizer for pointer
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_add_finalizer(
+napi_status NAPI_CDECL napi_add_finalizer(
     napi_env env,
     napi_value js_object,
     void *native_object,
@@ -7463,65 +7614,57 @@ napi_status __cdecl napi_add_finalizer(
 // BigInt
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_create_bigint_int64(
-    napi_env env,
-    int64_t value,
-    napi_value *result) {
-  return CHECKED_ENV_GENERIC_FAILURE(
-      env, "BigInt is not implemented by Hermes");
+napi_status NAPI_CDECL
+napi_create_bigint_int64(napi_env env, int64_t value, napi_value *result) {
+  return CHECKED_ENV(env)->createBigIntFromInt64(value, result);
 }
 
-napi_status __cdecl napi_create_bigint_uint64(
-    napi_env env,
-    uint64_t value,
-    napi_value *result) {
-  return CHECKED_ENV_GENERIC_FAILURE(
-      env, "BigInt is not implemented by Hermes");
+napi_status NAPI_CDECL
+napi_create_bigint_uint64(napi_env env, uint64_t value, napi_value *result) {
+  return CHECKED_ENV(env)->createBigIntFromUint64(value, result);
 }
 
-napi_status __cdecl napi_create_bigint_words(
+napi_status NAPI_CDECL napi_create_bigint_words(
     napi_env env,
     int sign_bit,
     size_t word_count,
     const uint64_t *words,
     napi_value *result) {
-  return CHECKED_ENV_GENERIC_FAILURE(
-      env, "BigInt is not implemented by Hermes");
+  return CHECKED_ENV(env)->createBigIntFromWords(
+      sign_bit, word_count, words, result);
 }
 
-napi_status __cdecl napi_get_value_bigint_int64(
+napi_status NAPI_CDECL napi_get_value_bigint_int64(
     napi_env env,
     napi_value value,
     int64_t *result,
     bool *lossless) {
-  return CHECKED_ENV_GENERIC_FAILURE(
-      env, "BigInt is not implemented by Hermes");
+  return CHECKED_ENV(env)->getBigIntValueInt64(value, result, lossless);
 }
 
-napi_status __cdecl napi_get_value_bigint_uint64(
+napi_status NAPI_CDECL napi_get_value_bigint_uint64(
     napi_env env,
     napi_value value,
     uint64_t *result,
     bool *lossless) {
-  return CHECKED_ENV_GENERIC_FAILURE(
-      env, "BigInt is not implemented by Hermes");
+  return CHECKED_ENV(env)->getBigIntValueUint64(value, result, lossless);
 }
 
-napi_status __cdecl napi_get_value_bigint_words(
+napi_status NAPI_CDECL napi_get_value_bigint_words(
     napi_env env,
     napi_value value,
     int *sign_bit,
     size_t *word_count,
     uint64_t *words) {
-  return CHECKED_ENV_GENERIC_FAILURE(
-      env, "BigInt is not implemented by Hermes");
+  return CHECKED_ENV(env)->getBigIntValueWords(
+      value, sign_bit, word_count, words);
 }
 
 //-----------------------------------------------------------------------------
 // Object
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_get_all_property_names(
+napi_status NAPI_CDECL napi_get_all_property_names(
     napi_env env,
     napi_value object,
     napi_key_collection_mode key_mode,
@@ -7536,7 +7679,7 @@ napi_status __cdecl napi_get_all_property_names(
 // Instance data
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_set_instance_data(
+napi_status NAPI_CDECL napi_set_instance_data(
     napi_env env,
     void *data,
     napi_finalize finalize_cb,
@@ -7544,7 +7687,7 @@ napi_status __cdecl napi_set_instance_data(
   return CHECKED_ENV(env)->setInstanceData(data, finalize_cb, finalize_hint);
 }
 
-napi_status __cdecl napi_get_instance_data(napi_env env, void **data) {
+napi_status NAPI_CDECL napi_get_instance_data(napi_env env, void **data) {
   return CHECKED_ENV(env)->getInstanceData(data);
 }
 
@@ -7556,13 +7699,12 @@ napi_status __cdecl napi_get_instance_data(napi_env env, void **data) {
 // ArrayBuffer detaching
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_detach_arraybuffer(
-    napi_env env,
-    napi_value arraybuffer) {
+napi_status NAPI_CDECL
+napi_detach_arraybuffer(napi_env env, napi_value arraybuffer) {
   return CHECKED_ENV(env)->detachArrayBuffer(arraybuffer);
 }
 
-napi_status __cdecl napi_is_detached_arraybuffer(
+napi_status NAPI_CDECL napi_is_detached_arraybuffer(
     napi_env env,
     napi_value arraybuffer,
     bool *result) {
@@ -7577,14 +7719,14 @@ napi_status __cdecl napi_is_detached_arraybuffer(
 // Type tagging
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_type_tag_object(
+napi_status NAPI_CDECL napi_type_tag_object(
     napi_env env,
     napi_value object,
     const napi_type_tag *type_tag) {
   return CHECKED_ENV(env)->typeTagObject(object, type_tag);
 }
 
-napi_status __cdecl napi_check_object_type_tag(
+napi_status NAPI_CDECL napi_check_object_type_tag(
     napi_env env,
     napi_value object,
     const napi_type_tag *type_tag,
@@ -7592,11 +7734,11 @@ napi_status __cdecl napi_check_object_type_tag(
   return CHECKED_ENV(env)->checkObjectTypeTag(object, type_tag, result);
 }
 
-napi_status __cdecl napi_object_freeze(napi_env env, napi_value object) {
+napi_status NAPI_CDECL napi_object_freeze(napi_env env, napi_value object) {
   return CHECKED_ENV(env)->objectFreeze(object);
 }
 
-napi_status __cdecl napi_object_seal(napi_env env, napi_value object) {
+napi_status NAPI_CDECL napi_object_seal(napi_env env, napi_value object) {
   return CHECKED_ENV(env)->objectSeal(object);
 }
 
@@ -7606,11 +7748,17 @@ napi_status __cdecl napi_object_seal(napi_env env, napi_value object) {
 // Hermes specific API
 //=============================================================================
 
-napi_status __cdecl napi_create_hermes_env(napi_env *env) {
+napi_status hermes_create_napi_env(
+    ::hermes::vm::Runtime &runtime,
+    bool isInspectable,
+    std::shared_ptr<facebook::jsi::PreparedScriptStore> preparedScript,
+    const ::hermes::vm::RuntimeConfig &runtimeConfig,
+    napi_env *env) {
   if (!env) {
     return napi_status::napi_invalid_arg;
   }
-  *env = hermes::napi::napiEnv(new hermes::napi::NapiEnvironment());
+  *env = hermes::napi::napiEnv(new hermes::napi::NapiEnvironment(
+      runtime, isInspectable, std::move(preparedScript), runtimeConfig));
   return napi_status::napi_ok;
 }
 
@@ -7618,121 +7766,58 @@ napi_status __cdecl napi_create_hermes_env(napi_env *env) {
 // Node-API extensions to host JS engine and to implement JSI
 //=============================================================================
 
-napi_status __cdecl napi_ext_create_env(
-    napi_ext_env_settings *settings,
-    napi_env *env) {
-  return napi_create_hermes_env(env);
-}
-
-napi_status __cdecl napi_ext_env_ref(napi_env env) {
+napi_status NAPI_CDECL jsr_env_ref(napi_env env) {
   return CHECKED_ENV(env)->incRefCount();
 }
 
-napi_status __cdecl napi_ext_env_unref(napi_env env) {
+napi_status NAPI_CDECL jsr_env_unref(napi_env env) {
   return CHECKED_ENV(env)->decRefCount();
 }
 
-napi_status __cdecl napi_ext_open_env_scope(
-    napi_env env,
-    napi_ext_env_scope *result) {
-  return napi_open_handle_scope(
-      env, reinterpret_cast<napi_handle_scope *>(result));
-}
-
-napi_status __cdecl napi_ext_close_env_scope(
-    napi_env env,
-    napi_ext_env_scope scope) {
-  return napi_close_handle_scope(
-      env, reinterpret_cast<napi_handle_scope>(scope));
-}
-
-napi_status __cdecl napi_ext_collect_garbage(napi_env env) {
+napi_status NAPI_CDECL jsr_collect_garbage(napi_env env) {
   return CHECKED_ENV(env)->collectGarbage();
 }
 
-napi_status __cdecl napi_ext_has_unhandled_promise_rejection(
-    napi_env env,
-    bool *result) {
+napi_status NAPI_CDECL
+jsr_has_unhandled_promise_rejection(napi_env env, bool *result) {
   return CHECKED_ENV(env)->hasUnhandledPromiseRejection(result);
 }
 
-napi_status __cdecl napi_get_and_clear_last_unhandled_promise_rejection(
+napi_status NAPI_CDECL jsr_get_and_clear_last_unhandled_promise_rejection(
     napi_env env,
     napi_value *result) {
   return CHECKED_ENV(env)->getAndClearLastUnhandledPromiseRejection(result);
 }
 
-napi_status __cdecl napi_ext_get_unique_string_utf8_ref(
-    napi_env env,
-    const char *str,
-    size_t length,
-    napi_ext_ref *result) {
-  return CHECKED_ENV(env)->getUniqueStringRef(str, length, result);
+napi_status NAPI_CDECL jsr_get_description(napi_env env, const char **result) {
+  return CHECKED_ENV(env)->getDescription(result);
 }
 
-napi_status __cdecl napi_ext_get_unique_string_ref(
-    napi_env env,
-    napi_value str_value,
-    napi_ext_ref *result) {
-  return CHECKED_ENV(env)->getUniqueStringRef(str_value, result);
+napi_status NAPI_CDECL
+jsr_drain_microtasks(napi_env env, int32_t max_count_hint, bool *result) {
+  return CHECKED_ENV(env)->drainMicrotasks(max_count_hint, result);
 }
 
-//-----------------------------------------------------------------------------
-// Methods to control object lifespan.
-// The NAPI's napi_ref can be used only for objects.
-// The napi_ext_ref can be used for any value type.
-//-----------------------------------------------------------------------------
-
-napi_status __cdecl napi_ext_create_reference(
-    napi_env env,
-    napi_value value,
-    napi_ext_ref *result) {
-  return CHECKED_ENV(env)->createStrongReference(value, result);
+napi_status NAPI_CDECL jsr_is_inspectable(napi_env env, bool *result) {
+  return CHECKED_ENV(env)->isInspectable(result);
 }
 
-napi_status __cdecl napi_ext_create_reference_with_data(
-    napi_env env,
-    napi_value value,
-    void *native_object,
-    napi_finalize finalize_cb,
-    void *finalize_hint,
-    napi_ext_ref *result) {
-  return CHECKED_ENV(env)->createStrongReferenceWithData(
-      value, native_object, finalize_cb, finalize_hint, result);
+JSR_API jsr_open_napi_env_scope(napi_env env, jsr_napi_env_scope *scope) {
+  return CHECKED_ENV(env)->openEnvScope(scope);
 }
 
-napi_status __cdecl napi_ext_create_weak_reference(
-    napi_env env,
-    napi_value value,
-    napi_ext_ref *result) {
-  return CHECKED_ENV(env)->createWeakReference(value, result);
-}
-
-napi_status __cdecl napi_ext_reference_ref(napi_env env, napi_ext_ref ref) {
-  return CHECKED_ENV(env)->incReference(ref);
-}
-
-napi_status __cdecl napi_ext_reference_unref(napi_env env, napi_ext_ref ref) {
-  return CHECKED_ENV(env)->decReference(ref);
-}
-
-napi_status __cdecl napi_ext_get_reference_value(
-    napi_env env,
-    napi_ext_ref ref,
-    napi_value *result) {
-  return CHECKED_ENV(env)->getReferenceValue(ref, result);
+JSR_API jsr_close_napi_env_scope(napi_env env, jsr_napi_env_scope scope) {
+  return CHECKED_ENV(env)->closeEnvScope(scope);
 }
 
 //-----------------------------------------------------------------------------
-// Script running, preparing, and serialization.
+// Script preparing and running.
 //
 // Script is usually converted to byte code, or in other words - prepared - for
-// execution. The APIs below allow not only running the script, but also control
-// its preparation phase where we can explicitly prepare the script for running,
-// run the prepared script, and serialize or deserialize the prepared script.
+// execution. Then, we can run the prepared script.
 //-----------------------------------------------------------------------------
 
-napi_status __cdecl napi_ext_run_script(
+napi_status NAPI_CDECL jsr_run_script(
     napi_env env,
     napi_value source,
     const char *source_url,
@@ -7740,71 +7825,31 @@ napi_status __cdecl napi_ext_run_script(
   return CHECKED_ENV(env)->runScript(source, source_url, result);
 }
 
-napi_status __cdecl napi_ext_run_serialized_script(
+napi_status NAPI_CDECL jsr_create_prepared_script(
     napi_env env,
-    const uint8_t *buffer,
-    size_t buffer_length,
-    napi_value source,
+    const uint8_t *script_data,
+    size_t script_length,
+    jsr_data_delete_cb script_delete_cb,
+    void *deleter_data,
     const char *source_url,
-    napi_value *result) {
-  return CHECKED_ENV(env)->runSerializedScript(
-      buffer, buffer_length, source, source_url, result);
-}
-
-napi_status __cdecl napi_ext_serialize_script(
-    napi_env env,
-    napi_value source,
-    const char *source_url,
-    napi_ext_buffer_callback buffer_cb,
-    void *buffer_hint) {
-  return CHECKED_ENV(env)->serializeScript(
-      source, source_url, buffer_cb, buffer_hint);
-}
-
-napi_status __cdecl napi_ext_run_script_with_source_map(
-    napi_env env,
-    napi_ext_buffer script,
-    napi_ext_buffer source_map,
-    const char *source_url,
-    napi_value *result) {
-  return CHECKED_ENV(env)->runScript(
-      hermes::napi::NapiExternalBuffer::make(env, script),
-      hermes::napi::NapiExternalBuffer::make(env, source_map),
+    jsr_prepared_script *result) {
+  return CHECKED_ENV(env)->createPreparedScript(
+      script_data,
+      script_length,
+      script_delete_cb,
+      deleter_data,
       source_url,
       result);
 }
 
-napi_status __cdecl napi_ext_prepare_script_with_source_map(
-    napi_env env,
-    napi_ext_buffer script,
-    napi_ext_buffer source_map,
-    const char *source_url,
-    napi_ext_prepared_script *prepared_script) {
-  return CHECKED_ENV(env)->createScriptModel(
-      hermes::napi::NapiExternalBuffer::make(env, script),
-      hermes::napi::NapiExternalBuffer::make(env, source_map),
-      source_url,
-      prepared_script);
+napi_status NAPI_CDECL
+jsr_delete_prepared_script(napi_env env, jsr_prepared_script prepared_script) {
+  return CHECKED_ENV(env)->deletePreparedScript(prepared_script);
 }
 
-napi_status __cdecl napi_ext_run_prepared_script(
+napi_status NAPI_CDECL jsr_prepared_script_run(
     napi_env env,
-    napi_ext_prepared_script prepared_script,
+    jsr_prepared_script prepared_script,
     napi_value *result) {
-  return CHECKED_ENV(env)->runScriptModel(prepared_script, result);
-}
-
-napi_status __cdecl napi_ext_delete_prepared_script(
-    napi_env env,
-    napi_ext_prepared_script prepared_script) {
-  return CHECKED_ENV(env)->deleteScriptModel(prepared_script);
-}
-
-napi_status __cdecl napi_ext_serialize_prepared_script(
-    napi_env env,
-    napi_ext_prepared_script prepared_script,
-    napi_ext_buffer_callback buffer_cb,
-    void *buffer_hint) {
-  return CHECKED_ENV(env)->serializeScriptModel(
-      prepared_script, buffer_cb, buffer_hint);
+  return CHECKED_ENV(env)->runPreparedScript(prepared_script, result);
 }

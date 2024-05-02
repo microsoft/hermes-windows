@@ -27,6 +27,7 @@ TEST_P(NapiTest, test_ext_run_script) {
   });
 }
 
+#if 0
 TEST_P(NapiTest, test_ext_unique_string) {
   ExecuteNapi([&](NapiTestContext *testContext, napi_env env) {
     napi_ext_ref utf8Str11{}, utf8Str12{}, utf8Str21{}, utf8Str22{},
@@ -68,3 +69,4 @@ TEST_P(NapiTest, test_ext_unique_string) {
     ASSERT_STREQ(strValue.c_str(), "Hello");
   });
 }
+#endif

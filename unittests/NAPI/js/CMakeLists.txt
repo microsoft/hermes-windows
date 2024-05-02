@@ -18,6 +18,7 @@ set(testJSFiles
   test_error/test.js
   test_exception/test.js
   test_exception/testFinalizerException.js
+  test_finalizer/test.js
   test_function/test.js
   test_general/test.js
   test_general/testEnvCleanup.js

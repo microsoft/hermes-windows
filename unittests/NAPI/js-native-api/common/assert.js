@@ -137,6 +137,7 @@ function innerThrows(method, argLen, fn, expected, message) {
         actual = `${error.name}: ${error.message}`;
         return expected.test(actual);
       } else if (expected) {
+        actual = `${error.name}: ${error.message}`;
         if (expected.name && expected.name != error.name) {
           return false;
         } else if (expected.message && expected.message != error.message) {

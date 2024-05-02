@@ -6,9 +6,10 @@
 set(HERMES_ENABLE_EH ON)
 set(HERMES_ENABLE_RTTI ON)
 
-add_subdirectory(napi)
-add_subdirectory(hermes)
+add_subdirectory(node-api)
 
 if (WIN32 AND HERMES_ENABLE_DEBUGGER)
     add_subdirectory(inspector)
 endif()
+
+add_subdirectory(hermes)

@@ -1393,7 +1393,8 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   // Symbol »)
   // 9. If trapResult contains any duplicate entries, throw a TypeError
   // exception.
-  CallResult<uint64_t> countRes = getArrayLikeLength(trapResultArray, runtime);
+  CallResult<uint64_t> countRes =
+      getArrayLikeLength_RJS(trapResultArray, runtime);
   if (LLVM_UNLIKELY(countRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1414,7 +1415,7 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
   }
   Handle<OrderedHashMap> dupcheck = runtime.makeHandle(std::move(*dupcheckRes));
   if (LLVM_UNLIKELY(
-          createListFromArrayLike(
+          createListFromArrayLike_RJS(
               trapResultArray,
               runtime,
               count,
@@ -1435,6 +1436,23 @@ CallResult<PseudoHandle<JSArray>> JSProxy::ownPropertyKeys(
                             dupcheck, runtime, valHandle, valHandle) ==
                         ExecutionStatus::EXCEPTION))
                   return ExecutionStatus::RETURNED;
+                if (valHandle->isString()) {
+                  Handle<StringPrimitive> str =
+                      Handle<StringPrimitive>::vmcast(valHandle);
+                  OptValue<uint32_t> strAsIndexOpt = toArrayIndex(runtime, str);
+                  // Convert index keys
+                  if (strAsIndexOpt) {
+                    HermesValue strAsIndexValue =
+                        HermesValue::encodeDoubleValue(
+                            static_cast<double>(strAsIndexOpt.getValue()));
+                    JSArray::setElementAt(
+                        trapResult,
+                        runtime,
+                        index,
+                        runtime.makeHandle(strAsIndexValue));
+                    return ExecutionStatus::RETURNED;
+                  }
+                }
                 JSArray::setElementAt(trapResult, runtime, index, valHandle);
                 return ExecutionStatus::RETURNED;
               }) == ExecutionStatus::EXCEPTION)) {

@@ -13,7 +13,6 @@ TEST_P(NapiTest, test_bigint) {
     testContext->AddNativeModule(
         "./build/x86/test_bigint",
         [](napi_env env, napi_value exports) { return Init(env, exports); });
-    // TODO: Hermes does not support BigInt
-    // testContext->RunTestScript("test_bigint/test.js");
+    testContext->RunTestScript("test_bigint/test.js");
   });
 }

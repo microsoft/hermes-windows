@@ -318,7 +318,7 @@ class HadesGC final : public GCBase {
     return calledByBackgroundThread() || inGC();
   }
 
-  /// Return true if \p ptr is currently pointing at valid accessable memory,
+  /// Return true if \p ptr is currently pointing at valid accessible memory,
   /// allocated to an object.
   bool validPointer(const void *ptr) const override;
 
@@ -691,11 +691,11 @@ class HadesGC final : public GCBase {
 
   /// Flag used to signal to the background thread that it should stop and yield
   /// the gcMutex_ to the mutator as soon as possible.
-  AtomicIfConcurrentGC<bool> ogPaused_{false};
+  bool ogPaused_{false};
 
-  /// Condition variable that the background thread should wait on when
-  /// ogPaused_ is set to true, until the mutator has acquired gcMutex_.
-  std::condition_variable_any ogPauseCondVar_;
+  /// Condition variable that the background thread should wait on while
+  /// ogPaused_ is set to true.
+  std::condition_variable_any ogResumeCondVar_;
 
   enum class Phase : uint8_t {
     None,
@@ -926,21 +926,39 @@ class HadesGC final : public GCBase {
   /// thread, to perform it concurrently with the mutator.
   void collectOGInBackground();
 
-  /// Ensures that work on the background thread to be suspended when
-  /// concurrent GC is enabled.
-  LLVM_NODISCARD std::lock_guard<Mutex> ensureBackgroundTaskPaused() {
-    if constexpr (kConcurrentGC) {
-      return pauseBackgroundTask();
-    }
-    return std::lock_guard(gcMutex_);
-  }
-
-  /// Forces work on the background thread to be suspended and returns a lock
-  /// holding gcMutex_. This is used to ensure that the mutator receives
+  /// Forces work on the background thread to be suspended and locks
+  /// gcMutex_. This is used to ensure that the mutator receives
   /// priority in acquiring gcMutex_, and does not remain blocked on the
   /// background thread for an extended period of time. The background thread
-  /// will resume once the lock is released.
-  LLVM_NODISCARD std::lock_guard<Mutex> pauseBackgroundTask();
+  /// will resume once the destructor is called and the lock is released.
+  struct LockGCMutexAndPauseBackgroundTask {
+    // The constructor locks gcMutex_ and sets ogPaused_ to true.
+    // Keeping ogPaused_ set to true while the background task waits for the
+    // ogResumeCondVar_ variable signal protects it from sporadic wake ups.
+    LockGCMutexAndPauseBackgroundTask(HadesGC &gc)
+        : gc_(gc), lock_(gc.gcMutex_) {
+      assert(!gc_.calledByBackgroundThread() && "Must be called from mutator");
+      if constexpr (kConcurrentGC) {
+        assert(
+            !gc_.ogPaused_ &&
+            "Must not be called when the old generation is already paused");
+        gc_.ogPaused_ = true;
+      }
+    }
+
+    // Signal to the background thread that it may resume and unlock the
+    // gcMutex_.
+    ~LockGCMutexAndPauseBackgroundTask() {
+      if constexpr (kConcurrentGC) {
+        gc_.ogPaused_ = false;
+        gc_.ogResumeCondVar_.notify_one();
+      }
+    }
+
+   private:
+    HadesGC &gc_;
+    std::scoped_lock<Mutex> lock_;
+  };
 
   /// Perform a single step of an OG collection. \p backgroundThread indicates
   /// whether this call was made from the background thread.
@@ -1097,7 +1115,7 @@ inline T *HadesGC::makeA(uint32_t size, Args &&...args) {
       "Call to makeA must use a size aligned to HeapAlign");
   assert(noAllocLevel_ == 0 && "No allocs allowed right now.");
   if (longLived == LongLived::Yes) {
-    auto lk = ensureBackgroundTaskPaused();
+    LockGCMutexAndPauseBackgroundTask lk{*this};
     return constructCell<T>(
         allocLongLived(size), size, std::forward<Args>(args)...);
   }

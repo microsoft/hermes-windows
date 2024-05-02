@@ -7,6 +7,7 @@
 
 #include "ESTreeIRGen.h"
 
+#include "hermes/FrontEndDefs/NativeErrorTypes.h"
 #include "llvh/ADT/SmallString.h"
 
 namespace hermes {
@@ -153,7 +154,7 @@ Value *ESTreeIRGen::genArrowFunctionExpression(
 
   auto *newFunc = Builder.createFunction(
       newScopeDesc(),
-      nameHint,
+      genAnonymousFunctionNameIfNeeded(nameHint),
       Function::DefinitionKind::ES6Arrow,
       ESTree::isStrict(AF->strictness),
       AF->sourceVisibility,
@@ -206,14 +207,14 @@ Function *ESTreeIRGen::genES5Function(
   Function *newFunction = isGeneratorInnerFunction
       ? Builder.createGeneratorInnerFunction(
             newScopeDesc(),
-            originalName,
+            genAnonymousFunctionNameIfNeeded(originalName),
             Function::DefinitionKind::ES5Function,
             ESTree::isStrict(functionNode->strictness),
             functionNode->getSourceRange(),
             /* insertBefore */ nullptr)
       : Builder.createFunction(
             newScopeDesc(),
-            originalName,
+            genAnonymousFunctionNameIfNeeded(originalName),
             Function::DefinitionKind::ES5Function,
             ESTree::isStrict(functionNode->strictness),
             functionNode->sourceVisibility,
@@ -311,7 +312,7 @@ Function *ESTreeIRGen::genGeneratorFunction(
   // Does not have an associated source range.
   auto *outerFn = Builder.createGeneratorFunction(
       newScopeDesc(),
-      originalName,
+      genAnonymousFunctionNameIfNeeded(originalName),
       Function::DefinitionKind::ES5Function,
       ESTree::isStrict(functionNode->strictness),
       functionNode->sourceVisibility,
@@ -398,7 +399,7 @@ Function *ESTreeIRGen::genAsyncFunction(
 
   auto *asyncFn = Builder.createAsyncFunction(
       newScopeDesc(),
-      originalName,
+      genAnonymousFunctionNameIfNeeded(originalName),
       Function::DefinitionKind::ES5Function,
       ESTree::isStrict(functionNode->strictness),
       functionNode->sourceVisibility,
@@ -684,8 +685,10 @@ Function *ESTreeIRGen::genSyntaxErrorFunction(
 
   builder.createThrowInst(builder.createCallInst(
       CallInst::kNoTextifiedCallee,
-      loadGlobalObjectProperty(
-          builder, builder.createGlobalObjectProperty("SyntaxError", false)),
+      builder.createCallBuiltinInst(
+          BuiltinMethod::HermesBuiltin_getOriginalNativeErrorConstructor,
+          builder.getLiteralNumber(
+              static_cast<unsigned>(NativeErrorTypes::SyntaxError))),
       builder.getLiteralUndefined(),
       builder.getLiteralString(error)));
 

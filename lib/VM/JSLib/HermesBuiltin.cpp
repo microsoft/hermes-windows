@@ -8,6 +8,7 @@
 #include "JSLibInternal.h"
 
 #include "hermes/FrontEndDefs/Builtins.h"
+#include "hermes/FrontEndDefs/NativeErrorTypes.h"
 #include "hermes/Support/Base64vlq.h"
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/JSArray.h"
@@ -327,8 +328,6 @@ CallResult<HermesValue> copyDataPropertiesSlowPath_RJS(
           nextKeyHandle,
           DefinePropertyFlags::getDefaultNewPropertyFlags(),
           propValueHandle);
-      if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
-        return ExecutionStatus::EXCEPTION;
       assert(
           crb != ExecutionStatus::EXCEPTION && *crb &&
           "CreateDataProperty failed");
@@ -684,7 +683,7 @@ hermesBuiltinApply(void *, Runtime &runtime, NativeArgs args) {
 
   MutableHandle<> thisVal{runtime};
   if (isConstructor) {
-    auto thisValRes = Callable::createThisForConstruct(fn, runtime);
+    auto thisValRes = Callable::createThisForConstruct_RJS(fn, runtime);
     if (LLVM_UNLIKELY(thisValRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -819,6 +818,31 @@ CallResult<HermesValue> hermesBuiltinInitRegexNamedGroups(
   return HermesValue::encodeUndefinedValue();
 }
 
+CallResult<HermesValue> hermesBuiltinGetOriginalNativeErrorConstructor(
+    void *ctx,
+    Runtime &runtime,
+    NativeArgs args) {
+  CallResult<HermesValue> res = toInt32_RJS(runtime, args.getArgHandle(0));
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
+  uint32_t errorId = res->getNumberAs<uint32_t>();
+  switch (static_cast<NativeErrorTypes>(errorId)) {
+    default:
+      return runtime.raiseRangeError(
+          "Invalid error ID passed to getOriginalNativeErrorConstructor");
+
+    case NativeErrorTypes::Error:
+      return runtime.errorConstructor;
+
+#define NATIVE_ERROR_TYPE(name) \
+  case NativeErrorTypes::name:  \
+    return runtime.name##Constructor;
+#include "hermes/FrontEndDefs/NativeErrorTypes.def"
+  }
+}
+
 void createHermesBuiltins(
     Runtime &runtime,
     llvh::MutableArrayRef<Callable *> builtins) {
@@ -894,6 +918,11 @@ void createHermesBuiltins(
       B::HermesBuiltin_initRegexNamedGroups,
       P::initRegexNamedGroups,
       hermesBuiltinInitRegexNamedGroups);
+
+  defineInternMethod(
+      B::HermesBuiltin_getOriginalNativeErrorConstructor,
+      P::getOriginalNativeErrorConstructor,
+      hermesBuiltinGetOriginalNativeErrorConstructor);
 
   // Define the 'requireFast' function, which takes a number argument.
   defineInternMethod(

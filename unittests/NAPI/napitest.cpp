@@ -197,14 +197,13 @@ NapiTestErrorHandler NapiTest::ExecuteNapi(
     std::function<void(NapiTestContext *, napi_env)> code) noexcept {
   try {
     const NapiTestData &testData = GetParam();
-    napi_env env = testData.EnvFactory();
+    std::unique_ptr<IEnvHolder> envHolder = testData.EnvHolderFactory();
+    napi_env env = envHolder->getEnv();
 
     {
       auto context = NapiTestContext(env, testData.TestJSPath);
       code(&context, env);
     }
-
-    THROW_IF_NOT_OK(napi_ext_env_unref(env));
 
     return NapiTestErrorHandler(nullptr, std::exception_ptr(), "", "", 0, 0);
   } catch (...) {
@@ -251,7 +250,7 @@ napi_value NapiTestContext::RunScript(
   THROW_IF_NOT_OK(
       napi_create_string_utf8(env, code.c_str(), code.size(), &script));
   if (sourceUrl) {
-    THROW_IF_NOT_OK(napi_ext_run_script(env, script, sourceUrl, &scriptResult));
+    THROW_IF_NOT_OK(jsr_run_script(env, script, sourceUrl, &scriptResult));
   } else {
     THROW_IF_NOT_OK(napi_run_script(env, script, &scriptResult));
   }
@@ -344,11 +343,11 @@ NapiTestErrorHandler NapiTestContext::RunTestScript(
 
 void NapiTestContext::HandleUnhandledPromiseRejections() {
   bool hasException{false};
-  THROW_IF_NOT_OK(napi_ext_has_unhandled_promise_rejection(env, &hasException));
+  THROW_IF_NOT_OK(jsr_has_unhandled_promise_rejection(env, &hasException));
   if (hasException) {
     napi_value error{};
     THROW_IF_NOT_OK(
-        napi_get_and_clear_last_unhandled_promise_rejection(env, &error));
+        jsr_get_and_clear_last_unhandled_promise_rejection(env, &error));
     throw NapiTestException(env, error);
   }
 }
@@ -407,7 +406,7 @@ void NapiTestContext::DefineGlobalFunctions() {
   napi_value gc{};
   auto gcCallback = [](napi_env env,
                        napi_callback_info /*info*/) -> napi_value {
-    NODE_API_CALL(env, napi_ext_collect_garbage(env));
+    NODE_API_CALL(env, jsr_collect_garbage(env));
 
     napi_value undefined{};
     NODE_API_CALL(env, napi_get_undefined(env, &undefined));

@@ -33,10 +33,6 @@ list(APPEND inspector_sources
 )
 
 list(APPEND inspector_sources
-  ${REACT_NATIVE_SOURCE}/ReactCommon/jsinspector/InspectorInterfaces.cpp
-)
-
-list(APPEND inspector_sources
    ../jsi/jsi/JSIDynamic.cpp
 )
 
@@ -97,6 +93,8 @@ include_directories(${FOLLY_SOURCE})
 include_directories(${REACT_NATIVE_SOURCE}/ReactCommon)
 include_directories(stubs)
 
+set(REACT_NATIVE_SOURCE ${REACT_NATIVE_SOURCE} PARENT_SCOPE)
+
 file(GLOB inspector_headers ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 file(GLOB inspector_public_headers ${PROJECT_SOURCE_DIR}/public/hermes/Public/*.h)
 
@@ -108,7 +106,7 @@ set(HERMES_ENABLE_RTTI ON)
 
 configure_file(version.rc.in version.rc @ONLY)
 
-add_library(hermesinspector SHARED
+add_hermes_library(hermesinspector
   ${inspector_sources}
   ${inspector_headers}
   ${folly_sources}
@@ -116,9 +114,9 @@ add_library(hermesinspector SHARED
   ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 
 target_link_libraries(hermesinspector
+  hermesNapi
   hermesPublic
   jsi
-  libhermes
 )
 hermes_link_icu(hermesinspector)
 
@@ -149,6 +147,3 @@ set_target_properties(hermesinspector PROPERTIES
   LINK_OPTIONS "$<IF:$<CONFIG:Debug>,${link_flags_debug},${link_flags_release}>"
   OUTPUT_NAME hermesinspector
 )
-
-set_property(TARGET hermesinspector APPEND_STRING PROPERTY
-  COMPILE_DEFINITIONS "CREATE_SHARED_LIBRARY")
