@@ -668,7 +668,7 @@ TEST(HeapSnapshotTest, TestNodesAndEdgesForDummyObjects) {
               numberEdge,
               undefinedEdge,
               nullEdge,
-              Edge{HeapSnapshot::EdgeType::Weak, "0", firstDummy.id}}));
+              Edge{HeapSnapshot::EdgeType::Weak, "weak", firstDummy.id}}));
 
   EXPECT_EQ(
       FIND_NODE_AND_EDGES_FOR_ID(secondDummy.id, nodes, edges, strings),
@@ -679,7 +679,7 @@ TEST(HeapSnapshotTest, TestNodesAndEdgesForDummyObjects) {
               numberEdge,
               undefinedEdge,
               nullEdge,
-              Edge{HeapSnapshot::EdgeType::Weak, "0", secondDummy.id}}));
+              Edge{HeapSnapshot::EdgeType::Weak, "weak", secondDummy.id}}));
 }
 
 TEST(HeapSnapshotTest, SnapshotFromCallbackContext) {
@@ -885,26 +885,27 @@ TEST_F(HeapSnapshotRuntimeTest, WeakMapTest) {
           firstNamed + 3));
   EXPECT_EQ(nodesAndEdges.second.size(), firstNamed + 3);
 
-  // Test the weak edge.
-  EXPECT_EQ(
-      nodesAndEdges.second[firstNamed],
-      Edge(
-          HeapSnapshot::EdgeType::Weak,
-          "0",
-          runtime.getHeap().getObjectID(key.get())));
   // Test the native edge.
   const auto nativeMapID = map->getMapID(runtime.getHeap());
   EXPECT_EQ(
-      nodesAndEdges.second[firstNamed + 2],
+      nodesAndEdges.second[firstNamed],
       Edge(HeapSnapshot::EdgeType::Internal, "map", nativeMapID));
   EXPECT_EQ(
       FIND_NODE_FOR_ID(nativeMapID, nodes, strings),
       Node(
           HeapSnapshot::NodeType::Native,
-          "DenseMap",
+          "DenseSet",
           nativeMapID,
           map->getMallocSize(),
           0));
+
+  // Test the weak edge.
+  EXPECT_EQ(
+      nodesAndEdges.second[firstNamed + 1],
+      Edge(
+          HeapSnapshot::EdgeType::Weak,
+          "0",
+          runtime.getHeap().getObjectID(key.get())));
 }
 
 TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
@@ -930,13 +931,13 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
       runtime,
       fooSym,
       dpf,
-      runtime.makeHandle(HermesValue::encodeNumberValue(100)))));
+      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(100)))));
   ASSERT_FALSE(isException(JSObject::defineOwnProperty(
       obj,
       runtime,
       barSym,
       dpf,
-      runtime.makeHandle(HermesValue::encodeNumberValue(200)))));
+      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(200)))));
   // Trigger update transitions for both properties.
   dpf.writable = false;
   ASSERT_FALSE(isException(JSObject::defineOwnProperty(
@@ -944,13 +945,13 @@ TEST_F(HeapSnapshotRuntimeTest, PropertyUpdatesTest) {
       runtime,
       fooSym,
       dpf,
-      runtime.makeHandle(HermesValue::encodeNumberValue(100)))));
+      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(100)))));
   ASSERT_FALSE(isException(JSObject::defineOwnProperty(
       obj,
       runtime,
       barSym,
       dpf,
-      runtime.makeHandle(HermesValue::encodeNumberValue(200)))));
+      runtime.makeHandle(HermesValue::encodeTrustedNumberValue(200)))));
   // Forcibly clear the final hidden class's property map.
   auto *clazz = obj->getClass(runtime);
   clazz->clearPropertyMap(runtime.getHeap());
@@ -1008,7 +1009,8 @@ TEST_F(HeapSnapshotRuntimeTest, ArrayElements) {
   auto cr = JSObject::getComputed_RJS(
       array,
       runtime,
-      runtime.makeHandle(HermesValue::encodeNumberValue((1 << 20) + 1000)));
+      runtime.makeHandle(
+          HermesValue::encodeTrustedNumberValue((1 << 20) + 1000)));
   ASSERT_FALSE(isException(cr));
   Handle<JSObject> thirdElement = runtime.makeHandle<JSObject>(std::move(*cr));
   const auto arrayID = runtime.getHeap().getObjectID(array.get());
@@ -1224,8 +1226,8 @@ foo(8) @ test.js(2):3:20)#");
 (root)(0) @ (0):0:0
 global(1) @ test.js(2):2:1
 global(2) @ test.js(2):11:4
-baz(4) @ test.js(2):9:31
-bar(5) @ test.js(2):6:20)#");
+baz(3) @ test.js(2):9:31
+bar(4) @ test.js(2):6:20)#");
 
   const JSONArray &samples = *llvh::cast<JSONArray>(root->at("samples"));
   // Must have at least one sample

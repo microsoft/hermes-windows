@@ -154,7 +154,7 @@ ExecutionStatus Callable::defineNameLengthAndPrototype(
   // Length is the number of formal arguments.
   // 10.2.9 SetFunctionLength is performed during 10.2.3 OrdinaryFunctionCreate.
   auto lengthHandle =
-      runtime.makeHandle(HermesValue::encodeDoubleValue(paramCount));
+      runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(paramCount));
   DEFINE_PROP(selfHandle, P::length, lengthHandle);
 
   // Define the name.
@@ -471,7 +471,6 @@ const CallableVTable BoundFunction::vt{
             cellSize<BoundFunction>(),
             nullptr,
             nullptr,
-            nullptr,
             nullptr
 #ifdef HERMES_MEMORY_INSTRUMENTATION
             ,
@@ -570,7 +569,7 @@ ExecutionStatus BoundFunction::initializeLengthAndName_RJS(
   pf.configurable = 1;
 
   // Length is the number of formal arguments.
-  auto length = runtime.makeHandle(HermesValue::encodeNumberValue(
+  auto length = runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(
       argCount >= *targetLength ? 0.0 : *targetLength - argCount));
   if (LLVM_UNLIKELY(
           JSObject::defineNewOwnProperty(
@@ -825,7 +824,6 @@ const CallableVTable NativeFunction::vt{
             cellSize<NativeFunction>(),
             nullptr,
             nullptr,
-            nullptr,
             nullptr
 #ifdef HERMES_MEMORY_INSTRUMENTATION
             ,
@@ -1000,7 +998,6 @@ const CallableVTable NativeConstructor::vt{
             cellSize<NativeConstructor>(),
             nullptr,
             nullptr,
-            nullptr,
             nullptr
 #ifdef HERMES_MEMORY_INSTRUMENTATION
             ,
@@ -1053,7 +1050,6 @@ const CallableVTable JSFunction::vt{
         VTable(
             CellKind::JSFunctionKind,
             cellSize<JSFunction>(),
-            nullptr,
             nullptr,
             nullptr,
             nullptr
@@ -1175,7 +1171,6 @@ const CallableVTable JSAsyncFunction::vt{
             cellSize<JSAsyncFunction>(),
             nullptr,
             nullptr,
-            nullptr,
             nullptr
 #ifdef HERMES_MEMORY_INSTRUMENTATION
             ,
@@ -1232,7 +1227,6 @@ const CallableVTable JSGeneratorFunction::vt{
             cellSize<JSGeneratorFunction>(),
             nullptr,
             nullptr,
-            nullptr,
             nullptr
 #ifdef HERMES_MEMORY_INSTRUMENTATION
             ,
@@ -1287,7 +1281,6 @@ const CallableVTable GeneratorInnerFunction::vt{
         VTable(
             CellKind::GeneratorInnerFunctionKind,
             cellSize<GeneratorInnerFunction>(),
-            nullptr,
             nullptr,
             nullptr,
             nullptr

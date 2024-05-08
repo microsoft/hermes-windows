@@ -11,13 +11,16 @@
 'use strict';
 
 export * from './CatchClauseDefinition';
+export * from './ComponentNameDefinition';
 export * from './ClassNameDefinition';
 export * from './Definition';
 export * from './DefinitionType';
 export * from './EnumDefinition';
 export * from './FunctionNameDefinition';
+export * from './HookNameDefinition';
 export * from './ImplicitGlobalVariableDefinition';
 export * from './ImportBindingDefinition';
+export * from './NamespaceNameDefinition';
 export * from './ParameterDefinition';
 export * from './TypeDefinition';
 export * from './TypeParameterDefinition';

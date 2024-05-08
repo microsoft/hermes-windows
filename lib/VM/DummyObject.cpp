@@ -20,13 +20,22 @@ const VTable DummyObject::vt{
     CellKind::DummyObjectKind,
     cellSize<DummyObject>(),
     _finalizeImpl,
-    _markWeakImpl,
     _mallocSizeImpl,
-    nullptr};
+    nullptr
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+    ,
+    VTable::HeapSnapshotMetadata{
+        HeapSnapshot::NodeType::Object,
+        nullptr,
+        _snapshotAddEdgesImpl,
+        nullptr,
+        nullptr}
+#endif
+};
 
 DummyObject::DummyObject(GC &gc) : other(), x(1), y(2) {
   hvBool.setNonPtr(HermesValue::encodeBoolValue(true), gc);
-  hvDouble.setNonPtr(HermesValue::encodeNumberValue(3.14), gc);
+  hvDouble.setNonPtr(HermesValue::encodeUntrustedNumberValue(3.14), gc);
   hvNative.setNonPtr(HermesValue::encodeNativeUInt32(0xE), gc);
   hvUndefined.setNonPtr(HermesValue::encodeUndefinedValue(), gc);
   hvEmpty.setNonPtr(HermesValue::encodeEmptyValue(), gc);
@@ -53,6 +62,7 @@ void DummyObject::setPointer(GC &gc, DummyObject *obj) {
 
 DummyObject *DummyObject::create(GC &gc, PointerBase &base) {
   auto *cell = gc.makeAFixed<DummyObject, HasFinalizer::Yes>(gc);
+  cell->finalizerCallback.set(gc, nullptr);
   cell->weak.emplace(base, gc, cell);
   return cell;
 }
@@ -66,9 +76,15 @@ bool DummyObject::classof(const GCCell *cell) {
 
 void DummyObject::_finalizeImpl(GCCell *cell, GC &gc) {
   auto *self = vmcast<DummyObject>(cell);
-  if (self->finalizerCallback)
-    (*self->finalizerCallback)();
+  auto callback = self->finalizerCallback.get(gc);
+  if (callback)
+    (*callback)();
+  if (self->weak)
+    self->weak->releaseSlot();
   self->releaseExtMem(gc);
+
+  // Callback is assumed to point to allocated memory
+  delete callback;
   self->~DummyObject();
 }
 
@@ -76,13 +92,24 @@ size_t DummyObject::_mallocSizeImpl(GCCell *cell) {
   return vmcast<DummyObject>(cell)->extraBytes;
 }
 
-void DummyObject::_markWeakImpl(GCCell *cell, WeakRefAcceptor &acceptor) {
-  auto *self = reinterpret_cast<DummyObject *>(cell);
-  if (self->markWeakCallback)
-    (*self->markWeakCallback)(cell, acceptor);
-  if (self->weak)
-    acceptor.accept(*self->weak);
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+void DummyObject::_snapshotAddEdgesImpl(
+    GCCell *cell,
+    GC &gc,
+    HeapSnapshot &snap) {
+  auto *const self = vmcast<DummyObject>(cell);
+  if (!self->weak)
+    return;
+  // Filter out empty refs from adding edges.
+  if (!self->weak->isValid())
+    return;
+  // DummyObject has only one WeakRef field.
+  snap.addNamedEdge(
+      HeapSnapshot::EdgeType::Weak,
+      "weak",
+      gc.getObjectID(self->weak->getNoBarrierUnsafe(gc.getPointerBase())));
 }
+#endif
 
 } // namespace testhelpers
 

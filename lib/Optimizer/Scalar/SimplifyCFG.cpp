@@ -12,6 +12,7 @@
 #include "hermes/IR/CFG.h"
 #include "hermes/IR/IRBuilder.h"
 #include "hermes/IR/IREval.h"
+#include "hermes/Optimizer/Scalar/Utils.h"
 #include "hermes/Support/Statistic.h"
 
 #include "llvh/ADT/SmallPtrSet.h"
@@ -211,6 +212,58 @@ static bool attemptBranchRemovalFromPhiNodes(BasicBlock *BB) {
   return true;
 }
 
+/// Perform a strict quality check on two literals. Literals are uniqued by
+/// type, so we can just compare pointers, except for numbers, where we need to
+/// perform a numeric comparison to ensure that NaNs and -0 are handled.
+static bool literalStrictEquality(Literal *L1, Literal *L2) {
+  if (llvh::isa<LiteralNumber>(L1) && llvh::isa<LiteralNumber>(L2)) {
+    return llvh::cast<LiteralNumber>(L1)->getValue() ==
+        llvh::cast<LiteralNumber>(L2)->getValue();
+  }
+  return L1 == L2;
+}
+
+/// Remove switch targets that are known to be unreachable via the switch
+/// due to \p SI having a literal operand.
+static bool simplifySwitchInst(SwitchInst *SI) {
+  auto *thisBlock = SI->getParent();
+  IRBuilder builder(thisBlock->getParent());
+  builder.setInsertionBlock(thisBlock);
+
+  Value *input = SI->getInputValue();
+  auto *litInput = llvh::dyn_cast<Literal>(input);
+
+  // If input of switch is not literal, nothing can be done.
+  if (!litInput) {
+    return false;
+  }
+
+  auto *destination = SI->getDefaultDestination();
+
+  for (unsigned i = 0, e = SI->getNumCasePair(); i < e; i++) {
+    auto switchCase = SI->getCasePair(i);
+
+    // Look for a case which matches input.
+    if (literalStrictEquality(switchCase.first, litInput)) {
+      destination = switchCase.second;
+      break;
+    }
+  }
+
+  // Rewrite all phi nodes that no longer have incoming arrows from this block.
+  for (unsigned i = 0, e = SI->getNumSuccessors(); i < e; i++) {
+    auto *successor = SI->getSuccessor(i);
+    if (successor == destination)
+      continue;
+    deleteIncomingBlockFromPhis(successor, thisBlock);
+  }
+
+  auto *newBranch = builder.createBranchInst(destination);
+  SI->replaceAllUsesWith(newBranch);
+  SI->eraseFromParent();
+  return true;
+}
+
 /// Get rid of trampolines and merge basic blocks that are split by static
 /// non-conditional branches.
 static bool optimizeStaticBranches(Function *F) {
@@ -220,6 +273,14 @@ static bool optimizeStaticBranches(Function *F) {
   // Remove conditional branches with a constant condition.
   for (auto &it : *F) {
     BasicBlock *BB = &it;
+
+    // Handle SwitchInst, which can have a static branch and allow us to remove
+    // multiple arms.
+    if (auto *switchInst = llvh::dyn_cast<SwitchInst>(BB->getTerminator())) {
+      changed |= simplifySwitchInst(switchInst);
+      continue;
+    }
+
     auto *cbr = llvh::dyn_cast<CondBranchInst>(BB->getTerminator());
     if (!cbr)
       continue;

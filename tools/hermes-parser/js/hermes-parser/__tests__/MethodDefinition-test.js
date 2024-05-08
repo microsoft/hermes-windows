@@ -16,7 +16,7 @@ import {
   expectBabelAlignment,
   expectEspreeAlignment,
 } from '../__test_utils__/alignment-utils';
-import {parse, parseForSnapshot} from '../__test_utils__/parse';
+import {parseForSnapshot} from '../__test_utils__/parse';
 
 describe('MethodDefinition', () => {
   describe('method', () => {
@@ -90,40 +90,46 @@ describe('MethodDefinition', () => {
 
     test('Babel', () => {
       // Babel AST has ClassMethod containing all properties of FunctionExpression
-      expect(parse(testCase.code, {babel: true})).toMatchObject({
-        type: 'File',
-        program: {
-          type: 'Program',
-          body: [
+      expect(parseForSnapshot(testCase.code, {babel: true}))
+        .toMatchInlineSnapshot(`
+        {
+          "body": [
             {
-              type: 'ClassDeclaration',
-              body: {
-                type: 'ClassBody',
-                body: [
+              "body": {
+                "body": [
                   {
-                    type: 'ClassMethod',
-                    key: {
-                      type: 'Identifier',
-                      name: 'foo',
+                    "async": false,
+                    "body": {
+                      "body": [],
+                      "directives": [],
+                      "type": "BlockStatement",
                     },
-                    id: null,
-                    params: [],
-                    body: {
-                      type: 'BlockStatement',
-                      body: [],
+                    "computed": false,
+                    "generator": false,
+                    "id": null,
+                    "key": {
+                      "name": "foo",
+                      "type": "Identifier",
                     },
-                    async: false,
-                    generator: false,
-                    returnType: null,
-                    typeParameters: null,
-                    predicate: null,
+                    "kind": "method",
+                    "params": [],
+                    "static": false,
+                    "type": "ClassMethod",
                   },
                 ],
+                "type": "ClassBody",
               },
+              "id": {
+                "name": "C",
+                "type": "Identifier",
+              },
+              "superClass": null,
+              "type": "ClassDeclaration",
             },
           ],
-        },
-      });
+          "type": "Program",
+        }
+      `);
       expectBabelAlignment(testCase);
     });
   });
@@ -199,42 +205,46 @@ describe('MethodDefinition', () => {
 
     test('Babel', () => {
       // Babel AST has ClassMethod containing all properties of FunctionExpression
-      expect(parse(testCase.code, {babel: true})).toMatchObject({
-        type: 'File',
-        program: {
-          type: 'Program',
-          body: [
+      expect(parseForSnapshot(testCase.code, {babel: true}))
+        .toMatchInlineSnapshot(`
+        {
+          "body": [
             {
-              type: 'ClassDeclaration',
-              body: {
-                type: 'ClassBody',
-                body: [
+              "body": {
+                "body": [
                   {
-                    type: 'ClassMethod',
-                    key: {
-                      type: 'Identifier',
-                      name: 'constructor',
+                    "async": false,
+                    "body": {
+                      "body": [],
+                      "directives": [],
+                      "type": "BlockStatement",
                     },
-                    id: null,
-                    params: [],
-                    body: {
-                      type: 'BlockStatement',
-                      body: [],
+                    "computed": false,
+                    "generator": false,
+                    "id": null,
+                    "key": {
+                      "name": "constructor",
+                      "type": "Identifier",
                     },
-                    async: false,
-                    generator: false,
-                    returnType: null,
-                    typeParameters: null,
-                    predicate: null,
-                    // the kind should be set correctly
-                    kind: 'constructor',
+                    "kind": "constructor",
+                    "params": [],
+                    "static": false,
+                    "type": "ClassMethod",
                   },
                 ],
+                "type": "ClassBody",
               },
+              "id": {
+                "name": "C",
+                "type": "Identifier",
+              },
+              "superClass": null,
+              "type": "ClassDeclaration",
             },
           ],
-        },
-      });
+          "type": "Program",
+        }
+      `);
       expectBabelAlignment(testCase);
     });
   });
@@ -355,74 +365,82 @@ describe('MethodDefinition', () => {
 
     test('Babel', () => {
       // Babel AST has ClassMethod containing all properties of FunctionExpression
-      expect(parse(testCase.code, {babel: true})).toMatchObject({
-        type: 'File',
-        program: {
-          type: 'Program',
-          body: [
+      expect(parseForSnapshot(testCase.code, {babel: true}))
+        .toMatchInlineSnapshot(`
+        {
+          "body": [
             {
-              type: 'ClassDeclaration',
-              body: {
-                type: 'ClassBody',
-                body: [
+              "body": {
+                "body": [
                   {
-                    type: 'ClassMethod',
-                    key: {
-                      type: 'Identifier',
-                      name: 'foo',
-                    },
-                    id: null,
-                    params: [],
-                    body: {
-                      type: 'BlockStatement',
-                      body: [
+                    "async": false,
+                    "body": {
+                      "body": [
                         {
-                          type: 'ReturnStatement',
-                          argument: {
-                            type: 'NumericLiteral',
+                          "argument": {
+                            "extra": {
+                              "raw": "1",
+                              "rawValue": 1,
+                            },
+                            "type": "NumericLiteral",
+                            "value": 1,
                           },
+                          "type": "ReturnStatement",
                         },
                       ],
+                      "directives": [],
+                      "type": "BlockStatement",
                     },
-                    async: false,
-                    generator: false,
-                    returnType: null,
-                    typeParameters: null,
-                    predicate: null,
-                    // the kind should be set correctly
-                    kind: 'get',
+                    "computed": false,
+                    "generator": false,
+                    "id": null,
+                    "key": {
+                      "name": "foo",
+                      "type": "Identifier",
+                    },
+                    "kind": "get",
+                    "params": [],
+                    "static": false,
+                    "type": "ClassMethod",
                   },
                   {
-                    type: 'ClassMethod',
-                    key: {
-                      type: 'Identifier',
-                      name: 'foo',
+                    "async": false,
+                    "body": {
+                      "body": [],
+                      "directives": [],
+                      "type": "BlockStatement",
                     },
-                    id: null,
-                    params: [
+                    "computed": false,
+                    "generator": false,
+                    "id": null,
+                    "key": {
+                      "name": "foo",
+                      "type": "Identifier",
+                    },
+                    "kind": "set",
+                    "params": [
                       {
-                        type: 'Identifier',
-                        name: 'v',
+                        "name": "v",
+                        "type": "Identifier",
                       },
                     ],
-                    body: {
-                      type: 'BlockStatement',
-                      body: [],
-                    },
-                    async: false,
-                    generator: false,
-                    returnType: null,
-                    typeParameters: null,
-                    predicate: null,
-                    // the kind should be set correctly
-                    kind: 'set',
+                    "static": false,
+                    "type": "ClassMethod",
                   },
                 ],
+                "type": "ClassBody",
               },
+              "id": {
+                "name": "C",
+                "type": "Identifier",
+              },
+              "superClass": null,
+              "type": "ClassDeclaration",
             },
           ],
-        },
-      });
+          "type": "Program",
+        }
+      `);
       expectBabelAlignment(testCase);
     });
   });

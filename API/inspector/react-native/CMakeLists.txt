@@ -2,8 +2,8 @@ include(FetchContent)
 
 FetchContent_Declare(
   reactnative
-  URL https://github.com/facebook/react-native/archive/a0800ffc7a676555aa9e769fc8fd6d3162de0ea6.zip
-  URL_HASH SHA256=80a3b89d92a48bd1d39533a6643e4f1390f2ce11db1377a50bd10d557e423857
+  URL https://github.com/facebook/react-native/archive/a0ed073650cbdc3e1e08c11d18acf73e0952393a.zip
+  URL_HASH SHA256=8111f994cbef91300ed57f9bbdd8a0d20fe27bab1ad9a6bfcd637c67a4a29af5
   DOWNLOAD_EXTRACT_TIMESTAMP true
 )
 
@@ -23,6 +23,9 @@ if(NOT reactnative_POPULATED)
   if(GEMFILES)
     file(REMOVE ${GEMFILES})
   endif()
+
+  file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/overrides/HermesRuntimeAgentDelegate.cpp
+    DESTINATION ${reactnative_SOURCE_DIR}/packages/react-native/ReactCommon/hermes/inspector-modern/chrome)
 endif()
 
-set(REACT_NATIVE_SOURCE ${reactnative_SOURCE_DIR} PARENT_SCOPE)
+set(REACT_NATIVE_SOURCE ${reactnative_SOURCE_DIR}/packages/react-native PARENT_SCOPE)

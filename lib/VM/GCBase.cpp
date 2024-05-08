@@ -57,6 +57,8 @@ GCBase::GCBase(
       // Start off not in GC.
       inGC_(false),
       name_(gcConfig.getName()),
+      weakSlots_(gcConfig.getOccupancyTarget(), 0.5 /* sizingWeight */),
+      weakMapEntrySlots_(gcConfig.getOccupancyTarget(), 0.5 /* sizingWeight */),
 #ifdef HERMES_MEMORY_INSTRUMENTATION
       allocationLocationTracker_(this),
       samplingAllocationTracker_(this),
@@ -255,7 +257,7 @@ struct PrimitiveNodeAcceptor : public SnapshotAcceptor {
   llvh::DenseSet<double, GCBase::IDTracker::DoubleComparator> seenNumbers_;
 };
 
-struct EdgeAddingAcceptor : public SnapshotAcceptor, public WeakRefAcceptor {
+struct EdgeAddingAcceptor : public SnapshotAcceptor {
   using SnapshotAcceptor::accept;
 
   EdgeAddingAcceptor(GCBase &gc, HeapSnapshot &snap)
@@ -285,25 +287,6 @@ struct EdgeAddingAcceptor : public SnapshotAcceptor, public WeakRefAcceptor {
     acceptHV(hv, name);
   }
 
-  void accept(WeakRefBase &wr) override {
-    WeakRefSlot *slot = wr.unsafeGetSlot();
-    if (slot->state() == WeakSlotState::Free) {
-      // If the slot is free, there's no edge to add.
-      return;
-    }
-    if (!slot->hasValue()) {
-      // Filter out empty refs from adding edges.
-      return;
-    }
-    // Assume all weak pointers have no names, and are stored in an array-like
-    // structure.
-    std::string indexName = std::to_string(nextEdge_++);
-    snap_.addNamedEdge(
-        HeapSnapshot::EdgeType::Weak,
-        indexName,
-        gc_.getObjectID(slot->getNoBarrierUnsafe(gc_.getPointerBase())));
-  }
-
   void acceptSym(SymbolID sym, const char *name) override {
     if (sym.isInvalid()) {
       return;
@@ -316,8 +299,6 @@ struct EdgeAddingAcceptor : public SnapshotAcceptor, public WeakRefAcceptor {
 
  private:
   GCBase &gc_;
-  // For unnamed edges, use indices instead.
-  unsigned nextEdge_{0};
 };
 
 struct SnapshotRootSectionAcceptor : public SnapshotAcceptor,
@@ -331,10 +312,6 @@ struct SnapshotRootSectionAcceptor : public SnapshotAcceptor,
   void accept(GCCell *&, const char *) override {
     // While adding edges to root sections, there's no need to do anything for
     // pointers.
-  }
-
-  void accept(WeakRefBase &wr) override {
-    // Same goes for weak refs.
   }
 
   void acceptWeak(GCCell *&ptr) override {
@@ -374,20 +351,6 @@ struct SnapshotRootAcceptor : public SnapshotAcceptor,
 
   void acceptWeak(GCCell *&ptr) override {
     pointerAccept(ptr, nullptr, true);
-  }
-
-  void accept(WeakRefBase &wr) override {
-    WeakRefSlot *slot = wr.unsafeGetSlot();
-    if (slot->state() == WeakSlotState::Free) {
-      // If the slot is free, there's no edge to add.
-      return;
-    }
-    if (!slot->hasValue()) {
-      // Filter out empty refs from adding edges.
-      return;
-    }
-    pointerAccept(
-        slot->getNoBarrierUnsafe(gc_.getPointerBase()), nullptr, true);
   }
 
   void acceptSym(SymbolID sym, const char *name) override {
@@ -605,9 +568,9 @@ void GCBase::snapshotAddGCNativeNodes(HeapSnapshot &snap) {
   snap.beginNode();
   snap.endNode(
       HeapSnapshot::NodeType::Native,
-      "std::deque<WeakRefSlot>",
+      "hermes::ManagedChunkedList<WeakRefSlot>",
       IDTracker::reserved(IDTracker::ReservedObjectID::WeakRefSlotStorage),
-      weakSlots_.size() * sizeof(decltype(weakSlots_)::value_type),
+      weakSlots_.capacity() * sizeof(decltype(weakSlots_)::value_type),
       0);
 }
 
@@ -700,9 +663,8 @@ void GCBase::getHeapInfo(HeapInfo &info) {
 
 void GCBase::getHeapInfoWithMallocSize(HeapInfo &info) {
   // Assign to overwrite anything previously in the heap info.
-  // A deque doesn't have a capacity, so the size is the lower bound.
   info.mallocSizeEstimate =
-      weakSlots_.size() * sizeof(decltype(weakSlots_)::value_type);
+      weakSlots_.capacity() * sizeof(decltype(weakSlots_)::value_type);
 }
 
 #ifndef NDEBUG
@@ -718,13 +680,7 @@ void GCBase::getDebugHeapInfo(DebugHeapInfo &info) {
 }
 
 size_t GCBase::countUsedWeakRefs() const {
-  size_t count = 0;
-  for (auto &slot : weakSlots_) {
-    if (slot.state() != WeakSlotState::Free) {
-      ++count;
-    }
-  }
-  return count;
+  return weakSlots_.sizeForTests();
 }
 #endif
 
@@ -959,38 +915,25 @@ GCBASE_BARRIER_2(
     snapshotWriteBarrierRange,
     const GCSmallHermesValue *,
     uint32_t);
+GCBASE_BARRIER_1(weakRefReadBarrier, HermesValue);
 GCBASE_BARRIER_1(weakRefReadBarrier, GCCell *);
 
 #undef GCBASE_BARRIER_1
 #undef GCBASE_BARRIER_2
 #endif
 
-/*static*/
-std::vector<detail::WeakRefKey *> GCBase::buildKeyList(
-    GC &gc,
-    JSWeakMap *weakMap) {
-  std::vector<detail::WeakRefKey *> res;
-  for (auto iter = weakMap->keys_begin(), end = weakMap->keys_end();
-       iter != end;
-       iter++) {
-    if (iter->getObjectInGC(gc)) {
-      res.push_back(&(*iter));
-    }
-  }
-  return res;
+WeakRefSlot *GCBase::allocWeakSlot(CompressedPointer ptr) {
+  return &weakSlots_.add(ptr);
 }
 
-WeakRefSlot *GCBase::allocWeakSlot(CompressedPointer ptr) {
-  // The weak ref mutex doesn't need to be held since we are only accessing free
-  // slots, which the background thread cannot access.
-  if (auto *slot = firstFreeWeak_) {
-    assert(slot->state() == WeakSlotState::Free && "invalid free slot state");
-    firstFreeWeak_ = firstFreeWeak_->nextFree();
-    slot->reset(ptr);
-    return slot;
-  }
-  weakSlots_.push_back({ptr});
-  return &weakSlots_.back();
+WeakMapEntrySlot *GCBase::allocWeakMapEntrySlot(
+    JSObject *key,
+    HermesValue value,
+    JSWeakMapImplBase *owner) {
+  return &weakMapEntrySlots_.add(
+      CompressedPointer::encode(key, getPointerBase()),
+      value,
+      CompressedPointer::encode(owner, getPointerBase()));
 }
 
 HeapSnapshot::NodeID GCBase::getObjectID(const GCCell *cell) {

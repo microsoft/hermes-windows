@@ -96,31 +96,11 @@ function(hermes_update_compile_flags name)
     set(flags "${flags} /Zi")
   #endif ()
 
-  if (HERMES_ENABLE_EH)
+  if (NOT HERMES_ENABLE_EH_RTTI)
     if (GCC_COMPATIBLE)
-      set(flags "${flags} -fexceptions")
+      set(flags "${flags} -fno-exceptions -fno-rtti")
     elseif (MSVC)
-      set(flags "${flags} /EHsc")
-    endif ()
-  else ()
-    if (GCC_COMPATIBLE)
-      set(flags "${flags} -fno-exceptions")
-    elseif (MSVC)
-      set(flags "${flags} /EHs-c-")
-    endif ()
-  endif ()
-
-  if (HERMES_ENABLE_RTTI)
-    if (GCC_COMPATIBLE)
-      set(flags "${flags} -frtti")
-    elseif (MSVC)
-      set(flags "${flags} /GR")
-    endif ()
-  else ()
-    if (GCC_COMPATIBLE)
-      set(flags "${flags} -fno-rtti")
-    elseif (MSVC)
-      set(flags "${flags} /GR-")
+      set(flags "${flags} /EHs-c- /GR-")
     endif ()
   endif ()
 
@@ -456,6 +436,10 @@ if (GCC_COMPATIBLE)
   # TODO(T108716033) Evaluate adding this flag back in once a new clang is
   # released or XCode is fixed.
   # add_flag_if_supported("-fno-strict-float-cast-overflow" NO_STRICT_FLOAT_CAST_OVERFLOW_FLAG)
+
+  # GCC uses fp-contract=fast by default, use "on" instead so that we can
+  # control it in source where needed.
+  add_flag_if_supported("-ffp-contract=on" FP_CONTRACT_FLAG)
 
   # Disable range loop analysis warnings.
   check_cxx_compiler_flag("-Wrange-loop-analysis" RANGE_ANALYSIS_FLAG)

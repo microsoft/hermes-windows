@@ -101,6 +101,66 @@ void TracingRuntime::replaceNondeterministicFuncs() {
       .asFunction(*this)
       .call(*this, {std::move(callUntraced)});
 
+  //
+  // Wrapper for HermesInternal.getInstrumentedStats (or any other
+  // non-deterministic functions that return JSObject)
+  //
+  jsi::Function callUntracedSimpleObjects =
+      jsi::Function::createFromHostFunction(
+          *this,
+          jsi::PropNameID::forAscii(*this, "callUntracedSimpleObjects"),
+          3,
+          [this](
+              Runtime &rt,
+              const jsi::Value &, // thisVal
+              const jsi::Value *args,
+              size_t count) {
+            assert(count == 3);
+            // Use non-tracing runtime to call the original function and
+            // stringify operation.
+            Runtime &noTracingRt = *runtime_;
+            const auto nativeFunc =
+                args[0].getObject(noTracingRt).getFunction(noTracingRt);
+            const auto jsonStringify =
+                args[1].getObject(noTracingRt).getFunction(noTracingRt);
+            const auto jsonParse =
+                args[2].getObject(noTracingRt).getFunction(noTracingRt);
+
+            // Call the original native function without tracing.
+            const jsi::Value funcResult = nativeFunc.call(noTracingRt);
+
+            // Stringify the result and convert it to UTF8 string;
+            const std::string utf8 = jsonStringify.call(noTracingRt, funcResult)
+                                         .asString(noTracingRt)
+                                         .utf8(noTracingRt);
+
+            // Recreate the result object from the string with TracingRuntime
+            // (rt) so that we record this object creation in trace record.
+            jsi::String str = jsi::String::createFromUtf8(rt, utf8);
+            // Finally, parse the stringified result back to JS object.
+            return jsonParse.call(rt, std::move(str));
+          });
+
+  code = R"(
+(function(callUntracedSimpleObjects){
+  // Capture the original JSON.stringify and JSON.parse functions in case they are overridden.
+  var realJSONStringify = JSON.stringify;
+  var realJSONParse = JSON.parse;
+  var hermesInternalGetInstrumentedStatsReal = HermesInternal.getInstrumentedStats;
+  HermesInternal.getInstrumentedStats = function getInstrumentedStats() {
+    return callUntracedSimpleObjects(hermesInternalGetInstrumentedStatsReal,
+      realJSONStringify, realJSONParse);
+  };
+  Object.freeze(HermesInternal);
+});
+)";
+  global()
+      .getPropertyAsFunction(*this, "eval")
+      .call(*this, code)
+      .asObject(*this)
+      .asFunction(*this)
+      .call(*this, {std::move(callUntracedSimpleObjects)});
+
   numPreambleRecords_ = trace_.records().size();
 }
 
@@ -618,6 +678,14 @@ jsi::Value TracingRuntime::callAsConstructor(
   return retval;
 }
 
+void TracingRuntime::setExternalMemoryPressure(
+    const jsi::Object &obj,
+    size_t amount) {
+  trace_.emplace_back<SynthTrace::SetExternalMemoryPressureRecord>(
+      getTimeSinceStart(), getUniqueID(obj), amount);
+  RD::setExternalMemoryPressure(obj, amount);
+}
+
 void TracingRuntime::addMarker(const std::string &marker) {
   trace_.emplace_back<SynthTrace::MarkerRecord>(getTimeSinceStart(), marker);
 }
@@ -720,8 +788,7 @@ std::string TracingHermesRuntime::flushAndDisableBridgeTrafficTrace() {
   if (flushedAndDisabled_) {
     return committedTraceFilename_;
   }
-  trace().flushAndDisable(
-      hermesRuntime().getMockedEnvironment(), hermesRuntime().getGCExecTrace());
+  trace().flushAndDisable(hermesRuntime().getGCExecTrace());
   flushedAndDisabled_ = true;
   committedTraceFilename_ = commitAction_();
   return committedTraceFilename_;
@@ -843,6 +910,7 @@ std::unique_ptr<TracingHermesRuntime> makeTracingHermesRuntime(
       std::move(hermesRuntime),
       runtimeConfig,
       std::move(traceStream),
+      // commitAction
       [traceCompletionCallback, traceScratchPath, traceResultPath]() {
         if (traceScratchPath != traceResultPath) {
           std::error_code ec =
@@ -857,18 +925,22 @@ std::unique_ptr<TracingHermesRuntime> makeTracingHermesRuntime(
             return std::string();
           }
         }
-        bool success = traceCompletionCallback();
-        if (!success) {
-          ::hermes::hermesLog(
-              "Hermes",
-              "Failed to invoke completion callback for tracing file %s",
-              traceResultPath.c_str());
-          return std::string();
+
+        if (traceCompletionCallback) {
+          bool success = traceCompletionCallback();
+          if (!success) {
+            ::hermes::hermesLog(
+                "Hermes",
+                "Failed to invoke completion callback for tracing file %s",
+                traceResultPath.c_str());
+            return std::string();
+          }
         }
         ::hermes::hermesLog(
             "Hermes", "Completed tracing file at %s", traceResultPath.c_str());
         return traceResultPath;
       },
+      // rollbackAction
       [traceScratchPath]() {
         // Delete the in-progress trace
         llvh::sys::fs::remove(traceScratchPath);
@@ -885,8 +957,8 @@ std::unique_ptr<TracingHermesRuntime> makeTracingHermesRuntime(
       std::move(hermesRuntime),
       runtimeConfig,
       std::move(traceStream),
-      []() { return std::string(); },
-      []() {},
+      /* commitAction */ []() { return std::string(); },
+      /* rollbackAction*/ []() {},
       forReplay);
 }
 

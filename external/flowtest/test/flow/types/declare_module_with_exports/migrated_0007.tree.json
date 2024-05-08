@@ -71,14 +71,14 @@
                   }
                 },
                 "optional":false
-              }
+              },
+              "kind":"var"
             },
             "specifiers":[],
             "source":null
           }
         ]
-      },
-      "kind":"ES"
+      }
     }
   ],
   "comments":[]

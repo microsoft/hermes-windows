@@ -101,7 +101,8 @@ BCProviderFromSrc::createBCProviderFromSrc(
     const ScopeChain &scopeChain,
     SourceErrorManager::DiagHandlerTy diagHandler,
     void *diagContext,
-    const std::function<void(Module &)> &runOptimizationPasses) {
+    const std::function<void(Module &)> &runOptimizationPasses,
+    const BytecodeGenerationOptions &defaultBytecodeGenerationOptions) {
   return createBCProviderFromSrcImpl(
       std::move(buffer),
       sourceURL,
@@ -110,7 +111,8 @@ BCProviderFromSrc::createBCProviderFromSrc(
       scopeChain,
       diagHandler,
       diagContext,
-      runOptimizationPasses);
+      runOptimizationPasses,
+      defaultBytecodeGenerationOptions);
 }
 
 std::pair<std::unique_ptr<BCProviderFromSrc>, std::string>
@@ -122,7 +124,8 @@ BCProviderFromSrc::createBCProviderFromSrcImpl(
     const ScopeChain &scopeChain,
     SourceErrorManager::DiagHandlerTy diagHandler,
     void *diagContext,
-    const std::function<void(Module &)> &runOptimizationPasses) {
+    const std::function<void(Module &)> &runOptimizationPasses,
+    const BytecodeGenerationOptions &defaultBytecodeGenerationOptions) {
   assert(
       buffer->data()[buffer->size()] == 0 &&
       "The input buffer must be null terminated");
@@ -130,6 +133,7 @@ BCProviderFromSrc::createBCProviderFromSrcImpl(
   CodeGenerationSettings codeGenOpts{};
   codeGenOpts.unlimitedRegisters = false;
   codeGenOpts.instrumentIR = compileFlags.instrumentIR;
+  codeGenOpts.enableBlockScoping = compileFlags.enableBlockScoping;
 
   OptimizationSettings optSettings;
   // If the optional value is not set, the parser will automatically detect
@@ -160,6 +164,7 @@ BCProviderFromSrc::createBCProviderFromSrcImpl(
 
   context->setStrictMode(compileFlags.strict);
   context->setEnableEval(true);
+  context->setConvertES6Classes(compileFlags.enableES6Classes);
   context->setPreemptiveFunctionCompilationThreshold(
       compileFlags.preemptiveFunctionCompilationThreshold);
   context->setPreemptiveFileCompilationThreshold(
@@ -181,6 +186,7 @@ BCProviderFromSrc::createBCProviderFromSrcImpl(
     parser::JSParser libParser(*context, std::move(libBuffer));
     auto libParsed = libParser.parse();
     assert(libParsed && "Libhermes failed to parse");
+    libParser.registerMagicURLs();
     declFileList.push_back(libParsed.getValue());
   }
 
@@ -198,24 +204,29 @@ BCProviderFromSrc::createBCProviderFromSrcImpl(
   auto parserMode = parser::FullParse;
   bool useStaticBuiltinDetected = false;
   if (context->isLazyCompilation() && isLargeFile) {
-    if (!parser::JSParser::preParseBuffer(
-            *context, fileBufId, useStaticBuiltinDetected)) {
+    auto preParser = parser::JSParser::preParseBuffer(*context, fileBufId);
+    if (!preParser)
       return {nullptr, getErrorString()};
-    }
+    useStaticBuiltinDetected = preParser->getUseStaticBuiltin();
+    preParser->registerMagicURLs();
     parserMode = parser::LazyParse;
   }
 
   sem::SemContext semCtx{};
   parser::JSParser parser(*context, fileBufId, parserMode);
   auto parsed = parser.parse();
+
+  // If we are using lazy parse mode, we should have already detected the 'use
+  // static builtin' directive and magic URLs in the pre-parsing stage.
+  if (parsed && parserMode != parser::LazyParse) {
+    useStaticBuiltinDetected = parser.getUseStaticBuiltin();
+    parser.registerMagicURLs();
+  }
+
   if (!parsed || !hermes::sem::validateAST(*context, semCtx, *parsed)) {
     return {nullptr, getErrorString()};
   }
-  // If we are using lazy parse mode, we should have already detected the 'use
-  // static builtin' directive in the pre-parsing stage.
-  if (parserMode != parser::LazyParse) {
-    useStaticBuiltinDetected = parser.getUseStaticBuiltin();
-  }
+
   // The compiler flag is not set, automatically detect 'use static builtin'
   // from the source.
   if (!compileFlags.staticBuiltins) {
@@ -231,11 +242,13 @@ BCProviderFromSrc::createBCProviderFromSrcImpl(
   if (runOptimizationPasses)
     runOptimizationPasses(M);
 
-  BytecodeGenerationOptions opts{compileFlags.format};
+  auto opts = defaultBytecodeGenerationOptions;
+  opts.format = compileFlags.format;
   opts.optimizationEnabled = !!runOptimizationPasses;
   opts.staticBuiltinsEnabled =
       context->getOptimizationSettings().staticBuiltins;
   opts.verifyIR = compileFlags.verifyIR;
+
   auto BM = hbc::generateBytecodeModule(&M, M.getTopLevelFunction(), opts);
   if (context->getSourceErrorManager().getErrorCount() > 0) {
     return {nullptr, getErrorString()};

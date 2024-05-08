@@ -12,12 +12,15 @@
 
 export * from './BlockScope';
 export * from './CatchScope';
+export * from './ComponentScope';
 export * from './ClassFieldInitializerScope';
 export * from './ClassScope';
 export * from './DeclareModuleScope';
+export * from './DeclareNamespaceScope';
 export * from './ForScope';
 export * from './FunctionExpressionNameScope';
 export * from './FunctionScope';
+export * from './HookScope';
 export * from './GlobalScope';
 export * from './ModuleScope';
 export * from './Scope';

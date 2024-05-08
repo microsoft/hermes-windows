@@ -17,8 +17,17 @@ const ObjectVTable JSWeakRef::vt{
     VTable(
         CellKind::JSWeakRefKind,
         cellSize<JSWeakRef>(),
+        JSWeakRef::_finalizeImpl,
         nullptr,
-        JSWeakRef::_markWeakImpl),
+        nullptr
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+        ,
+        VTable::HeapSnapshotMetadata {
+          HeapSnapshot::NodeType::Object, nullptr,
+              JSWeakRef::_snapshotAddEdgesImpl, nullptr, nullptr
+        }
+#endif
+        ),
     JSWeakRef::_getOwnIndexedRangeImpl,
     JSWeakRef::_haveOwnIndexedImpl,
     JSWeakRef::_getOwnIndexedPropertyFlagsImpl,
@@ -34,17 +43,32 @@ void JSWeakRefBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.setVTable(&JSWeakRef::vt);
 }
 
-void JSWeakRef::_markWeakImpl(GCCell *cell, WeakRefAcceptor &acceptor) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+void JSWeakRef::_snapshotAddEdgesImpl(
+    GCCell *cell,
+    GC &gc,
+    HeapSnapshot &snap) {
+  auto *const self = vmcast<JSWeakRef>(cell);
+  // Filter out empty refs from adding edges.
+  if (!self->ref_.isValid())
+    return;
+  snap.addNamedEdge(
+      HeapSnapshot::EdgeType::Weak,
+      "weak",
+      gc.getObjectID(self->ref_.getNoBarrierUnsafe(gc.getPointerBase())));
+}
+#endif
+
+void JSWeakRef::_finalizeImpl(GCCell *cell, GC &) {
   auto *self = vmcast<JSWeakRef>(cell);
-  if (self->ref_.unsafeGetSlot()) {
-    acceptor.accept(self->ref_);
-  }
+  if (!self->ref_.isEmpty())
+    self->ref_.releaseSlot();
 }
 
 PseudoHandle<JSWeakRef> JSWeakRef::create(
     Runtime &runtime,
     Handle<JSObject> parentHandle) {
-  auto *cell = runtime.makeAFixed<JSWeakRef>(
+  auto *cell = runtime.makeAFixed<JSWeakRef, HasFinalizer::Yes>(
       runtime,
       parentHandle,
       runtime.getHiddenClassForPrototype(
@@ -53,8 +77,7 @@ PseudoHandle<JSWeakRef> JSWeakRef::create(
 }
 
 void JSWeakRef::setTarget(Runtime &runtime, Handle<JSObject> target) {
-  WeakRefLock lk{runtime.getHeap().weakRefMutex()};
-  assert(!ref_.unsafeGetSlot() && "Should not call setTarget multiple times");
+  assert(ref_.isEmpty() && "Should not call setTarget multiple times");
   ref_ = WeakRef<JSObject>(runtime, target);
 }
 

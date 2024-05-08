@@ -367,7 +367,18 @@ CallResult<HermesValue> getOwnPropertyDescriptor(
     valueOrAccessor = std::move(*propRes);
   }
 
-  return objectFromPropertyDescriptor(runtime, desc, valueOrAccessor);
+  DefinePropertyFlags dpFlags;
+  dpFlags.configurable = desc.flags.configurable;
+  dpFlags.enumerable = desc.flags.enumerable;
+  dpFlags.writable = desc.flags.writable;
+  dpFlags.setEnumerable = true;
+  dpFlags.setWritable = true;
+  dpFlags.setConfigurable = true;
+  dpFlags.setGetter = desc.flags.accessor;
+  dpFlags.setSetter = desc.flags.accessor;
+  dpFlags.setValue = !desc.flags.accessor;
+
+  return objectFromPropertyDescriptor(runtime, dpFlags, valueOrAccessor);
 }
 
 CallResult<HermesValue>
@@ -1178,6 +1189,9 @@ CallResult<HermesValue> directObjectPrototypeToString(
       tagLen.add(9);
       CallResult<StringBuilder> builder =
           StringBuilder::createStringBuilder(runtime, tagLen);
+      if (LLVM_UNLIKELY(builder == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
       // 19. Return the String that is the result of concatenating
       // "[object ", tag, and "]".
       builder->appendASCIIRef(ASCIIRef{"[object ", 8});
@@ -1436,12 +1450,9 @@ objectPrototypeDefineGetter(void *, Runtime &runtime, NativeArgs args) {
     return runtime.raiseTypeError("__defineGetter__ getter not callable");
   }
 
-  auto crtRes = PropertyAccessor::create(
+  HermesValue crtRes = PropertyAccessor::create(
       runtime, getter, Runtime::makeNullHandle<Callable>());
-  if (crtRes == ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  auto accessor = runtime.makeHandle<PropertyAccessor>(*crtRes);
+  auto accessor = runtime.makeHandle<PropertyAccessor>(crtRes);
 
   DefinePropertyFlags dpf;
   dpf.setEnumerable = 1;
@@ -1477,12 +1488,9 @@ objectPrototypeDefineSetter(void *, Runtime &runtime, NativeArgs args) {
     return runtime.raiseTypeError("__defineSetter__ setter not callable");
   }
 
-  auto crtRes = PropertyAccessor::create(
+  HermesValue crtRes = PropertyAccessor::create(
       runtime, Runtime::makeNullHandle<Callable>(), setter);
-  if (crtRes == ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  auto accessor = runtime.makeHandle<PropertyAccessor>(*crtRes);
+  auto accessor = runtime.makeHandle<PropertyAccessor>(crtRes);
 
   DefinePropertyFlags dpf;
   dpf.setEnumerable = 1;

@@ -130,168 +130,157 @@ void SwitchLowering::erasePhiTarget(BasicBlock *block, BasicBlock *toDelete) {
   }
 }
 
-/// LowerAllocObjectFuncContext allows us to walk down the dominance tree and
-/// process each basic block in the order of dominance relationship. This is
-/// required to achieve reliable lowering optimizations for object
-/// creations.
-class LowerAllocObjectFuncContext
-    : public DomTreeDFS::Visitor<
-          LowerAllocObjectFuncContext,
-          DomTreeDFS::StackNode<LowerAllocObjectFuncContext>> {
- public:
-  LowerAllocObjectFuncContext(
-      const DominanceInfo &DI,
-      AllocObjectInst *allocInst)
-      : DomTreeDFS::Visitor<
-            LowerAllocObjectFuncContext,
-            DomTreeDFS::StackNode<LowerAllocObjectFuncContext>>(DI),
-        allocInst_(allocInst) {
-    // The following loop constructs userBasicBlockMap_, by storing
-    // all users of allocInst keyed by Basic Block.
-    for (Instruction *I : allocInst->getUsers()) {
-      BasicBlock *BB = I->getParent();
-      userBasicBlockMap_[BB].insert(I);
+/// Starting from the given \p entry block, use the given DominanceInfo to
+/// examine all blocks that satisfy \p pred and attempt to construct the longest
+/// possible ordered chain of blocks such that each block dominates the block
+/// after it. This is done by traversing the dominance tree, until we encounter
+/// two blocks that satisfy pred and do not have a dominance relationship. Note
+/// that the last block in the chain will dominate all remaining blocks that
+/// satisfy \p pred.
+/// \return the longest ordered chain of blocks that satisfy \p pred.
+template <typename Func>
+static llvh::SmallVector<BasicBlock *, 4> orderBlocksByDominance(
+    const DominanceInfo &DI,
+    BasicBlock *entry,
+    Func &&pred) {
+  class OrderBlocksContext : public DomTreeDFS::Visitor<
+                                 OrderBlocksContext,
+                                 DomTreeDFS::StackNode<OrderBlocksContext>> {
+    /// The given predicate to determine whether a block should be considered.
+    Func pred_;
+
+    /// When we encounter branching, i.e. for a given basic block, if multiple
+    /// of the basic blocks dominated by that basic block all contain users of
+    /// allocInst_, we can not append any of those basic blocks to
+    /// sortedBasicBlocks_. Furthermore, we can not append any other basic
+    /// blocks to sortedBasicBlocks_ because the branch already exists.
+    bool stopAddingBasicBlock_{false};
+
+    /// List of basic blocks that satisfy the predicate, ordered by dominance
+    /// relationship.
+    llvh::SmallVector<BasicBlock *, 4> sortedBasicBlocks_{};
+
+   public:
+    OrderBlocksContext(
+        const DominanceInfo &DI,
+        BasicBlock *entryBlock,
+        Func &&pred)
+        : DomTreeDFS::Visitor<
+              OrderBlocksContext,
+              DomTreeDFS::StackNode<OrderBlocksContext>>(DI),
+          pred_(std::forward<Func>(pred)) {
+      // Perform the DFS to populate sortedBasicBlocks_.
+      this->DFS(this->DT_.getNode(entryBlock));
     }
-  }
 
-  llvh::SmallVector<StoreNewOwnPropertyInst *, 4> run() {
-    // First of all, get a list of basic blocks that contain users of
-    // allocInst_, sorted by dominance relationship.
-    DFS(DT_.getNode(allocInst_->getParent()));
-    // Extract instructions (users) from these basic blocks that meet
-    // the requirement of lowering.
-    return collectInstructions();
-  }
+    llvh::SmallVector<BasicBlock *, 4> get() && {
+      return std::move(sortedBasicBlocks_);
+    }
 
- private:
-  // friend Visitor such that DFS can call processNode.
-  friend DomTreeDFS::Visitor<
-      LowerAllocObjectFuncContext,
-      DomTreeDFS::StackNode<LowerAllocObjectFuncContext>>;
+    /// Called by DFS recursively to process each node. Note that the return
+    /// value isn't actually used.
+    bool processNode(DomTreeDFS::StackNode<OrderBlocksContext> *SN) {
+      assert(!SN->isDone() && "Visiting same basic block twice");
 
-  /// Called by DFS recursively to process each node.
-  /// The outcome (sortedBasicBlocks_) we expect is the list of basic blocks
-  /// that contain users of allocInst_, that's strictly ordered by dominance
-  /// (i.e. every BB must dominate the next one on the list). One important
-  /// extra constraint is that the last BB in the list must also dominate all
-  /// other BBs that contains users of allocInst_ that's not in the basic block
-  /// list. The return value indicates whether this basic block is added to the
-  /// list. Note that the return value isn't actually used.
-  bool processNode(DomTreeDFS::StackNode<LowerAllocObjectFuncContext> *SN);
+      BasicBlock *BB = SN->node()->getBlock();
+      // If BB does not satisfy the predicate, proceed to the next block.
+      if (!pred_(BB))
+        return false;
 
-  /// collectInstructions walks through sortedBasicBlocks_, extract instructions
-  /// that are users of allocInst_, ordered by dominance relationship.
-  /// We also look into the type of each user and decide when to stop the
-  /// lowering process. Specifically, we only process StoreNewOwnPropertyInst.
-  llvh::SmallVector<StoreNewOwnPropertyInst *, 4> collectInstructions() const;
+      while (!sortedBasicBlocks_.empty() &&
+             !this->DT_.properlyDominates(sortedBasicBlocks_.back(), BB)) {
+        // If the last basic block in the list does not dominate BB,
+        // it means BB and that last basic block are in parallel branches
+        // of previous basic blocks. We cannot doing any lowering into
+        // any of these basic blocks. So we roll back one basic block,
+        // and mark the fact that we can no longer append any more basic blocks
+        // afterwards because of the existence of basic blocks.
+        // The DFS process needs to continue, as we may roll back even more
+        // basic blocks.
+        sortedBasicBlocks_.pop_back();
+        stopAddingBasicBlock_ = true;
+      }
+      if (!stopAddingBasicBlock_) {
+        sortedBasicBlocks_.push_back(BB);
+        return true;
+      }
+      return false;
+    }
+  };
 
-  /// The instruction that allocates the object.
-  AllocObjectInst *allocInst_;
-
-  /// Constructed from all users of allocInst_. Map from basic block to the set
-  /// of instructions in that basic block that are users of allocInst_. This
-  /// data structure is needed to speed up all the lookup operations during the
-  /// process.
-  llvh::DenseMap<BasicBlock *, llvh::DenseSet<Instruction *>>
-      userBasicBlockMap_{};
-
-  /// When we encounter branching, i.e. for a given basic block, if multiple of
-  /// the basic blocks dominated by that basic block all contain users of
-  /// allocInst_, we can not append any of those basic blocks to
-  /// sortedBasicBlocks_. Furthermore, we can not append any other basic blocks
-  /// to sortedBasicBlocks_ because the branch already exists.
-  bool stopAddingBasicBlock_{false};
-
-  /// List of basic blocks that contain users of allocInst_, ordered by
-  /// dominance relationship.
-  llvh::SmallVector<BasicBlock *, 4> sortedBasicBlocks_{};
-};
-
-bool LowerAllocObjectFuncContext::processNode(
-    DomTreeDFS::StackNode<LowerAllocObjectFuncContext> *SN) {
-  assert(!SN->isDone() && "Visiting same basic block twice");
-  SN->markDone();
-
-  BasicBlock *BB = SN->node()->getBlock();
-  if (!userBasicBlockMap_.count(BB)) {
-    // BB does not contain any users of allocInst_.
-    return false;
-  }
-  while (!sortedBasicBlocks_.empty() &&
-         !DT_.properlyDominates(sortedBasicBlocks_.back(), BB)) {
-    // If the last basic block in the list does not dominate BB,
-    // it means BB and that last basic block are in parallel branches
-    // of previous basic blocks. We cannot doing any lowering into
-    // any of these basic blocks. So we roll back one basic block,
-    // and mark the fact that we can no longer append any more basic blocks
-    // afterwards because of the existence of basic blocks.
-    // The DFS process needs to continue, as we may roll back even more
-    // basic blocks.
-    sortedBasicBlocks_.pop_back();
-    stopAddingBasicBlock_ = true;
-  }
-  if (!stopAddingBasicBlock_) {
-    sortedBasicBlocks_.push_back(BB);
-    return true;
-  }
-  return false;
+  return OrderBlocksContext(DI, entry, std::forward<Func>(pred)).get();
 }
 
-llvh::SmallVector<StoreNewOwnPropertyInst *, 4>
-LowerAllocObjectFuncContext::collectInstructions() const {
-  llvh::SmallVector<StoreNewOwnPropertyInst *, 4> instrs;
+LowerAllocObject::StoreList LowerAllocObject::collectStores(
+    AllocObjectInst *allocInst,
+    const BlockUserMap &userBasicBlockMap,
+    const DominanceInfo &DI) {
+  // Sort the basic blocks that contain users of allocInst by dominance.
+  auto sortedBlocks = orderBlocksByDominance(
+      DI, allocInst->getParent(), [&userBasicBlockMap](BasicBlock *BB) {
+        return userBasicBlockMap.find(BB) != userBasicBlockMap.end();
+      });
 
-  for (BasicBlock *BB : sortedBasicBlocks_) {
-    bool terminate = false;
-    for (Instruction &I : *BB) {
-      if (!userBasicBlockMap_.find(BB)->second.count(&I)) {
-        // I is not a user of allocInst_, ignore it.
-        continue;
-      }
-      auto *SI = llvh::dyn_cast<StoreNewOwnPropertyInst>(&I);
-      if (!SI || SI->getObject() != allocInst_) {
-        // A user that's not a StoreNewOwnPropertyInst storing into the object
-        // created by allocInst_. We have to stop processing here.
-        terminate = true;
-        break;
-      }
-      instrs.push_back(SI);
-    }
-    if (terminate) {
-      break;
+  // Iterate over the sorted blocks to collect StoreNewOwnPropertyInst users
+  // until we encounter a nullptr indicating we should stop.
+  StoreList instrs;
+  for (BasicBlock *BB : sortedBlocks) {
+    for (StoreNewOwnPropertyInst *I : userBasicBlockMap.find(BB)->second) {
+      // If I is null, we cannot consider additional stores.
+      if (!I)
+        return instrs;
+      instrs.push_back(I);
     }
   }
   return instrs;
 }
 
 bool LowerAllocObject::runOnFunction(Function *F) {
-  bool changed = false;
-  llvh::SmallVector<AllocObjectInst *, 4> allocs;
-  // Collect all AllocObject instructions.
-  for (BasicBlock &BB : *F)
-    for (auto &it : BB) {
-      if (auto *A = llvh::dyn_cast<AllocObjectInst>(&it))
-        if (llvh::isa<EmptySentinel>(A->getParentObject()))
-          allocs.push_back(A);
+  /// If we can still append to \p stores, check if the user \p U is an eligible
+  /// store to \p A. If so, append it to \p stores, if not, append nullptr to
+  /// indicate that subsequent users in the basic block should not be
+  /// considered.
+  auto tryAdd = [](AllocObjectInst *A, Instruction *U, StoreList &stores) {
+    // If the store list has been terminated by a nullptr, we have already
+    // encountered a non-SNOP user of A in this block. Ignore this user.
+    if (!stores.empty() && !stores.back())
+      return;
+    auto *SI = llvh::dyn_cast<StoreNewOwnPropertyInst>(U);
+    if (!SI || SI->getStoredValue() == A || !SI->getIsEnumerable()) {
+      // A user that's not a StoreNewOwnPropertyInst storing into the object
+      // created by allocInst. We have to stop processing here. Note that we
+      // check the stored value instead of the target object so that we omit
+      // the case where an object is stored into itself. While it should
+      // technically be safe, this maintains the invariant that stop as soon
+      // the allocated object is used as something other than the target of a
+      // StoreNewOwnPropertyInst.
+      stores.push_back(nullptr);
+    } else {
+      assert(
+          SI->getObject() == A &&
+          "SNOP using allocInst must use it as object or value");
+      stores.push_back(SI);
     }
+  };
 
-  for (auto *A : allocs) {
-    changed |= lowerAlloc(A);
-  }
+  // For each basic block, collect an ordered list of stores into
+  // AllocObjectInsts that should be considered for lowering into a buffer.
+  llvh::DenseMap<AllocObjectInst *, BlockUserMap> allocUsers;
+  for (BasicBlock &BB : *F)
+    for (Instruction &I : BB)
+      for (size_t i = 0; i < I.getNumOperands(); ++i)
+        if (auto *A = llvh::dyn_cast<AllocObjectInst>(I.getOperand(i)))
+          tryAdd(A, &I, allocUsers[A][&BB]);
 
-  return changed;
-}
-
-bool LowerAllocObject::lowerAlloc(AllocObjectInst *allocInst) {
-  Function *F = allocInst->getParent()->getParent();
+  bool changed = false;
   DominanceInfo DI(F);
-  LowerAllocObjectFuncContext ctx(DI, allocInst);
-  llvh::SmallVector<StoreNewOwnPropertyInst *, 4> users = ctx.run();
-  if (users.empty()) {
-    return false;
+  for (const auto &[A, userBasicBlockMap] : allocUsers) {
+    // Collect the stores that are guaranteed to execute before any other user
+    // of this object.
+    auto stores = collectStores(A, userBasicBlockMap, DI);
+    changed |= lowerAllocObjectBuffer(A, stores, UINT16_MAX);
   }
 
-  bool changed = lowerAllocObjectBuffer(allocInst, users, UINT16_MAX);
   return changed;
 }
 
@@ -312,20 +301,18 @@ static constexpr uint32_t kNonLiteralPlaceholderLimit = 3;
 
 /// Whether the given value \v V can be serialized into the object literal
 /// buffer.
-static bool isSerializableLiteral(Value *V) {
-  return V &&
-      (llvh::isa<LiteralNull>(V) || llvh::isa<LiteralBool>(V) ||
-       llvh::isa<LiteralNumber>(V) || llvh::isa<LiteralString>(V));
-}
-
 static bool canSerialize(Value *V) {
-  if (auto *LCI = llvh::dyn_cast_or_null<HBCLoadConstInst>(V))
-    return isSerializableLiteral(LCI->getConst());
+  if (auto *LCI = llvh::dyn_cast_or_null<HBCLoadConstInst>(V)) {
+    Literal *L = LCI->getConst();
+    return llvh::isa<LiteralNull>(L) || llvh::isa<LiteralBool>(L) ||
+        llvh::isa<LiteralNumber>(L) || llvh::isa<LiteralString>(L);
+  }
   return false;
 }
 
 uint32_t LowerAllocObject::estimateBestNumElemsToSerialize(
-    llvh::SmallVectorImpl<StoreNewOwnPropertyInst *> &users) {
+    const StoreList &users,
+    bool hasParent) {
   // We want to track curSaving to avoid serializing too many place holders
   // which ends up causing a big size regression.
   // We set curSaving to be the delta of the size of two instructions to avoid
@@ -333,6 +320,10 @@ uint32_t LowerAllocObject::estimateBestNumElemsToSerialize(
   // significantly increase bytecode size.
   int32_t curSaving = static_cast<int32_t>(sizeof(inst::NewObjectInst)) -
       static_cast<int32_t>(sizeof(inst::NewObjectWithBufferInst));
+  // If there is a parent set on the new object, account for the CallBuiltin to
+  // explicitly set it.
+  if (hasParent)
+    curSaving -= sizeof(inst::CallBuiltinInst);
   int32_t maxSaving = 0;
   uint32_t optimumStopIndex = 0;
   uint32_t nonLiteralPlaceholderCount = 0;
@@ -377,9 +368,10 @@ uint32_t LowerAllocObject::estimateBestNumElemsToSerialize(
 
 bool LowerAllocObject::lowerAllocObjectBuffer(
     AllocObjectInst *allocInst,
-    llvh::SmallVectorImpl<StoreNewOwnPropertyInst *> &users,
+    const StoreList &users,
     uint32_t maxSize) {
-  auto size = estimateBestNumElemsToSerialize(users);
+  auto size = estimateBestNumElemsToSerialize(
+      users, !llvh::isa<EmptySentinel>(allocInst->getParentObject()));
   if (size == 0) {
     return false;
   }
@@ -435,155 +427,14 @@ bool LowerAllocObject::lowerAllocObjectBuffer(
   builder.setInsertionPoint(allocInst);
   auto *alloc = builder.createHBCAllocObjectFromBufferInst(
       prop_map, allocInst->getSize());
-  allocInst->replaceAllUsesWith(alloc);
-  allocInst->eraseFromParent();
 
-  return true;
-}
-
-bool LowerAllocObjectLiteral::runOnFunction(Function *F) {
-  bool changed = false;
-  llvh::SmallVector<AllocObjectLiteralInst *, 4> allocs;
-  for (BasicBlock &BB : *F) {
-    // We need to increase the iterator before calling lowerAllocObjectBuffer.
-    // Otherwise deleting the instruction will invalidate the iterator.
-    for (auto it = BB.begin(), e = BB.end(); it != e;) {
-      if (auto *A = llvh::dyn_cast<AllocObjectLiteralInst>(&*it++)) {
-        changed |= lowerAllocObjectBuffer(A);
-      }
-    }
+  // HBCAllocObjectFromBuffer does not take a prototype argument. So if the
+  // AllocObjectInst had a prototype set, make an explicit call to set it.
+  if (!llvh::isa<EmptySentinel>(allocInst->getParentObject())) {
+    builder.createCallBuiltinInst(
+        BuiltinMethod::HermesBuiltin_silentSetPrototypeOf,
+        {alloc, allocInst->getParentObject()});
   }
-
-  return changed;
-}
-
-bool LowerAllocObjectLiteral::lowerAlloc(AllocObjectLiteralInst *allocInst) {
-  Function *F = allocInst->getParent()->getParent();
-  IRBuilder builder(F);
-
-  auto size = allocInst->getKeyValuePairCount();
-
-  // Replace AllocObjectLiteral with a regular AllocObject
-  builder.setLocation(allocInst->getLocation());
-  builder.setCurrentSourceLevelScope(allocInst->getSourceLevelScope());
-  builder.setInsertionPoint(allocInst);
-  auto *Obj = builder.createAllocObjectInst(size, nullptr);
-
-  for (unsigned i = 0; i < allocInst->getKeyValuePairCount(); i++) {
-    Literal *key = allocInst->getKey(i);
-    Value *value = allocInst->getValue(i);
-    builder.createStoreNewOwnPropertyInst(
-        value, allocInst, key, IRBuilder::PropEnumerable::Yes);
-  }
-  allocInst->replaceAllUsesWith(Obj);
-  allocInst->eraseFromParent();
-
-  return true;
-}
-
-uint32_t LowerAllocObjectLiteral::estimateBestNumElemsToSerialize(
-    AllocObjectLiteralInst *allocInst) {
-  // Reuse calc logic from LowerAllocObject.
-  int32_t curSaving = static_cast<int32_t>(sizeof(inst::NewObjectInst)) -
-      static_cast<int32_t>(sizeof(inst::NewObjectWithBufferInst));
-  int32_t maxSaving = 0;
-  uint32_t optimumStopIndex = 0;
-  uint32_t nonLiteralPlaceholderCount = 0;
-
-  uint32_t curSize = 0;
-  for (unsigned i = 0; i < allocInst->getKeyValuePairCount(); i++) {
-    ++curSize;
-    Literal *key = allocInst->getKey(i);
-    Value *value = allocInst->getValue(i);
-    if (isSerializableLiteral(value)) {
-      curSaving += kLiteralSavedBytes;
-      if (curSaving > maxSaving) {
-        maxSaving = curSaving;
-        optimumStopIndex = curSize;
-      }
-    } else {
-      if (llvh::isa<LiteralNumber>(key)) {
-        continue;
-      }
-      if (nonLiteralPlaceholderCount == kNonLiteralPlaceholderLimit) {
-        // We have reached the maximum number of place holders we can put.
-        break;
-      }
-      nonLiteralPlaceholderCount++;
-      curSaving -= kNonLiteralCostBytes;
-    }
-  }
-  return optimumStopIndex;
-}
-
-bool LowerAllocObjectLiteral::lowerAllocObjectBuffer(
-    AllocObjectLiteralInst *allocInst) {
-  Function *F = allocInst->getParent()->getParent();
-  IRBuilder builder(F);
-
-  auto maxSize = (unsigned)UINT16_MAX;
-  auto size = estimateBestNumElemsToSerialize(allocInst);
-  size = std::min(maxSize, size);
-
-  // Should not create HBCAllocObjectFromBufferInst.
-  if (size == 0) {
-    return lowerAlloc(allocInst);
-  }
-
-  // Replace AllocObjectLiteral with HBCAllocObjectFromBufferInst
-  builder.setLocation(allocInst->getLocation());
-  builder.setCurrentSourceLevelScope(allocInst->getSourceLevelScope());
-  builder.setInsertionPointAfter(allocInst);
-  HBCAllocObjectFromBufferInst::ObjectPropertyMap propMap;
-
-  unsigned i = 0;
-  for (; i < size; i++) {
-    Literal *key = allocInst->getKey(i);
-    Value *value = allocInst->getValue(i);
-    Literal *propLiteral = nullptr;
-    // Property name can be either a LiteralNumber or a LiteralString.
-    if (auto *LN = llvh::dyn_cast<LiteralNumber>(key)) {
-      assert(
-          LN->convertToArrayIndex() &&
-          "LiteralNumber can be a property name only if it can be converted to array index.");
-      propLiteral = LN;
-    } else {
-      propLiteral = cast<LiteralString>(key);
-    }
-
-    if (isSerializableLiteral(value)) {
-      propMap.push_back(std::pair<Literal *, Literal *>(
-          propLiteral, llvh::cast<Literal>(value)));
-    } else if (llvh::isa<LiteralString>(propLiteral)) {
-      // LiteralString key with undefined / non-constant value.
-      propMap.push_back(std::pair<Literal *, Literal *>(
-          propLiteral, builder.getLiteralNull()));
-      builder.createStorePropertyInst(value, allocInst, key);
-    } else {
-      // LiteralNumber key with undefined / non-constant value.
-      // No need to put Null in the buffer, as numeric properties can
-      // be added in any order.
-      builder.createStoreOwnPropertyInst(
-          value, allocInst, key, IRBuilder::PropEnumerable::Yes);
-    }
-  }
-
-  // Handle properties beyond best num of properties or that cannot fit in
-  // maxSize.
-  for (; i < allocInst->getKeyValuePairCount(); i++) {
-    Literal *key = allocInst->getKey(i);
-    Value *value = allocInst->getValue(i);
-    builder.createStoreNewOwnPropertyInst(
-        value, allocInst, key, IRBuilder::PropEnumerable::Yes);
-  }
-
-  // Emit HBCAllocObjectFromBufferInst.
-  // First, we reset insertion location.
-  builder.setLocation(allocInst->getLocation());
-  builder.setCurrentSourceLevelScope(allocInst->getSourceLevelScope());
-  builder.setInsertionPoint(allocInst);
-  auto *alloc = builder.createHBCAllocObjectFromBufferInst(
-      propMap, allocInst->getKeyValuePairCount());
   allocInst->replaceAllUsesWith(alloc);
   allocInst->eraseFromParent();
 
@@ -658,11 +509,6 @@ bool LowerNumericProperties::runOnFunction(Function *F) {
       } else if (llvh::isa<StoreGetterSetterInst>(&Inst)) {
         changed |= stringToNumericProperty(
             builder, Inst, StoreGetterSetterInst::PropertyIdx);
-      } else if (llvh::isa<AllocObjectLiteralInst>(&Inst)) {
-        auto allocInst = cast<AllocObjectLiteralInst>(&Inst);
-        for (unsigned i = 0; i < allocInst->getKeyValuePairCount(); i++) {
-          changed |= stringToNumericProperty(builder, Inst, i * 2);
-        }
       }
     }
   }

@@ -11,7 +11,7 @@
 'use strict';
 
 import type {VisitorKeysType} from '../traverse/getVisitorKeys';
-import type {ESNode} from 'hermes-estree';
+import type {ESNode, Program} from 'hermes-estree';
 
 import {SimpleTraverser} from '../traverse/SimpleTraverser';
 import {
@@ -35,9 +35,16 @@ export type TransformOptions = $ReadOnly<{
   /** The callback function which is called on entering each node. */
   transform: TransformCallback,
 
-  /** The set of visitor keys to use for traversal. Defaults to the `hermes-eslint` visitor keys */
+  /** The set of visitor keys to use for traversal. Defaults to the Flow ESTree visitor keys */
   visitorKeys?: ?VisitorKeysType,
 }>;
+
+function setParentPointer(node: ESNode, parent: ?ESNode): void {
+  if (parent != null) {
+    // $FlowExpectedError[cannot-write]
+    node.parent = parent;
+  }
+}
 
 /**
  * A simple class to recursively tranform AST trees.
@@ -53,10 +60,20 @@ export class SimpleTransform {
     let resultRootNode: ESNode | null = rootNode;
     SimpleTraverser.traverse(rootNode, {
       enter: (node: ESNode, parent: ?ESNode) => {
+        // Ensure the parent pointers are correctly set before entering the node.
+        setParentPointer(node, parent);
+
         const resultNode = options.transform(node);
         if (resultNode !== node) {
-          const traversedResultNode =
-            resultNode != null ? this.transform(resultNode, options) : null;
+          let traversedResultNode = null;
+
+          if (resultNode != null) {
+            // Ensure the new node has the correct parent pointers before recursing again.
+            setParentPointer(resultNode, parent);
+
+            traversedResultNode = this.transform(resultNode, options);
+          }
+
           if (parent == null) {
             if (node !== rootNode) {
               throw new Error(
@@ -65,15 +82,22 @@ export class SimpleTransform {
             }
             resultRootNode = traversedResultNode;
           } else if (traversedResultNode == null) {
-            removeNodeOnParent(node, parent);
+            removeNodeOnParent(node, parent, options.visitorKeys);
           } else {
-            replaceNodeOnParent(node, parent, traversedResultNode);
+            replaceNodeOnParent(
+              node,
+              parent,
+              traversedResultNode,
+              options.visitorKeys,
+            );
+            setParentPointer(traversedResultNode, parent);
           }
 
           throw SimpleTraverser.Skip;
         }
       },
       leave(_node: ESNode) {},
+      visitorKeys: options.visitorKeys,
     });
     return resultRootNode;
   }
@@ -87,6 +111,17 @@ export class SimpleTransform {
     return new SimpleTransform().transform(node, options);
   }
 
+  static transformProgram(
+    program: Program,
+    options: TransformOptions,
+  ): Program {
+    const result = SimpleTransform.transform(program, options);
+    if (result?.type === 'Program') {
+      return result;
+    }
+    throw new Error('SimpleTransform.transformProgram: Expected program node.');
+  }
+
   /**
    * Return a new AST node with the given properties overrided if needed.
    *
@@ -98,7 +133,11 @@ export class SimpleTransform {
    * @return Either the orginal node if the properties matched the existing node or a new node with
    *         the new properties.
    */
-  static nodeWith<T: ESNode>(node: T, overrideProps: Partial<T>): T {
-    return nodeWith<T>(node, overrideProps);
+  static nodeWith<T: ESNode>(
+    node: T,
+    overrideProps: Partial<T>,
+    visitorKeys?: VisitorKeysType,
+  ): T {
+    return nodeWith<T>(node, overrideProps, visitorKeys);
   }
 }

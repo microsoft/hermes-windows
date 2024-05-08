@@ -16,7 +16,7 @@ import {
   expectBabelAlignment,
   expectEspreeAlignment,
 } from '../__test_utils__/alignment-utils';
-import {parse, parseForSnapshot} from '../__test_utils__/parse';
+import {parseForSnapshot} from '../__test_utils__/parse';
 
 describe('Object properties', () => {
   const testCase: AlignmentCase = {
@@ -110,7 +110,7 @@ describe('Object properties', () => {
                     "params": [],
                     "predicate": null,
                     "range": [
-                      41,
+                      43,
                       56,
                     ],
                     "returnType": null,
@@ -326,128 +326,145 @@ describe('Object properties', () => {
   });
 
   test('Babel', () => {
-    expect(parse(testCase.code, {babel: true})).toMatchObject({
-      type: 'File',
-      program: {
-        type: 'Program',
-        body: [
+    expect(parseForSnapshot(testCase.code, {babel: true}))
+      .toMatchInlineSnapshot(`
+      {
+        "body": [
           {
-            type: 'ExpressionStatement',
-            expression: {
-              type: 'ObjectExpression',
-              properties: [
+            "expression": {
+              "properties": [
                 {
-                  type: 'ObjectProperty',
-                  key: {
-                    type: 'Identifier',
-                    name: 'prop1',
+                  "computed": false,
+                  "key": {
+                    "name": "prop1",
+                    "type": "Identifier",
                   },
-                  value: {
-                    type: 'NumericLiteral',
-                    value: 1,
+                  "method": false,
+                  "shorthand": false,
+                  "type": "ObjectProperty",
+                  "value": {
+                    "extra": {
+                      "raw": "1",
+                      "rawValue": 1,
+                    },
+                    "type": "NumericLiteral",
+                    "value": 1,
                   },
-                  computed: false,
-                  shorthand: false,
                 },
                 {
-                  type: 'ObjectProperty',
-                  key: {
-                    type: 'Identifier',
-                    name: 'prop2',
+                  "computed": false,
+                  "key": {
+                    "name": "prop2",
+                    "type": "Identifier",
                   },
-                  value: {
-                    type: 'FunctionExpression',
+                  "method": false,
+                  "shorthand": false,
+                  "type": "ObjectProperty",
+                  "value": {
+                    "async": false,
+                    "body": {
+                      "body": [],
+                      "directives": [],
+                      "type": "BlockStatement",
+                    },
+                    "generator": false,
+                    "id": null,
+                    "params": [],
+                    "type": "FunctionExpression",
                   },
-                  computed: false,
-                  shorthand: false,
                 },
                 {
-                  type: 'ObjectMethod',
-                  key: {
-                    type: 'Identifier',
-                    name: 'prop3',
+                  "async": false,
+                  "body": {
+                    "body": [],
+                    "directives": [],
+                    "type": "BlockStatement",
                   },
-                  kind: 'method',
-                  id: null,
-                  params: [],
-                  body: {
-                    type: 'BlockStatement',
-                    body: [],
+                  "computed": false,
+                  "generator": false,
+                  "id": null,
+                  "key": {
+                    "name": "prop3",
+                    "type": "Identifier",
                   },
-                  async: false,
-                  generator: false,
-                  returnType: null,
-                  typeParameters: null,
-                  predicate: null,
+                  "kind": "method",
+                  "method": true,
+                  "params": [],
+                  "type": "ObjectMethod",
                 },
                 {
-                  type: 'ObjectMethod',
-                  key: {
-                    type: 'Identifier',
-                    name: 'prop4',
+                  "async": true,
+                  "body": {
+                    "body": [],
+                    "directives": [],
+                    "type": "BlockStatement",
                   },
-                  kind: 'method',
-                  id: null,
-                  params: [],
-                  body: {
-                    type: 'BlockStatement',
-                    body: [],
+                  "computed": false,
+                  "generator": false,
+                  "id": null,
+                  "key": {
+                    "name": "prop4",
+                    "type": "Identifier",
                   },
-                  async: true,
-                  generator: false,
-                  returnType: null,
-                  typeParameters: null,
-                  predicate: null,
+                  "kind": "method",
+                  "method": true,
+                  "params": [],
+                  "type": "ObjectMethod",
                 },
                 {
-                  type: 'ObjectMethod',
-                  key: {
-                    type: 'Identifier',
-                    name: 'prop5',
+                  "async": false,
+                  "body": {
+                    "body": [],
+                    "directives": [],
+                    "type": "BlockStatement",
                   },
-                  kind: 'get',
-                  id: null,
-                  params: [],
-                  body: {
-                    type: 'BlockStatement',
-                    body: [],
+                  "computed": false,
+                  "generator": false,
+                  "id": null,
+                  "key": {
+                    "name": "prop5",
+                    "type": "Identifier",
                   },
-                  async: false,
-                  generator: false,
-                  returnType: null,
-                  typeParameters: null,
-                  predicate: null,
+                  "kind": "get",
+                  "method": false,
+                  "params": [],
+                  "type": "ObjectMethod",
+                  "variance": null,
                 },
                 {
-                  type: 'ObjectMethod',
-                  key: {
-                    type: 'Identifier',
-                    name: 'prop6',
+                  "async": false,
+                  "body": {
+                    "body": [],
+                    "directives": [],
+                    "type": "BlockStatement",
                   },
-                  kind: 'set',
-                  id: null,
-                  params: [
+                  "computed": false,
+                  "generator": false,
+                  "id": null,
+                  "key": {
+                    "name": "prop6",
+                    "type": "Identifier",
+                  },
+                  "kind": "set",
+                  "method": false,
+                  "params": [
                     {
-                      type: 'Identifier',
-                      name: 'x',
+                      "name": "x",
+                      "type": "Identifier",
                     },
                   ],
-                  body: {
-                    type: 'BlockStatement',
-                    body: [],
-                  },
-                  async: false,
-                  generator: false,
-                  returnType: null,
-                  typeParameters: null,
-                  predicate: null,
+                  "type": "ObjectMethod",
+                  "variance": null,
                 },
               ],
+              "type": "ObjectExpression",
             },
+            "type": "ExpressionStatement",
           },
         ],
-      },
-    });
+        "type": "Program",
+      }
+    `);
     expectBabelAlignment(testCase);
   });
 });

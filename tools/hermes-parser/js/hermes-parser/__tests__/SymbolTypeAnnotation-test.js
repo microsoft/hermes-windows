@@ -16,7 +16,7 @@ import {
   expectBabelAlignment,
   expectEspreeAlignment,
 } from '../__test_utils__/alignment-utils';
-import {parse, parseForSnapshot} from '../__test_utils__/parse';
+import {parseForSnapshot} from '../__test_utils__/parse';
 
 describe('Symbol type annotation', () => {
   const testCase: AlignmentCase = {
@@ -55,25 +55,30 @@ describe('Symbol type annotation', () => {
   });
 
   test('Babel', () => {
-    expect(parse(testCase.code, {babel: true})).toMatchObject({
-      type: 'File',
-      program: {
-        type: 'Program',
-        body: [
+    expect(parseForSnapshot(testCase.code, {babel: true}))
+      .toMatchInlineSnapshot(`
+      {
+        "body": [
           {
-            type: 'TypeAlias',
-            right: {
-              type: 'GenericTypeAnnotation',
-              id: {
-                type: 'Identifier',
-                name: 'symbol',
-              },
+            "id": {
+              "name": "T",
+              "type": "Identifier",
             },
-            typeParameters: null,
+            "right": {
+              "id": {
+                "name": "symbol",
+                "type": "Identifier",
+              },
+              "type": "GenericTypeAnnotation",
+              "typeParameters": null,
+            },
+            "type": "TypeAlias",
+            "typeParameters": null,
           },
         ],
-      },
-    });
+        "type": "Program",
+      }
+    `);
     expectBabelAlignment(testCase);
   });
 });

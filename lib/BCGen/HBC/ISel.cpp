@@ -214,33 +214,64 @@ bool HBCISel::getDebugSourceLocation(
     return false;
   }
 
-  if (debugIdCache_.currentBufId != coords.bufId) {
-    llvh::StringRef filename = manager.getSourceUrl(coords.bufId);
-    debugIdCache_.currentFilenameId = BCFGen_->addFilename(filename);
-
-    auto sourceMappingUrl = manager.getSourceMappingUrl(coords.bufId);
-
-    // Lazily compiled functions ask to strip the source mapping URL because it
-    // was already encoded in the top level module, and it could be a 1MB+ data
-    // url that we don't want to duplicate once per function.
-    if (sourceMappingUrl.empty() ||
-        bytecodeGenerationOptions_.stripSourceMappingURL) {
-      debugIdCache_.currentSourceMappingUrlId =
-          facebook::hermes::debugger::kInvalidBreakpoint;
-    } else {
-      debugIdCache_.currentSourceMappingUrlId = BCFGen_->addFilename(
-          F_->getParent()->getContext().getIdentifier(sourceMappingUrl).str());
-    }
-
-    debugIdCache_.currentBufId = coords.bufId;
-  }
+  auto ids = obtainFileAndSourceMapId(manager, coords.bufId);
 
   out->line = coords.line;
   out->column = coords.col;
-  out->filenameId = debugIdCache_.currentFilenameId;
-  out->sourceMappingUrlId = debugIdCache_.currentSourceMappingUrlId;
+  out->filenameId = ids.filenameId;
+  out->sourceMappingUrlId = ids.sourceMappingUrlId;
 
   return true;
+}
+
+inline FileAndSourceMapId HBCISel::obtainFileAndSourceMapId(
+    SourceErrorManager &sm,
+    unsigned bufId) {
+  if (LLVM_LIKELY(
+          lastFoundFileSourceMapId_ &&
+          lastFoundFileSourceMapId_->first == bufId)) {
+    return lastFoundFileSourceMapId_->second;
+  }
+
+  auto it = fileAndSourceMapIdCache_.find(bufId);
+  if (LLVM_LIKELY(it != fileAndSourceMapIdCache_.end())) {
+    lastFoundFileSourceMapId_ = &*it;
+    return it->second;
+  }
+
+  llvh::StringRef filename = sm.getSourceUrl(bufId);
+
+  uint32_t currentFilenameId = BCFGen_->addFilename(filename);
+  uint32_t currentSourceMappingUrlId;
+
+  llvh::StringRef sourceMappingUrl{};
+  // Only fetch the source map URL if we are not stripping it and if we are
+  // generating full debug info.
+  if (!bytecodeGenerationOptions_.stripSourceMappingURL &&
+      F_->getContext().getDebugInfoSetting() >= DebugInfoSetting::ALL) {
+    sourceMappingUrl = sm.getSourceMappingUrl(bufId);
+  }
+
+  // Lazily compiled functions ask to strip the source mapping URL because
+  // it was already encoded in the top level module, and it could be a 1MB+
+  // data url that we don't want to duplicate once per function.
+  if (sourceMappingUrl.empty()) {
+    currentSourceMappingUrlId = facebook::hermes::debugger::kInvalidBreakpoint;
+  } else {
+    // NOTE: this is potentially a very expensive operation, since the source
+    // mapping URL could be many megabytes (when it is a data URL). Looking it
+    // up in the hash table potentially requires scanning it three times.
+    currentSourceMappingUrlId = BCFGen_->addFilename(
+        F_->getParent()->getContext().getIdentifier(sourceMappingUrl).str());
+  }
+
+  it = fileAndSourceMapIdCache_
+           .try_emplace(
+               bufId,
+               FileAndSourceMapId{currentFilenameId, currentSourceMappingUrlId})
+           .first;
+  lastFoundFileSourceMapId_ = &*it;
+  return it->second;
 }
 
 void HBCISel::addDebugSourceLocationInfo(SourceMapGenerator *outSourceMap) {
@@ -262,8 +293,8 @@ void HBCISel::addDebugSourceLocationInfo(SourceMapGenerator *outSourceMap) {
     assert(inst->hasLocation() && "Missing location");
     auto location = inst->getLocation();
 
-    if (!getDebugSourceLocation(manager, location, &info)) {
-      llvm_unreachable("Unable to get source location");
+    if (LLVM_UNLIKELY(!getDebugSourceLocation(manager, location, &info))) {
+      hermes_fatal("Unable to get source location");
     }
     std::pair<Register, ScopeDesc *> regAndScopeDesc =
         SRA_.registerAndScopeForInstruction(inst);
@@ -311,6 +342,12 @@ void HBCISel::generateScopeCreationInst(
   llvm_unreachable("This is not a concrete instruction");
 }
 
+void HBCISel::generateNestedScopeCreationInst(
+    NestedScopeCreationInst *Inst,
+    BasicBlock *next) {
+  llvm_unreachable("This is not a concrete instruction");
+}
+
 void HBCISel::generateSingleOperandInst(
     SingleOperandInst *Inst,
     BasicBlock *next) {
@@ -319,8 +356,9 @@ void HBCISel::generateSingleOperandInst(
 
 void HBCISel::generateDirectEvalInst(DirectEvalInst *Inst, BasicBlock *next) {
   auto dst = encodeValue(Inst);
-  auto src = encodeValue(Inst->getSingleOperand());
-  BCFGen_->emitDirectEval(dst, src);
+  auto src = encodeValue(Inst->getCodeString());
+  auto isStrict = Inst->getIsStrict();
+  BCFGen_->emitDirectEval(dst, src, isStrict);
 }
 
 void HBCISel::generateAddEmptyStringInst(
@@ -775,12 +813,6 @@ void HBCISel::generateAllocObjectInst(AllocObjectInst *Inst, BasicBlock *next) {
     BCFGen_->emitNewObjectWithParent(result, parentReg);
   }
 }
-void HBCISel::generateAllocObjectLiteralInst(
-    AllocObjectLiteralInst *,
-    BasicBlock *) {
-  // This instruction should not have reached this far.
-  llvm_unreachable("AllocObjectLiteralInst should have been lowered.");
-}
 void HBCISel::generateAllocArrayInst(AllocArrayInst *Inst, BasicBlock *next) {
   auto dstReg = encodeValue(Inst);
   auto elementCount = Inst->getElementCount();
@@ -819,6 +851,12 @@ void HBCISel::generateCreateFunctionInst(
 void HBCISel::generateCreateScopeInst(CreateScopeInst *Inst, BasicBlock *next) {
   llvm_unreachable("CreateScopeInst should have been lowered.");
 }
+void HBCISel::generateCreateInnerScopeInst(
+    CreateInnerScopeInst *Inst,
+    BasicBlock *next) {
+  llvm_unreachable("CreateInnerScopeInst should have been lowered.");
+}
+
 void HBCISel::generateHBCCreateFunctionInst(
     HBCCreateFunctionInst *Inst,
     BasicBlock *) {
@@ -1479,6 +1517,15 @@ void HBCISel::generateHBCCreateEnvironmentInst(
     hermes::BasicBlock *next) {
   auto dstReg = encodeValue(Inst);
   BCFGen_->emitCreateEnvironment(dstReg);
+}
+
+void HBCISel::generateHBCCreateInnerEnvironmentInst(
+    hermes::HBCCreateInnerEnvironmentInst *Inst,
+    hermes::BasicBlock *next) {
+  auto dstReg = encodeValue(Inst);
+  auto srcReg = encodeValue(Inst->getParentScopeNoCast());
+  BCFGen_->emitCreateInnerEnvironment(
+      dstReg, srcReg, Inst->getCreatedScopeDesc()->getVariables().size());
 }
 
 void HBCISel::generateHBCProfilePointInst(

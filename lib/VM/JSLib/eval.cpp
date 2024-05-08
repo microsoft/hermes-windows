@@ -31,6 +31,7 @@ CallResult<HermesValue> evalInEnvironment(
     Handle<Environment> environment,
     const ScopeChain &scopeChain,
     Handle<> thisArg,
+    bool isStrict,
     bool singleFunction) {
 #ifdef HERMESVM_LEAN
   return runtime.raiseEvalUnsupported(utf8code);
@@ -40,12 +41,14 @@ CallResult<HermesValue> evalInEnvironment(
   }
 
   hbc::CompileFlags compileFlags;
-  compileFlags.strict = false;
+  compileFlags.strict = isStrict;
   compileFlags.includeLibHermes = false;
   compileFlags.verifyIR = runtime.verifyEvalIR;
   compileFlags.emitAsyncBreakCheck = runtime.asyncBreakCheckInEval;
+  compileFlags.enableBlockScoping = runtime.enableBlockScopingInEval;
   compileFlags.lazy =
       utf8code.size() >= compileFlags.preemptiveFileCompilationThreshold;
+  compileFlags.enableES6Classes = runtime.hasES6Class();
 #ifdef HERMES_ENABLE_DEBUGGER
   // Required to allow stepping and examining local variables in eval'd code
   compileFlags.debug = true;
@@ -101,6 +104,7 @@ CallResult<HermesValue> directEval(
     Runtime &runtime,
     Handle<StringPrimitive> str,
     const ScopeChain &scopeChain,
+    bool isStrict,
     bool singleFunction) {
   // Convert the code into UTF8.
   std::string code;
@@ -118,6 +122,7 @@ CallResult<HermesValue> directEval(
       Runtime::makeNullHandle<Environment>(),
       scopeChain,
       runtime.getGlobal(),
+      isStrict,
       singleFunction);
 }
 
@@ -128,7 +133,8 @@ CallResult<HermesValue> eval(void *, Runtime &runtime, NativeArgs args) {
     return args.getArg(0);
   }
 
-  return directEval(runtime, args.dyncastArg<StringPrimitive>(0), {}, false);
+  return directEval(
+      runtime, args.dyncastArg<StringPrimitive>(0), {}, false, false);
 }
 
 } // namespace vm

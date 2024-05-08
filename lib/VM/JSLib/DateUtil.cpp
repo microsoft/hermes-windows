@@ -11,7 +11,6 @@
 #include "hermes/Support/Compiler.h"
 #include "hermes/Support/OSCompat.h"
 #include "hermes/VM/CallResult.h"
-#include "hermes/VM/JSLib/RuntimeCommonStorage.h"
 #include "hermes/VM/SmallXString.h"
 
 #include "llvh/Support/ErrorHandling.h"
@@ -215,30 +214,31 @@ int32_t weekDay(double t) {
 double localTZA() {
 #ifdef _WINDOWS
 
+  // TODO(T173336959): We should use a thread-safe API, and also be consistent
+  // with daylightSavingTA().
   _tzset();
 
   long gmtoff;
   int err = _get_timezone(&gmtoff);
-  assert(err == 0 && "_get_timezone failed in localTZA()");
+  if (err)
+    return 0;
 
   // The result of _get_timezone is negated
   return -gmtoff * MS_PER_SECOND;
 
 #else
 
-  ::tzset();
-
   // Get the current time in seconds (might have DST adjustment included).
-  time_t currentWithDST = std::time(nullptr);
-  if (currentWithDST == static_cast<time_t>(-1)) {
-    return 0;
-  }
+  std::time_t currentWithDST = std::time(nullptr);
 
   // Deconstruct the time into localTime.
-  std::tm *local = std::localtime(&currentWithDST);
-  if (!local) {
-    llvm_unreachable("localtime failed in localTZA()");
-  }
+  // Note that localtime_r uses cached timezone information on Linux (glibc), so
+  // the returned local time may not be computed using an updated timezone if
+  // the timezone changes after this process has started.
+  std::tm tm;
+  std::tm *local = ::localtime_r(&currentWithDST, &tm);
+  if (!local)
+    return 0;
 
   long gmtoff = local->tm_gmtoff;
 
@@ -376,11 +376,13 @@ int32_t detail::equivalentTime(int64_t epochSecs) {
 }
 
 double daylightSavingTA(double t) {
+  // The spec says LocalTime should only take finite time value and return 0 in
+  // case conversion fails. Once we enforce the finite input at the caller site,
+  // we should remove the below check or replace it with an assertion. For now,
+  // let's return NaN instead if it's not finite value.
   if (!std::isfinite(t)) {
     return std::numeric_limits<double>::quiet_NaN();
   }
-
-  ::tzset();
 
   // Convert t to seconds and get the actual time needed.
   const double seconds = t / MS_PER_SECOND;
@@ -398,12 +400,23 @@ double daylightSavingTA(double t) {
   // savings time calculations.
   local = detail::equivalentTime(static_cast<int64_t>(seconds));
 
-  std::tm *brokenTime = std::localtime(&local);
+  std::tm tm;
+#ifdef _WINDOWS
+  // The return value of localtime_s on Windows is an error code instead of
+  // a pointer to std::tm. For simplicity, we don't inspect the concrete error
+  // code and just return 0.
+  auto err = ::localtime_s(&tm, &local);
+  if (err) {
+    return 0;
+  }
+#else
+  std::tm *brokenTime = ::localtime_r(&local, &tm);
   if (!brokenTime) {
     // Local time is invalid.
-    return std::numeric_limits<double>::quiet_NaN();
+    return 0;
   }
-  return brokenTime->tm_isdst ? MS_PER_HOUR : 0;
+#endif
+  return tm.tm_isdst ? MS_PER_HOUR : 0;
 }
 
 //===----------------------------------------------------------------------===//
@@ -414,10 +427,41 @@ double localTime(double t) {
   return t + localTZA() + daylightSavingTA(t);
 }
 
+/// https://tc39.es/ecma262/#sec-localtime
 /// Conversion from local time to UTC.
+///
+/// There is time ambiguity when converting local time to UTC time. For example,
+/// when offsets change in backward direction (transition from DST), the same
+/// local time is repeated, and mapped to two different UTC times. When
+/// offsets change in forward direction (transition to DST), local times are
+/// skipped. ECMA262 requires that for both cases, time \t should be interpreted
+/// using the time zone offset *before* the transition.
+/// Consider time zone `America/New_York`, 1:30 AM on 5 November 2017 is
+/// repeated twice, it should be converted to UTC epoch 1509859800000
+/// (1:30 AM UTC-04) instead of 1509863400000 (1:30 AM UTC-05). And 2:30 AM on
+/// 12 March 2017 is skipped, it should be interpreted as 2:30 AM UTC-05
+/// instead of 3:30 AM UTC-04. However, in this case, both have the same UTC
+/// epoch.
 double utcTime(double t) {
   double ltza = localTZA();
-  return t - ltza - daylightSavingTA(t - ltza);
+  // To compute the DST offset, we need to use UTC time (as required by
+  // daylightSavingTA()). However, getting the exact UTC time is not possible
+  // since that would be circular. Therefore, we approximate the UTC time by
+  // subtracting the standard time adjustment and then subtracting an additional
+  // hour to comply with the spec's requirements as noted in the doc-comment.
+  //
+  // For example, imagine a transition to DST that goes from UTC+0 to UTC+1,
+  // moving 00:00 to 01:00. Any time in the skipped hour gets mapped to a
+  // UTC time before the transition when we subtract an hour (e.g., 00:30 ->
+  // 23:30), which will correctly result in DST not being in effect.
+  //
+  // Similarly, during a transition from DST back to standard time, the hour
+  // from 00:00 to 01:00 is repeated. A local time in the repeated hour
+  // similarly gets mapped to a UTC time before the transition.
+  //
+  // Note that this will not work if the timezone offset has historical/future
+  // changes (which generates a different ltza than the one obtained here).
+  return t - ltza - daylightSavingTA(t - ltza - MS_PER_HOUR);
 }
 
 //===----------------------------------------------------------------------===//
@@ -490,7 +534,14 @@ double makeDate(double day, double t) {
     return std::numeric_limits<double>::quiet_NaN();
   }
 
-  return day * MS_PER_DAY + t;
+  // Some compilers may contract the multiplication and addition into a single
+  // FMA when they are part of the same expression. This would result in
+  // non-standard results, so to avoid it, split them into separate expressions.
+  // Note that this applies only when compiling with -ffp-contract=on. If
+  // -ffp-contract=fast is used, the compiler will still be permitted to emit an
+  // FMA operation for the separate expressions.
+  double dayMs = day * MS_PER_DAY;
+  return dayMs + t;
 }
 
 //===----------------------------------------------------------------------===//

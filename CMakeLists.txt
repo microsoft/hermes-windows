@@ -211,6 +211,10 @@ set(HERMES_FUZZING_FLAG "-fsanitize=fuzzer" CACHE STRING
 set(HERMES_SLOW_DEBUG ON CACHE BOOL
   "Enable slow checks in Debug builds")
 
+# Build with -DHERMES_HARDENED for hardened builds
+set(HERMES_HARDENED OFF CACHE BOOL
+  "Enable compile-time security mitigations")
+
 # On CentOS:
 #   sudo yum install zlib-static glibc-static ncurses-static readline-static
 set(HERMES_STATIC_LINK OFF CACHE BOOL
@@ -221,6 +225,15 @@ set(HERMES_USE_STATIC_ICU OFF CACHE BOOL
 
 set(HERMES_UNICODE_LITE OFF CACHE BOOL
   "Enable to use internal no-op unicode functionality instead of relying on underlying system libraries")
+
+if(WIN32)
+  set(DEFAULT_HERMES_CHECK_NATIVE_STACK OFF)
+else()
+  set(DEFAULT_HERMES_CHECK_NATIVE_STACK ON)
+endif()
+
+set(HERMES_CHECK_NATIVE_STACK ${DEFAULT_HERMES_CHECK_NATIVE_STACK} CACHE BOOL
+  "Check the native stack for stack overflow")
 
 set(HERMES_ENABLE_DEBUGGER ON CACHE BOOL
   "Build with debugger support")
@@ -248,6 +261,9 @@ set(HERMES_USE_FLOWPARSER OFF CACHE BOOL
 
 set(HERMES_ENABLE_WERROR OFF CACHE BOOL
   "Whether the build should have -Werror enabled")
+
+set(HERMES_THREAD_SAFETY_ANALYSIS ON CACHE BOOL
+  "Whether to compile with clang's -Wthread-safety")
 
 set(HERMES_ENABLE_WIN10_ICU_FALLBACK ON CACHE BOOL
   "Whether to allow falling back on Win10 ICU")
@@ -277,14 +293,36 @@ set(HERMES_BUILD_APPLE_FRAMEWORK ON CACHE BOOL
 set(HERMES_BUILD_APPLE_DSYM OFF CACHE BOOL
   "Whether to build a DWARF debugging symbols bundle")
 
+set(IMPORT_HERMESC "" CACHE FILEPATH
+  "Import the hermesc compiler from another build using the given CMake file.")
+
 set(HERMES_BUILD_NODE_HERMES OFF CACHE BOOL "Whether to build node-hermes")
 
-set(HERMES_BUILD_LEAN_LIBHERMES OFF CACHE BOOL "Exclude the Hermes compiler from libhermes.")
+# On Windows, produce static libraries by default so that tests and tools work
+# without needing to move DLLs around.
+# On Emscripten, there is no concept of a shared library.
+if(WIN32 OR EMSCRIPTEN)
+  set(DEFAULT_BUILD_SHARED_LIBS OFF)
+else()
+  set(DEFAULT_BUILD_SHARED_LIBS ON)
+endif()
 
-set(HERMES_BUILD_SHARED_JSI OFF CACHE BOOL "Build JSI as a shared library.")
+set(HERMES_BUILD_SHARED_JSI ${DEFAULT_BUILD_SHARED_LIBS} CACHE BOOL "Build JSI as a shared library.")
+
+set(BUILD_SHARED_LIBS ${DEFAULT_BUILD_SHARED_LIBS} CACHE BOOL "Prefer producing shared libraries.")
 
 if (HERMES_IS_ANDROID)
   add_definitions(-DHERMES_PLATFORM_UNICODE=HERMES_PLATFORM_UNICODE_JAVA)
+endif()
+
+if(HERMES_CHECK_NATIVE_STACK)
+  if (WIN32)
+    message(
+      FATAL_ERROR
+      "Native stack checking not supported on Windows"
+    )
+  endif()
+  add_definitions(-DHERMES_CHECK_NATIVE_STACK)
 endif()
 
 if(HERMES_BUILD_APPLE_DSYM)
@@ -304,16 +342,26 @@ if (HERMES_STATIC_LINK)
   append("-static" CMAKE_EXE_LINKER_FLAGS)
   set(HERMES_USE_STATIC_ICU ON)
   set(CMAKE_FIND_LIBRARY_SUFFIXES "${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  set(HERMES_BUILD_SHARED_JSI OFF)
+  set(BUILD_SHARED_LIBS OFF)
 endif()
 
 if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
-  # Check if the linker supports --gc-sections and ICF.
+# Check if the linker supports deleting unused sections and ICF.
   # We can't simply CHECK_CXX_COMPILER_FLAG("-Wl,--gc-sections" ..) because CMake
   # will compile and link separately and only passes the flag during compilation.
   # TODO: Use check_linker_flag once we have CMake 3.18.
   set(OLD_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
   set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
   CHECK_CXX_COMPILER_FLAG("" HAVE_GC_SECTIONS)
+
+  # Only check for -dead_strip on Apple because some linkers may interpret it
+  # as "-d -e ad_strip".
+  if(APPLE)
+    set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,-dead_strip")
+    CHECK_CXX_COMPILER_FLAG("" HAVE_DEAD_STRIP)
+  endif()
+
   set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--icf=safe")
   CHECK_CXX_COMPILER_FLAG("" HAVE_ICF)
   set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS}")
@@ -322,6 +370,9 @@ if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
     add_flag_if_supported("-ffunction-sections" FUNCTION_SECTIONS)
     add_flag_if_supported("-fdata-sections" DATA_SECTIONS)
     list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--gc-sections")
+  elseif(HAVE_DEAD_STRIP)
+    # This is similar to the above, but for macOS.
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:-dead_strip")
   endif()
 
   if(HAVE_ICF)
@@ -423,7 +474,7 @@ if(HERMES_FACEBOOK_BUILD)
     add_definitions(-DHERMES_FACEBOOK_BUILD)
 endif()
 if(HERMESVM_EXCEPTION_ON_OOM)
-    set(HERMES_ENABLE_EH ON)
+    set(HERMES_ENABLE_EH_RTTI ON)
     add_definitions(-DHERMESVM_EXCEPTION_ON_OOM)
 endif()
 if(HERMESVM_PLATFORM_LOGGING)
@@ -458,9 +509,13 @@ endif()
 
 set(HERMES_ASSUMED_BUILD_MODE_IN_LIT_TEST $<IF:$<CONFIG:Debug>,dbg,opt>)
 
+if (HERMES_HARDENED)
+  add_definitions(-DHERMES_HARDENED)
+endif()
+
 if (GCC_COMPATIBLE)
   # Don't export symbols unless we explicitly say so
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
+  append("-fvisibility=hidden" CMAKE_CXX_FLAGS CMAKE_C_FLAGS)
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   # C4068 unknown pragma
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4068")
@@ -748,7 +803,7 @@ if(HERMES_ENABLE_TEST_SUITE)
     hbcdump=${HERMES_TOOLS_OUTPUT_DIR}/hbcdump
     hbc-deltaprep=${HERMES_TOOLS_OUTPUT_DIR}/hbc-deltaprep
     hbc_diff=${HERMES_TOOLS_OUTPUT_DIR}/hbc-diff
-    build_mode=${HERMES_ASSUMED_BUILD_MODE_IN_LIT_TEST}
+    build_mode="$<IF:$<CONFIG:Debug>,dbg,opt>"
     exception_on_oom_enabled=${HERMESVM_EXCEPTION_ON_OOM}
     node_hermes_enabled_flag=${HERMES_BUILD_NODE_HERMES}
     node-hermes=${HERMES_TOOLS_OUTPUT_DIR}/node-hermes
@@ -756,6 +811,7 @@ if(HERMES_ENABLE_TEST_SUITE)
     gc=${HERMESVM_GCKIND}
     ubsan=${HERMES_ENABLE_UNDEFINED_BEHAVIOR_SANITIZER}
     coverage=${coverage_directory}
+    check_native_stack=${HERMES_CHECK_NATIVE_STACK}
     )
 
   set(HERMES_LIT_TEST_PARAMS

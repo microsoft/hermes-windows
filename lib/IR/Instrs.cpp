@@ -25,6 +25,7 @@ unsigned TerminatorInst::getNumSuccessors() const {
   if (auto I = llvh::dyn_cast<CLASS>(this)) \
     return I->getNumSuccessors();
 #include "hermes/IR/Instrs.def"
+
   llvm_unreachable("not a terminator?!");
 }
 
@@ -34,6 +35,7 @@ BasicBlock *TerminatorInst::getSuccessor(unsigned idx) const {
   if (auto I = llvh::dyn_cast<CLASS>(this)) \
     return I->getSuccessor(idx);
 #include "hermes/IR/Instrs.def"
+
   llvm_unreachable("not a terminator?!");
 }
 
@@ -43,6 +45,7 @@ void TerminatorInst::setSuccessor(unsigned idx, BasicBlock *B) {
   if (auto I = llvh::dyn_cast<CLASS>(this)) \
     return I->setSuccessor(idx, B);
 #include "hermes/IR/Instrs.def"
+
   llvm_unreachable("not a terminator?!");
 }
 
@@ -150,18 +153,78 @@ BinaryOperatorInst::tryGetReverseOperator(BinaryOperatorInst::OpKind op) {
 
 SideEffectKind
 BinaryOperatorInst::getBinarySideEffect(Type leftTy, Type rightTy, OpKind op) {
-  // The 'in' and 'instanceof' operators may throw:
-  if (op == OpKind::InKind || op == OpKind::InstanceOfKind)
-    return SideEffectKind::Unknown;
+  switch (op) {
+    // The 'in' and 'instanceof' operators may execute arbitrary code, or throw
+    // when given primitive types:
+    case OpKind::InKind:
+    case OpKind::InstanceOfKind:
+      return SideEffectKind::Unknown;
 
-  // Strict equality does not throw or have other side effects (per ES5 11.9.6).
-  if (op == OpKind::StrictlyNotEqualKind || op == OpKind::StrictlyEqualKind)
-    return SideEffectKind::None;
+    // Strict equality does not throw or have other side effects (per
+    // ES5 11.9.6).
+    case OpKind::StrictlyNotEqualKind:
+    case OpKind::StrictlyEqualKind:
+      return SideEffectKind::None;
 
-  // This instruction does not read/write memory if the LHS and RHS types are
-  // known to be safe (number, string, null, etc).
-  if (isSideEffectFree(leftTy) && isSideEffectFree(rightTy))
-    return SideEffectKind::None;
+    case OpKind::EqualKind:
+    case OpKind::NotEqualKind:
+    case OpKind::LessThanKind:
+    case OpKind::LessThanOrEqualKind:
+    case OpKind::GreaterThanKind:
+    case OpKind::GreaterThanOrEqualKind:
+      // This instruction does not read/write memory if the LHS and RHS types
+      // are known to be primitive.
+      if (leftTy.isPrimitive() && rightTy.isPrimitive())
+        return SideEffectKind::None;
+      break;
+
+    case OpKind::UnsignedRightShiftKind:
+    case OpKind::DivideKind:
+    case OpKind::ModuloKind:
+      // We can only reason about primitive types.
+      if (!leftTy.isPrimitive() || !rightTy.isPrimitive())
+        break;
+      // if either of the operands can be a BigInt, this instruction may throw
+      // for one of the following reasons:
+      // - BigInt doesn't have unsigned right shift.
+      // - BigInt division by zero.
+      if (leftTy.canBeBigInt() || rightTy.canBeBigInt())
+        return SideEffectKind::Unknown;
+      // We have primitive operands that are not BigInt.
+      return SideEffectKind::None;
+
+    case OpKind::AddKind:
+      // We can only reason about primitive types.
+      if (!leftTy.isPrimitive() || !rightTy.isPrimitive())
+        break;
+      // If one of the operands is a string, it is side effect free.
+      if (leftTy.isStringType() || rightTy.isStringType())
+        return SideEffectKind::None;
+      [[fallthrough]];
+
+    case OpKind::LeftShiftKind:
+    case OpKind::RightShiftKind:
+    case OpKind::SubtractKind:
+    case OpKind::MultiplyKind:
+    case OpKind::OrKind:
+    case OpKind::XorKind:
+    case OpKind::AndKind:
+    case OpKind::ExponentiationKind:
+      // We can only reason about primitive types.
+      if (!leftTy.isPrimitive() || !rightTy.isPrimitive())
+        break;
+      // If both operands are BigInt, it is side effect free.
+      if (leftTy.isBigIntType() && rightTy.isBigIntType())
+        return SideEffectKind::None;
+      // However BigInt arithmetic operands don't mix with any other type.
+      if (leftTy.canBeBigInt() || rightTy.canBeBigInt())
+        return SideEffectKind::Unknown;
+      // We have primitive operands that are not BigInt.
+      return SideEffectKind::None;
+
+    default:
+      hermes_fatal("Invalid binary operator");
+  }
 
   // This binary operation may execute arbitrary code.
   return SideEffectKind::Unknown;

@@ -27,16 +27,21 @@ namespace {
 constexpr Type kNullOrUndef =
     Type::unionTy(Type::createUndefined(), Type::createNull());
 
-bool canBeNaN(Value *value) {
+/// \return true if the value is known to not be NaN. Note that it may still
+///    be convertible to NaN.
+bool notNaN(Value *value) {
+  // Only numbers can be NaN.
   if (!value->getType().canBeNumber()) {
-    return false;
+    return true;
   }
 
+  // If it is a literal, we can simply check.
   if (auto *literalNumber = llvh::dyn_cast<LiteralNumber>(value)) {
-    return std::isnan(literalNumber->getValue());
+    return !std::isnan(literalNumber->getValue());
   }
 
-  return true;
+  // The value could be a number, so it could be NaN.
+  return false;
 }
 
 template <typename T>
@@ -174,18 +179,33 @@ Value *simplifyBinOp(BinaryOperatorInst *binary) {
   // or type information can be used to simplify some non-constant expressions.
   Type leftTy = lhs->getType();
   Type rightTy = rhs->getType();
-  bool safeTypes = isSideEffectFree(leftTy) && isSideEffectFree(rightTy);
+  const bool primitiveTypes = leftTy.isPrimitive() && rightTy.isPrimitive();
 
-  // Verify that the operands are identical and can be replaced. NaN is never
-  // identical to itself, and comparisons with side effects can't be replaced.
-  bool identicalOperands = safeTypes && lhs == rhs && !canBeNaN(lhs);
+  // This flag helps to simplify equality comparisons (==, ===, !=, !===).
+  // Indicate that the operands are the same value which has a primitive type
+  // and always compares equal to itself when the comparison does NOT perform
+  // any conversions.
+  // NaN is never equal to itself, and comparisons between non-primitive types
+  // have side effects and can't be predicted.
+  const bool identicalForEquality = primitiveTypes && lhs == rhs && notNaN(lhs);
+
+  // This flag helps to simplify relational comparisons (<, <=, >, >=).
+  // In additional to the equality checks, it also checks that the operands
+  // will not be converted to NaN when the relational comparison invokes
+  // toNumeric().
+  // We know the identical operand is a primitive, and the only primitive types
+  // that can be converted to NaN by toNumeric() are string and undefined.
+  // However if the operands are strings, the comparison is performed before
+  // toNumeric(). So the only case that for NaN that remains is "undefined".
+  bool identicalForRelational =
+      identicalForEquality && !leftTy.canBeUndefined();
 
   using OpKind = BinaryOperatorInst::OpKind;
 
   switch (kind) {
     case OpKind::EqualKind: // ==
       // Identical operands must be equal.
-      if (identicalOperands) {
+      if (identicalForEquality) {
         return builder.getLiteralBool(true);
       }
 
@@ -200,7 +220,7 @@ Value *simplifyBinOp(BinaryOperatorInst *binary) {
 
     case OpKind::NotEqualKind: // !=
       // Identical operands can't be non-equal.
-      if (identicalOperands) {
+      if (identicalForEquality) {
         return builder.getLiteralBool(false);
       }
 
@@ -215,7 +235,7 @@ Value *simplifyBinOp(BinaryOperatorInst *binary) {
 
     case OpKind::StrictlyEqualKind: // ===
       // Identical operand must be strictly equal.
-      if (identicalOperands) {
+      if (identicalForEquality) {
         return builder.getLiteralBool(true);
       }
 
@@ -229,35 +249,35 @@ Value *simplifyBinOp(BinaryOperatorInst *binary) {
 
     case OpKind::StrictlyNotEqualKind: // !===
       // Identical operands can't be non-equal.
-      if (identicalOperands) {
+      if (identicalForEquality) {
         return builder.getLiteralBool(false);
       }
       break;
 
     case OpKind::LessThanKind: // <
       // Handle comparison to self:
-      if (identicalOperands && !leftTy.isUndefinedType()) {
+      if (identicalForRelational) {
         return builder.getLiteralBool(false);
       }
       break;
 
     case OpKind::LessThanOrEqualKind: // <=
       // Handle comparison to self:
-      if (identicalOperands && !leftTy.isUndefinedType()) {
+      if (identicalForRelational) {
         return builder.getLiteralBool(true);
       }
       break;
 
     case OpKind::GreaterThanKind: // >
       // Handle comparison to self:
-      if (identicalOperands && !leftTy.isUndefinedType()) {
+      if (identicalForRelational) {
         return builder.getLiteralBool(false);
       }
       break;
 
     case OpKind::GreaterThanOrEqualKind: // >=
       // Handle comparison to self:
-      if (identicalOperands && !leftTy.isUndefinedType()) {
+      if (identicalForRelational) {
         return builder.getLiteralBool(true);
       }
       break;
@@ -302,23 +322,11 @@ Value *simplifyBinOp(BinaryOperatorInst *binary) {
 }
 
 Value *simplifyPhiInst(PhiInst *P) {
-  unsigned numEntries = P->getNumEntries();
-  if (!numEntries) {
-    // This Phi has no incoming entries. This means that the entire block is
-    // unreachable and will be removed by DCE.
-    return nullptr;
-  }
-
-  // Optimize away PHI nodes with a single entry.
-  if (1 == numEntries) {
-    auto E = P->getEntry(0);
-    P->replaceAllUsesWith(E.first);
-    P->eraseFromParent();
-    return nullptr;
-  }
-
+  // Optimize PHI nodes where all incoming values that are not self-edges are
+  // the same, by replacing them with that single source value. Note that Phis
+  // that have no inputs, or where all inputs are self-edges, must be dead, and
+  // will be left untouched.
   Value *incoming = nullptr;
-  // Optimize PHI nodes that accept the same input from all directions:
   for (int i = 0, e = P->getNumEntries(); i < e; i++) {
     auto E = P->getEntry(i);
     // Ignore self edges.
@@ -437,42 +445,6 @@ Value *simplifyCallInst(CallInst *CI) {
   }
 
   return nullptr;
-}
-
-Value *simplifySwitchInst(SwitchInst *SI) {
-  auto *thisBlock = SI->getParent();
-  IRBuilder builder(thisBlock->getParent());
-  builder.setInsertionBlock(thisBlock);
-
-  Value *input = SI->getInputValue();
-  auto *litInput = llvh::dyn_cast<Literal>(input);
-
-  // If input of switch is not literal, nothing can be done.
-  if (!litInput) {
-    return nullptr;
-  }
-
-  auto *destination = SI->getDefaultDestination();
-
-  for (unsigned i = 0, e = SI->getNumCasePair(); i < e; i++) {
-    auto switchCase = SI->getCasePair(i);
-
-    // Look for a case which matches input.
-    if (switchCase.first == litInput) {
-      destination = switchCase.second;
-      break;
-    }
-  }
-
-  // Rewrite all phi nodes that no longer have incoming arrows from this block.
-  for (unsigned i = 0, e = SI->getNumSuccessors(); i < e; i++) {
-    auto *successor = SI->getSuccessor(i);
-    if (successor == destination)
-      continue;
-    deleteIncomingBlockFromPhis(successor, thisBlock);
-  }
-
-  return builder.createBranchInst(destination);
 }
 
 Value *simplifyAsNumber(AsNumberInst *asNumber) {
@@ -595,8 +567,6 @@ OptValue<Value *> simplifyInstruction(Instruction *I) {
       return simplifyPhiInst(cast<PhiInst>(I));
     case ValueKind::CondBranchInstKind:
       return simplifyCondBranchInst(cast<CondBranchInst>(I));
-    case ValueKind::SwitchInstKind:
-      return simplifySwitchInst(cast<SwitchInst>(I));
     case ValueKind::CallInstKind:
       return simplifyCallInst(cast<CallInst>(I));
     case ValueKind::CoerceThisNSInstKind:
@@ -616,10 +586,9 @@ bool InstSimplify::runOnFunction(Function *F) {
   bool changed = false;
   IRBuilder::InstructionDestroyer destroyer;
 
-  // For all blocks in the function:
-  for (auto &blockIter : *F) {
-    BasicBlock *BB = &blockIter;
-
+  // For all reachable blocks in the function, in RPO order.
+  PostOrderAnalysis PO(F);
+  for (BasicBlock *BB : llvh::reverse(PO)) {
     // For all instructions:
     for (auto instIter = BB->begin(), e = BB->end(); instIter != e;) {
       Instruction *II = &*instIter;

@@ -5,11 +5,13 @@
 
 add_hermes_library(hermesAST
     ASTBuilder.cpp
+    BlockScopingTransformations.cpp
     ESTree.cpp
     ESTreeJSONDumper.cpp
     SemValidate.cpp
     SemanticValidator.cpp SemanticValidator.h
     CommonJS.cpp
+    ES6Class.cpp
     LINK_LIBS
     hermesRegex
     hermesSupport

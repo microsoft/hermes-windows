@@ -25,7 +25,6 @@ struct HermesTestHelper;
 namespace hermes {
 namespace vm {
 class GCExecTrace;
-struct MockedEnvironment;
 } // namespace vm
 } // namespace hermes
 
@@ -138,18 +137,10 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
   /// \return a jsi::Object if a matching object is found, else returns null.
   jsi::Value getObjectForID(uint64_t id);
 
-  /// Get a structure representing the environment-dependent behavior, so
-  /// it can be written into the trace for later replay.
-  const ::hermes::vm::MockedEnvironment &getMockedEnvironment() const;
-
   /// Get a structure representing the execution history (currently just of
   /// GC, but will be generalized as necessary), to aid in debugging
   /// non-deterministic execution.
   const ::hermes::vm::GCExecTrace &getGCExecTrace() const;
-
-  /// Make the runtime read from \p env to replay its environment-dependent
-  /// behavior.
-  void setMockedEnvironment(const ::hermes::vm::MockedEnvironment &env);
 
   /// Get IO tracking (aka HBC page access) info as a JSON string.
   /// See hermes::vm::Runtime::getIOTrackingInfoJSON() for conditions
@@ -190,12 +181,20 @@ class HERMES_EXPORT HermesRuntime : public jsi::Runtime {
   /// Unregister this runtime for sampling profiler.
   void unregisterForProfiling();
 
+  /// Define methods to interrupt JS execution and set time limits.
+  /// All JS compiled to bytecode via prepareJS, or evaluateJS, will support
+  /// interruption and time limit monitoring if the runtime is configured with
+  /// AsyncBreakCheckInEval. If JS prepared in other ways is executed, care must
+  /// be taken to ensure that it is compiled in a mode that supports it (i.e.,
+  /// the emitted code contains async break checks).
+
+  /// Asynchronously terminates the current execution. This can be called on
+  /// any thread.
+  void asyncTriggerTimeout();
+
   /// Register this runtime for execution time limit monitoring, with a time
   /// limit of \p timeoutInMs milliseconds.
-  /// All JS compiled to bytecode via prepareJS, or evaluateJS, will support the
-  /// time limit monitoring.  If JS prepared in other ways is executed, care
-  /// must be taken to ensure that it is compiled in a mode that supports the
-  /// monitoring (i.e., the emitted code contains async break checks).
+  /// See compilation notes above.
   void watchTimeLimit(uint32_t timeoutInMs);
   /// Unregister this runtime for execution time limit monitoring.
   void unwatchTimeLimit();

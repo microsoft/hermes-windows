@@ -94,7 +94,8 @@ function code_sinking_in_loop(x, y) {
 // Auto-generated content below. Please do not modify manually.
 
 // CHECK:function global#0()#1 : undefined
-// CHECK-NEXT:frame = [], globals = [hoist_branch, hoist_branch_window, no_hoist_inc_dec, hoist_loop, hoist_loop_expression, hoist_from_multiblock_loop, hoist_with_dependencies_in_loop, code_sinking, code_sinking_in_loop]
+// CHECK-NEXT:globals = [hoist_branch, hoist_branch_window, no_hoist_inc_dec, hoist_loop, hoist_loop_expression, hoist_from_multiblock_loop, hoist_with_dependencies_in_loop, code_sinking, code_sinking_in_loop]
+// CHECK-NEXT:S{global#0()#1} = []
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  $Reg0 @0 [1...19) 	%0 = HBCCreateEnvironmentInst %S{global#0()#1}
 // CHECK-NEXT:  $Reg2 @1 [2...4) 	%1 = HBCCreateFunctionInst %hoist_branch#0#1()#2, %0
@@ -121,7 +122,7 @@ function code_sinking_in_loop(x, y) {
 // CHECK-NEXT:function_end
 
 // CHECK:function hoist_branch#0#1(x, y)#2
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{hoist_branch#0#1()#2} = []
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  $Reg0 @0 [1...2) 	%0 = HBCLoadParamInst 2 : number
 // CHECK-NEXT:  $Reg0 @1 [2...3) 	%1 = LoadPropertyInst %0, "z" : string
@@ -137,7 +138,7 @@ function code_sinking_in_loop(x, y) {
 // CHECK-NEXT:function_end
 
 // CHECK:function hoist_branch_window#0#1(x, y)#2
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{hoist_branch_window#0#1()#2} = []
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  $Reg1 @0 [1...3) 	%0 = HBCLoadParamInst 2 : number
 // CHECK-NEXT:  $Reg0 @1 [2...10) 	%1 = AsInt32Inst %0
@@ -156,7 +157,7 @@ function code_sinking_in_loop(x, y) {
 // CHECK-NEXT:function_end
 
 // CHECK:function no_hoist_inc_dec#0#1(x, y)#2 : number|bigint
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{no_hoist_inc_dec#0#1()#2} = []
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  $Reg1 @0 [1...7) 	%0 = HBCLoadParamInst 2 : number
 // CHECK-NEXT:  $Reg0 @1 [2...3) 	%1 = HBCLoadParamInst 1 : number
@@ -176,76 +177,77 @@ function code_sinking_in_loop(x, y) {
 // CHECK-NEXT:function_end
 
 // CHECK:function hoist_loop#0#1(x)#2 : undefined
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{hoist_loop#0#1()#2} = []
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  $Reg3 @0 [1...12) 	%0 = HBCLoadParamInst 1 : number
-// CHECK-NEXT:  $Reg2 @1 [2...5) 	%1 = HBCLoadConstInst 0 : number
-// CHECK-NEXT:  $Reg1 @2 [3...12) 	%2 = HBCGetGlobalObjectInst
-// CHECK-NEXT:  $Reg0 @3 [4...13) 	%3 = HBCLoadConstInst undefined : undefined
-// CHECK-NEXT:  $Reg2 @4 [5...7) 	%4 = MovInst %1 : number
-// CHECK-NEXT:  $Reg4 @5 [empty]	%5 = CompareBranchInst '<', %4 : number, %0, %BB1, %BB2
+// CHECK-NEXT:  $Reg3 @0 [1...13) 	%0 = HBCLoadParamInst 1 : number
+// CHECK-NEXT:  $Reg2 @1 [2...6) 	%1 = HBCLoadConstInst 0 : number
+// CHECK-NEXT:  $Reg4 @2 [3...7) 	%2 = BinaryOperatorInst '<', %1 : number, %0
+// CHECK-NEXT:  $Reg1 @3 [4...13) 	%3 = HBCGetGlobalObjectInst
+// CHECK-NEXT:  $Reg0 @4 [5...14) 	%4 = HBCLoadConstInst undefined : undefined
+// CHECK-NEXT:  $Reg2 @5 [6...8) 	%5 = MovInst %1 : number
+// CHECK-NEXT:  $Reg4 @6 [empty]	%6 = CondBranchInst %2 : boolean, %BB1, %BB2
 // CHECK-NEXT:%BB1:
-// CHECK-NEXT:  $Reg2 @6 [2...12) 	%6 = PhiInst %4 : number, %BB0, %10 : number|bigint, %BB1
-// CHECK-NEXT:  $Reg4 @7 [8...9) 	%7 = TryLoadGlobalPropertyInst %2 : object, "print" : string
-// CHECK-NEXT:  $Reg4 @8 [empty]	%8 = HBCCallNInst %7, %3 : undefined, %6 : number|bigint
-// CHECK-NEXT:  $Reg2 @9 [10...11) 	%9 = UnaryOperatorInst '++', %6 : number|bigint
-// CHECK-NEXT:  $Reg2 @10 [11...12) 	%10 = MovInst %9 : number|bigint
-// CHECK-NEXT:  $Reg1 @11 [empty]	%11 = CompareBranchInst '<', %10 : number|bigint, %0, %BB1, %BB2
+// CHECK-NEXT:  $Reg2 @7 [2...13) 	%7 = PhiInst %5 : number, %BB0, %11 : number|bigint, %BB1
+// CHECK-NEXT:  $Reg4 @8 [9...10) 	%8 = TryLoadGlobalPropertyInst %3 : object, "print" : string
+// CHECK-NEXT:  $Reg4 @9 [empty]	%9 = HBCCallNInst %8, undefined : undefined, %4 : undefined, %7 : number|bigint
+// CHECK-NEXT:  $Reg2 @10 [11...12) 	%10 = UnaryOperatorInst '++', %7 : number|bigint
+// CHECK-NEXT:  $Reg2 @11 [12...13) 	%11 = MovInst %10 : number|bigint
+// CHECK-NEXT:  $Reg1 @12 [empty]	%12 = CompareBranchInst '<', %11 : number|bigint, %0, %BB1, %BB2
 // CHECK-NEXT:%BB2:
-// CHECK-NEXT:  $Reg0 @12 [empty]	%12 = ReturnInst %3 : undefined
+// CHECK-NEXT:  $Reg0 @13 [empty]	%13 = ReturnInst %4 : undefined
 // CHECK-NEXT:function_end
 
 // CHECK:function hoist_loop_expression#0#1(a, b, call)#2 : undefined
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{hoist_loop_expression#0#1()#2} = []
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  $Reg2 @0 [1...13) 	%0 = HBCLoadParamInst 3 : number
-// CHECK-NEXT:  $Reg1 @1 [2...13) 	%1 = HBCLoadConstInst undefined : undefined
-// CHECK-NEXT:  $Reg0 @2 [3...4) 	%2 = HBCLoadParamInst 1 : number
-// CHECK-NEXT:  $Reg0 @3 [4...7) 	%3 = AsNumberInst %2
-// CHECK-NEXT:  $Reg3 @4 [5...6) 	%4 = HBCLoadParamInst 2 : number
-// CHECK-NEXT:  $Reg4 @5 [6...9) 	%5 = AsNumberInst %4
-// CHECK-NEXT:  $Reg3 @6 [7...10) 	%6 = UnaryOperatorInst '-', %3 : number
+// CHECK-NEXT:  $Reg0 @1 [2...3) 	%1 = HBCLoadParamInst 1 : number
+// CHECK-NEXT:  $Reg0 @2 [3...7) 	%2 = AsNumberInst %1
+// CHECK-NEXT:  $Reg1 @3 [4...5) 	%3 = HBCLoadParamInst 2 : number
+// CHECK-NEXT:  $Reg4 @4 [5...9) 	%4 = AsNumberInst %3
+// CHECK-NEXT:  $Reg1 @5 [6...13) 	%5 = HBCLoadConstInst undefined : undefined
+// CHECK-NEXT:  $Reg3 @6 [7...10) 	%6 = UnaryOperatorInst '-', %2 : number
 // CHECK-NEXT:  $Reg0 @7 [8...9) 	%7 = HBCLoadConstInst 7 : number
-// CHECK-NEXT:  $Reg0 @8 [9...10) 	%8 = BinaryOperatorInst '+', %5 : number, %7 : number
+// CHECK-NEXT:  $Reg0 @8 [9...10) 	%8 = BinaryOperatorInst '+', %4 : number, %7 : number
 // CHECK-NEXT:  $Reg0 @9 [10...13) 	%9 = BinaryOperatorInst '*', %6 : number, %8 : number
 // CHECK-NEXT:  $Reg3 @10 [empty]	%10 = BranchInst %BB1
 // CHECK-NEXT:%BB1:
-// CHECK-NEXT:  $Reg3 @11 [empty]	%11 = HBCCallNInst %0, %1 : undefined, %9 : number
+// CHECK-NEXT:  $Reg3 @11 [empty]	%11 = HBCCallNInst %0, undefined : undefined, %5 : undefined, %9 : number
 // CHECK-NEXT:  $Reg0 @12 [empty]	%12 = BranchInst %BB1
 // CHECK-NEXT:function_end
 
 // CHECK:function hoist_from_multiblock_loop#0#1(x)#2 : undefined
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{hoist_from_multiblock_loop#0#1()#2} = []
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  $Reg3 @0 [1...16) 	%0 = HBCGetGlobalObjectInst
-// CHECK-NEXT:  $Reg2 @1 [2...16) 	%1 = HBCLoadConstInst undefined : undefined
-// CHECK-NEXT:  $Reg0 @2 [3...4) 	%2 = HBCLoadParamInst 1 : number
-// CHECK-NEXT:  $Reg4 @3 [4...9) 	%3 = AsNumberInst %2
+// CHECK-NEXT:  $Reg0 @0 [1...2) 	%0 = HBCLoadParamInst 1 : number
+// CHECK-NEXT:  $Reg4 @1 [2...9) 	%1 = AsNumberInst %0
+// CHECK-NEXT:  $Reg3 @2 [3...16) 	%2 = HBCGetGlobalObjectInst
+// CHECK-NEXT:  $Reg2 @3 [4...16) 	%3 = HBCLoadConstInst undefined : undefined
 // CHECK-NEXT:  $Reg0 @4 [5...6) 	%4 = HBCLoadConstInst 3 : number
-// CHECK-NEXT:  $Reg0 @5 [6...7) 	%5 = BinaryOperatorInst '*', %4 : number, %3 : number
-// CHECK-NEXT:  $Reg1 @6 [7...16) 	%6 = BinaryOperatorInst '*', %5 : number, %3 : number
+// CHECK-NEXT:  $Reg0 @5 [6...7) 	%5 = BinaryOperatorInst '*', %4 : number, %1 : number
+// CHECK-NEXT:  $Reg1 @6 [7...16) 	%6 = BinaryOperatorInst '*', %5 : number, %1 : number
 // CHECK-NEXT:  $Reg0 @7 [8...9) 	%7 = HBCLoadConstInst 1 : number
-// CHECK-NEXT:  $Reg0 @8 [9...16) 	%8 = BinaryOperatorInst '-', %3 : number, %7 : number
+// CHECK-NEXT:  $Reg0 @8 [9...16) 	%8 = BinaryOperatorInst '-', %1 : number, %7 : number
 // CHECK-NEXT:  $Reg4 @9 [empty]	%9 = BranchInst %BB1
 // CHECK-NEXT:%BB1:
-// CHECK-NEXT:  $Reg4 @10 [11...12) 	%10 = TryLoadGlobalPropertyInst %0 : object, "print" : string
-// CHECK-NEXT:  $Reg4 @11 [empty]	%11 = HBCCallNInst %10, %1 : undefined, %6 : number
+// CHECK-NEXT:  $Reg4 @10 [11...12) 	%10 = TryLoadGlobalPropertyInst %2 : object, "print" : string
+// CHECK-NEXT:  $Reg4 @11 [empty]	%11 = HBCCallNInst %10, undefined : undefined, %3 : undefined, %6 : number
 // CHECK-NEXT:  $Reg4 @12 [empty]	%12 = CondBranchInst %8 : number, %BB2, %BB1
 // CHECK-NEXT:%BB2:
-// CHECK-NEXT:  $Reg4 @13 [14...15) 	%13 = TryLoadGlobalPropertyInst %0 : object, "print" : string
-// CHECK-NEXT:  $Reg4 @14 [empty]	%14 = HBCCallNInst %13, %1 : undefined, %6 : number
+// CHECK-NEXT:  $Reg4 @13 [14...15) 	%13 = TryLoadGlobalPropertyInst %2 : object, "print" : string
+// CHECK-NEXT:  $Reg4 @14 [empty]	%14 = HBCCallNInst %13, undefined : undefined, %3 : undefined, %6 : number
 // CHECK-NEXT:  $Reg0 @15 [empty]	%15 = BranchInst %BB1
 // CHECK-NEXT:function_end
 
 // CHECK:function hoist_with_dependencies_in_loop#0#1(x, y)#2
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{hoist_with_dependencies_in_loop#0#1()#2} = []
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  $Reg0 @0 [1...14) 	%0 = HBCLoadParamInst 2 : number
-// CHECK-NEXT:  $Reg3 @1 [2...13) 	%1 = HBCGetGlobalObjectInst
-// CHECK-NEXT:  $Reg2 @2 [3...13) 	%2 = HBCLoadConstInst undefined : undefined
-// CHECK-NEXT:  $Reg1 @3 [4...5) 	%3 = HBCLoadParamInst 1 : number
-// CHECK-NEXT:  $Reg1 @4 [5...6) 	%4 = AsNumberInst %3
-// CHECK-NEXT:  $Reg4 @5 [6...8) 	%5 = BinaryOperatorInst '*', %4 : number, %4 : number
+// CHECK-NEXT:  $Reg1 @1 [2...3) 	%1 = HBCLoadParamInst 1 : number
+// CHECK-NEXT:  $Reg1 @2 [3...6) 	%2 = AsNumberInst %1
+// CHECK-NEXT:  $Reg3 @3 [4...13) 	%3 = HBCGetGlobalObjectInst
+// CHECK-NEXT:  $Reg2 @4 [5...13) 	%4 = HBCLoadConstInst undefined : undefined
+// CHECK-NEXT:  $Reg4 @5 [6...8) 	%5 = BinaryOperatorInst '*', %2 : number, %2 : number
 // CHECK-NEXT:  $Reg1 @6 [7...8) 	%6 = HBCLoadConstInst 3 : number
 // CHECK-NEXT:  $Reg1 @7 [8...13) 	%7 = BinaryOperatorInst '-', %5 : number, %6 : number
 // CHECK-NEXT:  $Reg4 @8 [empty]	%8 = BranchInst %BB1
@@ -254,13 +256,13 @@ function code_sinking_in_loop(x, y) {
 // CHECK-NEXT:%BB2:
 // CHECK-NEXT:  $Reg0 @13 [empty]	%10 = ReturnInst %0
 // CHECK-NEXT:%BB3:
-// CHECK-NEXT:  $Reg4 @10 [11...12) 	%11 = TryLoadGlobalPropertyInst %1 : object, "print" : string
-// CHECK-NEXT:  $Reg4 @11 [empty]	%12 = HBCCallNInst %11, %2 : undefined, %7 : number
+// CHECK-NEXT:  $Reg4 @10 [11...12) 	%11 = TryLoadGlobalPropertyInst %3 : object, "print" : string
+// CHECK-NEXT:  $Reg4 @11 [empty]	%12 = HBCCallNInst %11, undefined : undefined, %4 : undefined, %7 : number
 // CHECK-NEXT:  $Reg1 @12 [empty]	%13 = BranchInst %BB1
 // CHECK-NEXT:function_end
 
 // CHECK:function code_sinking#0#1(x, y)#2 : number
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{code_sinking#0#1()#2} = []
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  $Reg0 @0 [1...2) 	%0 = HBCLoadParamInst 2 : number
 // CHECK-NEXT:  $Reg1 @1 [2...4) 	%1 = AsInt32Inst %0
@@ -277,7 +279,7 @@ function code_sinking_in_loop(x, y) {
 // CHECK-NEXT:function_end
 
 // CHECK:function code_sinking_in_loop#0#1(x, y)#2 : undefined
-// CHECK-NEXT:frame = []
+// CHECK-NEXT:S{code_sinking_in_loop#0#1()#2} = []
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  $Reg1 @0 [1...7) 	%0 = HBCLoadParamInst 1 : number
 // CHECK-NEXT:  $Reg0 @1 [2...7) 	%1 = HBCLoadParamInst 2 : number

@@ -16,8 +16,11 @@ import type {Scope} from './scope/Scope';
 import {
   BlockScope,
   CatchScope,
+  ComponentScope,
+  HookScope,
   ClassScope,
   DeclareModuleScope,
+  DeclareNamespaceScope,
   ForScope,
   FunctionExpressionNameScope,
   FunctionScope,
@@ -212,6 +215,14 @@ class ScopeManager {
     );
   }
 
+  nestDeclareNamespaceScope(
+    node: DeclareNamespaceScope['block'],
+  ): DeclareNamespaceScope {
+    return this._nestScope(
+      new DeclareNamespaceScope(this, this._assertCurrentScope(), node),
+    );
+  }
+
   nestForScope(node: ForScope['block']): ForScope {
     return this._nestScope(
       new ForScope(this, this._assertCurrentScope(), node),
@@ -223,6 +234,18 @@ class ScopeManager {
   ): FunctionExpressionNameScope {
     return this._nestScope(
       new FunctionExpressionNameScope(this, this._assertCurrentScope(), node),
+    );
+  }
+
+  nestComponentScope(node: ComponentScope['block']): ComponentScope {
+    return this._nestScope(
+      new ComponentScope(this, this._assertCurrentScope(), node),
+    );
+  }
+
+  nestHookScope(node: HookScope['block']): HookScope {
+    return this._nestScope(
+      new HookScope(this, this._assertCurrentScope(), node),
     );
   }
 

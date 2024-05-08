@@ -34,9 +34,13 @@ struct DummyObject final : public GCCell {
   uint32_t extraBytes{};
 
   using Callback = std::function<void()>;
-  std::unique_ptr<Callback> finalizerCallback;
-  using MarkWeakCallback = std::function<VTable::MarkWeakCallback>;
-  std::unique_ptr<MarkWeakCallback> markWeakCallback;
+  /// While DummyObject is not used in prod, protecting function pointers
+  /// in here is useful to ensure that they won't be used to easily escalate
+  /// fake obj injections attacks to arbitrary code execution
+  XorPtr<
+      std::remove_pointer<Callback>::type,
+      XorPtrKeyID::DummyObjectFinalizerCallback>
+      finalizerCallback;
 
   DummyObject(GC &gc);
 
@@ -50,7 +54,10 @@ struct DummyObject final : public GCCell {
   static bool classof(const GCCell *cell);
   static void _finalizeImpl(GCCell *cell, GC &);
   static size_t _mallocSizeImpl(GCCell *cell);
-  static void _markWeakImpl(GCCell *cell, WeakRefAcceptor &acceptor);
+
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+  static void _snapshotAddEdgesImpl(GCCell *cell, GC &gc, HeapSnapshot &snap);
+#endif
 };
 
 } // namespace testhelpers

@@ -103,6 +103,10 @@ class JSParserImpl {
     return context_;
   }
 
+  JSLexer &getLexer() {
+    return lexer_;
+  }
+
   bool isStrictMode() const {
     return lexer_.isStrictMode();
   }
@@ -119,22 +123,6 @@ class JSParserImpl {
   /// of \c SmallString to be stored in \c PreParseFunctionInfo safely.
   llvh::SmallVector<llvh::SmallString<24>, 1> copySeenDirectives() const;
 
-  llvh::ArrayRef<StoredComment> getStoredComments() const {
-    return lexer_.getStoredComments();
-  }
-
-  llvh::ArrayRef<StoredToken> getStoredTokens() const {
-    return lexer_.getStoredTokens();
-  }
-
-  void setStoreComments(bool storeComments) {
-    lexer_.setStoreComments(storeComments);
-  }
-
-  void setStoreTokens(bool storeTokens) {
-    lexer_.setStoreTokens(storeTokens);
-  }
-
   Optional<ESTree::ProgramNode *> parse();
 
   void seek(SMLoc startPos) {
@@ -143,14 +131,13 @@ class JSParserImpl {
   }
 
   /// Parse the given buffer id, indexing all functions and storing them in the
-  /// \p Context. Returns true on success, at which point the file can be
-  /// processed on demand in \p LazyParse mode. \p useStaticBuiltinDetected will
-  /// be set to true if 'use static builtin' directive is detected in the
-  /// source.
-  static bool preParseBuffer(
+  /// \p Context. On failure returns nullptr.
+  /// On success, returns a pointer to the \c JSParserImpl object that can be
+  /// queried for various attributes of the just pre-parsed file, e.g. static
+  /// builtins or magic URLs.
+  static std::shared_ptr<JSParserImpl> preParseBuffer(
       Context &context,
-      uint32_t bufferId,
-      bool &useStaticBuiltinDetected);
+      uint32_t bufferId);
 
   /// Parse the AST of a specified function type at a given starting point.
   /// This is used for lazy compilation to parse and compile the function on
@@ -237,6 +224,10 @@ class JSParserImpl {
 
 #if HERMES_PARSE_FLOW
   bool allowAnonFunctionType_{false};
+  Optional<UniqueString *> parseRenderTypeOperator();
+#endif
+#if HERMES_PARSE_FLOW || HERMES_PARSE_TS
+  bool allowConditionalType_{false};
 #endif
 
   // Certain known identifiers which we need to use when constructing the
@@ -276,6 +267,7 @@ class JSParserImpl {
 #if HERMES_PARSE_FLOW
 
   UniqueString *typeofIdent_;
+  UniqueString *keyofIdent_;
   UniqueString *declareIdent_;
   UniqueString *protoIdent_;
   UniqueString *opaqueIdent_;
@@ -300,14 +292,31 @@ class JSParserImpl {
   UniqueString *symbolIdent_;
   UniqueString *bigintIdent_;
 
-  UniqueString *checksIdent_;
+  UniqueString *mappedTypeOptionalIdent_;
+  UniqueString *mappedTypePlusOptionalIdent_;
+  UniqueString *mappedTypeMinusOptionalIdent_;
 
+  UniqueString *checksIdent_;
+  UniqueString *assertsIdent_;
+
+  UniqueString *componentIdent_;
+  UniqueString *hookIdent_;
+  UniqueString *rendersIdent_;
+  UniqueString *rendersMaybeOperator_;
+  UniqueString *rendersStarOperator_;
 #endif
 
 #if HERMES_PARSE_TS
-  UniqueString *namespaceIdent_;
   UniqueString *readonlyIdent_;
+  UniqueString *neverIdent_;
+  UniqueString *undefinedIdent_;
+  UniqueString *unknownIdent_;
+#endif
+
+#if HERMES_PARSE_FLOW || HERMES_PARSE_TS
+  UniqueString *namespaceIdent_;
   UniqueString *isIdent_;
+  UniqueString *inferIdent_;
 #endif
 
   /// String representation of all tokens.
@@ -512,6 +521,14 @@ class JSParserImpl {
 
 #if HERMES_PARSE_FLOW
     if (context_.getParseFlow()) {
+      if (context_.getParseFlowComponentSyntax() &&
+          checkComponentDeclarationFlow()) {
+        return true;
+      }
+      if (context_.getParseFlowComponentSyntax() &&
+          checkHookDeclarationFlow()) {
+        return true;
+      }
       if (check(opaqueIdent_)) {
         auto optNext = lexer_.lookahead1(llvh::None);
         return optNext.hasValue() && (*optNext == TokenKind::identifier);
@@ -555,8 +572,9 @@ class JSParserImpl {
         return false;
       TokenKind next = *optNext;
       return next == TokenKind::identifier || next == TokenKind::rw_interface ||
-          next == TokenKind::rw_var || next == TokenKind::rw_function ||
-          next == TokenKind::rw_class || next == TokenKind::rw_export;
+          next == TokenKind::rw_var || next == TokenKind::rw_const ||
+          next == TokenKind::rw_function || next == TokenKind::rw_class ||
+          next == TokenKind::rw_export || next == TokenKind::rw_enum;
     }
 #endif
     return false;
@@ -567,9 +585,17 @@ class JSParserImpl {
     return check(TokenKind::no_substitution_template, TokenKind::template_head);
   }
 
+  /// Whether to include the 'of' identifier when checking the end of an
+  /// AssignmentExpression.
+  enum class OfEndsAssignment { No, Yes };
+
   /// Check whether the current token can be the token after the end of an
   /// AssignmentExpression.
-  bool checkEndAssignmentExpression() const;
+  /// \param ofEndsAssignment needed because 'of' isn't reserved and can be used
+  /// outside a for loop:
+  ///    yield of();
+  bool checkEndAssignmentExpression(
+      OfEndsAssignment ofEndsAssignment = OfEndsAssignment::Yes) const;
 
   /// Check whether we match 'async [no LineTerminator here] function'.
   /// \pre the current token is 'async'.
@@ -866,6 +892,11 @@ class JSParserImpl {
   Optional<ESTree::Node *> parsePostfixExpression();
   Optional<ESTree::Node *> parseUnaryExpression();
 
+  /// Convert identifiers to the operator they represent.
+  /// Called after each parseUnaryExpression to change identifiers that might be
+  /// operators into their corresponding IDENT_OP tokens.
+  inline void convertIdentOpIfPossible();
+
   /// Parse a binary expression using a precedence table, in order to decrease
   /// recursion depth.
   Optional<ESTree::Node *> parseBinaryExpression(Param param);
@@ -912,21 +943,26 @@ class JSParserImpl {
   /// Reparse the specified node as arrow function parameter list and store the
   /// parameter list in \p paramList. Print an error and return false on error,
   /// otherwise return true.
+  /// \param hasNewLine whether the parameters had a newline before them.
   /// \param[in/out] isAsync the arrow function is async. The caller may already
   /// know this prior to calling this function, in which case `true` should be
   /// passed. Otherwise, this function will try to reparse a call expression
   /// into an async arrow function.
   bool reparseArrowParameters(
       ESTree::Node *node,
+      bool hasNewLine,
       ESTree::NodeList &paramList,
       bool &isAsync);
 
+  /// \param hasNewLine whether the leftExpr to be reparsed
+  ///   has a newline immediately before it.
   /// \param forceAsync set to true when it is already known that the arrow
   ///   function expression is 'async'. This occurs when there are no parens
   ///   around the argument list.
   Optional<ESTree::Node *> parseArrowFunctionExpression(
       Param param,
       ESTree::Node *leftExpr,
+      bool hasNewLine,
       ESTree::Node *typeParams,
       ESTree::Node *returnType,
       ESTree::Node *predicate,
@@ -1058,23 +1094,89 @@ class JSParserImpl {
     return parseTypeAnnotationTS(wrappedStart);
 #endif
   }
+
+  Optional<ESTree::Node *> parseReturnTypeAnnotation(
+      Optional<SMLoc> wrappedStart = None,
+      AllowAnonFunctionType allowAnonFunctionType =
+          AllowAnonFunctionType::Yes) {
+    assert(context_.getParseFlow() || context_.getParseTS());
+#if HERMES_PARSE_FLOW
+    if (context_.getParseFlow())
+      return parseReturnTypeAnnotationFlow(wrappedStart, allowAnonFunctionType);
+#endif
+#if HERMES_PARSE_TS
+    return parseTypeAnnotationTS(wrappedStart);
+#endif
+  }
 #endif
 
 #if HERMES_PARSE_FLOW
+  /// Allow parsing the initial part of an identifier + type annotation pair.
+  /// Used for the following syntax structure:
+  ///   IdentifierName: TypeAnnotation
+  ///   IdentifierName?: TypeAnnotation
+  ///   TypeAnnotation
+  ///   ^
+  /// This will try parsing as a TypeAnnotation unless a known type ident is
+  /// found. In this case it will lookahead to see if a colon is present to
+  /// ensure the type annotation does not fail to parse. e.g.
+  ///   type T = (component()) => void;
+  ///             ^
+  ///   type T = (component: component()) => void;
+  ///             ^
+  /// In the above example the second case would fail when calling
+  /// `parseTypeAnnotationFlow` as it is not a valid Flow type annotation,
+  /// whereas `parseTypeAnnotationBeforeColonFlow` would lookahead for a colon
+  /// to know if a `GenericTypeAnnotation` is valid in this position instead.
+  /// \return A type annotation, if its known a colon is the preceding token a
+  /// GenericTypeAnnotation will be returned for unwrapping by
+  /// reparseTypeAnnotationAsIdentifierFlow.
+  Optional<ESTree::Node *> parseTypeAnnotationBeforeColonFlow();
   /// \param wrappedStart if set, the type annotation should be wrapped in a
   /// TypeAnnotationNode starting at this location. If not set, the type
   /// annotation should not be wrapped in a TypeAnnotationNode.
   Optional<ESTree::Node *> parseTypeAnnotationFlow(
       Optional<SMLoc> wrappedStart = None,
       AllowAnonFunctionType allowAnonFunctionType = AllowAnonFunctionType::Yes);
-
-  /// Allow 'declare export type', which is only allowed in 'declare module'.
-  enum class AllowDeclareExportType { No, Yes };
+  /// \param wrappedStart if set, the type annotation should be wrapped in a
+  /// TypeAnnotationNode starting at this location. If not set, the type
+  /// annotation should not be wrapped in a TypeAnnotationNode.
+  Optional<ESTree::Node *> parseReturnTypeAnnotationFlow(
+      Optional<SMLoc> wrappedStart = None,
+      AllowAnonFunctionType allowAnonFunctionType = AllowAnonFunctionType::Yes);
 
   Optional<ESTree::Node *> parseFlowDeclaration();
-  Optional<ESTree::Node *> parseDeclareFLow(
+  Optional<ESTree::Node *> parseDeclareFLow(SMLoc start);
+  bool checkComponentDeclarationFlow();
+  Optional<ESTree::Node *> parseComponentDeclarationFlow(
       SMLoc start,
-      AllowDeclareExportType allowDeclareExportType);
+      bool declare);
+  bool checkHookDeclarationFlow();
+  Optional<ESTree::Node *> parseHookDeclarationFlow(SMLoc start);
+
+  /// This is for parsing the `renders` clause that comes after component
+  /// declarations, declared components, and component types, but not for
+  /// standalone render types. It assumes that you've already checked that there
+  /// is a `renders` clause.
+  Optional<ESTree::Node *> parseComponentRenderTypeFlow(bool componentType);
+
+  /// Parse ComponentParameters with the leading '(' and the trailing ')'.
+  /// \pre the current token must be '('. \param[out] paramList populated
+  /// with the ComponentParameters. \return true on success, false on failure.
+  bool parseComponentParametersFlow(Param param, ESTree::NodeList &paramList);
+  Optional<ESTree::Node *> parseComponentParameterFlow(Param param);
+
+  Optional<ESTree::Node *> parseComponentTypeAnnotationFlow();
+  /// Parse ComponentTypeParameters with the leading '(' and the trailing ')'.
+  /// \pre the current token must be '('. \param[out] paramList populated
+  /// with the ComponentTypeParameters.
+  /// \return the rest parameter if it exists, nullptr otherwise. None still
+  /// indicates an error.
+  Optional<ESTree::Node *> parseComponentTypeParametersFlow(
+      Param param,
+      ESTree::NodeList &paramList);
+  Optional<ESTree::Node *> parseComponentTypeRestParameterFlow(Param param);
+  Optional<ESTree::Node *> parseComponentTypeParameterFlow(Param param);
 
   enum class TypeAliasKind { None, Declare, Opaque, DeclareOpaque };
   Optional<ESTree::Node *> parseTypeAliasFlow(SMLoc start, TypeAliasKind kind);
@@ -1093,28 +1195,37 @@ class JSParserImpl {
   bool parseInterfaceExtends(SMLoc start, ESTree::NodeList &extends);
 
   Optional<ESTree::Node *> parseDeclareFunctionFlow(SMLoc start);
-  Optional<ESTree::Node *> parseDeclareClassFlow(SMLoc start);
-  Optional<ESTree::Node *> parseDeclareExportFlow(
+  Optional<ESTree::Node *> parseDeclareHookFlow(SMLoc start);
+  Optional<ESTree::Node *> parseDeclareFunctionOrHookFlow(
       SMLoc start,
-      AllowDeclareExportType allowDeclareExportType);
+      bool hook);
+  Optional<ESTree::Node *> parseDeclareClassFlow(SMLoc start);
+  Optional<ESTree::Node *> parseDeclareExportFlow(SMLoc start);
   Optional<ESTree::Node *> parseDeclareModuleFlow(SMLoc start);
+  Optional<ESTree::Node *> parseDeclareNamespaceFlow(SMLoc start);
 
   Optional<ESTree::Node *> parseExportTypeDeclarationFlow(SMLoc start);
 
+  Optional<ESTree::Node *> parseConditionalTypeAnnotationFlow();
   Optional<ESTree::Node *> parseUnionTypeAnnotationFlow();
   Optional<ESTree::Node *> parseIntersectionTypeAnnotationFlow();
   Optional<ESTree::Node *> parseAnonFunctionWithoutParensTypeAnnotationFlow();
   Optional<ESTree::Node *> parsePrefixTypeAnnotationFlow();
   Optional<ESTree::Node *> parsePostfixTypeAnnotationFlow();
   Optional<ESTree::Node *> parsePrimaryTypeAnnotationFlow();
+  Optional<ESTree::Node *> parseTypeofTypeAnnotationFlow();
   Optional<ESTree::Node *> parseTupleTypeAnnotationFlow();
+  Optional<ESTree::Node *> parseTupleElementFlow();
   Optional<ESTree::Node *> parseFunctionTypeAnnotationFlow();
+  Optional<ESTree::Node *> parseHookTypeAnnotationFlow();
+  Optional<ESTree::Node *> parseFunctionOrHookTypeAnnotationFlow(bool hook);
   Optional<ESTree::Node *> parseFunctionTypeAnnotationWithParamsFlow(
       SMLoc start,
       ESTree::NodeList &&params,
       ESTree::Node *thisConstraint,
       ESTree::Node *rest,
-      ESTree::Node *typeParams);
+      ESTree::Node *typeParams,
+      bool hook);
   Optional<ESTree::Node *> parseFunctionOrGroupTypeAnnotationFlow();
 
   /// Whether to allow 'proto' properties in an object type annotation.
@@ -1147,9 +1258,15 @@ class JSParserImpl {
       ESTree::NodeList &callProperties,
       ESTree::NodeList &internalSlots);
 
-  /// Current token must be immediately after opening '['.
+  /// Current token must be immediately after the left token e.g. '[T'
+  Optional<ESTree::Node *> parseTypeMappedTypePropertyFlow(
+      SMLoc start,
+      ESTree::Node *left,
+      ESTree::Node *variance);
+  /// Current token must be immediately after the left token e.g. '[T'
   Optional<ESTree::Node *> parseTypeIndexerPropertyFlow(
       SMLoc start,
+      ESTree::Node *left,
       ESTree::Node *variance,
       bool isStatic);
 
@@ -1178,7 +1295,9 @@ class JSParserImpl {
   Optional<ESTree::FunctionTypeParamNode *>
   parseFunctionTypeAnnotationParamsFlow(
       ESTree::NodeList &params,
-      ESTree::NodePtr &thisConstraint);
+      ESTree::NodePtr &thisConstraint,
+      bool hook);
+  Optional<ESTree::FunctionTypeParamNode *> parseHookTypeAnnotationParamFlow();
   Optional<ESTree::FunctionTypeParamNode *>
   parseFunctionTypeAnnotationParamFlow();
 
@@ -1197,6 +1316,15 @@ class JSParserImpl {
 
   Optional<ESTree::Node *> parsePredicateFlow();
 
+  /// Process a TypeAnnotation node and validate it matches the parsing rules
+  /// for an identifier.
+  /// \return identifier name equivalent of the passed TypeAnnotation node. None
+  /// indicates an error.
+  Optional<UniqueString *> reparseTypeAnnotationAsIdFlow(
+      ESTree::Node *typeAnnotation);
+  /// Process a TypeAnnotation node into a valid Identifier node.
+  /// \return identifier name equivalent of the passed TypeAnnotation node. None
+  /// indicates an error.
   Optional<ESTree::IdentifierNode *> reparseTypeAnnotationAsIdentifierFlow(
       ESTree::Node *typeAnnotation);
 
@@ -1234,7 +1362,8 @@ class JSParserImpl {
     }
   }
 
-  Optional<ESTree::Node *> parseEnumDeclarationFlow();
+  /// \param declare whether this is 'declare enum'
+  Optional<ESTree::Node *> parseEnumDeclarationFlow(SMLoc start, bool declare);
   Optional<ESTree::Node *> parseEnumBodyFlow(
       OptValue<EnumKind> optKind,
       Optional<SMLoc> explicitTypeStart);

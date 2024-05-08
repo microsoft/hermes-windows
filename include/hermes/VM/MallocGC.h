@@ -243,6 +243,7 @@ class MallocGC final : public GCBase {
   void snapshotWriteBarrier(const GCSymbolID *) {}
   void snapshotWriteBarrierRange(const GCHermesValue *, uint32_t) {}
   void snapshotWriteBarrierRange(const GCSmallHermesValue *, uint32_t) {}
+  void weakRefReadBarrier(HermesValue) {}
   void weakRefReadBarrier(GCCell *) {}
 
   void getHeapInfo(HeapInfo &info) override;
@@ -285,9 +286,6 @@ class MallocGC final : public GCBase {
   /// Reset the statistics used for reporting GC information.
   void resetStats();
 
-  /// Sets all weak references to unmarked in preparation for a collection.
-  void resetWeakReferences();
-
   struct MarkingAcceptor;
   class SkipWeakRefsMarkingAcceptor;
   struct FullMSCUpdateWeakRootsAcceptor;
@@ -297,17 +295,12 @@ class MallocGC final : public GCBase {
   /// unmarked object, mark it and push it on the mark stack.
   void drainMarkStack(MarkingAcceptor &acceptor);
 
-  /// In the first phase of marking, before this is called, we treat
-  /// JSWeakMaps specially: when we mark a reachable JSWeakMap, we do
-  /// not mark from it, but rather save a pointer to it in a vector.
-  /// Then we call this method, which finds the keys that are
-  /// reachable, and marks transitively from the corresponding value.
-  /// This is done carefully, to reach a correct global transitive
-  /// closure, in cases where keys are reachable only via values of
-  /// other keys.  When this marking is done, entries with unreachable
-  /// keys are cleared.  Normal WeakRef processing at the end of GC
-  /// will delete the cleared entries from the map.
-  void completeWeakMapMarking(MarkingAcceptor &acceptor);
+  /// Iterate the list of `weakMapEntrySlots_`, for each non-free slot, if
+  /// both the key and the owner are marked, mark the mapped value with
+  /// \p acceptor. This may further cause other values to be marked, so we need
+  /// to keep iterating until no update. After the iteration, set each
+  /// unreachable mapped value to Empty.
+  void markWeakMapEntrySlots(MarkingAcceptor &acceptor);
 
   /// Update all of the weak references and invalidate the ones that point to
   /// dead objects.

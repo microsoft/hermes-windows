@@ -227,7 +227,7 @@ ExecutionStatus Debugger::runDebugger(
       isDebugging_ = false;
       return ExecutionStatus::RETURNED;
     }
-    pauseReason = PauseReason::AsyncTrigger;
+    pauseReason = PauseReason::AsyncTriggerImplicit;
   } else if (runReason == RunReason::AsyncBreakExplicit) {
     // The user requested an async break, so we can clear stepping state
     // with the knowledge that the inspector isn't sending an immediate
@@ -236,7 +236,7 @@ ExecutionStatus Debugger::runDebugger(
       clearTempBreakpoints();
       curStepMode_ = llvh::None;
     }
-    pauseReason = PauseReason::AsyncTrigger;
+    pauseReason = PauseReason::AsyncTriggerExplicit;
   } else {
     assert(runReason == RunReason::Opcode && "Unknown run reason");
     // First, check if we have to finish a step that's in progress.
@@ -941,7 +941,7 @@ static unsigned getFrameSize(
 
   do {
     frameSize += scopeDescs[i].names.size();
-  } while (scopeDescs[i--].flags.isInnerScope);
+  } while (scopeDescs[i++].flags.isInnerScope);
 
   return frameSize;
 }
@@ -1168,6 +1168,7 @@ HermesValue Debugger::evalInFrame(
         Handle<Environment>::vmcast(runtime_, env),
         chain,
         Handle<>(&frameInfo->frame->getThisArgRef()),
+        false,
         singleFunction);
   }
 
@@ -1411,6 +1412,43 @@ auto Debugger::getSourceMappingUrl(ScriptID scriptId) const -> String {
   }
 
   return "";
+}
+
+auto Debugger::getLoadedScripts() const -> std::vector<SourceLocation> {
+  std::vector<SourceLocation> loadedScripts;
+  for (auto &runtimeModule : runtime_.getRuntimeModules()) {
+    if (!runtimeModule.isInitialized()) {
+      // Uninitialized module.
+      continue;
+    }
+
+    auto *debugInfo = runtimeModule.getBytecode()->getDebugInfo();
+    if (!debugInfo) {
+      // No debug info in this module, keep going.
+      continue;
+    }
+
+    // Same as the temp breakpoint we set in Debugger::willExecuteModule() for
+    // pausing on script load.
+    auto globalFunctionIndex =
+        runtimeModule.getBytecode()->getGlobalFunctionIndex();
+    auto globalCodeBlock =
+        runtimeModule.getCodeBlockMayAllocate(globalFunctionIndex);
+    OptValue<hbc::DebugSourceLocation> debugSrcLoc =
+        globalCodeBlock->getSourceLocation();
+    if (!debugSrcLoc) {
+      continue;
+    }
+
+    SourceLocation loc;
+    loc.fileId = resolveScriptId(&runtimeModule, debugSrcLoc->filenameId);
+    loc.line = debugSrcLoc->line;
+    loc.column = debugSrcLoc->column;
+    loc.fileName = debugInfo->getFilenameByID(debugSrcLoc->filenameId);
+
+    loadedScripts.push_back(loc);
+  }
+  return loadedScripts;
 }
 
 auto Debugger::resolveScriptId(

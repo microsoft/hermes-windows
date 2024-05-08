@@ -22,6 +22,7 @@
 #include "llvh/ADT/DenseSet.h"
 #include "llvh/ADT/MapVector.h"
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -184,7 +185,7 @@ class Debugger {
 
   // Whether an user has attached to any Inspector.
   // It is exposed to JS via a property %DebuggerInternal.isDebuggerAttached
-  bool isDebuggerAttached_{false};
+  std::atomic<bool> isDebuggerAttached_{false};
 
  public:
   explicit Debugger(Runtime &runtime) : runtime_(runtime) {}
@@ -271,12 +272,14 @@ class Debugger {
     return pauseOnThrowMode_;
   }
 
-  /// Sets the property %isDebuggerAttached in the %DebuggerInternal object.
+  /// Sets the property %isDebuggerAttached in the %DebuggerInternal object. Can
+  /// be called from any thread.
   void setIsDebuggerAttached(bool isAttached) {
     isDebuggerAttached_ = isAttached;
   }
 
-  /// Gets the property %isDebuggerAttached in the %DebuggerInternal object.
+  /// Gets the property %isDebuggerAttached in the %DebuggerInternal object. Can
+  /// be called from any thread.
   bool getIsDebuggerAttached() const {
     return isDebuggerAttached_;
   }
@@ -388,6 +391,9 @@ class Debugger {
 
   /// \return the source map URL for \p scriptId, empty string if non exists.
   String getSourceMappingUrl(ScriptID scriptId) const;
+
+  /// \return list of loaded scripts
+  std::vector<SourceLocation> getLoadedScripts() const;
 
   /// Find the handler for an exception thrown at \p state.
   /// \return llvh::None if no handler is found, else return the state of the

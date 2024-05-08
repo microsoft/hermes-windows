@@ -21,6 +21,7 @@ import type {
   TemplateElement as TemplateElementType,
   Program as ProgramType,
   DocblockMetadata as DocblockMetadataType,
+  MemberExpression as MemberExpressionType,
 } from 'hermes-estree';
 import type {DetachedNode, MaybeDetachedNode} from '../../detachedNode';
 
@@ -62,8 +63,11 @@ export function ArrowFunctionExpression(props: {
     expression: props.body.type !== 'BlockStatement',
     params: props.params.map(n => asDetachedNode(n)),
     body: asDetachedNode(props.body),
+    // $FlowFixMe[incompatible-call]
     typeParameters: asDetachedNode(props.typeParameters),
+    // $FlowFixMe[incompatible-call]
     returnType: asDetachedNode(props.returnType),
+    // $FlowFixMe[incompatible-call]
     predicate: asDetachedNode(props.predicate),
     async: props.async,
   });
@@ -94,9 +98,13 @@ export function ClassDeclaration(props: {
 }): DetachedNode<ClassDeclarationType> {
   const node = detachedProps<ClassDeclarationType>(props.parent, {
     type: 'ClassDeclaration',
+    // $FlowFixMe[incompatible-call]
     id: asDetachedNode(props.id),
+    // $FlowFixMe[incompatible-call]
     typeParameters: asDetachedNode(props.typeParameters),
+    // $FlowFixMe[incompatible-call]
     superClass: asDetachedNode(props.superClass),
+    // $FlowFixMe[incompatible-call]
     superTypeParameters: asDetachedNode(props.superTypeParameters),
     decorators: (props.decorators ?? []).map(n => asDetachedNode(n)),
     implements: (props.implements ?? []).map(n => asDetachedNode(n)),
@@ -141,6 +149,7 @@ export function Identifier(props: {
     type: 'Identifier',
     name: props.name,
     optional: props.optional ?? false,
+    // $FlowFixMe[incompatible-call]
     typeAnnotation: asDetachedNode(props.typeAnnotation),
   });
   setParentPointersInDirectChildren(node);
@@ -198,7 +207,30 @@ export function DeclareFunction(props: {
         typeAnnotation: asDetachedNode(props.functionType),
       }),
     }),
+    // $FlowFixMe[incompatible-call]
     predicate: asDetachedNode(props.predicate),
+  });
+  setParentPointersInDirectChildren(node);
+  return node;
+}
+
+export type MemberExpressionProps = {
+  +object: MaybeDetachedNode<MemberExpressionType['object']>,
+  +property: MaybeDetachedNode<MemberExpressionType['property']>,
+  +computed: MemberExpressionType['computed'],
+  +optional?: MemberExpressionType['optional'],
+};
+
+export function MemberExpression(props: {
+  ...$ReadOnly<MemberExpressionProps>,
+  +parent?: ESNode,
+}): DetachedNode<MemberExpressionType> {
+  const node = detachedProps<MemberExpressionType>(props.parent, {
+    type: 'MemberExpression',
+    object: asDetachedNode(props.object),
+    property: asDetachedNode(props.property),
+    computed: props.computed,
+    optional: props.optional ?? false,
   });
   setParentPointersInDirectChildren(node);
   return node;

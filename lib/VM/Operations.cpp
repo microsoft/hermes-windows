@@ -547,7 +547,7 @@ CallResult<HermesValue> toNumber_RJS(Runtime &runtime, Handle<> valueHandle) {
       // Already have a number, just return it.
       return value;
   }
-  return HermesValue::encodeDoubleValue(result);
+  return HermesValue::encodeUntrustedNumberValue(result);
 }
 
 CallResult<HermesValue> toNumeric_RJS(Runtime &runtime, Handle<> valueHandle) {
@@ -577,7 +577,7 @@ CallResult<HermesValue> toLength(Runtime &runtime, Handle<> valueHandle) {
   } else if (len > maxLength) {
     len = maxLength;
   }
-  return HermesValue::encodeDoubleValue(len);
+  return HermesValue::encodeUntrustedNumberValue(len);
 }
 
 CallResult<uint64_t> toLengthU64(Runtime &runtime, Handle<> valueHandle) {
@@ -598,7 +598,7 @@ CallResult<uint64_t> toLengthU64(Runtime &runtime, Handle<> valueHandle) {
 
 CallResult<HermesValue> toIndex(Runtime &runtime, Handle<> valueHandle) {
   auto value = (valueHandle->isUndefined())
-      ? runtime.makeHandle(HermesValue::encodeDoubleValue(0))
+      ? runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(0))
       : valueHandle;
   auto res = toIntegerOrInfinity(runtime, value);
   if (res == ExecutionStatus::EXCEPTION) {
@@ -609,7 +609,7 @@ CallResult<HermesValue> toIndex(Runtime &runtime, Handle<> valueHandle) {
     return runtime.raiseRangeError("A negative value cannot be an index");
   }
   auto integerIndexHandle =
-      runtime.makeHandle(HermesValue::encodeDoubleValue(integerIndex));
+      runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(integerIndex));
   res = toLength(runtime, integerIndexHandle);
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -638,7 +638,7 @@ CallResult<HermesValue> toIntegerOrInfinity(
     result = std::trunc(num);
   }
 
-  return HermesValue::encodeDoubleValue(result);
+  return HermesValue::encodeTrustedNumberValue(result);
 }
 
 /// Conversion of HermesValues to integers.
@@ -652,7 +652,7 @@ static inline CallResult<HermesValue> toInt(
   }
   double num = res->getNumber();
   T result = static_cast<T>(hermes::truncateToInt32(num));
-  return HermesValue::encodeNumberValue(result);
+  return HermesValue::encodeUntrustedNumberValue(result);
 }
 
 CallResult<HermesValue> toInt8(Runtime &runtime, Handle<> valueHandle) {
@@ -709,7 +709,8 @@ CallResult<HermesValue> toUInt8Clamp(Runtime &runtime, Handle<> valueHandle) {
     // 2. ReturnIfAbrupt(number)
     return ExecutionStatus::EXCEPTION;
   }
-  return HermesValue::encodeNumberValue(toUInt8Clamp(res->getNumber()));
+  return HermesValue::encodeUntrustedNumberValue(
+      toUInt8Clamp(res->getNumber()));
 }
 
 CallResult<HermesValue> toUInt16(Runtime &runtime, Handle<> valueHandle) {
@@ -992,6 +993,49 @@ IMPLEMENT_COMPARISON_OP(greaterOp_RJS, >);
 IMPLEMENT_COMPARISON_OP(lessEqualOp_RJS, <=);
 IMPLEMENT_COMPARISON_OP(greaterEqualOp_RJS, >=);
 
+namespace {
+
+enum class EqualityResult { Unknown = -1, NotEqual, Equal };
+
+/// Perform a fast equality check to see if a given double and a given
+/// BigInt are equal. If both numbers are small enough for a fast
+/// comparison, this will return `Equal` or `NotEqual`. Otherwise, if
+/// the numbers are not small enough to be quickly compared, this will
+/// return `Unknown`, which denotes that a non-fast-path check is needed.
+EqualityResult areEqualSmallNumbers(const double x, BigIntPrimitive *y) {
+  // Doubles have a 53-bit mantissa, so only values from 0 to 2^53 - 1 are
+  // contiguously representable.
+  constexpr int64_t MaxSafeIntegerValueOfDouble =
+      (int64_t{1} << std::numeric_limits<double>::digits) - 1;
+
+  // Do a quick pass for single digit values. This prevents us from
+  // having to instantiate a BigInt object for small numbers. We can
+  // only do this if we can cast our single BigInt digit to a double
+  // without loss of precision.
+  if (y->isTruncationToSingleDigitLossless(true)) {
+    const auto yDigit =
+        static_cast<bigint::SignedBigIntDigitType>(y->truncateToSingleDigit());
+
+    if (std::abs(yDigit) < MaxSafeIntegerValueOfDouble) {
+      // `false` and `true` are safely castable directly to EqualityResults
+      return static_cast<EqualityResult>(static_cast<double>(yDigit) == x);
+    }
+  }
+
+  // y (the BigInt) is greater than MaxSafeIntegerValueOfDouble. Thus, if
+  // x (the double) is less than MaxSafeIntegerValueOfDouble they are
+  // certainly NotEqual.
+  if (std::abs(x) < static_cast<double>(MaxSafeIntegerValueOfDouble)) {
+    static_assert(
+        std::numeric_limits<bigint::SignedBigIntDigitType>::max() >
+        MaxSafeIntegerValueOfDouble);
+    return EqualityResult::NotEqual;
+  }
+
+  return EqualityResult::Unknown;
+}
+} // namespace
+
 /// ES11 7.2.15 Abstract Equality Comparison
 CallResult<bool>
 abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
@@ -1115,7 +1159,7 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
         return y->getBigInt()->compare(static_cast<int32_t>(x->getBool())) == 0;
       }
       CASE_S_M(Bool, Object) {
-        x = HermesValue::encodeDoubleValue(x->getBool());
+        x = HermesValue::encodeUntrustedNumberValue(x->getBool());
         break;
       }
       // 9. If Type(y) is Boolean, return the result of the comparison x == !
@@ -1131,7 +1175,7 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
         return x->getBigInt()->compare(static_cast<int32_t>(y->getBool())) == 0;
       }
       CASE_M_S(Object, Bool) {
-        y = HermesValue::encodeDoubleValue(y->getBool());
+        y = HermesValue::encodeUntrustedNumberValue(y->getBool());
         break;
       }
       // 10. If Type(x) is either String, Number, BigInt, or Symbol and Type(y)
@@ -1166,11 +1210,17 @@ abstractEqualityTest_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
       // the mathematical value of y, return true; otherwise return false.
       CASE_M_S(BigInt, NUMBER_TAG) {
         std::swap(x, y);
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
       }
       CASE_S_M(NUMBER_TAG, BigInt) {
         if (!isIntegralNumber(x->getNumber())) {
           return false;
+        }
+
+        EqualityResult areEqual =
+            areEqualSmallNumbers(x->getNumber(), y->getBigInt());
+        if (areEqual != EqualityResult::Unknown) {
+          return areEqual == EqualityResult::Equal ? true : false;
         }
 
         auto xAsBigInt = BigIntPrimitive::fromDouble(runtime, x->getNumber());
@@ -1260,7 +1310,7 @@ addOp_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
       return ExecutionStatus::EXCEPTION;
     }
     const double yNum = res->getNumber();
-    return HermesValue::encodeDoubleValue(xNum + yNum);
+    return HermesValue::encodeUntrustedNumberValue(xNum + yNum);
   }
 
   // yPrim is a primitive; therefore it is already a BigInt, or it will never be
@@ -1625,7 +1675,8 @@ CallResult<Handle<JSArray>> iterableToArray(
   // CreateArrayFromList: 2. Let n be 0.
   size_t n = 0;
 
-  for (;;) {
+  GCScopeMarkerRAII marker{runtime};
+  for (;; marker.flush()) {
     // IterableToList: 5.a. Set next to ? IteratorStep(iteratorRecord).
     CallResult<Handle<JSObject>> nextRes =
         iteratorStep(runtime, iteratorRecord);
@@ -2115,11 +2166,7 @@ ExecutionStatus toPropertyDescriptor(
       return runtime.raiseTypeError(
           "Invalid property descriptor. Can't set both accessor and writable.");
     }
-    auto crtRes = PropertyAccessor::create(runtime, getterPtr, setterPtr);
-    if (LLVM_UNLIKELY(crtRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    valueOrAccessor = *crtRes;
+    valueOrAccessor = PropertyAccessor::create(runtime, getterPtr, setterPtr);
   }
 
   return ExecutionStatus::RETURNED;
@@ -2127,13 +2174,13 @@ ExecutionStatus toPropertyDescriptor(
 
 CallResult<HermesValue> objectFromPropertyDescriptor(
     Runtime &runtime,
-    ComputedPropertyDescriptor desc,
+    DefinePropertyFlags dpFlags,
     Handle<> valueOrAccessor) {
   Handle<JSObject> obj = runtime.makeHandle(JSObject::create(runtime));
 
   DefinePropertyFlags dpf = DefinePropertyFlags::getDefaultNewPropertyFlags();
 
-  if (!desc.flags.accessor) {
+  if (!dpFlags.isAccessor()) {
     // Data Descriptor
     auto result = JSObject::defineOwnProperty(
         obj,
@@ -2149,18 +2196,20 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
       return ExecutionStatus::EXCEPTION;
     }
 
-    result = JSObject::defineOwnProperty(
-        obj,
-        runtime,
-        Predefined::getSymbolID(Predefined::writable),
-        dpf,
-        Runtime::getBoolValue(desc.flags.writable),
-        PropOpFlags().plusThrowOnError());
-    assert(
-        result != ExecutionStatus::EXCEPTION &&
-        "defineOwnProperty() failed on a new object");
-    if (result == ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
+    if (dpFlags.setWritable) {
+      result = JSObject::defineOwnProperty(
+          obj,
+          runtime,
+          Predefined::getSymbolID(Predefined::writable),
+          dpf,
+          Runtime::getBoolValue(dpFlags.writable),
+          PropOpFlags().plusThrowOnError());
+      assert(
+          result != ExecutionStatus::EXCEPTION &&
+          "defineOwnProperty() failed on a new object");
+      if (result == ExecutionStatus::EXCEPTION) {
+        return ExecutionStatus::EXCEPTION;
+      }
     }
   } else {
     // Accessor
@@ -2205,34 +2254,37 @@ CallResult<HermesValue> objectFromPropertyDescriptor(
     }
   }
 
-  auto result = JSObject::defineOwnProperty(
-      obj,
-      runtime,
-      Predefined::getSymbolID(Predefined::enumerable),
-      dpf,
-      Runtime::getBoolValue(desc.flags.enumerable),
-      PropOpFlags().plusThrowOnError());
-  assert(
-      result != ExecutionStatus::EXCEPTION &&
-      "defineOwnProperty() failed on a new object");
-  if (result == ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
+  if (dpFlags.setEnumerable) {
+    auto result = JSObject::defineOwnProperty(
+        obj,
+        runtime,
+        Predefined::getSymbolID(Predefined::enumerable),
+        dpf,
+        Runtime::getBoolValue(dpFlags.enumerable),
+        PropOpFlags().plusThrowOnError());
+    assert(
+        result != ExecutionStatus::EXCEPTION &&
+        "defineOwnProperty() failed on a new object");
+    if (result == ExecutionStatus::EXCEPTION) {
+      return ExecutionStatus::EXCEPTION;
+    }
   }
 
-  result = JSObject::defineOwnProperty(
-      obj,
-      runtime,
-      Predefined::getSymbolID(Predefined::configurable),
-      dpf,
-      Runtime::getBoolValue(desc.flags.configurable),
-      PropOpFlags().plusThrowOnError());
-  assert(
-      result != ExecutionStatus::EXCEPTION &&
-      "defineOwnProperty() failed on a new object");
-  if (result == ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
+  if (dpFlags.setConfigurable) {
+    auto result = JSObject::defineOwnProperty(
+        obj,
+        runtime,
+        Predefined::getSymbolID(Predefined::configurable),
+        dpf,
+        Runtime::getBoolValue(dpFlags.configurable),
+        PropOpFlags().plusThrowOnError());
+    assert(
+        result != ExecutionStatus::EXCEPTION &&
+        "defineOwnProperty() failed on a new object");
+    if (result == ExecutionStatus::EXCEPTION) {
+      return ExecutionStatus::EXCEPTION;
+    }
   }
-
   return obj.getHermesValue();
 }
 

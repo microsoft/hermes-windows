@@ -512,21 +512,12 @@ Value *ESTreeIRGen::genOptionalCallExpr(
 ///  textified callee: "aaaaaaaaaa(...)bbbbbbbbbb"
 static LiteralString *getTextifiedCallExpr(
     IRBuilder &builder,
-    ESTree::CallExpressionLikeNode *call) {
+    ESTree::Node *callee) {
   constexpr uint32_t kMaxTextifiedCalleeSizeUTF8Chars = 64;
   // Pessimizing the maximum buffer size for the textified callee as if all
   // characters were 4 bytes.
   llvh::SmallVector<char, kMaxTextifiedCalleeSizeUTF8Chars * 4> textifiedCallee;
   llvh::raw_svector_ostream OS(textifiedCallee);
-  ESTree::Node *callee{};
-  if (auto *C = llvh::dyn_cast<ESTree::CallExpressionNode>(call)) {
-    callee = C->_callee;
-  } else if (
-      auto *O = llvh::dyn_cast<ESTree::OptionalCallExpressionNode>(call)) {
-    callee = O->_callee;
-  } else {
-    llvm_unreachable("Unhandled CallExpressionLikeNode sub-type.");
-  }
 
   // Count of how many UTF8 character are on the textified callee string.
   uint32_t numUTF8Chars = 0;
@@ -652,7 +643,7 @@ Value *ESTreeIRGen::emitCall(
     }
 
     return Builder.createCallInst(
-        getTextifiedCallExpr(Builder, call), callee, thisVal, args);
+        getTextifiedCallExpr(Builder, getCallee(call)), callee, thisVal, args);
   }
 
   // Otherwise, there exists a spread argument, so the number of arguments
@@ -787,7 +778,9 @@ Value *ESTreeIRGen::genCallEvalExpr(ESTree::CallExpressionNode *call) {
         call->getSourceRange(), "Extra eval() arguments are ignored");
   }
 
-  return Builder.createDirectEvalInst(args[0]);
+  bool isStrict = Builder.getInsertionBlock()->getParent()->isStrictMode();
+  return Builder.createDirectEvalInst(
+      args[0], Builder.getLiteralBool(isStrict));
 }
 
 /// Convert a property key node to its JavaScript string representation.
@@ -893,13 +886,9 @@ Value *ESTreeIRGen::genObjectExpr(ESTree::ObjectExpressionNode *Expr) {
   ESTree::PropertyNode *protoProperty = nullptr;
 
   uint32_t numComputed = 0;
-  bool hasSpread = false;
-  bool hasAccessor = false;
-  bool hasDuplicateProperty = false;
 
   for (auto &P : Expr->_properties) {
     if (llvh::isa<ESTree::SpreadElementNode>(&P)) {
-      hasSpread = true;
       continue;
     }
 
@@ -936,10 +925,8 @@ Value *ESTreeIRGen::genObjectExpr(ESTree::ObjectExpressionNode *Expr) {
     PropertyValue *propValue = &propMap[propName];
     if (prop->_kind->str() == "get") {
       propValue->setGetter(cast<ESTree::FunctionExpressionNode>(prop->_value));
-      hasAccessor = true;
     } else if (prop->_kind->str() == "set") {
       propValue->setSetter(cast<ESTree::FunctionExpressionNode>(prop->_value));
-      hasAccessor = true;
     } else {
       assert(prop->_kind->str() == "init" && "invalid PropertyNode kind");
       // We record the propValue if this is a regular property
@@ -949,7 +936,6 @@ Value *ESTreeIRGen::genObjectExpr(ESTree::ObjectExpressionNode *Expr) {
     std::string key = (prop->_kind->str() + propName).str();
     auto iterAndSuccess = firstLocMap.try_emplace(key, prop->getSourceRange());
     if (!iterAndSuccess.second) {
-      hasDuplicateProperty = true;
       Builder.getModule()->getContext().getSourceErrorManager().warning(
           prop->getSourceRange(),
           Twine("the property \"") + propName +
@@ -958,38 +944,6 @@ Value *ESTreeIRGen::genObjectExpr(ESTree::ObjectExpressionNode *Expr) {
       Builder.getModule()->getContext().getSourceErrorManager().note(
           iterAndSuccess.first->second, "The first definition was here.");
     }
-  }
-
-  // Heuristically determine if we emit AllocObjectLiteral.
-  // We do so if there is no computed key, no __proto__, no spread element
-  // node, no duplicate properties, no accessors, and object literal is not
-  // empty.
-  if (numComputed == 0 && !protoProperty && !hasSpread &&
-      !hasDuplicateProperty && !hasAccessor && propMap.size()) {
-    AllocObjectLiteralInst::ObjectPropertyMap objPropMap;
-    // It is safe to assume that there is no computed keys, and
-    // no __proto__.
-    for (auto &P : Expr->_properties) {
-      auto *prop = cast<ESTree::PropertyNode>(&P);
-      assert(
-          !prop->_computed &&
-          "Cannot handle computed key in AllocObjectLiteral");
-
-      // We are reusing the storage, so make sure it is cleared at every
-      // iteration.
-      stringStorage.clear();
-
-      llvh::StringRef keyStr = propertyKeyAsString(stringStorage, prop->_key);
-      auto *Key = Builder.getLiteralString(keyStr);
-      assert(
-          propMap[keyStr].valueNode == prop->_value &&
-          "Should only have one value for each property.");
-      auto value =
-          genExpression(prop->_value, Builder.createIdentifier(keyStr));
-      objPropMap.push_back(std::pair<LiteralString *, Value *>(Key, value));
-    }
-
-    return Builder.createAllocObjectLiteralInst(objPropMap);
   }
 
   /// Attempt to determine whether we can directly use the value of the
@@ -1462,7 +1416,7 @@ Value *ESTreeIRGen::genYieldStarExpr(ESTree::YieldExpressionNode *Y) {
                 "yield* delegate must have a .throw() method")});
         // HermesInternal.throwTypeError will necessarily throw, but we need to
         // have a terminator on this BB to allow proper optimization.
-        Builder.createReturnInst(Builder.getLiteralUndefined());
+        Builder.createThrowInst(Builder.getLiteralUndefined());
       });
 
   Builder.setInsertionBlock(exitBlock);
@@ -1915,7 +1869,7 @@ Value *ESTreeIRGen::genNewExpr(ESTree::NewExpressionNode *N) {
       args.push_back(genExpression(&arg));
     }
 
-    return Builder.createConstructInst(callee, args);
+    return Builder.createConstructInst(callee, callee, args);
   }
 
   // Otherwise, there exists a spread argument, so the number of arguments

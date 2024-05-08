@@ -120,6 +120,7 @@ Handle<JSObject> createRegExpConstructor(Runtime &runtime) {
   defineGetter(proto, Predefined::unicode, regExpFlagPropertyGetter, 'u');
   defineGetter(proto, Predefined::sticky, regExpFlagPropertyGetter, 'y');
   defineGetter(proto, Predefined::dotAll, regExpFlagPropertyGetter, 's');
+  defineGetter(proto, Predefined::hasIndices, regExpFlagPropertyGetter, 'd');
 
   defineGetter(cons, Predefined::dollar1, regExpDollarNumberGetter, 1);
   defineGetter(cons, Predefined::dollar2, regExpDollarNumberGetter, 2);
@@ -188,6 +189,22 @@ Handle<JSObject> createRegExpConstructor(Runtime &runtime) {
   defineGetter(proto, Predefined::flags, regExpFlagsGetter);
 
   return cons;
+}
+
+/// ES2022 22.2.5.2.4 GetStringIndex ( S, e )
+static uint32_t getStringIndex(Handle<StringPrimitive> S, uint32_t e) {
+  // Relevant spec: Let eUTF be the smallest index into S that corresponds to
+  // the character at element e of codepoints. If e is greater than or equal to
+  // the number of elements in codepoints, then eUTF is the number of code units
+  // in S.
+  // This is a longwinded way of saying that we don't set e to match the
+  // trailing member of a surrogate pair.
+  if (e > 0 && e < S->getStringLength()) {
+    if (isHighSurrogate(S->at(e - 1)) && isLowSurrogate(S->at(e))) {
+      e -= 1;
+    }
+  }
+  return e;
 }
 
 /// 21.2.3.2.1 Runtime Semantics: RegExpAlloc ( newTarget )
@@ -460,6 +477,105 @@ static void createGroupsObject(
   JSObject::setNamedSlotValueUnsafe(matchObj.get(), runtime, groupsDesc, shv);
 }
 
+/// ES2022 22.2.7.8 MakeMatchIndicesIndexPairArray
+static CallResult<Handle<JSArray>> makeMatchIndicesIndexPairArray(
+    Runtime &runtime,
+    Handle<StringPrimitive> S,
+    RegExpMatch indices,
+    Handle<JSObject> mappingObj,
+    bool hasGroups) {
+  // 1. Let n be the number of elements in indices.
+  size_t n = indices.size();
+  // 2-4 skipped because mappingObj is not list, but an object in our
+  // implementation.
+  // 5. Let A be ! ArrayCreate(n).
+  auto arrRes = JSArray::create(runtime, n, n);
+  if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  Handle<JSArray> A = runtime.makeHandle<JSArray>(*arrRes);
+  JSArray::setStorageEndIndex(A, runtime, indices.size());
+
+  // 6-8. done later. We can't code exactly to spec here because mappingObj
+  // (roughly groupNames in the spec) is not an array, but an object containing
+  // group name and index.
+
+  MutableHandle<> matchIndexPair{runtime};
+  // 9. For each integer i such that 0 ≤ i < n, in ascending order, do
+  for (size_t i = 0; i < n; i++) {
+    // a. Let matchIndices be indices[i]
+    auto matchIndices = indices[i];
+    // b. If matchIndices is not undefined, then
+    if (matchIndices) {
+      // i. Let matchIndexPair be GetMatchIndexPair(S, matchIndices).
+      auto matchIndexPairRes = JSArray::create(runtime, 2, 2);
+      if (LLVM_UNLIKELY(matchIndexPairRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      auto pair = runtime.makeHandle<JSArray>(*matchIndexPairRes);
+      JSArray::setStorageEndIndex(pair, runtime, 2);
+      auto firstIdx =
+          SmallHermesValue::encodeNumberValue(matchIndices->location, runtime);
+      JSArray::unsafeSetExistingElementAt(*pair, runtime, 0, firstIdx);
+      auto secondIdx = SmallHermesValue::encodeNumberValue(
+          matchIndices->location + matchIndices->length, runtime);
+      JSArray::unsafeSetExistingElementAt(*pair, runtime, 1, secondIdx);
+      matchIndexPair = pair.getHermesValue();
+    } else {
+      // c. Else,
+      // i. Let matchIndexPair be undefined.
+      matchIndexPair = Runtime::getUndefinedValue();
+    }
+    // d. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(i)),
+    // matchIndexPair).
+    auto shv = SmallHermesValue::encodeHermesValue(*matchIndexPair, runtime);
+    JSArray::unsafeSetExistingElementAt(*A, runtime, i, shv);
+  }
+
+  // This is done out of order. See note above.
+  // 6. If hasGroups is true, then
+  MutableHandle<> groups{runtime};
+  if (hasGroups) {
+    // a. Let groups be OrdinaryObjectCreate(null).
+    auto mappingObjClazz = runtime.makeHandle(mappingObj->getClass(runtime));
+    auto groupsRes = JSObject::create(
+        runtime, Runtime::makeNullHandle<JSObject>(), mappingObjClazz);
+    auto groupsObj = runtime.makeHandle(groupsRes.get());
+    HiddenClass::forEachProperty(
+        mappingObjClazz,
+        runtime,
+        [&](SymbolID id, NamedPropertyDescriptor desc) {
+          auto groupIdx =
+              JSObject::getNamedSlotValueUnsafe(*mappingObj, runtime, desc.slot)
+                  .getNumber(runtime);
+          // 9.e. If i > 0 and groupNames[i - 1] is not undefined, then
+          // ii. Perform ! CreateDataPropertyOrThrow(groups, groupNames[i-1],
+          // matchIndexPair).
+          JSObject::setNamedSlotValueUnsafe(
+              *groupsObj, runtime, desc.slot, A->at(runtime, groupIdx));
+        });
+    groups = groupsObj.getHermesValue();
+  } else {
+    // 7. Else,
+    // a. Let groups be undefined.
+    groups = Runtime::getUndefinedValue();
+  }
+
+  // 8. Perform ! CreateDataPropertyOrThrow(A, "groups", groups).
+  if (LLVM_UNLIKELY(
+          JSObject::defineOwnProperty(
+              A,
+              runtime,
+              Predefined::getSymbolID(Predefined::groups),
+              DefinePropertyFlags::getDefaultNewPropertyFlags(),
+              groups) == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+
+  // 10. Return A.
+  return A;
+}
+
 // ES6 21.2.5.2.2
 CallResult<Handle<JSArray>> directRegExpExec(
     Handle<JSRegExp> regexp,
@@ -488,10 +604,13 @@ CallResult<Handle<JSArray>> directRegExpExec(
 
   // If flags contains "g", let global be true, else let global be false
   // If flags contains "y", let sticky be true, else let sticky be false.
+  // If flags contains "d", let hasIndices be true, else let hasIndices be
+  // false.
   // If flags contains "u", let fullUnicode be true, else let fullUnicode be
   // false.
   const bool global = flags.global;
   const bool sticky = flags.sticky;
+  const bool hasIndices = flags.hasIndices;
   const bool fullUnicode = flags.unicode;
 
   // If global is false and sticky is false, set lastIndex to 0.
@@ -514,7 +633,7 @@ CallResult<Handle<JSArray>> directRegExpExec(
 
   if (LLVM_UNLIKELY(matchResult == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
-  const RegExpMatch &match = *matchResult;
+  RegExpMatch &match = *matchResult;
   if (match.empty()) {
     // No match. The following implements both:
     //   If lastIndex > length, then
@@ -542,24 +661,22 @@ CallResult<Handle<JSArray>> directRegExpExec(
   // e, true)."
   // Here 'e' is the end of the total match.
   assert(!match.empty() && "Match should not be empty");
+
+  // If using unicode, ensure that no indices can be set to a trailing
+  // surrogate.
+  if (fullUnicode) {
+    for (auto &mg : match) {
+      if (!mg)
+        continue;
+      auto captureStart = getStringIndex(S, mg->location);
+      auto captureEnd = getStringIndex(S, mg->location + mg->length);
+      mg = RegExpMatchRange{captureStart, captureEnd - captureStart};
+    }
+  }
+
   if (global || sticky) {
     auto totalMatch = *match.front();
     uint32_t e = totalMatch.location + totalMatch.length;
-
-    // If fullUnicode is true, then:
-    // a. e is an index into the Input character list, derived from S, matched
-    // by matcher. Let eUTF be the smallest index into S that corresponds to the
-    // character at element e of Input. If e is greater than or equal to the
-    // number of elements in Input, then eUTF is the number of code units in S.
-    // b. set e to eUTF.
-    // This is a longwinded way of saying that we don't set lastIndex to match
-    // the trailing member of a surrogate pair.
-    if (fullUnicode && e > 0 && e < S->getStringLength()) {
-      if (isHighSurrogate(S->at(e - 1)) && isLowSurrogate(S->at(e))) {
-        e -= 1;
-      }
-    }
-
     if (LLVM_UNLIKELY(
             setLastIndex(regexp, runtime, e) == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -595,6 +712,10 @@ CallResult<Handle<JSArray>> directRegExpExec(
   auto inputSHV = SmallHermesValue::encodeStringValue(*S, runtime);
   JSObject::setNamedSlotValueUnsafe(*A, runtime, inputDesc, inputSHV);
 
+  // If R contains any GroupName, then let hasGroups be true.
+  Handle<JSObject> groupNames = regexp->getGroupNameMappings(runtime);
+  bool hasGroups = (bool)groupNames;
+
   // Set capture groups (including the initial full match)
   size_t idx = 0;
   auto marker = gcScope.createMarker();
@@ -618,7 +739,30 @@ CallResult<Handle<JSArray>> directRegExpExec(
     }
     idx++;
   }
-  createGroupsObject(runtime, A, regexp->getGroupNameMappings(runtime));
+
+  // If hasIndices is true, then
+  if (hasIndices) {
+    // Let indicesArray be MakeMatchIndicesIndexPairArray(S, indices,
+    // groupNames, hasGroups).
+    auto indicesArray = makeMatchIndicesIndexPairArray(
+        runtime, S, match, groupNames, hasGroups);
+    if (LLVM_UNLIKELY(indicesArray == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+
+    // Perform ! CreateDataPropertyOrThrow(A, "indices", indicesArray).
+    if (LLVM_UNLIKELY(
+            JSObject::defineOwnProperty(
+                A,
+                runtime,
+                Predefined::getSymbolID(Predefined::indices),
+                DefinePropertyFlags::getDefaultNewPropertyFlags(),
+                *indicesArray) == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+  }
+
+  createGroupsObject(runtime, A, groupNames);
   return A;
 }
 
@@ -833,6 +977,8 @@ regExpFlagPropertyGetter(void *ctx, Runtime &runtime, NativeArgs args) {
       return HermesValue::encodeBoolValue(syntaxFlags.sticky);
     case 's':
       return HermesValue::encodeBoolValue(syntaxFlags.dotAll);
+    case 'd':
+      return HermesValue::encodeBoolValue(syntaxFlags.hasIndices);
     default:
       llvm_unreachable("Invalid flag passed to regExpFlagPropertyGetter");
       return HermesValue::encodeEmptyValue();
@@ -1413,7 +1559,7 @@ regExpPrototypeSymbolSearch(void *, Runtime &runtime, NativeArgs args) {
   }
   // 13. If result is null, return –1.
   if (result->isNull()) {
-    return HermesValue::encodeNumberValue(-1);
+    return HermesValue::encodeUntrustedNumberValue(-1);
   }
   // 14. Return Get(result, "index").
   auto resultObj = Handle<JSObject>::dyn_vmcast(result);
@@ -1655,7 +1801,7 @@ regExpPrototypeSymbolReplace(void *, Runtime &runtime, NativeArgs args) {
       GCScopeMarkerRAII marker2{runtime};
       // i. Let capN be Get(result, ToString(n)).
       // ii. ReturnIfAbrupt(capN).
-      nHandle = HermesValue::encodeNumberValue(n);
+      nHandle = HermesValue::encodeUntrustedNumberValue(n);
       propRes = JSObject::getComputed_RJS(result, runtime, nHandle);
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
@@ -1725,7 +1871,7 @@ regExpPrototypeSymbolReplace(void *, Runtime &runtime, NativeArgs args) {
         }
         // iii. Append position and S.
         newFrame->getArgRef(argIdx++) =
-            HermesValue::encodeNumberValue(position);
+            HermesValue::encodeUntrustedNumberValue(position);
         newFrame->getArgRef(argIdx++) = S.getHermesValue();
         // iv. If namedCaptures is not undefined, then
         if (hasNamedCaptures) {
@@ -2073,7 +2219,7 @@ regExpPrototypeSymbolSplit(void *, Runtime &runtime, NativeArgs args) {
   return A.getHermesValue();
 }
 
-// ES9 21.2.5.4
+// ES2022 22.2.5.4
 // Note that we don't yet support unicode.
 CallResult<HermesValue>
 regExpFlagsGetter(void *ctx, Runtime &runtime, NativeArgs args) {
@@ -2085,11 +2231,12 @@ regExpFlagsGetter(void *ctx, Runtime &runtime, NativeArgs args) {
         "RegExp.prototype.flags getter called on non-object");
   }
 
-  llvh::SmallString<5> result;
+  llvh::SmallString<7> result;
   static const struct FlagProp {
     char flagChar;
     Predefined::Str name;
   } flagProps[] = {
+      {'d', Predefined::hasIndices},
       {'g', Predefined::global},
       {'i', Predefined::ignoreCase},
       {'m', Predefined::multiline},

@@ -27,6 +27,12 @@ NodeList &getParams(FunctionLikeNode *node) {
       return cast<ArrowFunctionExpressionNode>(node)->_params;
     case NodeKind::FunctionDeclaration:
       return cast<FunctionDeclarationNode>(node)->_params;
+#if HERMES_PARSE_FLOW
+    case NodeKind::ComponentDeclaration:
+      return cast<ComponentDeclarationNode>(node)->_params;
+    case NodeKind::HookDeclaration:
+      return cast<HookDeclarationNode>(node)->_params;
+#endif
   }
 }
 
@@ -42,10 +48,16 @@ BlockStatementNode *getBlockStatement(FunctionLikeNode *node) {
     case NodeKind::FunctionDeclaration:
       return cast<BlockStatementNode>(
           cast<FunctionDeclarationNode>(node)->_body);
-    case NodeKind::ArrowFunctionExpression: {
+    case NodeKind::ArrowFunctionExpression:
       return dyn_cast<BlockStatementNode>(
-          cast<FunctionDeclarationNode>(node)->_body);
-    }
+          cast<ArrowFunctionExpressionNode>(node)->_body);
+#if HERMES_PARSE_FLOW
+    case NodeKind::ComponentDeclaration:
+      return cast<BlockStatementNode>(
+          cast<ComponentDeclarationNode>(node)->_body);
+    case NodeKind::HookDeclaration:
+      return cast<BlockStatementNode>(cast<HookDeclarationNode>(node)->_body);
+#endif
   }
 }
 
@@ -113,8 +125,27 @@ bool hasSimpleParams(FunctionLikeNode *node) {
   for (Node &param : getParams(node)) {
     if (isa<PatternNode>(param))
       return false;
+#if HERMES_PARSE_FLOW
+    if (isa<ComponentParameterNode>(param) &&
+        isa<PatternNode>(cast<ComponentParameterNode>(&param)->_local))
+      return false;
+#endif
   }
   return true;
+}
+
+bool hasParamExpressions(FunctionLikeNode *node) {
+  for (Node &param : getParams(node)) {
+    if (isa<AssignmentPatternNode>(param))
+      return true;
+#if HERMES_PARSE_FLOW
+    if (isa<ComponentParameterNode>(param) &&
+        isa<AssignmentPatternNode>(
+            cast<ComponentParameterNode>(&param)->_local))
+      return false;
+#endif
+  }
+  return false;
 }
 
 bool isGenerator(FunctionLikeNode *node) {
@@ -129,6 +160,12 @@ bool isGenerator(FunctionLikeNode *node) {
       return false;
     case NodeKind::FunctionDeclaration:
       return cast<FunctionDeclarationNode>(node)->_generator;
+#if HERMES_PARSE_FLOW
+    case NodeKind::ComponentDeclaration:
+      return false;
+    case NodeKind::HookDeclaration:
+      return false;
+#endif
   }
 }
 
@@ -144,6 +181,12 @@ bool isAsync(FunctionLikeNode *node) {
       return cast<ArrowFunctionExpressionNode>(node)->_async;
     case NodeKind::FunctionDeclaration:
       return cast<FunctionDeclarationNode>(node)->_async;
+#if HERMES_PARSE_FLOW
+    case NodeKind::ComponentDeclaration:
+      return false;
+    case NodeKind::HookDeclaration:
+      return false;
+#endif
   }
 }
 

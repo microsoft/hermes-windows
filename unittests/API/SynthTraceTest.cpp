@@ -21,6 +21,7 @@
 #include <hermes/hermes.h>
 
 #include <memory>
+#include <variant>
 
 using namespace facebook::hermes::tracing;
 using namespace facebook::hermes;
@@ -34,7 +35,10 @@ struct SynthTraceTest : public ::testing::Test {
 
   static std::unique_ptr<TracingHermesRuntime> makeRuntime() {
     ::hermes::vm::RuntimeConfig config =
-        ::hermes::vm::RuntimeConfig::Builder().withTraceEnabled(true).build();
+        ::hermes::vm::RuntimeConfig::Builder()
+            .withSynthTraceMode(
+                ::hermes::vm::SynthTraceMode::TracingAndReplaying)
+            .build();
     // We pass "forReplay = true" below, to prevent the TracingHermesRuntime
     // from interactions it does automatically on non-replay runs.
     // We don't need those for these tests.
@@ -1035,7 +1039,8 @@ struct SynthTraceRuntimeTest : public ::testing::Test {
 
   SynthTraceRuntimeTest()
       : config(::hermes::vm::RuntimeConfig::Builder()
-                   .withTraceEnabled(true)
+                   .withSynthTraceMode(
+                       ::hermes::vm::SynthTraceMode::TracingAndReplaying)
                    .withMicrotaskQueue(true)
                    .build()),
         traceRt(makeTracingHermesRuntime(
@@ -1086,9 +1091,15 @@ struct SynthTraceReplayTest : public SynthTraceRuntimeTest {
 
   void replay() {
     traceRt.reset();
-    replayRt = makeHermesRuntime(config);
-    tracing::TraceInterpreter::execFromMemoryBuffer(
-        llvh::MemoryBuffer::getMemBuffer(traceResult), {}, *replayRt, {});
+
+    tracing::TraceInterpreter::ExecuteOptions options;
+    options.useTraceConfig = true;
+    auto [_, rt] = tracing::TraceInterpreter::execFromMemoryBuffer(
+        llvh::MemoryBuffer::getMemBuffer(traceResult), // traceBuf
+        {}, // codeBufs
+        options, // ExecuteOptions
+        makeHermesRuntime);
+    replayRt = std::move(rt);
   }
 };
 
@@ -1108,6 +1119,86 @@ TEST_F(SynthTraceReplayTest, CreateObjectReplay) {
             .getProperty(rt, "bar")
             .asNumber(),
         5);
+  }
+}
+
+TEST_F(SynthTraceRuntimeTest, WarmUpAndRepeatReplay) {
+  {
+    auto &rt = *traceRt;
+    auto obj = jsi::Object(rt);
+    obj.setProperty(rt, "bar", 5);
+    rt.global().setProperty(rt, "foo", obj);
+  }
+
+  traceRt.reset();
+
+  // ExecuteOptions has warmupReps and reps to run replay multiple times. It
+  // should not have different results from replaying only once.
+  tracing::TraceInterpreter::ExecuteOptions options;
+  options.warmupReps = 1;
+  options.reps = 3;
+  options.useTraceConfig = true;
+  auto [_, rt] = tracing::TraceInterpreter::execFromMemoryBuffer(
+      llvh::MemoryBuffer::getMemBuffer(traceResult), // traceBuf
+      {}, // codeBufs
+      options, // ExecuteOptions
+      makeHermesRuntime);
+
+  {
+    EXPECT_EQ(
+        rt->global()
+            .getPropertyAsObject(*rt, "foo")
+            .getProperty(*rt, "bar")
+            .asNumber(),
+        5);
+  }
+}
+
+// Replay the trace and generate a new one while doing so. They should produce
+// the same results in the runtime regardless how many times we repeat.
+TEST_F(SynthTraceRuntimeTest, TraceWhileReplaying) {
+  // Generate the initial trace.
+  {
+    auto &rt = *traceRt;
+    auto obj = jsi::Object(rt);
+    obj.setProperty(rt, "bar", 5);
+    rt.global().setProperty(rt, "foo", obj);
+  }
+
+  traceRt.reset();
+
+  std::string previousResult = traceResult;
+
+  for (int i = 0; i < 5; i++) {
+    tracing::TraceInterpreter::ExecuteOptions options;
+    options.useTraceConfig = true;
+    options.traceEnabled = true;
+    std::string newResult;
+
+    auto [_, rt] = tracing::TraceInterpreter::execFromMemoryBuffer(
+        llvh::MemoryBuffer::getMemBuffer(previousResult),
+        {}, // codeBufs
+        options, // ExecuteOptions
+        [&newResult](const ::hermes::vm::RuntimeConfig &config) {
+          return makeTracingHermesRuntime(
+              makeHermesRuntime(config),
+              config,
+              std::make_unique<llvh::raw_string_ostream>(newResult),
+              true // forReplay
+          );
+        }
+
+    );
+
+    EXPECT_EQ(
+        rt->global()
+            .getPropertyAsObject(*rt, "foo")
+            .getProperty(*rt, "bar")
+            .asNumber(),
+        5);
+
+    rt.reset(); // flush the result
+    previousResult = newResult;
   }
 }
 
@@ -1178,6 +1269,233 @@ TEST_F(SynthTraceReplayTest, BigIntCreate) {
 #endif
 
 #if JSI_VERSION >= 4
+TEST_F(SynthTraceReplayTest, HostObjectManipulation) {
+  // HostObject for testing.
+  // It allows to set either number or string property.
+  class TestHostObject : public jsi::HostObject {
+    using NumOrString = std::variant<double, std::string>;
+    std::unordered_map<std::string, NumOrString> values_;
+
+   public:
+    jsi::Value get(jsi::Runtime &rt, const jsi::PropNameID &name) override {
+      auto it = values_.find(name.utf8(rt));
+      if (it != values_.end()) {
+        const auto &val = it->second;
+        if (const auto *d = std::get_if<double>(&val)) {
+          return jsi::Value(*d);
+        } else if (const auto *s = std::get_if<std::string>(&val)) {
+          return jsi::String::createFromUtf8(rt, *s);
+        } else {
+          return jsi::Value::undefined();
+        }
+      }
+      return jsi::Value::undefined();
+    }
+
+    void set(
+        jsi::Runtime &rt,
+        const jsi::PropNameID &name,
+        const jsi::Value &value) override {
+      if (value.isNumber()) {
+        values_[name.utf8(rt)] = value.asNumber();
+      } else if (value.isString()) {
+        values_[name.utf8(rt)] = value.asString(rt).utf8(rt);
+      } else {
+        throw std::runtime_error("Unsupported type");
+      }
+    }
+
+    std::vector<jsi::PropNameID> getPropertyNames(jsi::Runtime &rt) override {
+      std::vector<jsi::PropNameID> ret;
+      for (const auto &kv : values_) {
+        ret.emplace_back(jsi::PropNameID::forUtf8(rt, kv.first));
+      }
+      return ret;
+    }
+  };
+
+  //
+  // Tracing
+  //
+  {
+    auto &rt = *traceRt;
+    auto o = jsi::Object::createFromHostObject(
+        rt, std::make_shared<TestHostObject>());
+
+    // Put "o" in global scope.
+    rt.global().setProperty(rt, "o", o);
+
+    // Add a new property with number
+    o.setProperty(rt, "foo", 5);
+    // Store the value of o.foo to foo1 so that we can use for verification
+    eval(rt, "var foo1 = o.foo;");
+
+    // Add another property with number
+    o.setProperty(rt, "bar", 3);
+    // Store the value of o.bar to bar so that we can use for verification
+    eval(rt, "var bar = o.bar;");
+
+    // Override o.foo with string
+    o.setProperty(rt, "foo", "name");
+    // Store the value of o.foo to foo2 so that we can use for verification
+    eval(rt, "var foo2 = o.foo;");
+
+    // Below verification is rather checking that TestHostObject is working as
+    // expected.
+    auto foo1 = eval(rt, "foo1;");
+    auto foo2 = eval(rt, "foo2;");
+    auto bar = eval(rt, "bar;");
+    EXPECT_TRUE(foo1.isNumber());
+    EXPECT_EQ(foo1.asNumber(), 5);
+    EXPECT_TRUE(foo2.isString());
+    EXPECT_EQ(foo2.asString(rt).utf8(rt), "name");
+    EXPECT_TRUE(bar.isNumber());
+    EXPECT_EQ(bar.asNumber(), 3);
+
+    // Store the result of Object.getOwnPropertyNames(o) to "props" so that we
+    // can use for verification
+    eval(rt, "var props = Object.getOwnPropertyNames(o);");
+
+    // Below verification is rather checking that TestHostObject is working as
+    // expected.
+    auto props = eval(rt, "props;");
+    EXPECT_TRUE(props.isObject());
+    EXPECT_TRUE(props.asObject(rt).isArray(rt));
+    auto propsArray = props.asObject(rt).asArray(rt);
+    for (size_t i = 0; i < propsArray.size(rt); ++i) {
+      auto prop = propsArray.getValueAtIndex(rt, i);
+      EXPECT_TRUE(prop.isString());
+      EXPECT_TRUE(
+          prop.getString(rt).utf8(rt) == "foo" ||
+          prop.getString(rt).utf8(rt) == "bar");
+    }
+  }
+
+  replay();
+
+  //
+  // Verification
+  //
+  {
+    auto &rt = *replayRt;
+
+    // We replayed the code above, that means we should have "foo1", "foo2",
+    // "bar", "props" in global scope. Use them to verify that the replay
+    // reproduced the same result for the host object manipulation.
+    auto foo1 = eval(rt, "foo1;");
+    auto foo2 = eval(rt, "foo2;");
+    auto bar = eval(rt, "bar;");
+    EXPECT_TRUE(foo1.isNumber());
+    EXPECT_EQ(foo1.asNumber(), 5);
+    EXPECT_TRUE(foo2.isString());
+    EXPECT_EQ(foo2.asString(rt).utf8(rt), "name");
+    EXPECT_TRUE(bar.isNumber());
+    EXPECT_EQ(bar.asNumber(), 3);
+
+    auto props = eval(rt, "props;");
+    EXPECT_TRUE(props.isObject());
+    EXPECT_TRUE(props.asObject(rt).isArray(rt));
+    auto propsArray = props.asObject(rt).asArray(rt);
+    for (size_t i = 0; i < propsArray.size(rt); ++i) {
+      auto prop = propsArray.getValueAtIndex(rt, i);
+      EXPECT_TRUE(prop.isString());
+      EXPECT_TRUE(
+          prop.getString(rt).utf8(rt) == "foo" ||
+          prop.getString(rt).utf8(rt) == "bar");
+    }
+
+    // Note: Keeping below as commented out to note that we can't test like
+    // below because it will fail. TraceInterpreter's FakeHostObject (see
+    // TraceInterpreter::createHostObject()) does not work beyond just replaying
+    // what was recorded.
+
+    // auto o = rt.global().getPropertyAsObject(rt, "o");
+    // EXPECT_TRUE(o.getProperty(rt, "foo").isString());
+    // EXPECT_EQ(o.getProperty(rt, "foo").asString(rt).utf8(rt), "hello");
+    // EXPECT_EQ(o.getProperty(rt, "bar").asNumber(), 5);
+  }
+}
+
+// This test mainly verifies that SynthTrace records HostFunction calls and
+// returns properly, and the replay to return the same values for each calls.
+TEST_F(SynthTraceReplayTest, HostFunctionTraceAndReplayCallCount) {
+  //
+  // Tracing
+  //
+  {
+    auto &rt = *traceRt;
+    auto propName = jsi::PropNameID::forAscii(rt, "foo");
+    const unsigned int paramCount = 0;
+    int callCount = 0;
+
+    // A HostFunction that returns different type of Value based on the call
+    // count.
+    auto func = jsi::Function::createFromHostFunction(
+        rt,
+        propName,
+        paramCount,
+        [callCount](
+            jsi::Runtime &rt,
+            const jsi::Value &thisVal,
+            const jsi::Value *args,
+            size_t count) mutable -> jsi::Value {
+          ++callCount;
+          if (callCount == 1) {
+            return jsi::Value::undefined();
+          } else if (callCount == 2) {
+            return jsi::Value::null();
+          } else if (callCount == 3) {
+            return jsi::Value(3);
+          } else if (callCount == 4) {
+            return jsi::Value(true);
+          } else if (callCount == 5) {
+            return jsi::String::createFromUtf8(rt, "foobarbaz");
+          }
+          return jsi::Value::undefined();
+        });
+
+    rt.global().setProperty(rt, "foo", func);
+
+    // Call foo() and store results to variables so that we can use them for
+    // verification after replay.
+    eval(rt, "var ret1 = foo()"); // undefined
+    eval(rt, "var ret2 = foo()"); // null
+    eval(rt, "var ret3 = foo()"); // 3
+    eval(rt, "var ret4 = foo()"); // true
+    eval(rt, "var ret5 = foo()"); // "foobarbaz"
+    eval(rt, "var ret6 = foo()"); // undefined
+  }
+
+  replay();
+
+  //
+  // Verification
+  //
+  {
+    auto &rt = *replayRt;
+    auto ret1 = eval(rt, "ret1;");
+    EXPECT_TRUE(ret1.isUndefined());
+
+    auto ret2 = eval(rt, "ret2;");
+    EXPECT_TRUE(ret2.isNull());
+
+    auto ret3 = eval(rt, "ret3;");
+    EXPECT_TRUE(ret3.isNumber());
+    EXPECT_EQ(ret3.getNumber(), 3);
+
+    auto ret4 = eval(rt, "ret4;");
+    EXPECT_TRUE(ret4.isBool());
+    EXPECT_EQ(ret4.getBool(), true);
+
+    auto ret5 = eval(rt, "ret5;");
+    EXPECT_TRUE(ret5.isString());
+    EXPECT_EQ(ret5.getString(rt).utf8(rt), "foobarbaz");
+
+    auto ret6 = eval(rt, "ret6;");
+    EXPECT_TRUE(ret6.isUndefined());
+  }
+}
+
 using JobQueueReplayTest = SynthTraceReplayTest;
 
 TEST_F(JobQueueReplayTest, DrainSingleMicrotask) {
@@ -1317,6 +1635,156 @@ var secondDeref = ref.deref();
   auto replayedSecond = eval(*replayRt, "secondDeref").isUndefined();
   EXPECT_EQ(replayedFirst, 5);
   EXPECT_EQ(secondDeref, replayedSecond);
+}
+
+TEST_F(NonDeterminismReplayTest, HermesInternalGetInstrumentedStatsTest) {
+  // Use JSON.stringify to serialize stats object to verify the result easily.
+  auto jsonStringify = [](jsi::Runtime &runtime,
+                          const jsi::Value &val) -> std::string {
+    auto JSON = runtime.global().getPropertyAsObject(runtime, "JSON");
+    auto stringify = JSON.getPropertyAsFunction(runtime, "stringify");
+
+    facebook::jsi::Value stringifyRes = stringify.call(runtime, val);
+    assert(stringifyRes.isString());
+    const auto statsStr = stringifyRes.getString(runtime).utf8(runtime);
+    return statsStr;
+  };
+
+  // Create some objects
+  eval(*traceRt, R"(
+    var s512 = " ".repeat(128);
+    var arr = [];
+  )");
+
+  // Run GC to get meaningful stats
+  traceRt->instrumentation().collectGarbage("forced for stats");
+
+  {
+    // Store current stats to var "stats1"
+    const jsi::Value stats1 = eval(*traceRt, R"(
+      var stats1 = HermesInternal.getInstrumentedStats();
+      stats1;
+    )");
+
+    // Run GC again to get different stats
+    traceRt->instrumentation().collectGarbage("forced for stats");
+
+    // Store second stats to var "stats2"
+    const jsi::Value stats2 = eval(*traceRt, R"(
+      var stats2 = HermesInternal.getInstrumentedStats();
+      stats2;
+    )");
+
+    // Return type of getInstrumentedStats should be an object
+    EXPECT_TRUE(stats1.isObject());
+    EXPECT_TRUE(stats2.isObject());
+  }
+
+  {
+    const std::string stats1Str =
+        jsonStringify(*traceRt, eval(*traceRt, "stats1"));
+    const std::string stats2Str =
+        jsonStringify(*traceRt, eval(*traceRt, "stats2"));
+
+    //
+    // replay
+    //
+    replay();
+
+    // Return type of getInstrumentedStats should be an object
+    EXPECT_TRUE(eval(*replayRt, "stats1").isObject());
+    EXPECT_TRUE(eval(*replayRt, "stats2").isObject());
+
+    const std::string replayStats1Str =
+        jsonStringify(*replayRt, eval(*replayRt, "stats1"));
+    const std::string replayStats2Str =
+        jsonStringify(*replayRt, eval(*replayRt, "stats2"));
+
+    // Compare the results between the original and the replayed run.
+    EXPECT_EQ(stats1Str, replayStats1Str);
+    EXPECT_EQ(stats2Str, replayStats2Str);
+  }
+}
+
+// Verify that jsi::Runtime::setExternalMemoryPressure() is properly traced and
+// replayed
+TEST(SynthTraceReplayTestNoFixture, ExternalMemoryTest) {
+  std::string traceResult;
+  std::vector<size_t>
+      amounts; // Record the "amount" passed to setExternalMemoryPressure()
+
+  // Tracing
+  {
+    const ::hermes::vm::RuntimeConfig config(
+        ::hermes::vm::RuntimeConfig::Builder()
+            .withSynthTraceMode(::hermes::vm::SynthTraceMode::Tracing)
+            .build());
+    std::unique_ptr<TracingHermesRuntime> traceRt = makeTracingHermesRuntime(
+        makeHermesRuntime(config),
+        config,
+        std::make_unique<llvh::raw_string_ostream>(traceResult),
+        /* forReplay */ false);
+
+    for (size_t i = 0; i < 200; i++) {
+      auto o = jsi::Object::createFromHostObject(
+          *traceRt, std::make_shared<jsi::HostObject>());
+
+      size_t amount = (i + 1) * 1024;
+      o.setExternalMemoryPressure(*traceRt, amount);
+      amounts.push_back(amount);
+    }
+
+    traceRt.reset();
+  }
+
+  // Just to hook setExternalMemoryPressure() and record the invokations of it
+  // so that we can verify the function calls were traced and replayed
+  // correctly.
+  class ReplayRuntime : public jsi::RuntimeDecorator<jsi::Runtime> {
+   public:
+    using RD = RuntimeDecorator<jsi::Runtime>;
+    ReplayRuntime(
+        std::unique_ptr<jsi::Runtime> runtime,
+        const ::hermes::vm::RuntimeConfig &conf)
+        : jsi::RuntimeDecorator<jsi::Runtime>(*runtime),
+          runtime_(std::move(runtime)) {}
+
+    void setExternalMemoryPressure(const jsi::Object &obj, size_t amount)
+        override {
+      RD::setExternalMemoryPressure(obj, amount);
+      amounts.push_back(amount);
+    }
+
+    std::vector<size_t> amounts;
+
+   private:
+    std::unique_ptr<jsi::Runtime> runtime_;
+  };
+
+  // Replaying
+
+  tracing::TraceInterpreter::ExecuteOptions options;
+  options.useTraceConfig = true;
+  auto [_, rt] = tracing::TraceInterpreter::execFromMemoryBuffer(
+      llvh::MemoryBuffer::getMemBuffer(traceResult),
+      {}, // codeBufs
+      options,
+      [](const ::hermes::vm::RuntimeConfig &config)
+          -> std::unique_ptr<jsi::Runtime> {
+        return std::make_unique<ReplayRuntime>(
+            makeHermesRuntime(config), config);
+      });
+
+  auto replayRt = dynamic_cast<ReplayRuntime *>(rt.get());
+
+  // Verify that the call counts of setExternalMemoryPressure() are the same
+  EXPECT_EQ(amounts.size(), replayRt->amounts.size());
+
+  // Verify that the arguments passed to setExternalMemoryPressure() are the
+  // same
+  for (size_t i = 0; i < amounts.size(); i++) {
+    EXPECT_EQ(amounts[i], replayRt->amounts[i]);
+  }
 }
 #endif
 

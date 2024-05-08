@@ -13,7 +13,6 @@
 #include "hermes/Support/SHA1.h"
 #include "hermes/Support/StringSetVector.h"
 #include "hermes/VM/GCExecTrace.h"
-#include "hermes/VM/MockedEnvironment.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -209,6 +208,7 @@ class SynthTrace {
     GetNativePropertyNamesReturn,
     CreateBigInt,
     BigIntToString,
+    SetExternalMemoryPressure,
   };
 
   /// A Record is one element of a trace.
@@ -1181,12 +1181,33 @@ class SynthTrace {
     bool operator==(const Record &that) const override;
   };
 
+  struct SetExternalMemoryPressureRecord final : public Record {
+    static constexpr RecordType type{RecordType::SetExternalMemoryPressure};
+    const ObjectID objID_;
+    const size_t amount_;
+
+    explicit SetExternalMemoryPressureRecord(
+        TimeSinceStart time,
+        const ObjectID objID,
+        const size_t amount)
+        : Record(time), objID_(objID), amount_(amount) {}
+
+    RecordType getType() const override {
+      return type;
+    }
+
+    std::vector<ObjectID> uses() const override {
+      return {objID_};
+    }
+
+    void toJSONInternal(::hermes::JSONEmitter &json) const override;
+    bool operator==(const Record &that) const override;
+  };
+
   /// Completes writing of the trace to the trace stream.  If writing
   /// to a file, disables further writing to the file, or accumulation
   /// of data.
-  void flushAndDisable(
-      const ::hermes::vm::MockedEnvironment &env,
-      const ::hermes::vm::GCExecTrace &gcTrace);
+  void flushAndDisable(const ::hermes::vm::GCExecTrace &gcTrace);
 };
 
 llvh::raw_ostream &operator<<(

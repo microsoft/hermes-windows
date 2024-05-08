@@ -187,6 +187,12 @@ bool LoadConstants::operandMustBeLiteral(Instruction *Inst, unsigned opIndex) {
        opIndex == CallBuiltinInst::ThisIdx))
     return true;
 
+  /// Call's new.target must be literal if it is undefined (well, it doesn't,
+  /// but an undefined new.target won't be emitted to bytecode, hence it doesn't
+  /// need to be loaded).
+  if (llvh::isa<CallInst>(Inst) && opIndex == CallInst::NewTargetIdx)
+    return true;
+
   /// GetBuiltinClosureInst's builtin index is always literal.
   if (llvh::isa<GetBuiltinClosureInst>(Inst) &&
       opIndex == GetBuiltinClosureInst::BuiltinIndexIdx)
@@ -208,6 +214,11 @@ bool LoadConstants::operandMustBeLiteral(Instruction *Inst, unsigned opIndex) {
       opIndex == ThrowIfHasRestrictedGlobalPropertyInst::PropertyIdx) {
     return true;
   }
+  // DirectEvalInst's isStrict is a boolean constant.
+  if (llvh::isa<DirectEvalInst>(Inst) &&
+      opIndex == DirectEvalInst::IsStrictIdx) {
+    return true;
+  }
 
   return false;
 }
@@ -216,46 +227,43 @@ bool LoadConstants::runOnFunction(Function *F) {
   IRBuilder builder(F);
   bool changed = false;
 
-  llvh::SmallDenseMap<Literal *, Instruction *, 8> constMap{};
-
-  // This is a bit counter-intuitive because the logic appears reversed.
-  // We only want to unique the generated literals if optimization is disabled.
-  // That is the case when it causes too many registers to be generated (one
-  // per literal).
-  // If optimization is enabled, that is not necessary because of CSE and
-  // because doing this now interefers with code motion.
-  const bool uniqueLiterals = !optimizationEnabled_;
-
-  auto createLoadLiteral = [&builder](Literal *literal) -> Instruction * {
+  /// Inserts and returns a load instruction for \p literal before \p where.
+  auto createLoadLiteral = [&builder](Literal *literal, Instruction *where) {
+    builder.setInsertionPoint(where);
     return llvh::isa<GlobalObject>(literal)
         ? cast<Instruction>(builder.createHBCGetGlobalObjectInst())
         : cast<Instruction>(builder.createHBCLoadConstInst(literal));
   };
 
-  updateToEntryInsertionPoint(builder, F);
-
-  for (BasicBlock &bbit : F->getBasicBlockList()) {
-    for (auto &it : bbit.getInstList()) {
-      for (unsigned i = 0, n = it.getNumOperands(); i < n; i++) {
-        if (operandMustBeLiteral(&it, i))
-          continue;
-
-        auto *operand = llvh::dyn_cast<Literal>(it.getOperand(i));
-        if (!operand)
-          continue;
-
-        Instruction *load = nullptr;
-        if (uniqueLiterals) {
-          auto &entry = constMap[operand];
-          if (!entry)
-            entry = createLoadLiteral(operand);
-          load = entry;
-        } else {
-          load = createLoadLiteral(operand);
+  for (BasicBlock &BB : *F) {
+    for (auto &I : BB) {
+      if (auto *phi = llvh::dyn_cast<PhiInst>(&I)) {
+        // Since PhiInsts must always be at the start of a basic block, we have
+        // to insert the load instruction in the predecessor. This lowering is
+        // sub-optimal: for conditional branches, the load constant operation
+        // will be performed before the branch decides which path to take.
+        for (unsigned i = 0, e = phi->getNumEntries(); i < e; ++i) {
+          auto [val, bb] = phi->getEntry(i);
+          if (auto *literal = llvh::dyn_cast<Literal>(val)) {
+            auto *load = createLoadLiteral(literal, bb->getTerminator());
+            phi->updateEntry(i, load, bb);
+            changed = true;
+          }
         }
-
-        it.setOperand(load, i);
-        changed = true;
+        continue;
+      }
+      // For all other instructions, insert load constants right before the they
+      // are needed. This minimizes their live range and therefore reduces
+      // register pressure. CodeMotion and CSE can later hoist and deduplicate
+      // them.
+      for (unsigned i = 0, e = I.getNumOperands(); i < e; ++i) {
+        if (auto *literal = llvh::dyn_cast<Literal>(I.getOperand(i))) {
+          if (!operandMustBeLiteral(&I, i)) {
+            auto *load = createLoadLiteral(literal, &I);
+            I.setOperand(load, i);
+            changed = true;
+          }
+        }
       }
     }
   }
@@ -297,20 +305,29 @@ ScopeCreationInst *LowerLoadStoreFrameInst::getScope(
     IRBuilder &builder,
     Variable *var,
     ScopeCreationInst *environment) {
-  if (var->getParent()->getFunction() != builder.getFunction()) {
-    // If the variable is neither from the current scope,
-    // we should get the proper scope for it.
-    return builder.createHBCResolveEnvironment(
-        environment->getCreatedScopeDesc(), var->getParent());
-  } else {
-    // Now we know that the variable belongs to the current scope.
-    // We are going to conservatively assume the variable might get
-    // captured. Hence we use the newly created scope.
-    // This will not cause performance issue as long as optimization
-    // is enabled, because every variable will be moved to stack
-    // if not being captured.
+  if (var->getParent() == environment->getCreatedScopeDesc()) {
+    // Var's scope belongs to the current function.
+    assert(
+        var->getParent()->getFunction() == builder.getFunction() &&
+        "Scope should only be found if var is not captured from another "
+        "function");
     return environment;
   }
+
+  auto *environmentWithParent =
+      llvh::dyn_cast<NestedScopeCreationInst>(environment);
+  if (!environmentWithParent) {
+    // Failed to find the variable in the current Function -- the first scope in
+    // a Function is always an non-NestedScopeCreationInst.
+    assert(
+        var->getParent()->getFunction() != builder.getFunction() &&
+        "Failed to find scope in current function for local variable.");
+    return builder.createHBCResolveEnvironment(
+        environment->getCreatedScopeDesc(), var->getParent());
+  }
+
+  // Keep looking.
+  return getScope(builder, var, environmentWithParent->getParentScope());
 }
 
 bool LowerLoadStoreFrameInst::runOnFunction(Function *F) {
@@ -328,6 +345,17 @@ bool LowerLoadStoreFrameInst::runOnFunction(Function *F) {
         builder.setInsertionPoint(csi);
         Instruction *llInst =
             builder.createHBCCreateEnvironmentInst(csi->getCreatedScopeDesc());
+        Inst->replaceAllUsesWith(llInst);
+        Inst->eraseFromParent();
+        changed = true;
+      } else if (auto cisi = llvh::dyn_cast<CreateInnerScopeInst>(Inst)) {
+        builder.setInsertionPoint(cisi);
+        assert(
+            llvh::isa<HBCCreateEnvironmentInst>(cisi->getParentScope()) ||
+            llvh::isa<HBCCreateInnerEnvironmentInst>(cisi->getParentScope()));
+
+        Instruction *llInst = builder.createHBCCreateInnerEnvironmentInst(
+            cisi->getParentScope(), cisi->getCreatedScopeDesc());
         Inst->replaceAllUsesWith(llInst);
         Inst->eraseFromParent();
         changed = true;
@@ -359,10 +387,6 @@ bool LowerLoadStoreFrameInst::runOnFunction(Function *F) {
           auto *environment = LFI->getEnvironment();
 
           builder.setInsertionPoint(Inst);
-          assert(
-              llvh::isa<HBCCreateEnvironmentInst>(environment) &&
-              environment->getCreatedScopeDesc() == F->getFunctionScopeDesc() &&
-              "materializing the wrong scope");
           ScopeCreationInst *scope = getScope(builder, var, environment);
           Instruction *newInst =
               builder.createHBCLoadFromEnvironmentInst(scope, var);
@@ -379,10 +403,6 @@ bool LowerLoadStoreFrameInst::runOnFunction(Function *F) {
           auto *environment = SFI->getEnvironment();
 
           builder.setInsertionPoint(Inst);
-          assert(
-              llvh::isa<HBCCreateEnvironmentInst>(environment) &&
-              environment->getCreatedScopeDesc() == F->getFunctionScopeDesc() &&
-              "materializing the wrong scope");
           ScopeCreationInst *scope = getScope(builder, var, environment);
           builder.createHBCStoreToEnvironmentInst(scope, val, var);
 
@@ -395,10 +415,6 @@ bool LowerLoadStoreFrameInst::runOnFunction(Function *F) {
           auto *environment = CFI->getEnvironment();
 
           builder.setInsertionPoint(Inst);
-          assert(
-              llvh::cast<HBCCreateEnvironmentInst>(environment)
-                      ->getCreatedScopeDesc() == F->getFunctionScopeDesc() &&
-              "materializing the wrong scope");
           auto *newInst = builder.createHBCCreateFunctionInst(
               CFI->getFunctionCode(), environment);
 
@@ -412,10 +428,6 @@ bool LowerLoadStoreFrameInst::runOnFunction(Function *F) {
           auto *environment = CFI->getEnvironment();
 
           builder.setInsertionPoint(Inst);
-          assert(
-              llvh::cast<HBCCreateEnvironmentInst>(environment)
-                      ->getCreatedScopeDesc() == F->getFunctionScopeDesc() &&
-              "materializing the wrong scope");
           auto *newInst = builder.createHBCCreateGeneratorInst(
               CFI->getFunctionCode(), environment);
 
@@ -618,8 +630,8 @@ bool LowerConstruction::runOnFunction(Function *F) {
         for (int i = 1, n = constructor->getNumArguments(); i < n; i++) {
           args.push_back(constructor->getArgument(i));
         }
-        auto newConstructor =
-            builder.createHBCConstructInst(closure, thisObject, args);
+        auto newConstructor = builder.createHBCConstructInst(
+            closure, constructor->getNewTarget(), thisObject, args);
         auto finalValue = builder.createHBCGetConstructedObjectInst(
             thisObject, newConstructor);
         constructor->replaceAllUsesWith(finalValue);

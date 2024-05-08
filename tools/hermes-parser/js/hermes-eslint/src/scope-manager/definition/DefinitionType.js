@@ -15,8 +15,11 @@ import keyMirror from '../keyMirror';
 const DefinitionType = keyMirror({
   CatchClause: null,
   ClassName: null,
+  ComponentName: null,
+  NamespaceName: null,
   Enum: null,
   FunctionName: null,
+  HookName: null,
   ImplicitGlobalVariable: null,
   ImportBinding: null,
   Parameter: null,

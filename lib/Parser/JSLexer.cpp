@@ -428,6 +428,7 @@ const Token *JSLexer::advance(GrammarContext grammarContext) {
           scanLineComment(curCharPtr_);
           continue;
         }
+        token_.setStart(curCharPtr_);
         if (!scanPrivateIdentifier()) {
           continue;
         }
@@ -621,7 +622,7 @@ const Token *JSLexer::advanceInJSXChild() {
           break;
         }
         // Fall-through to start scanning text.
-        LLVM_FALLTHROUGH;
+        [[fallthrough]];
 
       default: {
         const char *start = curCharPtr_;
@@ -902,10 +903,20 @@ const Token *JSLexer::rescanRBraceInTemplateLiteral() {
 }
 
 OptValue<TokenKind> JSLexer::lookahead1(OptValue<TokenKind> expectedToken) {
+  // We support TokenKind::question here because of Flow's render types.
+  // `renders?` is not a token itself (as making it a token would be bad for
+  // identifier parsing performance). When we are parsing something like
+  // (renders?: number) => string and the cursor is under the `?`, we need to
+  // perform a lookahead to see if the next token is a colon, in which case
+  // this is a function parameter, and if not then parse as a render type.
   assert(
-      (token_.getKind() == TokenKind::identifier || token_.isResWord()) &&
+      (token_.getKind() == TokenKind::identifier || token_.isResWord() ||
+       token_.getKind() == TokenKind::question) &&
       "unsupported current token");
-  UniqueString *savedIdent = token_.getResWordOrIdentifier();
+  UniqueString *savedIdent;
+  if (token_.getKind() == TokenKind::identifier || token_.isResWord()) {
+    savedIdent = token_.getResWordOrIdentifier();
+  }
   TokenKind savedKind = token_.getKind();
   SMLoc start = token_.getStartLoc();
   SMLoc end = token_.getEndLoc();
@@ -935,6 +946,8 @@ OptValue<TokenKind> JSLexer::lookahead1(OptValue<TokenKind> expectedToken) {
   token_.setEnd(end.getPointer());
   if (savedKind == TokenKind::identifier) {
     token_.setIdentifier(savedIdent);
+  } else if (savedKind == TokenKind::question) {
+    token_.setPunctuator(TokenKind::question);
   } else {
     token_.setResWord(savedKind, savedIdent);
   }
@@ -1091,7 +1104,7 @@ void JSLexer::consumeIdentifierParts() {
         errorRange(
             startLoc,
             "Unicode escape \\u" + Twine::utohexstr(cp) +
-                "is not a valid identifier codepoint");
+                " is not a valid identifier codepoint");
       } else {
         appendUnicodeToStorage(cp);
       }
@@ -1288,10 +1301,17 @@ void JSLexer::scanLineComment(const char *start) {
   if (!comment.consume_front(llvh::StringLiteral("//# ")))
     return;
 
-  if (comment.consume_front(llvh::StringLiteral("sourceURL=")))
+  if (comment.consume_front(llvh::StringLiteral("sourceURL="))) {
+    sourceURL_ = comment;
+#ifndef STATIC_HERMES
     sm_.setSourceUrl(bufId_, comment);
-  else if (comment.consume_front(llvh::StringLiteral("sourceMappingURL=")))
+#endif
+  } else if (comment.consume_front(llvh::StringLiteral("sourceMappingURL="))) {
+    sourceMappingURL_ = comment;
+#ifndef STATIC_HERMES
     sm_.setSourceMappingUrl(bufId_, comment);
+#endif
+  }
 }
 
 const char *JSLexer::skipBlockComment(const char *start) {
@@ -1708,7 +1728,17 @@ void JSLexer::scanIdentifierFastPath(const char *start) {
 template <JSLexer::IdentifierMode Mode>
 void JSLexer::scanIdentifierParts() {
   consumeIdentifierParts<Mode>();
-  token_.setIdentifier(getIdentifier(tmpStorage_.str()));
+  auto rw =
+      scanReservedWord(tmpStorage_.str().begin(), tmpStorage_.str().size());
+  if (rw != TokenKind::identifier) {
+    token_.setResWord(rw, resWordIdent(rw));
+    sm_.warning(
+        {token_.getStartLoc(), SMLoc::getFromPointer(curCharPtr_)},
+        "scanning identifier with unicode escape as reserved word",
+        Subsystem::Lexer);
+  } else {
+    token_.setIdentifier(getIdentifier(tmpStorage_.str()));
+  }
 }
 
 bool JSLexer::scanPrivateIdentifier() {
@@ -1729,9 +1759,6 @@ bool JSLexer::scanPrivateIdentifier() {
     return false;
   }
 
-  // Reset the start to the '#' because the scanIdentifier functions were
-  // not aware of the true start of the token.
-  token_.setStart(start);
   // Parsed a resword or identifier.
   // Convert the TokenKind to private_identifier after the fact.
   // This avoids adding another Mode to IdentifierMode.
@@ -1807,7 +1834,7 @@ void JSLexer::scanString() {
             appendUnicodeToStorage(0);
             break;
           }
-          LLVM_FALLTHROUGH;
+          [[fallthrough]];
         case '1':
         case '2':
         case '3':
@@ -1996,7 +2023,7 @@ void JSLexer::scanTemplateLiteral() {
             appendUnicodeToStorage(0);
             break;
           }
-          // fall-through
+          [[fallthrough]];
 
         case '1':
         case '2':

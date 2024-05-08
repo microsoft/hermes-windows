@@ -13,6 +13,7 @@
 #include <cassert>
 #include <vector>
 
+#include <emscripten/stack.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -82,11 +83,6 @@ static llvh::ErrorOr<void *> vm_allocate_impl(size_t sz) {
   return result;
 }
 
-static char *alignAlloc(void *p, size_t alignment) {
-  return reinterpret_cast<char *>(
-      llvh::alignTo(reinterpret_cast<uintptr_t>(p), alignment));
-}
-
 llvh::ErrorOr<void *> vm_allocate(size_t sz, void * /* hint */) {
   assert(sz % page_size() == 0);
 #ifndef NDEBUG
@@ -101,42 +97,17 @@ llvh::ErrorOr<void *>
 vm_allocate_aligned(size_t sz, size_t alignment, void * /* hint */) {
   assert(sz > 0 && sz % page_size() == 0);
   assert(alignment > 0 && alignment % page_size() == 0);
+  // Ensure the alignment is a power of two as this is required by
+  // aligned_alloc.
+  assert(llvh::isPowerOf2_64(alignment));
 
-  // Opportunistically allocate without alignment constraint,
-  // and see if the memory happens to be aligned.
-  // While this may be unlikely on the first allocation request,
-  // subsequent allocation requests have a good chance.
-  auto result = vm_allocate_impl(sz);
-  if (!result) {
-    return result;
-  }
-  void *mem = *result;
-  if (mem == alignAlloc(mem, alignment)) {
-    return mem;
-  }
-
-  // Free the oppotunistic allocation.
-  oscompat::vm_free(mem, sz);
-
-  // This time, allocate a larger section to ensure that it contains
-  // a subsection that satisfies the request.
-  // Use *real* page size here since that's what vm_allocate_impl guarantees.
-  const size_t excessSize = sz + alignment - page_size_real();
-  result = vm_allocate_impl(excessSize);
-  if (!result)
-    return result;
-
-  void *raw = *result;
-  char *aligned = alignAlloc(raw, alignment);
-  size_t excessAtFront = aligned - static_cast<char *>(raw);
-  size_t excessAtBack = excessSize - excessAtFront - sz;
-
-  if (excessAtFront)
-    oscompat::vm_free(raw, excessAtFront);
-  if (excessAtBack)
-    oscompat::vm_free(aligned + sz, excessAtBack);
-
-  return aligned;
+  // Emscripten does not support partial munmap, so use aligned_alloc to obtain
+  // an aligned region and then memset it to zero.
+  auto *p = aligned_alloc(alignment, sz);
+  if (!p)
+    return std::error_code(errno, std::generic_category());
+  memset(p, 0, sz);
+  return p;
 }
 
 void vm_free(void *p, size_t sz) {
@@ -153,8 +124,22 @@ void vm_free(void *p, size_t sz) {
 }
 
 void vm_free_aligned(void *p, size_t sz) {
-  vm_free(p, sz);
+  free(p);
 }
+
+/// Define a no-op implementation of the reserve/commit APIs that just call
+/// through to regular allocations.
+llvh::ErrorOr<void *>
+vm_reserve_aligned(size_t sz, size_t alignment, void *hint) {
+  return vm_allocate_aligned(sz, alignment, hint);
+}
+void vm_release_aligned(void *p, size_t sz) {
+  vm_free_aligned(p, sz);
+}
+llvh::ErrorOr<void *> vm_commit(void *p, size_t sz) {
+  return p;
+}
+void vm_uncommit(void *p, size_t sz) {}
 
 void vm_hugepage(void *p, size_t sz) {
   assert(
@@ -227,8 +212,15 @@ bool num_context_switches(long &voluntary, long &involuntary) {
   return false;
 }
 
-uint64_t thread_id() {
+uint64_t global_thread_id() {
   return 0;
+}
+
+std::pair<const void *, size_t> thread_stack_bounds(unsigned gap) {
+  uintptr_t high = emscripten_stack_get_base();
+  uintptr_t low = emscripten_stack_get_end();
+  size_t sz = high - low - gap;
+  return {(void *)high, sz};
 }
 
 void set_thread_name(const char *name) {

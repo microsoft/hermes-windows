@@ -16,7 +16,7 @@ import {
   expectBabelAlignment,
   expectEspreeAlignment,
 } from '../__test_utils__/alignment-utils';
-import {parse, parseForSnapshot} from '../__test_utils__/parse';
+import {parseForSnapshot} from '../__test_utils__/parse';
 
 describe('RestElement', () => {
   const testCase: AlignmentCase = {
@@ -106,45 +106,65 @@ describe('RestElement', () => {
   });
 
   test('Babel', () => {
-    expect(parse(testCase.code, {babel: true})).toMatchObject({
-      type: 'File',
-      program: {
-        type: 'Program',
-        body: [
+    expect(parseForSnapshot(testCase.code, {babel: true}))
+      .toMatchInlineSnapshot(`
+      {
+        "body": [
           {
-            type: 'FunctionDeclaration',
-            params: [
+            "async": false,
+            "body": {
+              "body": [],
+              "directives": [],
+              "type": "BlockStatement",
+            },
+            "generator": false,
+            "id": {
+              "name": "test1",
+              "type": "Identifier",
+            },
+            "params": [
               {
-                type: 'RestElement',
-                argument: {
-                  type: 'Identifier',
-                  name: 'rest',
-                  typeAnnotation: null,
+                "argument": {
+                  "name": "rest",
+                  "type": "Identifier",
                 },
+                "type": "RestElement",
               },
             ],
+            "type": "FunctionDeclaration",
           },
           {
-            type: 'FunctionDeclaration',
-            params: [
+            "async": false,
+            "body": {
+              "body": [],
+              "directives": [],
+              "type": "BlockStatement",
+            },
+            "generator": false,
+            "id": {
+              "name": "test2",
+              "type": "Identifier",
+            },
+            "params": [
               {
-                type: 'ArrayPattern',
-                elements: [
+                "elements": [
                   {
-                    type: 'RestElement',
-                    argument: {
-                      type: 'Identifier',
-                      name: 'rest',
-                      typeAnnotation: null,
+                    "argument": {
+                      "name": "rest",
+                      "type": "Identifier",
                     },
+                    "type": "RestElement",
                   },
                 ],
+                "type": "ArrayPattern",
               },
             ],
+            "type": "FunctionDeclaration",
           },
         ],
-      },
-    });
+        "type": "Program",
+      }
+    `);
     expectBabelAlignment(testCase);
   });
 
@@ -249,47 +269,77 @@ describe('RestElement', () => {
     });
 
     test('Babel', () => {
-      expect(parse(testCase.code, {babel: true})).toMatchObject({
-        type: 'File',
-        program: {
-          type: 'Program',
-          body: [
+      expect(parseForSnapshot(testCase.code, {babel: true}))
+        .toMatchInlineSnapshot(`
+        {
+          "body": [
             {
-              type: 'FunctionDeclaration',
-              params: [
+              "async": false,
+              "body": {
+                "body": [],
+                "directives": [],
+                "type": "BlockStatement",
+              },
+              "generator": false,
+              "id": {
+                "name": "test1",
+                "type": "Identifier",
+              },
+              "params": [
                 {
-                  type: 'RestElement',
-                  argument: {
-                    type: 'Identifier',
-                    name: 'rest',
-                    typeAnnotation: null,
+                  "argument": {
+                    "name": "rest",
+                    "type": "Identifier",
                   },
-                  typeAnnotation: {type: 'TypeAnnotation'},
+                  "type": "RestElement",
+                  "typeAnnotation": {
+                    "type": "TypeAnnotation",
+                    "typeAnnotation": {
+                      "type": "StringTypeAnnotation",
+                    },
+                  },
                 },
               ],
+              "type": "FunctionDeclaration",
             },
             {
-              type: 'FunctionDeclaration',
-              params: [
+              "async": false,
+              "body": {
+                "body": [],
+                "directives": [],
+                "type": "BlockStatement",
+              },
+              "generator": false,
+              "id": {
+                "name": "test2",
+                "type": "Identifier",
+              },
+              "params": [
                 {
-                  type: 'ArrayPattern',
-                  elements: [
+                  "elements": [
                     {
-                      type: 'RestElement',
-                      argument: {
-                        type: 'Identifier',
-                        name: 'rest',
-                        typeAnnotation: null,
+                      "argument": {
+                        "name": "rest",
+                        "type": "Identifier",
                       },
-                      typeAnnotation: {type: 'TypeAnnotation'},
+                      "type": "RestElement",
+                      "typeAnnotation": {
+                        "type": "TypeAnnotation",
+                        "typeAnnotation": {
+                          "type": "StringTypeAnnotation",
+                        },
+                      },
                     },
                   ],
+                  "type": "ArrayPattern",
                 },
               ],
+              "type": "FunctionDeclaration",
             },
           ],
-        },
-      });
+          "type": "Program",
+        }
+      `);
       expectBabelAlignment(testCase);
     });
   });
@@ -396,47 +446,77 @@ describe('RestElement', () => {
     });
 
     test('Babel', () => {
-      expect(parse(testCase.code, {babel: true})).toMatchObject({
-        type: 'File',
-        program: {
-          type: 'Program',
-          body: [
+      expect(parseForSnapshot(testCase.code, {babel: true}))
+        .toMatchInlineSnapshot(`
+        {
+          "body": [
             {
-              type: 'FunctionDeclaration',
-              params: [
+              "async": false,
+              "body": {
+                "body": [],
+                "directives": [],
+                "type": "BlockStatement",
+              },
+              "generator": false,
+              "id": {
+                "name": "test1",
+                "type": "Identifier",
+              },
+              "params": [
                 {
-                  type: 'RestElement',
-                  argument: {
-                    type: 'ArrayPattern',
-                    elements: [],
-                    typeAnnotation: null,
+                  "argument": {
+                    "elements": [],
+                    "type": "ArrayPattern",
                   },
-                  typeAnnotation: {type: 'TypeAnnotation'},
+                  "type": "RestElement",
+                  "typeAnnotation": {
+                    "type": "TypeAnnotation",
+                    "typeAnnotation": {
+                      "type": "StringTypeAnnotation",
+                    },
+                  },
                 },
               ],
+              "type": "FunctionDeclaration",
             },
             {
-              type: 'FunctionDeclaration',
-              params: [
+              "async": false,
+              "body": {
+                "body": [],
+                "directives": [],
+                "type": "BlockStatement",
+              },
+              "generator": false,
+              "id": {
+                "name": "test2",
+                "type": "Identifier",
+              },
+              "params": [
                 {
-                  type: 'ArrayPattern',
-                  elements: [
+                  "elements": [
                     {
-                      type: 'RestElement',
-                      argument: {
-                        type: 'ArrayPattern',
-                        elements: [],
-                        typeAnnotation: null,
+                      "argument": {
+                        "elements": [],
+                        "type": "ArrayPattern",
                       },
-                      typeAnnotation: {type: 'TypeAnnotation'},
+                      "type": "RestElement",
+                      "typeAnnotation": {
+                        "type": "TypeAnnotation",
+                        "typeAnnotation": {
+                          "type": "StringTypeAnnotation",
+                        },
+                      },
                     },
                   ],
+                  "type": "ArrayPattern",
                 },
               ],
+              "type": "FunctionDeclaration",
             },
           ],
-        },
-      });
+          "type": "Program",
+        }
+      `);
       expectBabelAlignment(testCase);
     });
   });

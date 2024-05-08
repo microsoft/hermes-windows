@@ -8,28 +8,33 @@
 add_subdirectory(boost)
 add_subdirectory(folly)
 add_subdirectory(react-native)
+add_subdirectory(react-native-0.72)
 
 include(CMakePrintHelpers)
 cmake_print_variables(BOOST_INCLUDES)
 cmake_print_variables(FOLLY_SOURCE)
 cmake_print_variables(REACT_NATIVE_SOURCE)
+cmake_print_variables(REACT_NATIVE_SOURCE_72)
 
 set(inspector_sources
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/Inspector.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/InspectorState.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/RuntimeAdapter.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/detail/CallbackOStream.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/detail/SerialExecutor.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/detail/Thread.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/Inspector.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/InspectorState.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/RuntimeAdapter.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/detail/CallbackOStream.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/detail/SerialExecutor.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/detail/Thread.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/chrome/Connection.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/chrome/ConnectionDemux.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/chrome/MessageConverters.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/chrome/MessageTypes.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/chrome/Registration.cpp
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon/hermes/inspector/chrome/RemoteObjectsTable.cpp
 )
 
 list(APPEND inspector_sources
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/chrome/Connection.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/chrome/ConnectionDemux.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/chrome/MessageConverters.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/chrome/MessageTypes.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/chrome/Registration.cpp
-  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector/chrome/RemoteObjectsTable.cpp
+  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector-modern/chrome/ConnectionDemux.cpp
+  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector-modern/chrome/HermesRuntimeAgentDelegate.cpp 
+  ${REACT_NATIVE_SOURCE}/ReactCommon/hermes/inspector-modern/chrome/Registration.cpp 
 )
 
 list(APPEND inspector_sources
@@ -91,9 +96,11 @@ add_definitions(-D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
 include_directories(${BOOST_INCLUDES})
 include_directories(${FOLLY_SOURCE})
 include_directories(${REACT_NATIVE_SOURCE}/ReactCommon)
+include_directories(${REACT_NATIVE_SOURCE_72}/ReactCommon)
 include_directories(stubs)
 
 set(REACT_NATIVE_SOURCE ${REACT_NATIVE_SOURCE} PARENT_SCOPE)
+set(REACT_NATIVE_SOURCE_72 ${REACT_NATIVE_SOURCE_72} PARENT_SCOPE)
 
 file(GLOB inspector_headers ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 file(GLOB inspector_public_headers ${PROJECT_SOURCE_DIR}/public/hermes/Public/*.h)
@@ -113,6 +120,8 @@ add_hermes_library(hermesinspector
   ${inspector_public_headers}
   ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 
+#target_compile_features(hermesinspector PUBLIC cxx_std_20)
+
 target_link_libraries(hermesinspector
   hermesNapi
   hermesPublic
@@ -121,7 +130,12 @@ target_link_libraries(hermesinspector
 hermes_link_icu(hermesinspector)
 
 # Export the required header directory
-target_include_directories(hermesinspector PUBLIC .. ${FOLLY_SOURCE})
+target_include_directories(hermesinspector PUBLIC
+  ..
+  ${FOLLY_SOURCE}
+  ${REACT_NATIVE_SOURCE}/ReactCommon
+  ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon)
 
 # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
 set(compile_flags " /await ")

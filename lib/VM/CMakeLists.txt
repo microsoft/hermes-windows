@@ -79,6 +79,8 @@ set(source_files
   JSLib/ArrayBuffer.cpp
   JSLib/ArrayIterator.cpp
   JSLib/AsyncFunction.cpp
+  JSLib/Base64.cpp
+  JSLib/Base64Util.cpp
   JSLib/BigInt.cpp
   JSLib/CallSite.cpp
   JSLib/DataView.cpp
@@ -93,7 +95,7 @@ set(source_files
   JSLib/Instrument.cpp
   JSLib/Intl.cpp
   JSLib/JSLibInternal.cpp JSLib/JSLibInternal.h
-  JSLib/RuntimeCommonStorage.cpp
+  JSLib/JSLibStorage.cpp
   JSLib/Map.cpp
   JSLib/Math.cpp
   JSLib/JSON.cpp
@@ -121,6 +123,7 @@ set(source_files
   JSLib/eval.cpp
   JSLib/escape.cpp
   JSLib/require.cpp
+  JSLib/TextEncoder.cpp
 )
 
 if (${HERMESVM_GCKIND} STREQUAL "MALLOC")

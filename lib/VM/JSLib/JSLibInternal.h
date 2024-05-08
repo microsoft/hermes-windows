@@ -414,6 +414,9 @@ Handle<JSObject> createGeneratorFunctionConstructor(Runtime &runtime);
 /// Create the AsyncFunction constructor and populate methods.
 Handle<JSObject> createAsyncFunctionConstructor(Runtime &runtime);
 
+/// Create the TextEncoder constructor and populate methods.
+Handle<JSObject> createTextEncoderConstructor(Runtime &runtime);
+
 /// Create the IteratorPrototype.
 void populateIteratorPrototype(Runtime &runtime);
 
@@ -444,7 +447,8 @@ CallResult<HermesValue> directEval(
     Runtime &runtime,
     Handle<StringPrimitive> str,
     const ScopeChain &scopeChain,
-    bool singleFunction = false);
+    bool isStrict,
+    bool singleFunction);
 
 /// ES10 23.1.1.2 AddEntriesFromIterable
 /// Calls a callback with each pair of [key, value] from an iterable.

@@ -9,8 +9,6 @@
 
 #include "hermes/BCGen/HBC/BytecodeGenerator.h"
 #include "hermes/VM/JSDate.h"
-#include "hermes/VM/JSLib/RuntimeCommonStorage.h"
-#include "hermes/VM/MockedEnvironment.h"
 
 using namespace hermes::vm;
 using namespace hermes::hbc;
@@ -57,7 +55,7 @@ TEST_F(InternalPropertiesTest, NamedInternalPropertyTest) {
           runtime,
           propID,
           dpf,
-          runtime.makeHandle(HermesValue::encodeDoubleValue(10.0))));
+          runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(10.0))));
 
   EXPECT_CALLRESULT_DOUBLE(10.0, JSObject::getNamed_RJS(obj, runtime, propID));
 

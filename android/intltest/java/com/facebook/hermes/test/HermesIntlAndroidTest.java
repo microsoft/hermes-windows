@@ -7,7 +7,7 @@
 
 package com.facebook.hermes.test;
 
-import static org.fest.assertions.api.Assertions.assertThat;
+import static org.assertj.core.api.Java6Assertions.assertThat;
 
 import android.content.res.AssetManager;
 import android.test.InstrumentationTestCase;
@@ -23,6 +23,17 @@ public class HermesIntlAndroidTest extends InstrumentationTestCase {
   public void testIntlFromAsset() throws IOException {
     AssetManager assets = getInstrumentation().getContext().getAssets();
     InputStream is = assets.open("intl.js");
+    String script =
+        new BufferedReader(new InputStreamReader(is)).lines().collect(Collectors.joining("\n"));
+    try (JSRuntime rt = JSRuntime.makeHermesRuntime()) {
+      rt.evaluateJavaScript(script);
+    }
+  }
+
+  @Test
+  public void testNumberFormatFractionDigitsFromAsset() throws IOException {
+    AssetManager assets = getInstrumentation().getContext().getAssets();
+    InputStream is = assets.open("number-format-fraction-digits.js");
     String script =
         new BufferedReader(new InputStreamReader(is)).lines().collect(Collectors.joining("\n"));
     try (JSRuntime rt = JSRuntime.makeHermesRuntime()) {

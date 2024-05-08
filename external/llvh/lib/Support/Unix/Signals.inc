@@ -184,6 +184,11 @@ public:
 };
 static std::atomic<FileToRemoveList *> FilesToRemove = ATOMIC_VAR_INIT(nullptr);
 
+/// Provide the interrupt function to clean up FilesToRemove if it is populated.
+/// We use a nullable static function pointer for this to allow the linker to
+/// strip the file removal code if RemoveFileOnSignal is never called.
+static std::atomic<InterruptFunctionType> FilesToRemoveInterruptFunc = ATOMIC_VAR_INIT(nullptr);
+
 /// Clean up the list in a signal-friendly manner.
 /// Recall that signals can fire during llvm_shutdown. If this occurs we should
 /// either clean something up or nothing at all, but we shouldn't crash!
@@ -236,7 +241,7 @@ static struct {
 // stack if we remove our signal handlers; that can't be done reliably if
 // someone else is also trying to do the same thing.
 static stack_t OldAltStack;
-static void* NewAltStackPointer;
+LLVM_ATTRIBUTE_USED static void* NewAltStackPointer;
 
 static void CreateSigAltStack() {
   const size_t AltStackSize = MINSIGSTKSZ + 64 * 1024;
@@ -327,7 +332,8 @@ static RETSIGTYPE SignalHandler(int Sig) {
   sigprocmask(SIG_UNBLOCK, &SigMask, nullptr);
 
   {
-    RemoveFilesToRemove();
+    if(auto *fn = FilesToRemoveInterruptFunc.load())
+      fn();
 
     if (std::find(std::begin(IntSigs), std::end(IntSigs), Sig)
         != std::end(IntSigs)) {
@@ -353,7 +359,8 @@ static RETSIGTYPE SignalHandler(int Sig) {
 }
 
 void llvh::sys::RunInterruptHandlers() {
-  RemoveFilesToRemove();
+  if(auto *fn = FilesToRemoveInterruptFunc.load())
+    fn();
 }
 
 void llvh::sys::SetInterruptFunction(void (*IF)()) {
@@ -367,6 +374,7 @@ bool llvh::sys::RemoveFileOnSignal(StringRef Filename,
   // Ensure that cleanup will occur as soon as one file is added.
   static ManagedStatic<FilesToRemoveCleanup> FilesToRemoveCleanup;
   *FilesToRemoveCleanup;
+  FilesToRemoveInterruptFunc = RemoveFilesToRemove;
   FileToRemoveList::insert(FilesToRemove, Filename.str());
   RegisterHandlers();
   return false;

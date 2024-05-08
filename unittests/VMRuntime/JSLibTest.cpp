@@ -9,9 +9,7 @@
 
 #include "hermes/BCGen/HBC/BytecodeGenerator.h"
 #include "hermes/VM/JSDate.h"
-#include "hermes/VM/JSLib/RuntimeCommonStorage.h"
 #include "hermes/VM/JSLib/Sorting.h"
-#include "hermes/VM/MockedEnvironment.h"
 #include "hermes/VM/PropertyAccessor.h"
 #include "hermes/VM/SmallXString.h"
 
@@ -33,13 +31,14 @@ TEST_F(JSLibTest, globalObjectConstTest) {
   GET_GLOBAL(NaN);
   EXPECT_TRUE(isSameValue(
       propRes->get(),
-      HermesValue::encodeDoubleValue(
+      HermesValue::encodeUntrustedNumberValue(
           std::numeric_limits<double>::quiet_NaN())));
 
   GET_GLOBAL(Infinity);
   EXPECT_TRUE(isSameValue(
       propRes->get(),
-      HermesValue::encodeDoubleValue(std::numeric_limits<double>::infinity())));
+      HermesValue::encodeUntrustedNumberValue(
+          std::numeric_limits<double>::infinity())));
 
   GET_GLOBAL(undefined);
   EXPECT_TRUE(isSameValue(propRes->get(), HermesValue::encodeUndefinedValue()));
@@ -114,7 +113,7 @@ TEST_F(JSLibTest, ObjectToStringTest) {
       toStringFn->executeCall0(
           toStringFn,
           runtime,
-          runtime.makeHandle(HermesValue::encodeDoubleValue(10))));
+          runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(10))));
 
   // Check that toStringFn.call(toStringFn) is "[object Function]".
   EXPECT_CALLRESULT_STRING(
@@ -153,7 +152,7 @@ TEST_F(JSLibTest, ObjectSealTest) {
           obj,
           runtime,
           *prop1ID,
-          runtime.makeHandle(HermesValue::encodeDoubleValue(10))) !=
+          runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(10))) !=
       ExecutionStatus::EXCEPTION);
 
   // Make sure it is configurable.
@@ -226,7 +225,7 @@ TEST_F(JSLibTest, ObjectFreezeTest) {
           obj,
           runtime,
           *prop1ID,
-          runtime.makeHandle(HermesValue::encodeDoubleValue(10))) !=
+          runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(10))) !=
       ExecutionStatus::EXCEPTION);
 
   // Make sure it is configurable.
@@ -356,7 +355,7 @@ TEST_F(JSLibTest, ObjectGetPrototypeOfTest) {
           objProto,
           runtime,
           *prop1ID,
-          runtime.makeHandle(HermesValue::encodeDoubleValue(10))) !=
+          runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(10))) !=
       ExecutionStatus::EXCEPTION);
 
   auto obj2 = createObject(runtime);
@@ -402,7 +401,7 @@ TEST_F(JSLibTest, ObjectGetOwnPropertyDescriptorTest) {
             obj,
             runtime,
             *prop1ID,
-            runtime.makeHandle(HermesValue::encodeDoubleValue(10))) !=
+            runtime.makeHandle(HermesValue::encodeUntrustedNumberValue(10))) !=
         ExecutionStatus::EXCEPTION);
 
     // Object.getOwnPropertyDescriptor(obj).
@@ -480,7 +479,7 @@ TEST_F(JSLibTest, ObjectGetOwnPropertyDescriptorTest) {
         runtime.makeNullHandle<Environment>(),
         codeBlock));
     auto accessor = runtime.makeHandle<PropertyAccessor>(
-        *PropertyAccessor::create(runtime, getter, setter));
+        PropertyAccessor::create(runtime, getter, setter));
     ASSERT_TRUE(
         JSObject::defineOwnProperty(obj, runtime, *prop1ID, dpf, accessor) !=
         ExecutionStatus::EXCEPTION);
@@ -553,7 +552,7 @@ TEST_F(JSLibTest, ObjectDefinePropertyTest) {
                     .getValue());
 
     // Add value to the PropertyDescriptor.
-    auto value = HermesValue::encodeDoubleValue(123);
+    auto value = HermesValue::encodeUntrustedNumberValue(123);
     ASSERT_TRUE(JSObject::putNamed_RJS(
                     attributes,
                     runtime,
@@ -702,7 +701,7 @@ TEST_F(JSLibTest, ObjectDefinePropertiesTest) {
                     runtime.makeHandle(HermesValue::encodeBoolValue(true)),
                     PropOpFlags().plusThrowOnError())
                     .getValue());
-    auto value1 = HermesValue::encodeDoubleValue(123);
+    auto value1 = HermesValue::encodeUntrustedNumberValue(123);
     ASSERT_TRUE(JSObject::putNamed_RJS(
                     property1,
                     runtime,
@@ -831,7 +830,7 @@ TEST_F(JSLibTest, ObjectCreateTest) {
                     runtime.makeHandle(HermesValue::encodeBoolValue(true)),
                     PropOpFlags().plusThrowOnError())
                     .getValue());
-    auto value1 = HermesValue::encodeDoubleValue(123);
+    auto value1 = HermesValue::encodeUntrustedNumberValue(123);
     ASSERT_TRUE(JSObject::putNamed_RJS(
                     property1,
                     runtime,
@@ -1051,124 +1050,12 @@ TEST_F(JSLibTest, HugeSortTest) {
 class JSLibMockedEnvironmentTest : public RuntimeTestFixtureBase {
  public:
   JSLibMockedEnvironmentTest()
-      : RuntimeTestFixtureBase(RuntimeConfig::Builder()
-                                   .withGCConfig(kTestGCConfig)
-                                   .withTraceEnabled(true)
-                                   .withEnableSampledStats(true)
-                                   .build()) {}
+      : RuntimeTestFixtureBase(
+            RuntimeConfig::Builder()
+                .withGCConfig(kTestGCConfig)
+                .withSynthTraceMode(::hermes::vm::SynthTraceMode::Tracing)
+                .withEnableSampledStats(true)
+                .build()) {}
 };
-
-TEST_F(JSLibMockedEnvironmentTest, MockedEnvironment) {
-  GCScope scope(runtime);
-
-  std::string affinityMaskKey{"js_threadAffinityMask"};
-  std::string affinityMaskValue{"<affinity mask>"};
-  std::string totalAllocBytesKey{"js_totalAllocatedBytes"};
-  double totalAllocBytesValue = 2222.0;
-  MockedEnvironment::StatsTable statsTable{
-      std::make_pair(
-          affinityMaskKey,
-          MockedEnvironment::StatsTableValue(affinityMaskValue)),
-      std::make_pair(
-          totalAllocBytesKey,
-          MockedEnvironment::StatsTableValue(totalAllocBytesValue))};
-
-  const std::deque<MockedEnvironment::StatsTable> instrumentedStats{statsTable};
-
-  runtime.setMockedEnvironment(
-      hermes::vm::MockedEnvironment{instrumentedStats});
-
-#ifndef _WINDOWS
-  // TODO(T62209287): For unknown reasons, this doesn't work on Windows.
-  // When we figure out why, and fix, it remove the #ifndef.
-  {
-    // Call HermesInternal.getInstrumentedStats() and check that the values
-    // we've set are what we recorded.
-    CallResult<PseudoHandle<>> hermesInternalRes = JSObject::getNamed_RJS(
-        runtime.getGlobal(),
-        runtime,
-        Predefined::getSymbolID(Predefined::HermesInternal));
-    ASSERT_NE(hermesInternalRes, ExecutionStatus::EXCEPTION)
-        << "Exception accessing HermesInternal on the global object";
-    ASSERT_TRUE(hermesInternalRes.getValue()->isObject())
-        << "HermesInternal is not an object.";
-    auto hermesInternal = runtime.makeHandle(
-        PseudoHandle<JSObject>::vmcast(std::move(*hermesInternalRes)));
-    auto propRes = JSObject::getNamed_RJS(
-        hermesInternal,
-        runtime,
-        Predefined::getSymbolID(Predefined::getInstrumentedStats));
-    ASSERT_NE(propRes, ExecutionStatus::EXCEPTION)
-        << "Exception accessing getInstrumentedStats on the "
-        << "HermesInternal object";
-    auto getInstrumentedStatsFunc = runtime.makeHandle(
-        PseudoHandle<Callable>::vmcast(std::move(propRes.getValue())));
-    auto statsObjRes = Callable::executeCall0(
-        getInstrumentedStatsFunc, runtime, Runtime::getUndefinedValue());
-    ASSERT_NE(statsObjRes, ExecutionStatus::EXCEPTION)
-        << "Exception executing the call on "
-        << "HermesInternal.getInstrumentedStats";
-    ASSERT_TRUE(statsObjRes.getValue()->isObject())
-        << "HermesInternal.getInstrumentedStats result is not an object.";
-    auto statsObj = runtime.makeHandle(
-        PseudoHandle<JSObject>::vmcast(std::move(statsObjRes.getValue())));
-
-    auto affinityMaskSymHandleRes =
-        runtime.getIdentifierTable().getSymbolHandle(
-            runtime, ASCIIRef(affinityMaskKey.c_str(), affinityMaskKey.size()));
-    ASSERT_NE(affinityMaskSymHandleRes, ExecutionStatus::EXCEPTION)
-        << "Exception accessing creating symbol for 'js_threadAffinityMask'";
-    auto affinityMaskVal2Res =
-        JSObject::getNamed_RJS(statsObj, runtime, **affinityMaskSymHandleRes);
-    ASSERT_NE(affinityMaskVal2Res, ExecutionStatus::EXCEPTION)
-        << "Exception accessing 'js_threadAffinityMask' in stats object";
-    ASSERT_TRUE(affinityMaskVal2Res.getValue()->isString())
-        << "Value of 'js_threadAffinityMask' in stats object is not a string";
-    auto affinityMaskVal2ResStringRef =
-        affinityMaskVal2Res.getValue()->getString()->getStringRef<char>();
-    ASSERT_EQ(
-        affinityMaskValue,
-        std::string(
-            affinityMaskVal2ResStringRef.data(),
-            affinityMaskVal2ResStringRef.size()));
-
-    auto totalAllocBytesSymHandleRes =
-        runtime.getIdentifierTable().getSymbolHandle(
-            runtime,
-            ASCIIRef(totalAllocBytesKey.c_str(), totalAllocBytesKey.size()));
-    ASSERT_NE(totalAllocBytesSymHandleRes, ExecutionStatus::EXCEPTION)
-        << "Exception accessing creating symbol for 'js_totalAllocatedBytes'";
-    auto totalAllocBytesVal2Res = JSObject::getNamed_RJS(
-        statsObj, runtime, **totalAllocBytesSymHandleRes);
-    ASSERT_NE(totalAllocBytesVal2Res, ExecutionStatus::EXCEPTION)
-        << "Exception accessing 'js_totalAllocatedBytes' in stats object";
-    ASSERT_TRUE(totalAllocBytesVal2Res.getValue()->isNumber())
-        << "Value of 'js_totalAllocatedBytes' in stats object is not a number";
-    double totalAllocBytesVal2 = totalAllocBytesVal2Res.getValue()->getNumber();
-    ASSERT_EQ(totalAllocBytesVal2, 2222.0);
-  }
-  // If the tracing mode is also engaged, ensure that the same values were
-  // traced as well.
-  auto *storage = runtime.getCommonStorage();
-  // TODO(T62209287): For unknown reasons, this doesn't work on Windows.
-  // When we figure out why, and fix, it remove the #ifndef.
-  EXPECT_EQ(
-      instrumentedStats.size(),
-      storage->tracedEnv.callsToHermesInternalGetInstrumentedStats.size());
-  auto &callToHermesInternalGetInstrumentedStats =
-      storage->tracedEnv.callsToHermesInternalGetInstrumentedStats.at(0);
-  EXPECT_EQ(
-      affinityMaskValue,
-      callToHermesInternalGetInstrumentedStats
-          [llvh::StringRef(affinityMaskKey.c_str(), affinityMaskKey.size())]
-              .str());
-  EXPECT_EQ(
-      totalAllocBytesValue,
-      callToHermesInternalGetInstrumentedStats[llvh::StringRef(
-                                                   totalAllocBytesKey.c_str(),
-                                                   totalAllocBytesKey.size())]
-          .num());
-#endif
-}
 
 } // anonymous namespace

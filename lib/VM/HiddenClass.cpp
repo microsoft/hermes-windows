@@ -47,6 +47,18 @@ void TransitionMap::snapshotAddNodes(GC &gc, HeapSnapshot &snap) {
 }
 
 void TransitionMap::snapshotAddEdges(GC &gc, HeapSnapshot &snap) {
+  uint32_t edge_index = 0;
+  forEachEntry([&snap, &gc, &edge_index](
+                   const Transition &, const WeakRef<HiddenClass> &value) {
+    // Filter out empty refs from adding edges.
+    if (value.isValid()) {
+      snap.addNamedEdge(
+          HeapSnapshot::EdgeType::Weak,
+          std::to_string(edge_index++),
+          gc.getObjectID(value.getNoBarrierUnsafe(gc.getPointerBase())));
+    }
+  });
+
   if (!isLarge()) {
     return;
   }
@@ -75,7 +87,8 @@ void TransitionMap::uncleanMakeLarge(Runtime &runtime) {
   auto large = new WeakValueMap<Transition, HiddenClass>();
   // Move any valid entry into the allocated map.
   if (auto value = smallValue().get(runtime))
-    large->insertNewLocked(runtime, smallKey_, runtime.makeHandle(value));
+    large->insertNew(runtime, smallKey_, runtime.makeHandle(value));
+  smallValue().releaseSlot();
   u.large_ = large;
   smallKey_.symbolID = SymbolID::deleted();
   assert(isLarge());
@@ -87,7 +100,6 @@ const VTable HiddenClass::vt{
     CellKind::HiddenClassKind,
     cellSize<HiddenClass>(),
     _finalizeImpl,
-    _markWeakImpl,
     _mallocSizeImpl,
     nullptr
 #ifdef HERMES_MEMORY_INSTRUMENTATION
@@ -108,11 +120,6 @@ void HiddenClassBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
   mb.addField("parent", &self->parent_);
   mb.addField("propertyMap", &self->propertyMap_);
   mb.addField("forInCache", &self->forInCache_);
-}
-
-void HiddenClass::_markWeakImpl(GCCell *cell, WeakRefAcceptor &acceptor) {
-  auto *self = reinterpret_cast<HiddenClass *>(cell);
-  self->transitionMap_.markWeakRefs(acceptor);
 }
 
 void HiddenClass::_finalizeImpl(GCCell *cell, GC &gc) {

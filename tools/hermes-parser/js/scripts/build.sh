@@ -8,7 +8,15 @@ set -xe -o pipefail
 
 THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-PACKAGES=(hermes-estree hermes-parser hermes-eslint hermes-transform flow-api-translator)
+PACKAGES=(
+  hermes-estree
+  hermes-parser
+  hermes-eslint
+  hermes-transform
+  flow-api-translator
+  prettier-plugin-hermes-parser
+  babel-plugin-syntax-hermes-parser
+)
 
 # Yarn install all packages
 yarn install
@@ -54,7 +62,7 @@ for package in "${PACKAGES[@]}"; do
 
   # There is no system for flow to emit flow declarations for files
   # So we rename all the JS files to .js.flow so they are treated like flow declarations
-  find "$PACKAGE_DIR/dist" -type f -name "*.js" -exec rename --no-overwrite ".js" ".js.flow" {} \;
+  find "$PACKAGE_DIR/dist" -type f -name "*.js" -exec grep -q " @flow" {} \; -exec rename --no-overwrite ".js" ".js.flow" {} \;
 
   # Copy just the JS files again
   (cd "$PACKAGE_DIR/src" && find . -type f -name '*.js' -exec cp --parents -t ../dist {} +)

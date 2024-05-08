@@ -75,16 +75,14 @@ class TraceInterpreter final {
   using HostFunctionToCalls =
       std::unordered_map<SynthTrace::ObjectID, std::vector<Call>>;
 
-  /// A PropNameToCalls is a mapping from property names to a list of
-  /// calls on that property. The calls are ordered by invocation (the 0th
-  /// element is the 1st call).
-  using PropNameToCalls = std::unordered_map<std::string, std::vector<Call>>;
-
   struct HostObjectInfo final {
     explicit HostObjectInfo() = default;
 
-    PropNameToCalls propNameToCalls;
-    std::vector<Call> callsToGetPropertyNames;
+    /// Stores any of get(), set(), getPropertyNames() call to a HostObject,
+    /// ordered by invocation.
+    std::vector<Call> calls;
+    /// Stores the return value of getPropertyNames() call to a HostObject
+    /// ordered by invocation.
     std::vector<std::vector<std::string>> resultsOfGetPropertyNames;
   };
 
@@ -118,10 +116,6 @@ class TraceInterpreter final {
     /// If true, run a complete collection before printing stats. Useful for
     /// guaranteeing there's no garbage in heap size numbers.
     bool forceGCBeforeStats{false};
-
-    /// If true, make attempts to make the instruction count more stable. Useful
-    /// for using a tool like PIN to count instructions and compare runs.
-    bool stabilizeInstructionCount{false};
 
     /// If true, remove the requirement that the input bytecode was compiled
     /// from the same source used to record the trace. There must only be one
@@ -178,20 +172,6 @@ class TraceInterpreter final {
   const std::unordered_map<SynthTrace::ObjectID, DefAndUse> &globalDefsAndUses_;
   const HostFunctionToCalls &hostFunctionCalls_;
   const HostObjectToCalls &hostObjectCalls_;
-  std::unordered_map<SynthTrace::ObjectID, jsi::Function> hostFunctions_;
-  std::unordered_map<SynthTrace::ObjectID, uint64_t> hostFunctionsCallCount_;
-  // NOTE: Theoretically a host object property can have both a getter and a
-  // setter. Since this doesn't occur in practice currently, this
-  // implementation will ignore it. If it does happen, the value of the
-  // interior map should turn into a pair of functions, and a pair of function
-  // counts.
-  std::unordered_map<SynthTrace::ObjectID, jsi::Object> hostObjects_;
-  std::unordered_map<
-      SynthTrace::ObjectID,
-      std::unordered_map<std::string, uint64_t>>
-      hostObjectsCallCount_;
-  std::unordered_map<SynthTrace::ObjectID, uint64_t>
-      hostObjectsPropertyNamesCallCount_;
 
   // Invariant: the value is either jsi::Object or jsi::String.
   std::unordered_map<SynthTrace::ObjectID, jsi::Value> gom_;
@@ -207,50 +187,32 @@ class TraceInterpreter final {
  public:
   /// Execute the trace given by \p traceFile, that was the trace of executing
   /// the bundle given by \p bytecodeFile.
-  static void exec(
-      const std::string &traceFile,
-      const std::vector<std::string> &bytecodeFiles,
-      const ExecuteOptions &options);
-
-  /// Same as exec, except it prints out the stats of a run.
   /// \return The stats collected by the runtime about times and memory usage.
   static std::string execAndGetStats(
       const std::string &traceFile,
       const std::vector<std::string> &bytecodeFiles,
       const ExecuteOptions &options);
 
-  /// Same as exec, except it additionally traces the execution of the
-  /// interpreter, to \p *traceStream.  (Requires \p traceStream to be
-  /// non-null.)  This trace can be compared to the original to detect
-  /// correctness issues.
-  static void execAndTrace(
+  /// Same as execAndGetStats, except it additionally accepts a function to
+  /// create the runtime instance for replaying. This can be used to pass, for
+  /// example, TracingRuntime to trace while replaying.
+  static std::string execWithRuntime(
       const std::string &traceFile,
       const std::vector<std::string> &bytecodeFiles,
       const ExecuteOptions &options,
-      std::unique_ptr<llvh::raw_ostream> traceStream);
-
-  static ::hermes::vm::RuntimeConfig merge(
-      ::hermes::vm::RuntimeConfig::Builder &,
-      const ::hermes::vm::GCConfig::Builder &,
-      const ExecuteOptions &,
-      bool,
-      bool);
+      const std::function<std::unique_ptr<jsi::Runtime>(
+          const ::hermes::vm::RuntimeConfig &runtimeConfig)> &createRuntime);
 
   /// \param traceStream If non-null, write a trace of the execution into this
   /// stream.
-  static std::string execFromMemoryBuffer(
+  /// \return Tuple of GC stats and the runtime instance used for replaying.
+  static std::tuple<std::string, std::unique_ptr<jsi::Runtime>>
+  execFromMemoryBuffer(
       std::unique_ptr<llvh::MemoryBuffer> &&traceBuf,
       std::vector<std::unique_ptr<llvh::MemoryBuffer>> &&codeBufs,
       const ExecuteOptions &options,
-      std::unique_ptr<llvh::raw_ostream> traceStream);
-
-  /// For test purposes, use the given runtime, execute once.
-  /// Otherwise like execFromMemoryBuffer above.
-  static std::string execFromMemoryBuffer(
-      std::unique_ptr<llvh::MemoryBuffer> &&traceBuf,
-      std::vector<std::unique_ptr<llvh::MemoryBuffer>> &&codeBufs,
-      jsi::Runtime &runtime,
-      const ExecuteOptions &options);
+      const std::function<std::unique_ptr<jsi::Runtime>(
+          const ::hermes::vm::RuntimeConfig &runtimeConfig)> &createRuntime);
 
  private:
   TraceInterpreter(
@@ -263,17 +225,18 @@ class TraceInterpreter final {
       const HostFunctionToCalls &hostFunctionCalls,
       const HostObjectToCalls &hostObjectCalls);
 
-  static std::string execFromFileNames(
-      const std::string &traceFile,
-      const std::vector<std::string> &bytecodeFiles,
-      const ExecuteOptions &options,
-      std::unique_ptr<llvh::raw_ostream> traceStream);
-
   static std::string exec(
       jsi::Runtime &rt,
       const ExecuteOptions &options,
       const SynthTrace &trace,
       std::map<::hermes::SHA1, std::shared_ptr<const jsi::Buffer>> bundles);
+
+  static ::hermes::vm::RuntimeConfig merge(
+      ::hermes::vm::RuntimeConfig::Builder &,
+      const ::hermes::vm::GCConfig::Builder &,
+      const ExecuteOptions &,
+      bool,
+      bool);
 
   /// Requires \p codeBufs to be the memory buffers containing the code
   /// referenced (via source hash) by the given \p trace.  Returns a map from

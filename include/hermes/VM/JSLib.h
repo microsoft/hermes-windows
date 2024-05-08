@@ -25,7 +25,7 @@ namespace vm {
 
 // External forward declarations.
 class Runtime;
-struct RuntimeCommonStorage;
+struct JSLibStorage;
 
 /// Flags controlling the initialization of the global object.
 class JSLibFlags {
@@ -44,8 +44,7 @@ void createHermesBuiltins(
     Runtime &runtime,
     llvh::MutableArrayRef<Callable *> builtins);
 
-std::shared_ptr<RuntimeCommonStorage> createRuntimeCommonStorage(
-    bool shouldTrace);
+std::unique_ptr<JSLibStorage> createJSLibStorage();
 
 /// eval() entry point. Evaluate the given source \p utf8code within the given
 /// \p environment, using the given \p scopeChain to resolve identifiers.
@@ -58,6 +57,7 @@ CallResult<HermesValue> evalInEnvironment(
     Handle<Environment> environment,
     const ScopeChain &scopeChain,
     Handle<> thisArg,
+    bool isStrict,
     bool singleFunction);
 
 /// If the target CJS module is not initialized, execute it.

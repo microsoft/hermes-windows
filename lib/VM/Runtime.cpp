@@ -28,8 +28,7 @@
 #include "hermes/VM/JSArray.h"
 #include "hermes/VM/JSError.h"
 #include "hermes/VM/JSLib.h"
-#include "hermes/VM/JSLib/RuntimeCommonStorage.h"
-#include "hermes/VM/MockedEnvironment.h"
+#include "hermes/VM/JSLib/JSLibStorage.h"
 #include "hermes/VM/Operations.h"
 #include "hermes/VM/OrderedHashMap.h"
 #include "hermes/VM/PredefinedStringIDs.h"
@@ -61,6 +60,19 @@
 #ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
 #pragma GCC diagnostic ignored "-Wshorten-64-to-32"
 #endif
+
+#ifdef __EMSCRIPTEN__
+/// Provide implementations with weak linkage that can serve as the default in a
+/// wasm build, while allowing them to be overridden depending on the target.
+/// Since Emscripten will effectively LTO, these should be inlined.
+__attribute__((__weak__)) extern "C" bool test_wasm_host_timeout() {
+  return false;
+}
+__attribute__((__weak__)) extern "C" bool test_and_clear_wasm_host_timeout() {
+  return false;
+}
+#endif
+
 namespace hermes {
 namespace vm {
 
@@ -69,6 +81,16 @@ namespace {
 /// The maximum number of registers that can be requested in a RuntimeConfig.
 static constexpr uint32_t kMaxSupportedNumRegisters =
     UINT32_MAX / sizeof(PinnedHermesValue);
+
+#ifdef HERMES_CHECK_NATIVE_STACK
+/// The minimum stack gap allowed from RuntimeConfig.
+static constexpr uint32_t kMinSupportedNativeStackGap =
+#if LLVM_ADDRESS_SANITIZER_BUILD
+    512 * 1024;
+#else
+    64 * 1024;
+#endif
+#endif
 
 // Only track I/O for buffers > 64 kB (which excludes things like
 // Runtime::generateSpecialRuntimeBytecode).
@@ -220,6 +242,8 @@ Runtime::Runtime(
       verifyEvalIR(runtimeConfig.getVerifyEvalIR()),
       optimizedEval(runtimeConfig.getOptimizedEval()),
       asyncBreakCheckInEval(runtimeConfig.getAsyncBreakCheckInEval()),
+      enableBlockScopingInEval(runtimeConfig.getEnableBlockScoping()),
+      traceMode(runtimeConfig.getSynthTraceMode()),
       heapStorage_(
           *this,
           *this,
@@ -229,6 +253,7 @@ Runtime::Runtime(
           runtimeConfig.getVMExperimentFlags()),
       hasES6Promise_(runtimeConfig.getES6Promise()),
       hasES6Proxy_(runtimeConfig.getES6Proxy()),
+      hasES6Class_(runtimeConfig.getES6Class()),
       hasIntl_(runtimeConfig.getIntl()),
       hasArrayBuffer_(runtimeConfig.getArrayBuffer()),
       hasMicrotaskQueue_(runtimeConfig.getMicrotaskQueue()),
@@ -236,10 +261,14 @@ Runtime::Runtime(
       bytecodeWarmupPercent_(runtimeConfig.getBytecodeWarmupPercent()),
       trackIO_(runtimeConfig.getTrackIO()),
       vmExperimentFlags_(runtimeConfig.getVMExperimentFlags()),
-      commonStorage_(
-          createRuntimeCommonStorage(runtimeConfig.getTraceEnabled())),
+      jsLibStorage_(createJSLibStorage()),
       stackPointer_(),
       crashMgr_(runtimeConfig.getCrashMgr()),
+#ifdef HERMES_CHECK_NATIVE_STACK
+      nativeStackGap_(std::max(
+          runtimeConfig.getNativeStackGap(),
+          kMinSupportedNativeStackGap)),
+#endif
       crashCallbackKey_(
           crashMgr_->registerCallback([this](int fd) { crashCallback(fd); })),
       codeCoverageProfiler_(std::make_unique<CodeCoverageProfiler>(*this)),
@@ -679,12 +708,9 @@ void Runtime::printRuntimeGCStats(JSONEmitter &json) const {
 }
 
 void Runtime::printHeapStats(llvh::raw_ostream &os) {
-  // Printing the timings is unstable.
-  if (shouldStabilizeInstructionCount())
-    return;
   getHeap().printAllCollectedStats(os);
 #ifndef NDEBUG
-  printArrayCensus(llvh::outs());
+  printArrayCensus(os);
 #endif
   if (trackIO_) {
     getIOTrackingInfoJSON(os);
@@ -878,15 +904,6 @@ void Runtime::potentiallyMoveHeap() {
           heapAlignSize(sizeof(FillerCell)), GC::minAllocationSize()));
 }
 #endif
-
-bool Runtime::shouldStabilizeInstructionCount() {
-  return getCommonStorage()->env &&
-      getCommonStorage()->env->stabilizeInstructionCount;
-}
-
-void Runtime::setMockedEnvironment(const MockedEnvironment &env) {
-  getCommonStorage()->env = env;
-}
 
 LLVM_ATTRIBUTE_NOINLINE
 static CallResult<HermesValue> interpretFunctionWithRandomStack(
@@ -1607,13 +1624,30 @@ ExecutionStatus Runtime::forEachPublicNativeBuiltin(
     auto objectName = (Predefined::Str)publicNativeBuiltins[methodIndex].object;
     if (objectName != lastObjectName) {
       auto objectID = Predefined::getSymbolID(objectName);
-      auto cr = JSObject::getNamed_RJS(getGlobal(), *this, objectID);
-      assert(
-          cr.getStatus() != ExecutionStatus::EXCEPTION &&
-          "getNamed() of builtin object failed");
-      assert(
-          vmisa<JSObject>(cr->get()) &&
-          "getNamed() of builtin object must be an object");
+      // Avoid running any JS here to avoid modifying the builtins while
+      // iterating them.
+      NamedPropertyDescriptor desc;
+      // Check if the builtin is overridden.
+      if (!JSObject::getOwnNamedDescriptor(
+              getGlobal(), *this, objectID, desc)) {
+        return raiseTypeError(
+            TwineChar16{
+                "Cannot execute a bytecode compiled with -fstatic-builtins: "} +
+            getPredefinedString(objectName) + " was deleted");
+      }
+      // Doesn't run accessors.
+      auto cr = JSObject::getNamedSlotValue(getGlobal(), *this, desc);
+      if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      // This is known to not be PropertyAccessor, so check that casting it to
+      // JSObject is allowed.
+      if (LLVM_UNLIKELY(!vmisa<JSObject>(cr->get()))) {
+        return raiseTypeError(
+            TwineChar16{
+                "Cannot execute a bytecode compiled with -fstatic-builtins: "} +
+            getPredefinedString(objectName) + " is not an object");
+      }
 
       lastObject = vmcast<JSObject>(cr->get());
       lastObjectName = objectName;
@@ -1696,21 +1730,38 @@ void Runtime::initJSBuiltins(
 ExecutionStatus Runtime::assertBuiltinsUnmodified() {
   assert(!builtinsFrozen_ && "Builtins are already frozen.");
   GCScope gcScope(*this);
+  NoRJSScope noRJS{*this};
 
   return forEachPublicNativeBuiltin([this](
                                         unsigned methodIndex,
-                                        Predefined::Str /* objectName */,
+                                        Predefined::Str objectName,
                                         Handle<JSObject> &currentObject,
                                         SymbolID methodID) {
-    auto cr = JSObject::getNamed_RJS(currentObject, *this, methodID);
-    assert(
-        cr.getStatus() != ExecutionStatus::EXCEPTION &&
-        "getNamed() of builtin method failed");
+    // Avoid running any JS here to avoid modifying the builtins while iterating
+    // them.
+    NamedPropertyDescriptor desc;
     // Check if the builtin is overridden.
+    // Need to check for flags which could result in JS execution.
+    if (!JSObject::getOwnNamedDescriptor(
+            currentObject, *this, methodID, desc) ||
+        desc.flags.proxyObject || desc.flags.hostObject) {
+      return raiseTypeError(
+          TwineChar16{
+              "Cannot execute a bytecode compiled with -fstatic-builtins: "} +
+          getPredefinedString(objectName) + "." +
+          getStringPrimFromSymbolID(methodID) + " has been modified");
+    }
+    auto cr = JSObject::getNamedSlotValue(currentObject, *this, desc);
+    if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
     auto currentBuiltin = dyn_vmcast<NativeFunction>(std::move(cr->get()));
     if (!currentBuiltin || currentBuiltin != builtins_[methodIndex]) {
       return raiseTypeError(
-          "Cannot execute a bytecode compiled with -fstatic-builtins when builtin functions are overriden.");
+          TwineChar16{
+              "Cannot execute a bytecode compiled with -fstatic-builtins: "} +
+          getPredefinedString(objectName) + "." +
+          getStringPrimFromSymbolID(methodID) + " has been modified");
     }
     return ExecutionStatus::RETURNED;
   });
@@ -1909,6 +1960,19 @@ static std::string &llvmStreamableToString(const T &v) {
   strstrm << v;
   strstrm.flush();
   return buf;
+}
+
+bool Runtime::isNativeStackOverflowingSlowPath() {
+#ifdef HERMES_CHECK_NATIVE_STACK
+  auto [highPtr, size] = oscompat::thread_stack_bounds(nativeStackGap_);
+  nativeStackHigh_ = (const char *)highPtr;
+  nativeStackSize_ = size;
+  return LLVM_UNLIKELY(
+      (uintptr_t)nativeStackHigh_ - (uintptr_t)__builtin_frame_address(0) >
+      nativeStackSize_);
+#else
+  return false;
+#endif
 }
 
 /****************************************************************************
@@ -2212,6 +2276,14 @@ void Runtime::pushCallStackImpl(
 }
 
 #endif // HERMES_MEMORY_INSTRUMENTATION
+
+void ScopedNativeDepthReducer::staticAsserts() {
+#ifdef HERMES_CHECK_NATIVE_STACK
+  static_assert(
+      kReducedNativeStackGap < kMinSupportedNativeStackGap,
+      "kMinSupportedNativeStackGap too low, must be reduced in the reducer");
+#endif
+}
 
 } // namespace vm
 } // namespace hermes

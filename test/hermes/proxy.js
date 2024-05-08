@@ -6,6 +6,7 @@
  */
 
 // RUN: %hermes -Xhermes-internal-test-methods -Xes6-proxy -non-strict -O -target=HBC %s | %FileCheck --match-full-lines %s
+// REQUIRES: !check_native_stack
 
 let isStrictMode = (function() { return this === undefined; })();
 

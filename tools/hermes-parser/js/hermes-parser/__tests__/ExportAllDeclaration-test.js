@@ -16,7 +16,7 @@ import {
   expectBabelAlignment,
   expectEspreeAlignment,
 } from '../__test_utils__/alignment-utils';
-import {parse, parseForSnapshot} from '../__test_utils__/parse';
+import {parseForSnapshot} from '../__test_utils__/parse';
 
 describe('ExportAllDeclaration', () => {
   describe('Unnamed', () => {
@@ -51,22 +51,26 @@ describe('ExportAllDeclaration', () => {
     });
 
     test('Babel', () => {
-      expect(parse(testCase.code, {babel: true})).toMatchObject({
-        type: 'File',
-        program: {
-          type: 'Program',
-          body: [
+      expect(parseForSnapshot(testCase.code, {babel: true}))
+        .toMatchInlineSnapshot(`
+        {
+          "body": [
             {
-              type: 'ExportAllDeclaration',
-              exportKind: 'value',
-              source: {
-                type: 'StringLiteral',
-                value: 'z',
+              "exportKind": "value",
+              "source": {
+                "extra": {
+                  "raw": "'z'",
+                  "rawValue": "z",
+                },
+                "type": "StringLiteral",
+                "value": "z",
               },
+              "type": "ExportAllDeclaration",
             },
           ],
-        },
-      });
+          "type": "Program",
+        }
+      `);
       expectBabelAlignment(testCase);
     });
   });
@@ -108,31 +112,35 @@ describe('ExportAllDeclaration', () => {
     });
 
     test('Babel', () => {
-      expect(parse(testCase.code, {babel: true})).toMatchObject({
-        type: 'File',
-        program: {
-          type: 'Program',
-          body: [
+      expect(parseForSnapshot(testCase.code, {babel: true}))
+        .toMatchInlineSnapshot(`
+        {
+          "body": [
             {
-              type: 'ExportNamedDeclaration',
-              exportKind: 'value',
-              specifiers: [
+              "exportKind": "value",
+              "source": {
+                "extra": {
+                  "raw": "'z'",
+                  "rawValue": "z",
+                },
+                "type": "StringLiteral",
+                "value": "z",
+              },
+              "specifiers": [
                 {
-                  type: 'ExportNamespaceSpecifier',
-                  exported: {
-                    type: 'Identifier',
-                    name: 'y',
+                  "exported": {
+                    "name": "y",
+                    "type": "Identifier",
                   },
+                  "type": "ExportNamespaceSpecifier",
                 },
               ],
-              source: {
-                type: 'StringLiteral',
-                value: 'z',
-              },
+              "type": "ExportNamedDeclaration",
             },
           ],
-        },
-      });
+          "type": "Program",
+        }
+      `);
       expectBabelAlignment(testCase);
     });
   });

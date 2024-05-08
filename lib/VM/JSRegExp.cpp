@@ -33,7 +33,6 @@ const ObjectVTable JSRegExp::vt{
         CellKind::JSRegExpKind,
         cellSize<JSRegExp>(),
         JSRegExp::_finalizeImpl,
-        nullptr,
         JSRegExp::_mallocSizeImpl,
         nullptr
 #ifdef HERMES_MEMORY_INSTRUMENTATION
@@ -214,7 +213,7 @@ ExecutionStatus JSRegExp::initializeGroupNameMappingObj(
       return ExecutionStatus::EXCEPTION;
     }
     auto idx = parsedMappings[identifier];
-    numberHandle.set(HermesValue::encodeNumberValue(idx));
+    numberHandle.set(HermesValue::encodeUntrustedNumberValue(idx));
     auto res = JSObject::defineNewOwnProperty(
         obj,
         runtime,

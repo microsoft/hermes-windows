@@ -37,7 +37,7 @@ struct CodeGenerationSettings {
   using DumpSettings = CodeGenerationSettings_DumpSettings;
 
   /// Whether we should emit TDZ checks.
-  bool enableTDZ{false};
+  bool const enableTDZ{false};
   /// Whether we can assume there are unlimited number of registers.
   /// This affects how we generate the IR, as we can decide whether
   /// to hold as many temporary values as we like.
@@ -56,6 +56,8 @@ struct CodeGenerationSettings {
   bool instrumentIR{false};
   /// Instructs IR Generation to use synthetic names for unnamed functions.
   bool generateNameForUnnamedFunctions{false};
+  /// Whether block scoping is enabled.
+  bool enableBlockScoping{false};
 
   /// Dump IR before each pass (if holds boolean), or the given passes (if holds
   /// DensetSet).
@@ -220,11 +222,17 @@ class Context {
   /// If true, allow parsing JSX as a primary expression.
   bool parseJSX_{false};
 
+  /// If true, allow parsing component syntax when also using Flow syntax.
+  bool parseFlowComponentSyntax_{false};
+
   /// Whether to parse Flow type syntax.
   ParseFlowSetting parseFlow_{ParseFlowSetting::NONE};
 
   /// Whether to parse TypeScript syntax.
   bool parseTS_{false};
+
+  /// Whether to convert ES6 classes to ES5 functions
+  bool convertES6Classes_{false};
 
   /// If non-null, the resolution table which resolves static require().
   const std::unique_ptr<ResolutionTable> resolutionTable_;
@@ -367,10 +375,18 @@ class Context {
     return emitAsyncBreakCheck_;
   }
 
-  void setUseCJSModules(bool useCJSModules) {
+  /// A hack to disable CJS modules while preserving the same interface.
+  void setUseCJSModules(bool useCJSModules) {}
+  bool getUseCJSModules() const {
+    return false;
+  }
+  /// SemanticValidator performs some AST transformations when CommonJS modules
+  /// are enabled. This attribute allows us to continue supporting those, while
+  /// code generation for CJS modules has been disabled.
+  void setTransformCJSModules(bool useCJSModules) {
     useCJSModules_ = useCJSModules;
   }
-  bool getUseCJSModules() const {
+  bool getTransformCJSModules() const {
     return useCJSModules_;
   }
 
@@ -391,11 +407,30 @@ class Context {
     return parseFlow_ == ParseFlowSetting::ALL;
   }
 
+  void setParseFlowComponentSyntax(bool parseFlowComponentSyntax) {
+    parseFlowComponentSyntax_ = parseFlowComponentSyntax;
+  }
+  bool getParseFlowComponentSyntax() const {
+    return parseFlowComponentSyntax_;
+  }
+
   void setParseTS(bool parseTS) {
     parseTS_ = parseTS;
   }
   bool getParseTS() const {
     return parseTS_;
+  }
+
+  void setConvertES6Classes(bool convertES6Classes) {
+    convertES6Classes_ = convertES6Classes;
+  }
+
+  bool getConvertES6Classes() const {
+#ifndef HERMES_FACEBOOK_BUILD
+    return convertES6Classes_;
+#else
+    return false;
+#endif
   }
 
   /// \return true if either TS or Flow is being parsed.

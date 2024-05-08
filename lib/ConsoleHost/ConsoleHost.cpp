@@ -13,7 +13,6 @@
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/Domain.h"
 #include "hermes/VM/JSObject.h"
-#include "hermes/VM/MockedEnvironment.h"
 #include "hermes/VM/NativeArgs.h"
 #include "hermes/VM/Profiler/SamplingProfiler.h"
 #include "hermes/VM/Runtime.h"
@@ -140,7 +139,7 @@ setTimeout(void *ctx, vm::Runtime &runtime, vm::NativeArgs args) {
     return ExecutionStatus::EXCEPTION;
   uint32_t taskId = consoleHost->queueTask(
       PseudoHandle<Callable>::vmcast(createPseudoHandle(*boundFunction)));
-  return HermesValue::encodeNumberValue(taskId);
+  return HermesValue::encodeTrustedNumberValue(taskId);
 }
 
 static vm::CallResult<vm::HermesValue>
@@ -266,13 +265,6 @@ bool executeHBCBytecodeImpl(
 
   std::unique_ptr<vm::StatSamplingThread> statSampler;
   auto runtime = vm::Runtime::create(options.runtimeConfig);
-  if (options.stabilizeInstructionCount) {
-    // Try to limit features that can introduce unpredictable CPU instruction
-    // behavior. Date is a potential cause, but is not handled currently.
-    vm::MockedEnvironment env;
-    env.stabilizeInstructionCount = true;
-    runtime->setMockedEnvironment(env);
-  }
 
   if (options.timeLimit > 0) {
     runtime->timeLimitMonitor = vm::TimeLimitMonitor::getOrCreate();

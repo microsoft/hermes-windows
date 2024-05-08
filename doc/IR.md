@@ -299,6 +299,26 @@ Arguments | %x and %y are the operands of the binary operation, %BB1 is the 'Tru
 Semantics | The instruction follows the rules of JavaScript for each one of the binary operators defined in the instruction. If the condition is evaluated as 'True' the program jumps to the 'True' block. Otherwise the program jumps to the 'False' block.
 Effects | May read and write memory.
 
+### CreateScopeInst
+
+CreateScopeInst | _
+--- | --- |
+Description | Create a new function top-level scope.
+Example | %0 = CreateScopeInst %desc
+Arguments | %desc describes the function's top-level scope.
+Semantics | Creates the top-level scope for its function.
+Effects | Does not read or write to memory.
+
+### CreateInnerScopeInst
+
+CreateInnerScopeInst | _
+--- | --- |
+Description | Creates a new scope with the given parent
+Example | %0 = CreateInnerScopeInst %parent, %desc
+Arguments | %parent is the inner scope's parent scope, and %desc describes the scope that is being created.
+Semantics | Creates a new inner scope within the given parent.
+Effects | Does not read or write to memory.
+
 ### CreateFunction
 
 CreateFunction | _
@@ -474,16 +494,6 @@ Description | Allocates a new JavaScript object on the heap.
 Example |  `%0 = AllocObjectInst %sizeHint : LiteralNumber, %parent : EmptySentinel or null or Value`
 Arguments | *%sizeHint% indicates that the object will need at least that many property slots. *%parent* is the optional parent to create the object with: *EmptySentinel* means use *Object.prototype*, *null* means no parent, or otherwise use the specified value.
 Semantics | The instruction creates a new JavaScript object on the heap. If the parent is invalid (not EmptySenyinel, null or object), it is silently ignored.
-Effects | Does not read or write to memory.
-
-### AllocObjectLiteralInst
-
-AllocObjectLiteralInst | _
---- | --- |
-Description | Allocates a new JavaScript object on the heap. During lowering pass it will be lowered to either an AllocObjectInst or a HBCAllocObjectFromBufferInst.
-Example |  %0 = AllocObjectLiteralInst "prop1" : string, 10 : number
-Arguments | %prop_map is a vector of (Literal*, value*) pairs which represents the properties and their keys in the object literal.
-Semantics | The instruction creates a new JavaScript object on the heap with an initial list of properties.
 Effects | Does not read or write to memory.
 
 ### AllocArrayInst
@@ -781,6 +791,27 @@ Description | Obtain the "global" object
 Example |  %0 = HBCGetGlobalObjectInst
 Arguments | None.
 Semantics | The instruction returns a reference to the "global" object.
+Effects | Does not read or write to memory.
+
+
+### HBCCreateEnvironment
+
+HBCCreateEnvironment | _
+--- | --- |
+Description | Create a new function top-level environment.
+Example | %0 = HBCCreateEnvironment %desc
+Arguments | %desc describes the function's top-level environment.
+Semantics | Creates the top-level environment for its function.
+Effects | Does not read or write to memory.
+
+### HBCCreateInnerEnvironment
+
+HBCCreateInnerEnvironment | _
+--- | --- |
+Description | Creates a new environment with the given parent
+Example | %0 = HBCCreateInnerEnvironment %parent, %desc
+Arguments | %parent is the inner environment's parent environment, and %desc describes the environment that is being created.
+Semantics | Creates a new inner environment within the given parent.
 Effects | Does not read or write to memory.
 
 ### HBCCreateFunction

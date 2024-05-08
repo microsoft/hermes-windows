@@ -19,11 +19,11 @@ import {flowDefToTSDef} from './flowDefToTSDef';
 import {flowToJS} from './flowToJS';
 import {flowImportTo} from './flowImportTo';
 
-export function translateFlowToFlowDef(
+export async function translateFlowToFlowDef(
   code: string,
   prettierOptions: {...} = {},
-): string {
-  const {ast, scopeManager} = parse(code);
+): Promise<string> {
+  const {ast, scopeManager} = await parse(code);
 
   const [flowDefAst, mutatedCode] = flowToFlowDef(ast, code, scopeManager, {
     recoverFromErrors: true,
@@ -32,26 +32,28 @@ export function translateFlowToFlowDef(
   return print(flowDefAst, mutatedCode, prettierOptions);
 }
 
-export function translateFlowToTSDef(
+export async function translateFlowToTSDef(
   code: string,
   prettierOptions: {...} = {},
-): string {
-  const flowDefCode = translateFlowToFlowDef(code, prettierOptions);
+): Promise<string> {
+  const flowDefCode = await translateFlowToFlowDef(code, prettierOptions);
 
   return translateFlowDefToTSDef(flowDefCode, prettierOptions);
 }
 
-export function translateFlowDefToTSDef(
+export async function translateFlowDefToTSDef(
   code: string,
   prettierOptions: {...} = {},
-): string {
-  const {ast, scopeManager} = parse(code);
-  const tsAST = flowDefToTSDef(code, ast, scopeManager);
+): Promise<string> {
+  const {ast, scopeManager} = await parse(code);
+  const [tsAST, mutatedCode] = flowDefToTSDef(code, ast, scopeManager, {
+    recoverFromErrors: true,
+  });
 
   return print(
     // $FlowExpectedError[incompatible-call] - this is fine as we're providing the visitor keys
     tsAST,
-    code,
+    mutatedCode,
     {
       ...prettierOptions,
     },
@@ -59,11 +61,11 @@ export function translateFlowDefToTSDef(
   );
 }
 
-export function translateFlowToJS(
+export async function translateFlowToJS(
   code: string,
   prettierOptions: {...} = {},
-): string {
-  const {ast, scopeManager} = parse(code);
+): Promise<string> {
+  const {ast, scopeManager} = await parse(code);
 
   const jsAST = flowToJS(ast, code, scopeManager);
 
@@ -71,12 +73,12 @@ export function translateFlowToJS(
 }
 
 export type {MapperOptions as FlowImportsMapperOptions};
-export function translateFlowImportsTo(
+export async function translateFlowImportsTo(
   code: string,
   prettierOptions: {...} = {},
   opts: MapperOptions,
-): string {
-  const {ast, scopeManager} = parse(code);
+): Promise<string> {
+  const {ast, scopeManager} = await parse(code);
 
   const jsAST = flowImportTo(ast, code, scopeManager, opts);
 

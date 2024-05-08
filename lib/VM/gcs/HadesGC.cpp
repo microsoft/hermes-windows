@@ -7,7 +7,6 @@
 
 #include "hermes/VM/HadesGC.h"
 
-#include "GCBase-WeakMap.h"
 #include "hermes/Support/Compiler.h"
 #include "hermes/Support/ErrorHandling.h"
 #include "hermes/VM/AllocResult.h"
@@ -15,7 +14,9 @@
 #include "hermes/VM/FillerCell.h"
 #include "hermes/VM/GCBase-inline.h"
 #include "hermes/VM/GCPointer.h"
+#include "hermes/VM/HermesValue-inline.h"
 #include "hermes/VM/RootAndSlotAcceptorDefault.h"
+#include "hermes/VM/SmallHermesValue-inline.h"
 
 #include <array>
 #include <functional>
@@ -37,6 +38,11 @@ static const char *kCompacteeNameForCrashMgr = "COMPACT";
 
 // We have a target max pause time of 50ms.
 static constexpr size_t kTargetMaxPauseMs = 50;
+
+// Assert that it is always safe to construct a cell that is as large as the
+// entire segment. This lets us always assume that contiguous regions in a
+// segment can be safely turned into a single FreelistCell.
+static_assert(HadesGC::HeapSegment::maxSize() <= HadesGC::maxAllocationSize());
 
 // A free list cell is always variable-sized.
 const VTable HadesGC::OldGen::FreelistCell::vt{
@@ -688,8 +694,7 @@ class MarkWorklist {
   llvh::SmallVector<GCCell *, 0> worklist_;
 };
 
-class HadesGC::MarkAcceptor final : public RootAndSlotAcceptor,
-                                    public WeakRefAcceptor {
+class HadesGC::MarkAcceptor final : public RootAndSlotAcceptor {
  public:
   MarkAcceptor(HadesGC &gc)
       : gc{gc},
@@ -798,17 +803,6 @@ class HadesGC::MarkAcceptor final : public RootAndSlotAcceptor,
     writeBarrierMarkedSymbols_[idx] = true;
   }
 
-  void accept(WeakRefBase &wr) override {
-    assert(
-        gc.weakRefMutex() &&
-        "Must hold weak ref mutex when marking a WeakRef.");
-    WeakRefSlot *slot = wr.unsafeGetSlot();
-    assert(
-        slot->state() != WeakSlotState::Free &&
-        "marking a freed weak ref slot");
-    slot->mark();
-  }
-
   /// Set the drain rate that'll be used for any future calls to drain APIs.
   void setDrainRate(size_t rate) {
     assert(!kConcurrentGC && "Drain rate is only used by incremental GC.");
@@ -887,12 +881,12 @@ class HadesGC::MarkAcceptor final : public RootAndSlotAcceptor,
     return !localWorklist_.empty();
   }
 
-  MarkWorklist &globalWorklist() {
-    return globalWorklist_;
+  bool isLocalWorklistEmpty() const {
+    return localWorklist_.empty();
   }
 
-  std::vector<JSWeakMap *> &reachableWeakMaps() {
-    return reachableWeakMaps_;
+  MarkWorklist &globalWorklist() {
+    return globalWorklist_;
   }
 
   /// Merge the symbols marked by the MarkAcceptor and by the write barrier,
@@ -922,9 +916,6 @@ class HadesGC::MarkAcceptor final : public RootAndSlotAcceptor,
   /// because the mutator can't be modifying mark bits at the same time as the
   /// marker thread.
   MarkWorklist globalWorklist_;
-
-  /// The WeakMap objects that have been discovered to be reachable.
-  std::vector<JSWeakMap *> reachableWeakMaps_;
 
   /// markedSymbols_ represents which symbols have been proven live so far in
   /// a collection. True means that it is live, false means that it could
@@ -959,11 +950,7 @@ class HadesGC::MarkAcceptor final : public RootAndSlotAcceptor,
     // cell's kind after initialization. The GC thread might to a free cell, but
     // only during sweeping, not concurrently with this operation. Therefore
     // there's no need for any synchronization here.
-    if (vmisa<JSWeakMap>(cell)) {
-      reachableWeakMaps_.push_back(vmcast<JSWeakMap>(cell));
-    } else {
-      localWorklist_.push(cell);
-    }
+    localWorklist_.push(cell);
   }
 
   template <typename T>
@@ -1374,7 +1361,6 @@ void HadesGC::createSnapshot(llvh::raw_ostream &os) {
   waitForCollectionToFinish("snapshot");
   {
     GCCycle cycle{*this, "GC Heap Snapshot"};
-    WeakRefLock lk{weakRefMutex()};
     GCBase::createSnapshot(*this, os);
   }
 }
@@ -1699,7 +1685,6 @@ void HadesGC::incrementalCollect(bool backgroundThread) {
         // Finish any collection bookkeeping.
         ogCollectionStats_->setEndTime();
         ogCollectionStats_->setAfterSize(segmentFootprint());
-        compacteeHandleForSweep_.reset();
         concurrentPhase_ = Phase::None;
         if (!backgroundThread)
           checkTripwireAndSubmitStats();
@@ -1741,7 +1726,6 @@ void HadesGC::prepareCompactee(bool forceCompaction) {
     compactee_.startCP = CompressedPointer::encodeNonNull(
         reinterpret_cast<GCCell *>(compactee_.segment->lowLim()),
         getPointerBase());
-    compacteeHandleForSweep_ = compactee_.segment;
   }
 }
 
@@ -1828,6 +1812,43 @@ void HadesGC::updateOldGenThreshold() {
   ogThreshold_.update(clampedRate / (clampedRate + 1));
 }
 
+void HadesGC::markWeakMapEntrySlots() {
+  bool newlyMarkedValue;
+  do {
+    newlyMarkedValue = false;
+    weakMapEntrySlots_.forEach([this](WeakMapEntrySlot &slot) {
+      if (!slot.key || !slot.owner)
+        return;
+      GCCell *ownerMapCell = slot.owner.getNoBarrierUnsafe(getPointerBase());
+      // If the owner structure isn't reachable, no need to mark the values.
+      if (!HeapSegment::getCellMarkBit(ownerMapCell))
+        return;
+      GCCell *cell = slot.key.getNoBarrierUnsafe(getPointerBase());
+      // The WeakRef object must be marked for the mapped value to
+      // be marked (unless there are other strong refs to the value).
+      if (!HeapSegment::getCellMarkBit(cell))
+        return;
+      oldGenMarker_->accept(slot.mappedValue);
+    });
+    newlyMarkedValue = !oldGenMarker_->isLocalWorklistEmpty();
+    oldGenMarker_->drainAllWork();
+  } while (newlyMarkedValue);
+
+  // If either a key or its owning map is dead, set the mapped value to Empty.
+  weakMapEntrySlots_.forEach([this](WeakMapEntrySlot &slot) {
+    if (!slot.key || !slot.owner) {
+      slot.mappedValue = HermesValue::encodeEmptyValue();
+      return;
+    }
+    GCCell *cell = slot.key.getNoBarrierUnsafe(getPointerBase());
+    GCCell *ownerMapCell = slot.owner.getNoBarrierUnsafe(getPointerBase());
+    if (!HeapSegment::getCellMarkBit(cell) ||
+        !HeapSegment::getCellMarkBit(ownerMapCell)) {
+      slot.mappedValue = HermesValue::encodeEmptyValue();
+    }
+  });
+}
+
 void HadesGC::completeMarking() {
   assert(inGC() && "inGC_ must be set during the STW pause");
   // Update the collection threshold before marking anything more, so that only
@@ -1847,7 +1868,7 @@ void HadesGC::completeMarking() {
   assert(
       oldGenMarker_->globalWorklist().empty() &&
       "Marking worklist wasn't drained");
-  completeWeakMapMarking(*oldGenMarker_);
+  markWeakMapEntrySlots();
   // Update the compactee tracking pointers so that the next YG collection will
   // do a compaction.
   compactee_.evacStart = compactee_.start;
@@ -1862,11 +1883,6 @@ void HadesGC::completeMarking() {
 
   // Now free symbols and weak refs.
   gcCallbacks_.freeSymbols(oldGenMarker_->markedSymbols());
-  // NOTE: If sweeping is done concurrently with YG collection, weak references
-  // could be handled during the sweep pass instead of the mark pass. The read
-  // barrier will need to be updated to handle the case where a WeakRef points
-  // to an now-empty cell.
-  updateWeakReferencesForOldGen();
 
   // Nothing needs oldGenMarker_ from this point onward.
   oldGenMarker_.reset();
@@ -2096,6 +2112,14 @@ void HadesGC::relocationWriteBarrier(const void *loc, const void *value) {
   }
 }
 
+void HadesGC::weakRefReadBarrier(HermesValue value) {
+  assert(
+      !calledByBackgroundThread() &&
+      "Read barrier invoked by background thread.");
+  if (ogMarkingBarriers_)
+    snapshotWriteBarrierInternal(value);
+}
+
 void HadesGC::weakRefReadBarrier(GCCell *value) {
   assert(
       !calledByBackgroundThread() &&
@@ -2197,11 +2221,6 @@ void *HadesGC::allocLongLived(uint32_t sz) {
   assert(
       isSizeHeapAligned(sz) &&
       "Call to allocLongLived must use a size aligned to HeapAlign");
-  if (kConcurrentGC) {
-    HERMES_SLOW_ASSERT(
-        !weakRefMutex() &&
-        "WeakRef mutex should not be held when allocLongLived is called");
-  }
   assert(gcMutex_ && "GC mutex must be held when calling allocLongLived");
   totalAllocatedBytes_ += sz;
   // Alloc directly into the old gen.
@@ -2369,6 +2388,15 @@ void HadesGC::youngGenEvacuateImpl(Acceptor &acceptor, bool doCompaction) {
   {
     DroppingAcceptor<Acceptor> nameAcceptor{acceptor};
     markRoots(nameAcceptor, /*markLongLived*/ doCompaction);
+
+    // Mark the values in WeakMap entries as roots for the purposes of young gen
+    // collection. This is slightly suboptimal since some of the keys or maps
+    // may be dead, but we still end up evacuating their corresponding value.
+    // This is done for simplicity, since it lets us avoid needing to iterate to
+    // a fixed point as is done during a full collection.
+    weakMapEntrySlots_.forEach([&nameAcceptor](WeakMapEntrySlot &slot) {
+      nameAcceptor.accept(slot.mappedValue);
+    });
   }
   // Find old-to-young pointers, as they are considered roots for YG
   // collection.
@@ -2494,7 +2522,6 @@ void HadesGC::youngGenCollection(
       // Since we can't track the actual number of external bytes that were in
       // this segment, just use the swept external byte count.
       externalBytes.before += externalCompactedBytes;
-      externalBytes.after += externalCompactedBytes;
     }
 
     // Move external memory accounting from YG to OG as well.
@@ -2682,12 +2709,17 @@ void HadesGC::scanDirtyCardsForSegment(
   size_t from = cardTable.addressToIndex(seg.start());
   const size_t to = cardTable.addressToIndex(origSegLevel - 1) + 1;
 
-  // If a compaction is taking place during sweeping, we may scan cards that
-  // contain dead objects which in turn point to dead objects in the compactee.
-  // In order to avoid promoting these dead objects, we should skip unmarked
-  // objects altogether when compaction and sweeping happen at the same time.
-  const bool visitUnmarked =
-      !CompactionEnabled || concurrentPhase_ != Phase::Sweep;
+  // Do not scan unmarked objects in the OG if we are currently sweeping. We do
+  // this for three reasons:
+  // 1. If an object is unmarked during sweeping, that means it is dead, so it
+  //    is wasteful to scan it and promote objects it refers to.
+  // 2. During compaction, these unmarked objects may point to dead objects in
+  //    the compactee. Promoting these objects is dangerous, since they may
+  //    contain references to other dead objects that are or will be freed.
+  // 3. If a compaction was completed during this cycle, unmarked objects may
+  //    contain references into the now freed compactee. These pointers are not
+  //    safe to visit.
+  const bool visitUnmarked = concurrentPhase_ != Phase::Sweep;
 
   while (const auto oiBegin = cardTable.findNextDirtyCard(from, to)) {
     const auto iBegin = *oiBegin;
@@ -2788,54 +2820,6 @@ void HadesGC::finalizeYoungGenObjects() {
     }
   }
   youngGenFinalizables_.clear();
-}
-
-void HadesGC::updateWeakReferencesForOldGen() {
-  for (auto &slot : weakSlots_) {
-    switch (slot.state()) {
-      case WeakSlotState::Free:
-        // Skip free weak slots.
-        break;
-      case WeakSlotState::Marked:
-        // Set all allocated slots to unmarked.
-        slot.unmark();
-        break;
-      case WeakSlotState::Unmarked:
-        freeWeakSlot(&slot);
-        break;
-    }
-  }
-}
-
-void HadesGC::completeWeakMapMarking(MarkAcceptor &acceptor) {
-  gcheapsize_t weakMapAllocBytes = GCBase::completeWeakMapMarking(
-      *this,
-      acceptor,
-      acceptor.reachableWeakMaps(),
-      /*objIsMarked*/
-      HeapSegment::getCellMarkBit,
-      /*markFromVal*/
-      [&acceptor](GCCell *valCell, GCHermesValue &valRef) {
-        if (HeapSegment::getCellMarkBit(valCell)) {
-          return false;
-        }
-        acceptor.accept(valRef);
-        // The weak ref lock is held throughout this entire section, so no need
-        // to re-lock it.
-        acceptor.drainAllWork();
-        return true;
-      },
-      /*drainMarkStack*/
-      [](MarkAcceptor &acceptor) {
-        // The weak ref lock is held throughout this entire section, so no need
-        // to re-lock it.
-        acceptor.drainAllWork();
-      },
-      /*checkMarkStackOverflow (HadesGC does not have mark stack overflow)*/
-      []() { return false; });
-
-  acceptor.reachableWeakMaps().clear();
-  (void)weakMapAllocBytes;
 }
 
 uint64_t HadesGC::allocatedBytes() const {
@@ -3104,7 +3088,6 @@ void HadesGC::removeSegmentExtentFromCrashManager(
 #ifdef HERMES_SLOW_DEBUG
 
 void HadesGC::checkWellFormed() {
-  WeakRefLock lk{weakRefMutex()};
   CheckHeapWellFormedAcceptor acceptor(*this);
   {
     DroppingAcceptor<CheckHeapWellFormedAcceptor> nameAcceptor{acceptor};
@@ -3114,6 +3097,14 @@ void HadesGC::checkWellFormed() {
   forAllObjs([this, &acceptor](GCCell *cell) {
     assert(cell->isValid() && "Invalid cell encountered in heap");
     markCell(cell, acceptor);
+  });
+
+  weakMapEntrySlots_.forEach([](WeakMapEntrySlot &slot) {
+    if (slot.mappedValue.isEmpty()) {
+      assert(
+          !slot.key ||
+          !slot.owner && "Reachable entry should have not have Empty value.");
+    }
   });
 }
 

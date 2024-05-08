@@ -60,7 +60,7 @@ export function translationError(
   node: ObjectWithLoc,
   message: string,
   context: $ReadOnly<{code: string, ...}>,
-): Error {
+): ExpectedTranslationError {
   return new ExpectedTranslationError(node, message, context);
 }
 
@@ -71,14 +71,15 @@ export function unexpectedTranslationError(
   node: ObjectWithLoc,
   message: string,
   context: $ReadOnly<{code: string, ...}>,
-): Error {
+): UnexpectedTranslationError {
   return new UnexpectedTranslationError(node, message, context);
 }
 
-function buildCodeFrame(
+export function buildCodeFrame(
   node: ObjectWithLoc,
   message: string,
   code: string,
+  highlightCode: boolean = process.env.NODE_ENV !== 'test',
 ): string {
   // babel uses 1-indexed columns
   const locForBabel = {
@@ -94,7 +95,7 @@ function buildCodeFrame(
   return codeFrameColumns(code, locForBabel, {
     linesAbove: 0,
     linesBelow: 0,
-    highlightCode: process.env.NODE_ENV !== 'test',
+    highlightCode,
     message: message,
   });
 }

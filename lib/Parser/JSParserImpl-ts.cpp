@@ -240,6 +240,28 @@ Optional<ESTree::Node *> JSParserImpl::parseTSFunctionOrParenthesizedType(
   ESTree::Node *type = nullptr;
   ESTree::NodeList params{};
 
+  if (check(TokenKind::rw_this)) {
+    OptValue<TokenKind> optNext = lexer_.lookahead1(None);
+    if (optNext.hasValue() && *optNext == TokenKind::colon) {
+      SMLoc thisStart = advance(JSLexer::GrammarContext::Type).Start;
+      advance(JSLexer::GrammarContext::Type);
+      CHECK_RECURSION;
+      auto typeAnnotation = parseTypeAnnotationTS();
+      if (!typeAnnotation)
+        return None;
+
+      params.push_back(*setLocation(
+          thisStart,
+          getPrevTokenEndLoc(),
+          new (context_) ESTree::IdentifierNode(
+              thisIdent_, *typeAnnotation, /* optional */ false)));
+      checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type);
+    } else if (optNext.hasValue() && *optNext == TokenKind::question) {
+      error(tok_->getSourceRange(), "'this' constraint may not be optional");
+      return None;
+    }
+  }
+
   if (allowAnonFunctionType_ &&
       checkAndEat(TokenKind::dotdotdot, JSLexer::GrammarContext::Type)) {
     isFunction = true;
@@ -935,6 +957,30 @@ Optional<ESTree::Node *> JSParserImpl::parseTSPrimaryType() {
             advance(JSLexer::GrammarContext::Type).End,
             new (context_) ESTree::TSStringKeywordNode());
       }
+      if (tok_->getResWordOrIdentifier() == bigintIdent_) {
+        return setLocation(
+            start,
+            advance(JSLexer::GrammarContext::Type).End,
+            new (context_) ESTree::TSBigIntKeywordNode());
+      }
+      if (tok_->getResWordOrIdentifier() == neverIdent_) {
+        return setLocation(
+            start,
+            advance(JSLexer::GrammarContext::Type).End,
+            new (context_) ESTree::TSNeverKeywordNode());
+      }
+      if (tok_->getResWordOrIdentifier() == undefinedIdent_) {
+        return setLocation(
+            start,
+            advance(JSLexer::GrammarContext::Type).End,
+            new (context_) ESTree::TSUndefinedKeywordNode());
+      }
+      if (tok_->getResWordOrIdentifier() == unknownIdent_) {
+        return setLocation(
+            start,
+            advance(JSLexer::GrammarContext::Type).End,
+            new (context_) ESTree::TSUnknownKeywordNode());
+      }
 
       {
         auto optRef = parseTSTypeReference();
@@ -942,6 +988,15 @@ Optional<ESTree::Node *> JSParserImpl::parseTSPrimaryType() {
           return None;
         return *optRef;
       }
+
+    case TokenKind::rw_null: {
+      SMLoc end = advance(JSLexer::GrammarContext::Type).End;
+      return setLocation(
+          start,
+          end,
+          new (context_) ESTree::TSLiteralTypeNode(setLocation(
+              start, end, new (context_) ESTree::NullLiteralNode())));
+    }
 
     case TokenKind::rw_void:
       return setLocation(
@@ -967,6 +1022,27 @@ Optional<ESTree::Node *> JSParserImpl::parseTSPrimaryType() {
           end,
           new (context_) ESTree::TSLiteralTypeNode(setLocation(
               start, end, new (context_) ESTree::NumericLiteralNode(str))));
+    }
+
+    case TokenKind::bigint_literal: {
+      UniqueString *raw = tok_->getBigIntLiteral();
+      SMLoc end = advance(JSLexer::GrammarContext::Type).End;
+      return setLocation(
+          start,
+          end,
+          new (context_) ESTree::TSLiteralTypeNode(setLocation(
+              start, end, new (context_) ESTree::BigIntLiteralNode(raw))));
+    }
+
+    case TokenKind::rw_true:
+    case TokenKind::rw_false: {
+      bool value = check(TokenKind::rw_true);
+      SMLoc end = advance(JSLexer::GrammarContext::Type).End;
+      return setLocation(
+          start,
+          end,
+          new (context_) ESTree::TSLiteralTypeNode(setLocation(
+              start, end, new (context_) ESTree::BooleanLiteralNode(value))));
     }
 
     default:

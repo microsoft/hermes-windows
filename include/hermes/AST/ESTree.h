@@ -344,6 +344,9 @@ class BlockStatementDecoration {
   bool paramAwait{false};
 };
 
+class JSXDecoration {};
+class FlowDecoration {};
+class TSDecoration {};
 class PatternDecoration {};
 class CoverDecoration {};
 
@@ -1007,6 +1010,9 @@ NodeList &getArguments(CallExpressionLikeNode *node);
 /// \return true when \p node has simple params, i.e. no destructuring and no
 /// initializers.
 bool hasSimpleParams(FunctionLikeNode *node);
+
+/// \return true when \p node has parameter expressions.
+bool hasParamExpressions(FunctionLikeNode *node);
 
 /// \return true when \p node is a generator function.
 bool isGenerator(FunctionLikeNode *node);

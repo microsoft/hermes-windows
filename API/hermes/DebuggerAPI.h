@@ -171,6 +171,10 @@ class HERMES_EXPORT Command {
   /// frame at index \p frameIndex.
   static Command eval(const String &src, uint32_t frameIndex);
 
+  /// \return a boolean whether this Command was constructed using the static
+  /// eval() method
+  bool isEval();
+
  private:
   friend Debugger;
   explicit Command(::hermes::vm::DebugCommand &&);
@@ -188,7 +192,8 @@ class HERMES_EXPORT Debugger {
   /// if the event observer is deallocated before the Debugger.
   void setEventObserver(EventObserver *observer);
 
-  /// Sets the property %isDebuggerAttached in %DebuggerInternal object.
+  /// Sets the property %isDebuggerAttached in %DebuggerInternal object. Can be
+  /// called from any thread.
   void setIsDebuggerAttached(bool isAttached);
 
   /// Asynchronously triggers a pause. This may be called from any thread. This
@@ -205,6 +210,11 @@ class HERMES_EXPORT Debugger {
 
   /// \return the source map URL for the \p fileId.
   String getSourceMappingUrl(uint32_t fileId) const;
+
+  /// Gets the list of loaded scripts. The order of the scripts in the vector
+  /// will be the same across calls.
+  /// \return list of loaded scripts
+  std::vector<SourceLocation> getLoadedScripts() const;
 
   /// -- Breakpoint Management --
 
@@ -398,6 +408,9 @@ class Command {
   }
   static Command eval(const String &src, uint32_t frameIndex) {
     return Command();
+  }
+  bool isEval() {
+    return false;
   }
 
  private:

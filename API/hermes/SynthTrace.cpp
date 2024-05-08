@@ -11,7 +11,6 @@
 #include "hermes/Support/Conversions.h"
 #include "hermes/Support/JSONEmitter.h"
 #include "hermes/Support/UTF8.h"
-#include "hermes/VM/MockedEnvironment.h"
 #include "hermes/VM/StringPrimitive.h"
 
 #include "llvh/Support/Endian.h"
@@ -522,6 +521,16 @@ bool SynthTrace::GetNativePropertyNamesReturnRecord::operator==(
   return propNames_ == thatCasted.propNames_;
 }
 
+bool SynthTrace::SetExternalMemoryPressureRecord::operator==(
+    const Record &that) const {
+  if (!Record::operator==(that)) {
+    return false;
+  }
+  auto &thatCasted =
+      dynamic_cast<const SetExternalMemoryPressureRecord &>(that);
+  return objID_ == thatCasted.objID_ && amount_ == thatCasted.amount_;
+}
+
 void SynthTrace::Record::toJSONInternal(JSONEmitter &json) const {
   std::string storage;
   llvh::raw_string_ostream os{storage};
@@ -731,6 +740,13 @@ void SynthTrace::GetNativePropertyNamesReturnRecord::toJSONInternal(
   json.closeArray();
 }
 
+void SynthTrace::SetExternalMemoryPressureRecord::toJSONInternal(
+    JSONEmitter &json) const {
+  Record::toJSONInternal(json);
+  json.emitKeyValue("objID", objID_);
+  json.emitKeyValue("amount", amount_);
+}
+
 const char *SynthTrace::nameFromReleaseUnused(::hermes::vm::ReleaseUnused ru) {
   switch (ru) {
     case ::hermes::vm::ReleaseUnused::kReleaseUnusedNone:
@@ -778,9 +794,7 @@ void SynthTrace::flushRecords() {
   records_.clear();
 }
 
-void SynthTrace::flushAndDisable(
-    const ::hermes::vm::MockedEnvironment &env,
-    const ::hermes::vm::GCExecTrace &gcTrace) {
+void SynthTrace::flushAndDisable(const ::hermes::vm::GCExecTrace &gcTrace) {
   if (!json_) {
     return;
   }
@@ -788,28 +802,6 @@ void SynthTrace::flushAndDisable(
   // First, flush any buffered records, and close the still-open "trace" array.
   flushRecords();
   json_->closeArray();
-
-  // Env section.
-  json_->emitKey("env");
-  json_->openDict();
-
-  json_->emitKey("callsToHermesInternalGetInstrumentedStats");
-  json_->openArray();
-  for (const ::hermes::vm::MockedEnvironment::StatsTable &call :
-       env.callsToHermesInternalGetInstrumentedStats) {
-    json_->openDict();
-    for (const auto &key : call.keys()) {
-      auto val = call.lookup(key);
-      if (val.isNum()) {
-        json_->emitKeyValue(key, val.num());
-      } else {
-        json_->emitKeyValue(key, val.str());
-      }
-    }
-    json_->closeDict();
-  }
-  json_->closeArray();
-  json_->closeDict();
 
   // Now emit the history information, if we're in trace debug mode.
   gcTrace.emit(*json_);
@@ -860,6 +852,7 @@ llvh::raw_ostream &operator<<(
     CASE(GetNativePropertyNamesReturn);
     CASE(CreateBigInt);
     CASE(BigIntToString);
+    CASE(SetExternalMemoryPressure);
   }
 #undef CASE
   // This only exists to appease gcc.
@@ -905,6 +898,7 @@ std::istream &operator>>(std::istream &is, SynthTrace::RecordType &type) {
   CASE(GetNativePropertyNamesReturn)
   CASE(CreateBigInt)
   CASE(BigIntToString)
+  CASE(SetExternalMemoryPressure)
 #undef CASE
 
   llvm_unreachable(

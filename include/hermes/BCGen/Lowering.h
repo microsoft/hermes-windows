@@ -48,35 +48,30 @@ class LowerAllocObject : public FunctionPass {
   bool runOnFunction(Function *F) override;
 
  private:
-  /// Perform a series of lowerings for a given allocInst.
-  bool lowerAlloc(AllocObjectInst *allocInst);
+  /// Define a type for managing lists of StoreNewOwnPropertyInsts.
+  using StoreList = llvh::SmallVector<StoreNewOwnPropertyInst *, 4>;
+  /// Define a type for mapping a given basic block to the stores to a given
+  /// AllocObjectInst in that basic block.
+  using BlockUserMap = llvh::DenseMap<BasicBlock *, StoreList>;
+
+  /// Construct an ordered list of stores to \p allocInst that are known to
+  /// always execute without any other intervening users.
+  StoreList collectStores(
+      AllocObjectInst *allocInst,
+      const BlockUserMap &userBasicBlockMap,
+      const DominanceInfo &DI);
   /// Serialize AllocObjects with literal property and value sets into object
   /// buffer; non-literals values could also be set as placeholders and later
   /// overwritten by PutByIds.
   bool lowerAllocObjectBuffer(
       AllocObjectInst *allocInst,
-      llvh::SmallVectorImpl<StoreNewOwnPropertyInst *> &users,
+      const StoreList &users,
       uint32_t maxSize);
   /// Estimate best number of elements to serialize into the buffer.
   /// Try optimizing for max bytecode size saving.
   uint32_t estimateBestNumElemsToSerialize(
-      llvh::SmallVectorImpl<StoreNewOwnPropertyInst *> &users);
-};
-
-/// Lowers AllocObjectLiterals which target object literals with
-/// constant properties.
-class LowerAllocObjectLiteral : public FunctionPass {
- public:
-  explicit LowerAllocObjectLiteral()
-      : FunctionPass("LowerAllocObjectLiteral") {}
-  ~LowerAllocObjectLiteral() override = default;
-
-  bool runOnFunction(Function *F) override;
-
- private:
-  uint32_t estimateBestNumElemsToSerialize(AllocObjectLiteralInst *allocInst);
-  bool lowerAlloc(AllocObjectLiteralInst *allocInst);
-  bool lowerAllocObjectBuffer(AllocObjectLiteralInst *allocInst);
+      const StoreList &users,
+      bool hasParent);
 };
 
 /// Lowers Store instructions down to MOVs after register allocation.

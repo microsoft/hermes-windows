@@ -101,6 +101,10 @@ String Debugger::getSourceMappingUrl(uint32_t fileId) const {
   return impl_->getSourceMappingUrl(fileId);
 }
 
+std::vector<SourceLocation> Debugger::getLoadedScripts() const {
+  return impl_->getLoadedScripts();
+}
+
 uint64_t Debugger::setBreakpoint(SourceLocation loc) {
   return impl_->createBreakpoint(loc);
 }
@@ -172,6 +176,10 @@ Command Command::continueExecution() {
 
 Command Command::eval(const String &src, uint32_t frameIndex) {
   return Command(DebugCommand::makeEval(frameIndex, src));
+}
+
+bool Command::isEval() {
+  return debugCommand_->type == ::hermes::vm::DebugCommandType::EVAL;
 }
 
 #endif // HERMES_ENABLE_DEBUGGER

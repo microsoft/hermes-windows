@@ -262,6 +262,10 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   }
 #endif
 
+  void setExternalMemoryPressure(const Object& obj, size_t amt) override {
+    plain_.setExternalMemoryPressure(obj, amt);
+  }
+
   Value getProperty(const Object& o, const PropNameID& name) override {
     return plain_.getProperty(o, name);
   };

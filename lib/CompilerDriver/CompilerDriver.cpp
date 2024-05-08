@@ -285,6 +285,25 @@ opt<bool> BasicBlockProfiling(
     init(false),
     desc("Enable basic block profiling (HBC only)"));
 
+opt<bool> EnableBlockScoping(
+    "block-scoping",
+    desc("Enables block scoping support."),
+    init(false),
+    Hidden,
+    cat(CompilerCategory));
+static llvh::cl::alias _EnableBlockScoping(
+    "bs",
+    desc("Alias for --block-scoping"),
+    Hidden,
+    llvh::cl::aliasopt(EnableBlockScoping));
+
+opt<bool> ES6Class(
+    "Xes6-class",
+    init(false),
+    desc("Enable support for ES6 Class"),
+    Hidden,
+    cat(CompilerCategory));
+
 opt<bool>
     EnableEval("enable-eval", init(true), desc("Enable support for eval()"));
 
@@ -490,6 +509,13 @@ static opt<bool> ParseFlow(
     desc("Parse Flow"),
     init(false),
     cat(CompilerCategory));
+
+static opt<bool> ParseFlowComponentSyntax(
+    "Xparse-component-syntax",
+    desc("Parse Component syntax"),
+    init(false),
+    Hidden,
+    cat(CompilerCategory));
 #endif
 
 #if HERMES_PARSE_TS
@@ -517,6 +543,7 @@ static ValuesClass warningValues{
 #define WARNING_CATEGORY_HIDDEN(name, specifier, description) \
   clEnumValN(Warning::name, specifier, description),
 #include "hermes/Support/Warnings.def"
+
 };
 
 static list<hermes::Warning> Werror(
@@ -558,13 +585,6 @@ static CLFlag StripFunctionNames(
     false,
     "Strip function names to reduce string table size",
     CompilerCategory);
-
-static opt<bool> EnableTDZ(
-    "Xenable-tdz",
-    init(false),
-    Hidden,
-    desc("UNSUPPORTED: Enable TDZ checks for let/const"),
-    cat(CompilerCategory));
 
 #define WARNING_CATEGORY(name, specifier, description) \
   static CLFlag name##Warning(                         \
@@ -778,6 +798,7 @@ bool loadGlobalDefinition(
   auto parsedJs = jsParser.parse();
   if (!parsedJs)
     return false;
+  jsParser.registerMagicURLs();
 
   declFileList.push_back(parsedJs.getValue());
   return true;
@@ -832,10 +853,11 @@ ESTree::NodePtr parseJS(
   auto mode = parser::FullParse;
 
   if (context->isLazyCompilation() && isLargeFile) {
-    if (!parser::JSParser::preParseBuffer(
-            *context, fileBufId, useStaticBuiltinDetected)) {
+    auto preParser = parser::JSParser::preParseBuffer(*context, fileBufId);
+    if (!preParser)
       return nullptr;
-    }
+    useStaticBuiltinDetected = preParser->getUseStaticBuiltin();
+    preParser->registerMagicURLs();
     mode = parser::LazyParse;
   }
 
@@ -849,10 +871,11 @@ ESTree::NodePtr parseJS(
   {
     parser::JSParser jsParser(*context, fileBufId, mode);
     parsedJs = jsParser.parse();
-    // If we are using lazy parse mode, we should have already detected the 'use
-    // static builtin' directive in the pre-parsing stage.
-    if (mode != parser::LazyParse) {
+    // If we are using lazy parse mode, we should have already detected the
+    // 'use static builtin' directive and magic URLs in the pre-parsing stage.
+    if (parsedJs && mode != parser::LazyParse) {
       useStaticBuiltinDetected = jsParser.getUseStaticBuiltin();
+      jsParser.registerMagicURLs();
     }
   }
   if (!parsedJs)
@@ -969,6 +992,8 @@ bool validateFlags() {
   if (cl::LazyCompilation) {
     if (cl::BytecodeFormat != cl::BytecodeFormatKind::HBC)
       err("-lazy only works with -target=HBC");
+    if (cl::DumpTarget != Execute)
+      err("-lazy only works when executing");
     if (cl::OptimizationLevel > cl::OptLevel::Og)
       err("-lazy does not work with -O");
     if (cl::BytecodeMode) {
@@ -1086,7 +1111,6 @@ std::shared_ptr<Context> createContext(
     std::unique_ptr<Context::ResolutionTable> resolutionTable,
     std::vector<uint32_t> segments) {
   CodeGenerationSettings codeGenOpts;
-  codeGenOpts.enableTDZ = cl::EnableTDZ;
   codeGenOpts.dumpOperandRegisters = cl::DumpOperandRegisters;
   codeGenOpts.dumpSourceLevelScope = cl::DumpSourceLevelScope;
   codeGenOpts.dumpTextifiedCallee = cl::DumpTextifiedCallee;
@@ -1103,6 +1127,7 @@ std::shared_ptr<Context> createContext(
     codeGenOpts.unlimitedRegisters = false;
   }
   codeGenOpts.instrumentIR = cl::InstrumentIR;
+  codeGenOpts.enableBlockScoping = cl::EnableBlockScoping;
 
   OptimizationSettings optimizationOpts;
 
@@ -1132,6 +1157,7 @@ std::shared_ptr<Context> createContext(
   // Default is non-strict mode.
   context->setStrictMode(!cl::NonStrictMode && cl::StrictMode);
   context->setEnableEval(cl::EnableEval);
+  context->setConvertES6Classes(cl::ES6Class);
   context->getSourceErrorManager().setOutputOptions(guessErrorOutputOptions());
 
   setWarningsAreErrorsFromFlags(context->getSourceErrorManager());
@@ -1155,7 +1181,7 @@ std::shared_ptr<Context> createContext(
         defaultFlags.preemptiveFunctionCompilationThreshold);
   }
 
-  if (cl::EagerCompilation || cl::DumpTarget == EmitBundle ||
+  if (cl::EagerCompilation || cl::DumpTarget != Execute ||
       cl::OptimizationLevel > cl::OptLevel::Og) {
     // Make sure nothing is lazy
     context->setLazyCompilation(false);
@@ -1169,8 +1195,8 @@ std::shared_ptr<Context> createContext(
     context->setLazyCompilation(true);
   }
 
-  if (cl::CommonJS) {
-    context->setUseCJSModules(true);
+  if (cl::CommonJS && cl::DumpTarget == DumpTransformedAST) {
+    context->setTransformCJSModules(true);
   }
 
 #if HERMES_PARSE_JSX
@@ -1183,6 +1209,7 @@ std::shared_ptr<Context> createContext(
   if (cl::ParseFlow) {
     context->setParseFlow(ParseFlowSetting::ALL);
   }
+  context->setParseFlowComponentSyntax(cl::ParseFlowComponentSyntax);
 #endif
 
 #if HERMES_PARSE_TS
@@ -1910,7 +1937,7 @@ CompileResult processSourceFiles(
   Module M(context);
   sem::SemContext semCtx{};
 
-  if (context->getUseCJSModules()) {
+  if (cl::CommonJS) {
     // Allow the IR generation function to populate inputSourceMaps to ensure
     // proper source map ordering.
     if (!generateIRForSourcesAsCJSModules(

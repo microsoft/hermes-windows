@@ -77,8 +77,7 @@ static opt<unsigned> ExecutionTimeLimit(
 static int executeHBCBytecodeFromCL(
     std::unique_ptr<hbc::BCProvider> bytecode,
     const driver::BytecodeBufferInfo &info) {
-  auto recStats =
-      (cl::GCPrintStats || cl::GCBeforeStats) && !cl::StableInstructionCount;
+  auto recStats = (cl::GCPrintStats || cl::GCBeforeStats);
   ExecuteOptions options;
   options.runtimeConfig =
       vm::RuntimeConfig::Builder()
@@ -97,6 +96,7 @@ static int executeHBCBytecodeFromCL(
                             .withAllocInYoung(cl::GCAllocYoung)
                             .withRevertToYGAtTTI(cl::GCRevertToYGAtTTI)
                             .build())
+          .withEnableBlockScoping(cl::EnableBlockScoping)
           .withEnableEval(cl::EnableEval)
           .withVerifyEvalIR(cl::VerifyIR)
           .withOptimizedEval(cl::OptimizedEval)
@@ -104,6 +104,7 @@ static int executeHBCBytecodeFromCL(
           .withVMExperimentFlags(cl::VMExperimentFlags)
           .withES6Promise(cl::ES6Promise)
           .withES6Proxy(cl::ES6Proxy)
+          .withES6Class(cl::ES6Class)
           .withIntl(cl::Intl)
           .withMicrotaskQueue(cl::MicrotaskQueue)
           .withEnableSampleProfiling(cl::SampleProfiling)
@@ -121,7 +122,6 @@ static int executeHBCBytecodeFromCL(
   options.timeLimit = cl::ExecutionTimeLimit;
   options.stopAfterInit = cl::StopAfterInit;
   options.forceGCBeforeStats = cl::GCBeforeStats;
-  options.stabilizeInstructionCount = cl::StableInstructionCount;
   options.sampleProfiling = cl::SampleProfiling;
   options.heapTimeline = cl::HeapTimeline;
 
@@ -157,9 +157,11 @@ static vm::RuntimeConfig getReplRuntimeConfig() {
                                       .build())
               .withShouldRecordStats(cl::GCPrintStats)
               .build())
+      .withEnableBlockScoping(cl::EnableBlockScoping)
       .withVMExperimentFlags(cl::VMExperimentFlags)
       .withES6Promise(cl::ES6Promise)
       .withES6Proxy(cl::ES6Proxy)
+      .withES6Class(cl::ES6Class)
       .withIntl(cl::Intl)
       .withMicrotaskQueue(cl::MicrotaskQueue)
       .withEnableHermesInternal(cl::EnableHermesInternal)

@@ -43,6 +43,10 @@ export const HERMES_AST_VISITOR_KEYS = {
     returnType: 'Node',
     predicate: 'Node',
   },
+  AsExpression: {
+    expression: 'Node',
+    typeAnnotation: 'Node',
+  },
   AssignmentExpression: {
     left: 'Node',
     right: 'Node',
@@ -107,10 +111,37 @@ export const HERMES_AST_VISITOR_KEYS = {
     id: 'Node',
     typeParameters: 'Node',
   },
+  ComponentDeclaration: {
+    id: 'Node',
+    params: 'NodeList',
+    body: 'Node',
+    typeParameters: 'Node',
+    rendersType: 'Node',
+  },
+  ComponentParameter: {
+    name: 'Node',
+    local: 'Node',
+  },
+  ComponentTypeAnnotation: {
+    params: 'NodeList',
+    rest: 'Node',
+    typeParameters: 'Node',
+    rendersType: 'Node',
+  },
+  ComponentTypeParameter: {
+    name: 'Node',
+    typeAnnotation: 'Node',
+  },
   ConditionalExpression: {
     test: 'Node',
     alternate: 'Node',
     consequent: 'Node',
+  },
+  ConditionalTypeAnnotation: {
+    checkType: 'Node',
+    extendsType: 'Node',
+    trueType: 'Node',
+    falseType: 'Node',
   },
   ContinueStatement: {
     label: 'Node',
@@ -124,8 +155,19 @@ export const HERMES_AST_VISITOR_KEYS = {
     mixins: 'NodeList',
     body: 'Node',
   },
+  DeclareComponent: {
+    id: 'Node',
+    params: 'NodeList',
+    rest: 'Node',
+    typeParameters: 'Node',
+    rendersType: 'Node',
+  },
   DeclaredPredicate: {
     value: 'Node',
+  },
+  DeclareEnum: {
+    id: 'Node',
+    body: 'Node',
   },
   DeclareExportAllDeclaration: {
     source: 'Node',
@@ -139,6 +181,9 @@ export const HERMES_AST_VISITOR_KEYS = {
     id: 'Node',
     predicate: 'Node',
   },
+  DeclareHook: {
+    id: 'Node',
+  },
   DeclareInterface: {
     id: 'Node',
     typeParameters: 'Node',
@@ -151,6 +196,10 @@ export const HERMES_AST_VISITOR_KEYS = {
   },
   DeclareModuleExports: {
     typeAnnotation: 'Node',
+  },
+  DeclareNamespace: {
+    id: 'Node',
+    body: 'Node',
   },
   DeclareOpaqueType: {
     id: 'Node',
@@ -270,6 +319,19 @@ export const HERMES_AST_VISITOR_KEYS = {
     id: 'Node',
     typeParameters: 'Node',
   },
+  HookDeclaration: {
+    id: 'Node',
+    params: 'NodeList',
+    body: 'Node',
+    typeParameters: 'Node',
+    returnType: 'Node',
+  },
+  HookTypeAnnotation: {
+    params: 'NodeList',
+    returnType: 'Node',
+    rest: 'Node',
+    typeParameters: 'Node',
+  },
   Identifier: {
     typeAnnotation: 'Node',
   },
@@ -306,6 +368,9 @@ export const HERMES_AST_VISITOR_KEYS = {
     indexType: 'Node',
   },
   InferredPredicate: {},
+  InferTypeAnnotation: {
+    typeParameter: 'Node',
+  },
   InterfaceDeclaration: {
     id: 'Node',
     typeParameters: 'Node',
@@ -357,6 +422,7 @@ export const HERMES_AST_VISITOR_KEYS = {
   JSXOpeningElement: {
     name: 'Node',
     attributes: 'NodeList',
+    typeArguments: 'Node',
   },
   JSXOpeningFragment: {},
   JSXSpreadAttribute: {
@@ -366,6 +432,9 @@ export const HERMES_AST_VISITOR_KEYS = {
     expression: 'Node',
   },
   JSXText: {},
+  KeyofTypeAnnotation: {
+    argument: 'Node',
+  },
   LabeledStatement: {
     label: 'Node',
     body: 'Node',
@@ -426,6 +495,12 @@ export const HERMES_AST_VISITOR_KEYS = {
     id: 'Node',
     value: 'Node',
   },
+  ObjectTypeMappedTypeProperty: {
+    keyTparam: 'Node',
+    propType: 'Node',
+    sourceType: 'Node',
+    variance: 'Node',
+  },
   ObjectTypeProperty: {
     key: 'Node',
     value: 'Node',
@@ -457,9 +532,12 @@ export const HERMES_AST_VISITOR_KEYS = {
     value: 'Node',
     variance: 'Node',
     typeAnnotation: 'Node',
-    tsModifiers: 'Node',
   },
   QualifiedTypeIdentifier: {
+    qualification: 'Node',
+    id: 'Node',
+  },
+  QualifiedTypeofIdentifier: {
     qualification: 'Node',
     id: 'Node',
   },
@@ -511,6 +589,15 @@ export const HERMES_AST_VISITOR_KEYS = {
   TupleTypeAnnotation: {
     types: 'NodeList',
   },
+  TupleTypeLabeledElement: {
+    label: 'Node',
+    elementType: 'Node',
+    variance: 'Node',
+  },
+  TupleTypeSpreadElement: {
+    label: 'Node',
+    typeAnnotation: 'Node',
+  },
   TypeAlias: {
     id: 'Node',
     typeParameters: 'Node',
@@ -525,6 +612,10 @@ export const HERMES_AST_VISITOR_KEYS = {
   },
   TypeofTypeAnnotation: {
     argument: 'Node',
+    typeArguments: 'Node',
+  },
+  TypeOperator: {
+    typeAnnotation: 'Node',
   },
   TypeParameter: {
     bound: 'Node',
@@ -536,6 +627,10 @@ export const HERMES_AST_VISITOR_KEYS = {
   },
   TypeParameterInstantiation: {
     params: 'NodeList',
+  },
+  TypePredicate: {
+    parameterName: 'Node',
+    typeAnnotation: 'Node',
   },
   UnaryExpression: {
     argument: 'Node',
@@ -611,5 +706,8 @@ export const HERMES_AST_VISITOR_KEYS = {
   OptionalMemberExpression: {
     object: 'Node',
     property: 'Node',
+  },
+  ExportNamespaceSpecifier: {
+    exported: 'Node',
   },
 };

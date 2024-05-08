@@ -11,7 +11,9 @@ labels:
 ## Bug Description
 
 <!--
-  Please provide a clear and concise description of what the bug is.
+  Please provide a clear and concise description of what the bug is with the
+  latest version of React Native and Hermes. Unfortunately we are unable to
+  provide fixes for old versions of Hermes.
 
   If it's an exception, please include the screenshots, e.g. the React Native
   RedBox screen includes a symbolicated JavaScript stack trace with a stack trace
@@ -23,13 +25,18 @@ labels:
   <https://github.com/facebook/hermes/blob/HEAD/doc/ReactNativeIntegration.md#reporting-native-crashes>
   for instructions on reporting a native crash, including symbolicating the native
   stack trace.  Note this will only work with some versions of Hermes.
+
+  If you believe you have discovered a security vulnerability in Hermes, please
+  refrain from filing a public issue and instead submit it through the Meta Bug
+  Bounty program <https://www.facebook.com/whitehat>.
 -->
 
 - [ ] I have run `gradle clean` and confirmed this bug does not occur with JSC
+- [ ] The issue is reproducible with the latest version of React Native.
 
-Hermes version:
-React Native version (if any):
-OS version (if any):
+Hermes git revision (if applicable):
+React Native version:
+OS:
 Platform (most likely one of arm64-v8a, armeabi-v7a, x86, x86_64):
 
 ## Steps To Reproduce

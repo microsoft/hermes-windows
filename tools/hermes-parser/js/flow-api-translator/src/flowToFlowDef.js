@@ -12,13 +12,19 @@
 
 import type {
   AFunction,
+  AsExpression,
   BindingName,
   ClassBody,
   ClassDeclaration,
   ClassMember,
   ClassPropertyNameComputed,
   ClassPropertyNameNonComputed,
+  ComponentDeclaration,
+  ComponentParameter,
+  ComponentTypeParameter,
   DeclareClass,
+  DeclareComponent,
+  DeclareHook,
   DeclareFunction,
   DeclareOpaqueType,
   DeclareVariable,
@@ -31,6 +37,7 @@ import type {
   FunctionParameter,
   FunctionTypeAnnotation,
   FunctionTypeParam,
+  HookDeclaration,
   Identifier,
   ImportDeclaration,
   InterfaceDeclaration,
@@ -43,12 +50,14 @@ import type {
   ObjectTypeProperty,
   OpaqueType,
   Program,
+  RestElement,
   Statement,
   StringLiteral,
   TypeAlias,
   TypeAnnotation,
   TypeAnnotationType,
   TypeCastExpression,
+  RendersType,
   TypeParameterDeclaration,
   TypeParameterInstantiation,
   VariableDeclaration,
@@ -69,7 +78,12 @@ import {
 import {createTranslationContext} from './utils/TranslationUtils';
 import {asDetachedNode} from 'hermes-transform';
 import {translationError, flowFixMeOrError} from './utils/ErrorUtils';
-import {isExpression} from 'hermes-estree';
+import {
+  isExpression,
+  isStringLiteral,
+  isNumericLiteral,
+  isIdentifier,
+} from 'hermes-estree';
 
 const EMPTY_TRANSLATION_RESULT = [null, []];
 
@@ -356,8 +370,16 @@ function convertStatement(
   context: TranslationContext,
 ): TranslatedResult<ProgramStatement> {
   switch (stmt.type) {
+    case 'ComponentDeclaration': {
+      const [result, deps] = convertComponentDeclaration(stmt, context);
+      return [result, deps];
+    }
+    case 'HookDeclaration': {
+      const [result, deps] = convertHookDeclaration(stmt, context);
+      return [result, deps];
+    }
     case 'FunctionDeclaration': {
-      const [result, deps] = convertFunctionDeclation(stmt, context);
+      const [result, deps] = convertFunctionDeclaration(stmt, context);
       return [result, deps];
     }
     case 'ClassDeclaration': {
@@ -388,6 +410,7 @@ function convertStatement(
     case 'DeclareVariable':
     case 'DeclareFunction':
     case 'DeclareModule':
+    case 'DeclareNamespace':
     case 'DeclareInterface':
     case 'DeclareTypeAlias':
     case 'DeclareOpaqueType':
@@ -409,6 +432,10 @@ function convertExpressionToTypeAnnotation(
   context: TranslationContext,
 ): TranslatedResult<TypeAnnotationType> {
   switch (expr.type) {
+    case 'AsExpression': {
+      const [resultExpr, deps] = convertAsExpression(expr, context);
+      return [resultExpr, deps];
+    }
     case 'TypeCastExpression': {
       const [resultExpr, deps] = convertTypeCastExpression(expr, context);
       return [resultExpr, deps];
@@ -460,8 +487,9 @@ function convertObjectExpression(
       }
       case 'Property': {
         if (
-          prop.key.type !== 'Identifier' &&
-          prop.key.type !== 'StringLiteral'
+          !isIdentifier(prop.key) &&
+          !isStringLiteral(prop.key) &&
+          !isNumericLiteral(prop.key)
         ) {
           throw translationError(
             prop.key,
@@ -608,8 +636,34 @@ function convertExportDeclaration(
   context: TranslationContext,
 ): TranslatedResult<ProgramStatement> {
   switch (decl.type) {
+    case 'ComponentDeclaration': {
+      const [declDecl, deps] = convertComponentDeclaration(decl, context);
+      return [
+        opts.default
+          ? t.DeclareExportDefaultDeclaration({
+              declaration: declDecl,
+            })
+          : t.DeclareExportDeclarationNamedWithDeclaration({
+              declaration: declDecl,
+            }),
+        deps,
+      ];
+    }
+    case 'HookDeclaration': {
+      const [declDecl, deps] = convertHookDeclaration(decl, context);
+      return [
+        opts.default
+          ? t.DeclareExportDefaultDeclaration({
+              declaration: declDecl,
+            })
+          : t.DeclareExportDeclarationNamedWithDeclaration({
+              declaration: declDecl,
+            }),
+        deps,
+      ];
+    }
     case 'FunctionDeclaration': {
-      const [declDecl, deps] = convertFunctionDeclation(decl, context);
+      const [declDecl, deps] = convertFunctionDeclaration(decl, context);
       return [
         opts.default
           ? t.DeclareExportDefaultDeclaration({
@@ -744,6 +798,20 @@ function convertExportDefaultDeclaration(
   stmt: ExportDefaultDeclaration,
   context: TranslationContext,
 ): TranslatedResult<ProgramStatement> {
+  const expr = stmt.declaration;
+  if (isExpression(expr) && (expr: $FlowFixMe).type === 'Identifier') {
+    const name = ((expr: $FlowFixMe): Identifier).name;
+    const [declDecl, deps] = [
+      t.TypeofTypeAnnotation({argument: t.Identifier({name})}),
+      analyzeTypeDependencies(expr, context),
+    ];
+    return [
+      t.DeclareExportDefaultDeclaration({
+        declaration: declDecl,
+      }),
+      deps,
+    ];
+  }
   return convertExportDeclaration(stmt.declaration, {default: true}, context);
 }
 
@@ -814,6 +882,13 @@ function convertVariableDeclaration(
       ];
     }
 
+    if (init.type === 'Identifier') {
+      return [
+        t.TypeofTypeAnnotation({argument: t.Identifier({name: init.name})}),
+        analyzeTypeDependencies(init, context),
+      ];
+    }
+
     return convertExpressionToTypeAnnotation(init, context);
   })();
 
@@ -826,6 +901,7 @@ function convertVariableDeclaration(
         }),
         optional: false,
       }),
+      kind: stmt.kind,
     }),
     annotDeps,
   ];
@@ -961,8 +1037,9 @@ function convertClassMember(
         return EMPTY_TRANSLATION_RESULT;
       }
       if (
-        member.key.type !== 'Identifier' &&
-        member.key.type !== 'StringLiteral'
+        !isIdentifier(member.key) &&
+        !isStringLiteral(member.key) &&
+        !isNumericLiteral(member.key)
       ) {
         throw translationError(
           member.key,
@@ -997,8 +1074,9 @@ function convertClassMember(
         return EMPTY_TRANSLATION_RESULT;
       }
       if (
-        member.key.type !== 'Identifier' &&
-        member.key.type !== 'StringLiteral'
+        !isIdentifier(member.key) &&
+        !isStringLiteral(member.key) &&
+        !isNumericLiteral(member.key)
       ) {
         throw translationError(
           member.key,
@@ -1047,8 +1125,168 @@ function convertClassMember(
     }
   }
 }
+function convertComponentDeclaration(
+  comp: ComponentDeclaration,
+  context: TranslationContext,
+): TranslatedResult<DeclareComponent> {
+  const [resultTypeParams, typeParamsDeps] =
+    convertTypeParameterDeclarationOrNull(comp.typeParameters, context);
 
-function convertFunctionDeclation(
+  const [resultParams, resultRestParam, paramsAndRestDeps] =
+    convertComponentParameters(comp.params, context);
+
+  const [resultRendersType, rendersTypeDeps] = (() => {
+    const rendersType = comp.rendersType;
+    if (rendersType == null) {
+      return EMPTY_TRANSLATION_RESULT;
+    }
+
+    return [
+      asDetachedNode<RendersType>(rendersType),
+      analyzeTypeDependencies(rendersType, context),
+    ];
+  })();
+
+  return [
+    t.DeclareComponent({
+      id: comp.id,
+      params: resultParams,
+      rest: resultRestParam,
+      typeParameters: resultTypeParams,
+      rendersType: resultRendersType,
+    }),
+    [...typeParamsDeps, ...paramsAndRestDeps, ...rendersTypeDeps],
+  ];
+}
+
+type TranslatedComponentParametersResults = [
+  $ReadOnlyArray<DetachedNode<ComponentTypeParameter>>,
+  ?DetachedNode<ComponentTypeParameter>,
+  TranslatedDeps,
+];
+
+function convertComponentParameters(
+  params: $ReadOnlyArray<ComponentParameter | RestElement>,
+  context: TranslationContext,
+): TranslatedComponentParametersResults {
+  return params.reduce<TranslatedComponentParametersResults>(
+    ([resultParams, restParam, paramsDeps], param) => {
+      switch (param.type) {
+        case 'ComponentParameter': {
+          let optional = false;
+          let local = param.local;
+          if (local.type === 'AssignmentPattern') {
+            local = local.left;
+            optional = true;
+          }
+          if (!optional && local.type === 'Identifier') {
+            optional = local.optional;
+          }
+
+          const [typeAnnotationType, typeDeps] = convertTypeAnnotation(
+            local.typeAnnotation,
+            param,
+            context,
+          );
+
+          const resultParam = t.ComponentTypeParameter({
+            name: asDetachedNode(param.name),
+            typeAnnotation: typeAnnotationType,
+            optional,
+          });
+
+          return [
+            [...resultParams, resultParam],
+            restParam,
+            [...paramsDeps, ...typeDeps],
+          ];
+        }
+        case 'RestElement': {
+          if (restParam != null) {
+            throw translationError(
+              param,
+              `ComponentParameter: Multiple rest elements found`,
+              context,
+            );
+          }
+          const argument = param.argument;
+          if (
+            argument.type === 'AssignmentPattern' ||
+            argument.type === 'ArrayPattern' ||
+            argument.type === 'RestElement'
+          ) {
+            throw translationError(
+              param,
+              `ComponentParameter: Invalid RestElement usage`,
+              context,
+            );
+          }
+          const [typeAnnotationType, typeDeps] = convertTypeAnnotation(
+            argument.typeAnnotation,
+            argument,
+            context,
+          );
+
+          const resultRestParam = t.ComponentTypeParameter({
+            name: t.Identifier({
+              name: argument.type === 'Identifier' ? argument.name : 'rest',
+            }),
+            typeAnnotation: typeAnnotationType,
+            optional:
+              argument.type === 'Identifier' ? argument.optional : false,
+          });
+
+          return [resultParams, resultRestParam, [...paramsDeps, ...typeDeps]];
+        }
+      }
+    },
+    [[], null, []],
+  );
+}
+
+function convertHookDeclaration(
+  hook: HookDeclaration,
+  context: TranslationContext,
+): TranslatedResult<DeclareHook> {
+  const id = hook.id;
+  const returnType: TypeAnnotation =
+    hook.returnType ??
+    // $FlowFixMe[incompatible-type]
+    t.TypeAnnotation({typeAnnotation: t.VoidTypeAnnotation()});
+
+  const [resultReturnType, returnDeps] = convertTypeAnnotation(
+    returnType,
+    hook,
+    context,
+  );
+
+  const [resultParams, restParam, paramsDeps] = convertFunctionParameters(
+    hook.params,
+    context,
+  );
+
+  const [resultTypeParams, typeParamsDeps] =
+    convertTypeParameterDeclarationOrNull(hook.typeParameters, context);
+
+  const resultFunc = t.FunctionTypeAnnotation({
+    params: resultParams,
+    returnType: resultReturnType,
+    rest: restParam,
+    typeParameters: resultTypeParams,
+  });
+
+  const funcDeps = [...paramsDeps, ...returnDeps, ...typeParamsDeps];
+
+  return [
+    t.DeclareHook({
+      name: id.name,
+      functionType: resultFunc,
+    }),
+    [...funcDeps],
+  ];
+}
+
+function convertFunctionDeclaration(
   func: FunctionDeclaration,
   context: TranslationContext,
 ): TranslatedResult<DeclareFunction> {
@@ -1239,6 +1477,17 @@ function convertOpaqueType(
     }),
     [...typeParamsDeps, ...supertypeDeps],
   ];
+}
+
+function convertAsExpression(
+  asExpression: AsExpression,
+  context: TranslationContext,
+): TranslatedResult<TypeAnnotationType> {
+  return convertTypeAnnotationType(
+    asExpression.typeAnnotation,
+    asExpression,
+    context,
+  );
 }
 
 function convertTypeCastExpression(

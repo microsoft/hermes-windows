@@ -6,6 +6,7 @@
  */
 
 //RUN: %hermes -O -target=HBC %s -gc-sanitize-handles=0 | %FileCheck --match-full-lines %s
+//REQUIRES: !check_native_stack
 
 try {
   var proxy = new Proxy(function() {}, {});
