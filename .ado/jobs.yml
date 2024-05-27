@@ -36,6 +36,10 @@ jobs:
           BuildConfiguration: release
           BuildPlatform: arm64
           BuildAppPlatform: win32
+        ReleaseArm64ECWin32:
+          BuildConfiguration: release
+          BuildPlatform: arm64ec
+          BuildAppPlatform: win32
     variables:
       semanticVersion: $[ dependencies.Setup.outputs['setVersions.semanticVersion'] ]
       fileVersion: $[ dependencies.Setup.outputs['setVersions.fileVersion'] ]

@@ -3,7 +3,7 @@ param(
     [string]$WorkSpacePath = "$SourcesPath\workspace",
     [string]$OutputPath = "$WorkSpacePath\out",
     
-    [ValidateSet("x64", "x86", "arm64")]
+    [ValidateSet("x64", "x86", "arm64", "arm64ec")]
     [String[]]$Platform = @("x64"),
 
     [ValidateSet("x64", "x86", "arm64")]
@@ -83,6 +83,7 @@ function Get-VCVarsParam($plat = "x64", $arch = "win32") {
         "x64" {"x64"}
         "x86" {"x64_x86"}
         "arm64" {"x64_arm64"}
+        "arm64ec" {"x64_arm64"}
         default { "x64" }
     }
 
@@ -263,7 +264,7 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
         $genArgs += '-DCMAKE_SYSTEM_NAME=WindowsStore'
         $genArgs += '-DCMAKE_SYSTEM_VERSION="10.0.17763.0"'
         $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
-    } elseif ($Platform -eq "arm64") {
+    } elseif ($Platform -eq "arm64" || $Platform -eq "arm64ec") {
         $genArgs += '-DHERMES_MSVC_ARM64=On'
         $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
     }
@@ -280,7 +281,7 @@ function Invoke-Test-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath,
     if ($AppPlatform -eq "uwp") {
         $genArgs += '-DCMAKE_SYSTEM_NAME=WindowsStore'
         $genArgs += '-DCMAKE_SYSTEM_VERSION="10.0.17763"'
-    } elseif ($Platform -eq "arm64") {
+    } elseif ($Platform -eq "arm64" || $Platform -eq "arm64ec") {
         $genArgs += '-DHERMES_MSVC_ARM64=On'
         $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
     }
@@ -391,6 +392,11 @@ function Invoke-PrepareNugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $
 
 Invoke-RemoveUnusedFilesForComponentGovernance
 $StartTime = (Get-Date)
+
+if ($Platform -eq "arm64ec") {
+    $Env:CFLAGS = "-arm64EC"
+    $Env:CXXFLAGS = "-arm64EC"
+}
 
 $VCVARS_PATH = Find-VS-Path
 
