@@ -264,7 +264,7 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
         $genArgs += '-DCMAKE_SYSTEM_NAME=WindowsStore'
         $genArgs += '-DCMAKE_SYSTEM_VERSION="10.0.17763.0"'
         $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
-    } elseif ($Platform -eq "arm64" || $Platform -eq "arm64ec") {
+    } elseif ($Platform -eq "arm64" -or $Platform -eq "arm64ec") {
         $genArgs += '-DHERMES_MSVC_ARM64=On'
         $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
     }
@@ -281,7 +281,7 @@ function Invoke-Test-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath,
     if ($AppPlatform -eq "uwp") {
         $genArgs += '-DCMAKE_SYSTEM_NAME=WindowsStore'
         $genArgs += '-DCMAKE_SYSTEM_VERSION="10.0.17763"'
-    } elseif ($Platform -eq "arm64" || $Platform -eq "arm64ec") {
+    } elseif ($Platform -eq "arm64" -or $Platform -eq "arm64ec") {
         $genArgs += '-DHERMES_MSVC_ARM64=On'
         $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
     }
