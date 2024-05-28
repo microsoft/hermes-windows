@@ -269,6 +269,11 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
         $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
     }
 
+    if ($Platform -eq "arm64ec") {
+        $Env:CFLAGS = "-arm64EC"
+        $Env:CXXFLAGS = "-arm64EC"
+    }
+
     Invoke-BuildImpl $SourcesPath $buildPath $genArgs $targets $incrementalBuild $Platform $Configuration $AppPlatform
 }
 
@@ -392,11 +397,6 @@ function Invoke-PrepareNugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $
 
 Invoke-RemoveUnusedFilesForComponentGovernance
 $StartTime = (Get-Date)
-
-if ($Platform -eq "arm64ec") {
-    $Env:CFLAGS = "-arm64EC"
-    $Env:CXXFLAGS = "-arm64EC"
-}
 
 $VCVARS_PATH = Find-VS-Path
 
