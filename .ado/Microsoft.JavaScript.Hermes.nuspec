@@ -24,6 +24,9 @@
     <file src="$nugetroot$\lib\native\win32\release\arm64\**\*.*"
           target="build\native\win32\arm64"
           exclude="**\*.manifest;**\*.iobj;**\*.ipdb;**\*.pdb;**\*.exp;**\*.ilk" />
+    <file src="$nugetroot$\lib\native\win32\release\arm64ec\**\*.*"
+          target="build\native\win32\arm64ec"
+          exclude="**\*.manifest;**\*.iobj;**\*.ipdb;**\*.pdb;**\*.exp;**\*.ilk" />
     <file src="$nugetroot$\lib\native\win32\release\x64\**\*.*"
           target="build\native\win32\x64"
           exclude="**\*.manifest;**\*.iobj;**\*.ipdb;**\*.pdb;**\*.exp;**\*.ilk" />
