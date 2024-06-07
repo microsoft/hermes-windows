@@ -15,22 +15,20 @@
 #include <string>
 #include <vector>
 
-#ifndef JSI_EXPORT
-#ifdef _MSC_VER
-#ifdef CREATE_SHARED_LIBRARY
-#define JSI_EXPORT __declspec(dllexport)
-#else
-#define JSI_EXPORT
-#endif // CREATE_SHARED_LIBRARY
-#else // _MSC_VER
-#define JSI_EXPORT __attribute__((visibility("default")))
-#endif // _MSC_VER
-#endif // !defined(JSI_EXPORT)
-
 // JSI version defines set of features available in the API.
 // Each significant API change must be under a new version.
+// The JSI_VERSION can be provided as a parameter to compiler
+// or in the optional "jsi_version.h" file.
+
 #ifndef JSI_VERSION
-#define JSI_VERSION 10
+#if defined(__has_include) && __has_include(<jsi/jsi-version.h>)
+#include <jsi/jsi-version.h>
+#endif
+#endif
+
+#ifndef JSI_VERSION
+// Use the latest version by default
+#define JSI_VERSION 12
 #endif
 
 #if JSI_VERSION >= 3
@@ -44,6 +42,18 @@
 #else
 #define JSI_CONST_10
 #endif
+
+#ifndef JSI_EXPORT
+#ifdef _MSC_VER
+#ifdef CREATE_SHARED_LIBRARY
+#define JSI_EXPORT __declspec(dllexport)
+#else
+#define JSI_EXPORT
+#endif // CREATE_SHARED_LIBRARY
+#else // _MSC_VER
+#define JSI_EXPORT __attribute__((visibility("default")))
+#endif // _MSC_VER
+#endif // !defined(JSI_EXPORT)
 
 class FBJSRuntime;
 namespace facebook {
@@ -232,6 +242,15 @@ class JSI_EXPORT Runtime {
   /// when the JSI API is sufficient.
   virtual Value evaluatePreparedJavaScript(
       const std::shared_ptr<const PreparedJavaScript>& js) = 0;
+
+#if JSI_VERSION >= 12
+  /// Queues a microtask in the JavaScript VM internal Microtask (a.k.a. Job in
+  /// ECMA262) queue, to be executed when the host drains microtasks in
+  /// its event loop implementation.
+  ///
+  /// \param callback a function to be executed as a microtask.
+  virtual void queueMicrotask(const jsi::Function& callback) = 0;
+#endif
 
 #if JSI_VERSION >= 4
   /// Drain the JavaScript VM internal Microtask (a.k.a. Job in ECMA262) queue.
@@ -431,10 +450,12 @@ class JSI_EXPORT Runtime {
 
   virtual bool instanceOf(const Object& o, const Function& f) = 0;
 
+#if JSI_VERSION >= 11
   /// See Object::setExternalMemoryPressure.
   virtual void setExternalMemoryPressure(
       const jsi::Object& obj,
       size_t amount) = 0;
+#endif
 
   // These exist so derived classes can access the private parts of
   // Value, Symbol, String, and Object, which are all friends of Runtime.
@@ -895,6 +916,7 @@ class JSI_EXPORT Object : public Pointer {
   /// works.  I only need it in one place.)
   Array getPropertyNames(Runtime& runtime) const;
 
+#if JSI_VERSION >= 11
   /// Inform the runtime that there is additional memory associated with a given
   /// JavaScript object that is not visible to the GC. This can be used if an
   /// object is known to retain some native memory, and may be used to guide
@@ -904,6 +926,7 @@ class JSI_EXPORT Object : public Pointer {
   /// collected, the associated external memory will be considered freed and may
   /// no longer factor into GC decisions.
   void setExternalMemoryPressure(Runtime& runtime, size_t amt) const;
+#endif
 
  protected:
   void setPropertyValue(

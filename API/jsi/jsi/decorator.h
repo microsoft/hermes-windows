@@ -126,6 +126,11 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
       const std::shared_ptr<const PreparedJavaScript>& js) override {
     return plain().evaluatePreparedJavaScript(js);
   }
+#if JSI_VERSION >= 12
+  void queueMicrotask(const jsi::Function& callback) override {
+    return plain().queueMicrotask(callback);
+  }
+#endif
 #if JSI_VERSION >= 4
   bool drainMicrotasks(int maxMicrotasksHint) override {
     return plain().drainMicrotasks(maxMicrotasksHint);
@@ -262,9 +267,11 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   }
 #endif
 
+#if JSI_VERSION >= 11
   void setExternalMemoryPressure(const Object& obj, size_t amt) override {
     plain_.setExternalMemoryPressure(obj, amt);
   }
+#endif
 
   Value getProperty(const Object& o, const PropNameID& name) override {
     return plain_.getProperty(o, name);
