@@ -94,16 +94,18 @@ if(HERMES_THREAD_SAFETY_ANALYSIS)
 endif()
 
 add_hermes_library(synthTrace hermes_tracing.cpp SynthTrace.cpp TracingRuntime.cpp
-  LINK_LIBS libhermes hermesPlatform)
+  LINK_LIBS libhermes2 hermesPlatform)
 
 add_hermes_library(timerStats TimerStats.cpp LINK_LIBS jsi hermesSupport)
 
 add_hermes_library(traceInterpreter TraceInterpreter.cpp
-  LINK_LIBS libhermes hermesInstrumentation synthTrace synthTraceParser)
+  LINK_LIBS libhermes2 hermesInstrumentation synthTrace synthTraceParser)
 
 add_library(libhermes2 ${api_sources})
 target_link_libraries(libhermes2 PUBLIC jsi PRIVATE hermesVMRuntime ${INSPECTOR_DEPS})
 target_link_options(libhermes2 PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
+
+# Export the required header directory
 target_include_directories(libhermes2 PUBLIC .. ../../public ${HERMES_JSI_DIR})
 
 add_library(libhermes SHARED ${api_sources2})
@@ -156,7 +158,6 @@ set_target_properties(libhermes PROPERTIES
   OUTPUT_NAME hermes
 )
 
-# Create a lean version of libhermes in the same way.
 add_library(libhermes_lean ${api_sources})
 target_link_libraries(libhermes_lean PUBLIC jsi PRIVATE hermesVMRuntimeLean ${INSPECTOR_DEPS})
 target_link_options(libhermes_lean PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
@@ -171,7 +172,7 @@ target_include_directories(libhermes_lean PUBLIC
 set_target_properties(libhermes_lean PROPERTIES OUTPUT_NAME hermes_lean)
 
 if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
-  set_target_properties(libhermes PROPERTIES
+  set_target_properties(libhermes2 PROPERTIES
     FRAMEWORK TRUE
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION}
@@ -188,26 +189,26 @@ if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
     MACOSX_PACKAGE_LOCATION Headers/Public
   )
   if(HERMES_ENABLE_BITCODE)
-    target_compile_options(libhermes PUBLIC "-fembed-bitcode")
-    target_link_options(libhermes PUBLIC "-fembed-bitcode")
+    target_compile_options(libhermes2 PUBLIC "-fembed-bitcode")
+    target_link_options(libhermes2 PUBLIC "-fembed-bitcode")
   endif()
   # Define the deployment target in the frameworks metadata
   if(HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone")
-    add_custom_command(TARGET libhermes POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes>/Info.plist
+    add_custom_command(TARGET libhermes2 POST_BUILD
+      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes2>/Info.plist
     )
   elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "catalyst")
-    add_custom_command(TARGET libhermes POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes>/Resources/Info.plist
+    add_custom_command(TARGET libhermes2 POST_BUILD
+      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes2>/Resources/Info.plist
     )
   elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "macos")
-    add_custom_command(TARGET libhermes POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes>/Resources/Info.plist
+    add_custom_command(TARGET libhermes2 POST_BUILD
+      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes2>/Resources/Info.plist
     )
   endif()
 endif()
 
-install(TARGETS libhermes
+install(TARGETS libhermes2
   RUNTIME DESTINATION bin
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
@@ -222,11 +223,11 @@ install(DIRECTORY "${PROJECT_SOURCE_DIR}/API/hermes" DESTINATION include
 # Largely inspired by https://github.com/llvm/llvm-project/blob/6701993027f8af172d7ba697884459261b00e3c6/llvm/cmake/modules/AddLLVM.cmake#L1934-L1986
 if(HERMES_BUILD_APPLE_DSYM)
   if(CMAKE_CXX_FLAGS MATCHES "-flto")
-    set(lto_object ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/libhermes-lto.o)
-    set_property(TARGET libhermes APPEND_STRING PROPERTY LINK_FLAGS " -Wl,-object_path_lto,${lto_object}")
+    set(lto_object ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/libhermes2-lto.o)
+    set_property(TARGET libhermes2 APPEND_STRING PROPERTY LINK_FLAGS " -Wl,-object_path_lto,${lto_object}")
   endif()
 
-  get_target_property(DSYM_PATH libhermes LOCATION)
+  get_target_property(DSYM_PATH libhermes2 LOCATION)
   if(HERMES_BUILD_APPLE_FRAMEWORK)
     get_filename_component(DSYM_PATH ${DSYM_PATH} DIRECTORY)
   endif()
@@ -235,8 +236,8 @@ if(HERMES_BUILD_APPLE_DSYM)
   if(NOT CMAKE_DSYMUTIL)
     set(CMAKE_DSYMUTIL xcrun dsymutil)
   endif()
-  add_custom_command(TARGET libhermes POST_BUILD
-    COMMAND ${CMAKE_DSYMUTIL} $<TARGET_FILE:libhermes> --out ${DSYM_PATH}
+  add_custom_command(TARGET libhermes2 POST_BUILD
+    COMMAND ${CMAKE_DSYMUTIL} $<TARGET_FILE:libhermes2> --out ${DSYM_PATH}
     BYPRODUCTS ${DSYM_PATH}
   )
 

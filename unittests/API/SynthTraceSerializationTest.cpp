@@ -239,7 +239,7 @@ TEST_F(SynthTraceSerializationTest, TimeIsPrinted) {
                      0xac, 0xcb, 0x02, 0x05, 0x5a, 0x4f}};
   // JSON emitters escape forward slashes.
   EXPECT_EQ(
-      R"({"type":"BeginExecJSRecord","time":100,"sourceURL":"file:///file.js","sourceHash":"6440b537af26795e5f452bcd320faccb02055a4f","sourceIsBytecode":false})",
+      R"({"type":"BeginExecJSRecord","time":100,"sourceURL":"file:\/\/\/file.js","sourceHash":"6440b537af26795e5f452bcd320faccb02055a4f","sourceIsBytecode":false})",
       to_string(SynthTrace::BeginExecJSRecord(
           std::chrono::milliseconds(100), "file:///file.js", hash, false)));
 }

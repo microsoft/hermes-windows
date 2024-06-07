@@ -288,7 +288,7 @@ set(HERMES_ENABLE_TEST_SUITE ON CACHE BOOL
   "Enable the test suite")
 
 set(HERMES_BUILD_APPLE_FRAMEWORK ON CACHE BOOL
-  "Whether to build the libhermes target as a framework bundle or dylib on Apple platforms")
+  "Whether to build the libhermes2 target as a framework bundle or dylib on Apple platforms")
 
 set(HERMES_BUILD_APPLE_DSYM OFF CACHE BOOL
   "Whether to build a DWARF debugging symbols bundle")
@@ -347,7 +347,7 @@ if (HERMES_STATIC_LINK)
 endif()
 
 if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
-# Check if the linker supports deleting unused sections and ICF.
+  # Check if the linker supports deleting unused sections and ICF.
   # We can't simply CHECK_CXX_COMPILER_FLAG("-Wl,--gc-sections" ..) because CMake
   # will compile and link separately and only passes the flag during compilation.
   # TODO: Use check_linker_flag once we have CMake 3.18.
@@ -507,8 +507,6 @@ if(HERMES_SLOW_DEBUG)
       COMPILE_DEFINITIONS $<$<CONFIG:Debug>:HERMES_SLOW_DEBUG>)
 endif()
 
-set(HERMES_ASSUMED_BUILD_MODE_IN_LIT_TEST $<IF:$<CONFIG:Debug>,dbg,opt>)
-
 if (HERMES_HARDENED)
   add_definitions(-DHERMES_HARDENED)
 endif()
@@ -619,7 +617,7 @@ endif()
 
 # If we have no ICU, then error out.
 if (NOT ICU_FOUND)
-message(FATAL_ERROR "Unable to find ICU for ${CMAKE_SYSTEM_VERSION}.")
+  message(FATAL_ERROR "Unable to find ICU for ${CMAKE_SYSTEM_VERSION}.")
 endif()
 
 # Declare a function that links ICU for the given target.

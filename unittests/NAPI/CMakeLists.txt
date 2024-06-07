@@ -46,13 +46,21 @@ set(NAPITests
   test_symbol.cpp
   test_typedarray.cpp
   )
-
 # Turn on EH and RTTI for APITests
-set(HERMES_ENABLE_EH ON)
-set(HERMES_ENABLE_RTTI ON)
+set(HERMES_ENABLE_EH_RTTI ON)
 # For some reason (bug?) add_unittest() is clearing LLVM_REQUIRES_RTTI, so
 # we need to set this one.
 set(LLVM_ENABLE_RTTI ON)
+
+
+# Enable exeption
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
+
+# Enable RTTI
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR")
+
+# Generate PDBs
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi")
 
 add_hermes_unittest(NAPITests ${NAPITests} LINK_LIBS hermesNapi)
 target_link_libraries(NAPITests hermesNapi libhermes)

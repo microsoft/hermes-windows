@@ -11,7 +11,7 @@ add_hermes_tool(hcds
 
 # TODO: Even though this does not use llvh at all, a quirk of our build is that
 #       pthread is found and provided by llvh.
-target_link_libraries(hcds libhermes LLVHSupport)
+target_link_libraries(hcds libhermes2 LLVHSupport)
 
 install(TARGETS hcds
   RUNTIME DESTINATION bin

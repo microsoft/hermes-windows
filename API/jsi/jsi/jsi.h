@@ -430,7 +430,7 @@ class JSI_EXPORT Runtime {
   virtual bool strictEquals(const Object& a, const Object& b) const = 0;
 
   virtual bool instanceOf(const Object& o, const Function& f) = 0;
-//TODO: (vmoroz) add version for setExternalMemoryPressure
+
   /// See Object::setExternalMemoryPressure.
   virtual void setExternalMemoryPressure(
       const jsi::Object& obj,
@@ -895,7 +895,6 @@ class JSI_EXPORT Object : public Pointer {
   /// works.  I only need it in one place.)
   Array getPropertyNames(Runtime& runtime) const;
 
-  //TODO: (vmoroz) add version for setExternalMemoryPressure
   /// Inform the runtime that there is additional memory associated with a given
   /// JavaScript object that is not visible to the GC. This can be used if an
   /// object is known to retain some native memory, and may be used to guide

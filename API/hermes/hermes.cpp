@@ -710,8 +710,6 @@ class HermesRuntimeImpl final : public HermesRuntime,
   void checkStatus(vm::ExecutionStatus);
   vm::HermesValue stringHVFromAscii(const char *ascii, size_t length);
   vm::HermesValue stringHVFromUtf8(const uint8_t *utf8, size_t length);
-  size_t getLength(vm::Handle<vm::ArrayImpl> arr);
-  size_t getByteLength(vm::Handle<vm::JSArrayBuffer> arr);
   std::string utf8FromStringView(vm::StringView view);
 
   /// Extract a UTF-8 message from the given exception \p ex as UTF-16. Uses
@@ -2372,27 +2370,6 @@ vm::HermesValue HermesRuntimeImpl::stringHVFromUtf8(
       runtime_, llvh::makeArrayRef(utf8, length), IgnoreInputErrors);
   checkStatus(strRes.getStatus());
   return *strRes;
-}
-
-size_t HermesRuntimeImpl::getLength(vm::Handle<vm::ArrayImpl> arr) {
-  auto res = vm::JSObject::getNamed_RJS(
-      arr, runtime_, vm::Predefined::getSymbolID(vm::Predefined::length));
-  checkStatus(res.getStatus());
-  if (!(*res)->isNumber()) {
-    throw jsi::JSError(*this, "getLength: property 'length' is not a number");
-  }
-  return static_cast<size_t>((*res)->getDouble());
-}
-
-size_t HermesRuntimeImpl::getByteLength(vm::Handle<vm::JSArrayBuffer> arr) {
-  auto res = vm::JSObject::getNamed_RJS(
-      arr, runtime_, vm::Predefined::getSymbolID(vm::Predefined::byteLength));
-  checkStatus(res.getStatus());
-  if (!(*res)->isNumber()) {
-    throw jsi::JSError(
-        *this, "getLength: property 'byteLength' is not a number");
-  }
-  return static_cast<size_t>((*res)->getDouble());
 }
 
 void HermesRuntimeImpl::throwPendingError() {
