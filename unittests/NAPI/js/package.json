@@ -5,10 +5,10 @@
     "postinstall": "tar -c -f node_modules.tar node_modules & md5-file node_modules.tar > node_modules.md5"
   },
   "devDependencies": {
-    "@babel/cli": "^7.18.10",
-    "@babel/core": "^7.18.10",
-    "@babel/runtime": "^7.18.9",
+    "@babel/cli": "^7.24.7",
+    "@babel/core": "^7.24.7",
+    "@babel/runtime": "^7.24.7",
     "md5-file": "^5.0.0",
-    "metro-react-native-babel-preset": "^0.70.3"
+    "metro-react-native-babel-preset": "^0.77.0"
   }
 }
