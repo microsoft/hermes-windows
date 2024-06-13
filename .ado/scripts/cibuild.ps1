@@ -113,7 +113,9 @@ function Get-CMakeConfiguration($config) {
 }
 
 function Invoke-RemoveUnusedFilesForComponentGovernance() {
-    Remove-Item -Path ".\unsupported\juno" -Force -Recurse
+    if (!(Test-Path -Path ".\unsupported\juno")) {
+        Remove-Item -Path ".\unsupported\juno" -Force -Recurse
+    }
 }
 
 function Invoke-Environment($Command, $arg) {
@@ -246,11 +248,9 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
     $genArgs = @();
     get-CommonArgs $Platform $Configuration $AppPlatform ([ref]$genArgs)
 
-    $targets = @('libhermes');
+    $targets = @('libshared');
 
     $genArgs += '-DHERMES_ENABLE_DEBUGGER=ON'
-
-    $genArgs += '-DHERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB=ON'
 
     if ($AppPlatform -eq "uwp") {
         # Link against default ICU libraries in Windows 10.
@@ -321,9 +321,9 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
 
     $RNDIR = Join-Path $buildPath "_deps\reactnative-src"
 
-    Copy-Item "$buildPath\API\hermes\hermes.dll" -Destination $finalOutputPath -force | Out-Null
-    Copy-Item "$buildPath\API\hermes\hermes.lib" -Destination $finalOutputPath -force | Out-Null
-    Copy-Item "$buildPath\API\hermes\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
+    Copy-Item "$buildPath\API\hermes_shared\hermes.dll" -Destination $finalOutputPath -force | Out-Null
+    Copy-Item "$buildPath\API\hermes_shared\hermes.lib" -Destination $finalOutputPath -force | Out-Null
+    Copy-Item "$buildPath\API\hermes_shared\hermes.pdb" -Destination $finalOutputPath -force | Out-Null
 
     if (!(Test-Path -Path "$OutputPath\lib\uap\")) {
         New-Item -ItemType "directory" -Path "$OutputPath\lib\uap\" | Out-Null
@@ -361,11 +361,11 @@ function Copy-Headers($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Con
 
     Copy-Item "$SourcesPath\API\jsi\jsi\*" -Destination "$OutputPath\build\native\include\jsi" -force -Recurse
 
-    Copy-Item "$SourcesPath\API\node-api\js_native_api.h" -Destination "$OutputPath\build\native\include\node-api" -force
-    Copy-Item "$SourcesPath\API\node-api\js_native_api_types.h" -Destination "$OutputPath\build\native\include\node-api" -force
-    Copy-Item "$SourcesPath\API\node-api\js_runtime_api.h" -Destination "$OutputPath\build\native\include\node-api" -force
+    Copy-Item "$SourcesPath\API\hermes_shared\node-api\js_native_api.h" -Destination "$OutputPath\build\native\include\node-api" -force
+    Copy-Item "$SourcesPath\API\hermes_shared\node-api\js_native_api_types.h" -Destination "$OutputPath\build\native\include\node-api" -force
+    Copy-Item "$SourcesPath\API\hermes_shared\node-api\js_runtime_api.h" -Destination "$OutputPath\build\native\include\node-api" -force
 
-    Copy-Item "$SourcesPath\API\hermes\hermes_api.h" -Destination "$OutputPath\build\native\include\hermes" -force
+    Copy-Item "$SourcesPath\API\hermes_shared\hermes_api.h" -Destination "$OutputPath\build\native\include\hermes" -force
 }
 
 function Invoke-PrepareNugetPackage($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {

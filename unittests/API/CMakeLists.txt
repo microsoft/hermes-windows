@@ -53,7 +53,7 @@ set(LLVM_ENABLE_RTTI ON)
 
 add_hermes_unittest(APITests ${APITestsSources})
 
-target_link_libraries(APITests libhermes2 compileJS SegmentTestCompile traceInterpreter
+target_link_libraries(APITests libhermes compileJS SegmentTestCompile traceInterpreter
                                timerStats hermesABIRuntimeWrapper hermesabi hermesSandboxRuntime
                                cdpInternal)
 

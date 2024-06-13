@@ -69,16 +69,6 @@ set(api_sources
   ${INSPECTOR_API_SOURCES}
   )
 
-set(api_sources2
-  ${api_sources}
-  hermes_napi.cpp
-  MurmurHash.cpp
-  )
-
-if(WIN32)
-  list(APPEND api_sources2 hermes_win.cpp)
-endif()
-
 file(GLOB api_headers ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 file(GLOB api_public_headers ${PROJECT_SOURCE_DIR}/public/hermes/Public/*.h)
 
@@ -94,85 +84,33 @@ if(HERMES_THREAD_SAFETY_ANALYSIS)
 endif()
 
 add_hermes_library(synthTrace hermes_tracing.cpp SynthTrace.cpp TracingRuntime.cpp
-  LINK_LIBS libhermes2 hermesPlatform)
+  LINK_LIBS libhermes hermesPlatform)
 
 add_hermes_library(timerStats TimerStats.cpp LINK_LIBS jsi hermesSupport)
 
 add_hermes_library(traceInterpreter TraceInterpreter.cpp
-  LINK_LIBS libhermes2 hermesInstrumentation synthTrace synthTraceParser)
+  LINK_LIBS libhermes hermesInstrumentation synthTrace synthTraceParser)
 
-add_library(libhermes2 ${api_sources})
-target_link_libraries(libhermes2 PUBLIC jsi PRIVATE hermesVMRuntime ${INSPECTOR_DEPS})
-target_link_options(libhermes2 PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
-
-# Export the required header directory
-target_include_directories(libhermes2 PUBLIC .. ../../public ${HERMES_JSI_DIR})
-
-add_library(libhermes SHARED ${api_sources2})
-target_link_libraries(libhermes PUBLIC jsi PRIVATE hermesVMRuntime hermesNapi hermesinspector ${INSPECTOR_DEPS})
+add_library(libhermes ${api_sources})
+target_link_libraries(libhermes PUBLIC jsi PRIVATE hermesVMRuntime ${INSPECTOR_DEPS})
 target_link_options(libhermes PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 
-if (WIN32)
-  configure_file(version.rc.in version.rc @ONLY)
-  target_sources(libhermes PRIVATE  ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
-endif()
-
 # Export the required header directory
-target_include_directories(libhermes PUBLIC
-  ..
-  ../../public
-  ../node-api
-  ${HERMES_JSI_DIR}
-  ${REACT_NATIVE_SOURCE}/ReactCommon
-  ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
-  ${REACT_NATIVE_SOURCE_72}/ReactCommon)
+target_include_directories(libhermes PUBLIC .. ../../public ${HERMES_JSI_DIR})
 
-if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
-  # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
-  set(compile_flags "")
+# Avoid becoming liblibhermes (and there's already a target called 'hermes')
+# TODO: (vmoroz) Make conditional
+#set_target_properties(libhermes PROPERTIES OUTPUT_NAME hermes)
 
-  # Enable exeption
-  set(compile_flags "${compile_flags} /EHsc")
-
-  # Enable RTTI
-  set(compile_flags "${compile_flags} /GR")
-
-  # Generate PDBs
-  set(compile_flags "${compile_flags} /Zi")
-
-  set(link_flags_debug "/DEBUG")
-  # Use /OPT:NOICF because hermes associates function pointer with its name.
-  # The optimization that merges functions with the same body breaks that code.
-  # See getFunctionNameImpl in lib\VM\JSNativeFunctions.cpp.
-  set(link_flags_release "/DEBUG;/DEBUGTYPE:CV$<COMMA>FIXUP;/OPT:REF;/OPT:NOICF;/INCREMENTAL:NO")
-  if(CMAKE_VS_PLATFORM_NAME MATCHES "^(x64|x86|Win32)$")
-    # CETCOMPAT is not supported by ARM or ARM64
-    list(APPEND link_flags_release "/CETCOMPAT")
-  endif()
-endif()
-
-set_target_properties(libhermes PROPERTIES
-  COMPILE_FLAGS "${compile_flags}"
-  LINK_OPTIONS "$<IF:$<CONFIG:Debug>,${link_flags_debug},${link_flags_release}>"
-  # Avoid becoming liblibhermes (and there's already a target called 'hermes')
-  OUTPUT_NAME hermes
-)
-
+# Create a lean version of libhermes in the same way.
 add_library(libhermes_lean ${api_sources})
 target_link_libraries(libhermes_lean PUBLIC jsi PRIVATE hermesVMRuntimeLean ${INSPECTOR_DEPS})
 target_link_options(libhermes_lean PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
-target_include_directories(libhermes_lean PUBLIC
-  ..
-  ../../public
-  ../node-api
-  ${HERMES_JSI_DIR}
-  ${REACT_NATIVE_SOURCE}/ReactCommon
-  ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
-  ${REACT_NATIVE_SOURCE_72}/ReactCommon)
+target_include_directories(libhermes_lean PUBLIC .. ../../public ${HERMES_JSI_DIR})
 set_target_properties(libhermes_lean PROPERTIES OUTPUT_NAME hermes_lean)
 
 if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
-  set_target_properties(libhermes2 PROPERTIES
+  set_target_properties(libhermes PROPERTIES
     FRAMEWORK TRUE
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION}
@@ -189,26 +127,26 @@ if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
     MACOSX_PACKAGE_LOCATION Headers/Public
   )
   if(HERMES_ENABLE_BITCODE)
-    target_compile_options(libhermes2 PUBLIC "-fembed-bitcode")
-    target_link_options(libhermes2 PUBLIC "-fembed-bitcode")
+    target_compile_options(libhermes PUBLIC "-fembed-bitcode")
+    target_link_options(libhermes PUBLIC "-fembed-bitcode")
   endif()
   # Define the deployment target in the frameworks metadata
   if(HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone")
-    add_custom_command(TARGET libhermes2 POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes2>/Info.plist
+    add_custom_command(TARGET libhermes POST_BUILD
+      COMMAND /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes>/Info.plist
     )
   elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "catalyst")
-    add_custom_command(TARGET libhermes2 POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes2>/Resources/Info.plist
+    add_custom_command(TARGET libhermes POST_BUILD
+      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes>/Resources/Info.plist
     )
   elseif(HERMES_APPLE_TARGET_PLATFORM MATCHES "macos")
-    add_custom_command(TARGET libhermes2 POST_BUILD
-      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes2>/Resources/Info.plist
+    add_custom_command(TARGET libhermes POST_BUILD
+      COMMAND /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string ${CMAKE_OSX_DEPLOYMENT_TARGET}" $<TARGET_FILE_DIR:libhermes>/Resources/Info.plist
     )
   endif()
 endif()
 
-install(TARGETS libhermes2
+install(TARGETS libhermes
   RUNTIME DESTINATION bin
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
@@ -223,11 +161,11 @@ install(DIRECTORY "${PROJECT_SOURCE_DIR}/API/hermes" DESTINATION include
 # Largely inspired by https://github.com/llvm/llvm-project/blob/6701993027f8af172d7ba697884459261b00e3c6/llvm/cmake/modules/AddLLVM.cmake#L1934-L1986
 if(HERMES_BUILD_APPLE_DSYM)
   if(CMAKE_CXX_FLAGS MATCHES "-flto")
-    set(lto_object ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/libhermes2-lto.o)
-    set_property(TARGET libhermes2 APPEND_STRING PROPERTY LINK_FLAGS " -Wl,-object_path_lto,${lto_object}")
+    set(lto_object ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/libhermes-lto.o)
+    set_property(TARGET libhermes APPEND_STRING PROPERTY LINK_FLAGS " -Wl,-object_path_lto,${lto_object}")
   endif()
 
-  get_target_property(DSYM_PATH libhermes2 LOCATION)
+  get_target_property(DSYM_PATH libhermes LOCATION)
   if(HERMES_BUILD_APPLE_FRAMEWORK)
     get_filename_component(DSYM_PATH ${DSYM_PATH} DIRECTORY)
   endif()
@@ -236,8 +174,8 @@ if(HERMES_BUILD_APPLE_DSYM)
   if(NOT CMAKE_DSYMUTIL)
     set(CMAKE_DSYMUTIL xcrun dsymutil)
   endif()
-  add_custom_command(TARGET libhermes2 POST_BUILD
-    COMMAND ${CMAKE_DSYMUTIL} $<TARGET_FILE:libhermes2> --out ${DSYM_PATH}
+  add_custom_command(TARGET libhermes POST_BUILD
+    COMMAND ${CMAKE_DSYMUTIL} $<TARGET_FILE:libhermes> --out ${DSYM_PATH}
     BYPRODUCTS ${DSYM_PATH}
   )
 
