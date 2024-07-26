@@ -106,36 +106,11 @@ jobs:
         displayName: '[Test] - To be Added via bug #77'
 
       - ${{ if not(parameters.isPublish) }}:
-        - script: mkdir $(Build.ArtifactStagingDirectory)\_manifest\$(BuildPlatform)\$(BuildFlavor)
-          displayName: 📒 Prep for Manifest
-
-        - task: AzureArtifacts.manifest-generator-task.manifest-generator-task.ManifestGeneratorTask@0
-          displayName: 📒 Generate Manifest
-          inputs:
-            BuildDropPath: $(Build.ArtifactStagingDirectory)
-            ManifestDirPath: $(Build.ArtifactStagingDirectory)/_manifest/$(BuildPlatform)/$(BuildFlavor)
-
         - task: PublishBuildArtifacts@1
           displayName: "Publish artifacts"
           inputs:
             artifactName: HermesArtifacts
             pathtoPublish: $(Build.ArtifactStagingDirectory)
-
-      - task: ComponentGovernanceComponentDetection@0
-        inputs:
-          ignoreDirectories: 'website'
-
-      # Guardian does not handle cmake, so manually running Binskim
-      - task: BinSkim@3
-        displayName: Run Binskim Analysis
-        inputs:
-            InputType: 'Basic'
-            Function: 'analyze'
-            AnalyzeTarget: $(Build.ArtifactStagingDirectory)/**/*.dll
-            AnalyzeVerbose: true
-            toolVersion: 'LatestPreRelease'
-        continueOnError: true
-        condition: and(eq(variables.BuildConfiguration, 'Release'), not(eq(variables.BuildPlatform, 'arm64')))
 
       # Make symbols available through http://symweb.
       - task: PublishSymbols@2
