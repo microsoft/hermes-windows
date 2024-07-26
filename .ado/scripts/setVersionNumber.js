@@ -42,7 +42,7 @@ function computeVersion() {
     }
 
     // $TODO DO NOT CHECK IN, FOR TESTING ONLY.
-    if (sourceBranch === "refs/heads/1espt") {
+    if (sourceBranch === "refs/heads/yicyao/cg") {
         return computeMainVersion();
       }
 
