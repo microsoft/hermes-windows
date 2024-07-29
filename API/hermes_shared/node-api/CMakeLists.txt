@@ -3,10 +3,11 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_library(hermesNodeApi INTERFACE
+  js_native_api_types.h
+  js_native_api.h
+  js_runtime_api.h)
 
-add_library(hermesNodeApi INTERFACE)
 target_include_directories(hermesNodeApi INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/API/node-api/" DESTINATION include

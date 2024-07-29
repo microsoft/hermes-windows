@@ -251,6 +251,7 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
     $targets = @('libshared');
 
     $genArgs += '-DHERMES_ENABLE_DEBUGGER=ON'
+    $genArgs += '-DHERMES_ENABLE_INTL=ON'
 
     if ($AppPlatform -eq "uwp") {
         # Link against default ICU libraries in Windows 10.
