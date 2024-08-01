@@ -146,6 +146,24 @@ if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
   endif()
 endif()
 
+if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
+  # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
+  set(compile_flags "")
+
+  # Enable exeption
+  set(compile_flags "${compile_flags} /EHsc")
+
+  # Enable RTTI
+  set(compile_flags "${compile_flags} /GR")
+
+  # Generate PDBs
+  set(compile_flags "${compile_flags} /Zi")
+endif()
+
+set_target_properties(libhermes PROPERTIES
+  COMPILE_FLAGS "${compile_flags}"
+)
+
 install(TARGETS libhermes
   RUNTIME DESTINATION bin
   LIBRARY DESTINATION lib
