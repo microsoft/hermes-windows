@@ -1723,6 +1723,12 @@ class NodeApiEnvironment final {
       napi_status onException,
       TResult *result) noexcept;
 
+  template <class T>
+  napi_status checkCallResult(const vm::CallResult<T> &value) noexcept;
+
+  template <class T>
+  napi_status checkCallResult(const T & /*value*/) noexcept;
+
  private:
   // Controls the lifetime of this class instances.
   std::atomic<int> refCount_{1};
@@ -3017,8 +3023,8 @@ class NodeApiScriptModel final {
 };
 
 // Conversion routines from double to int32, uin32 and int64.
-// The code is adapted from V8 source code to match the Node-API for V8 behavior.
-// https://github.com/v8/v8/blob/main/src/numbers/conversions-inl.h
+// The code is adapted from V8 source code to match the Node-API for V8
+// behavior. https://github.com/v8/v8/blob/main/src/numbers/conversions-inl.h
 // https://github.com/v8/v8/blob/main/src/base/numbers/double.h
 class NodeApiDoubleConversion final {
  public:
@@ -6771,14 +6777,14 @@ napi_status NodeApiEnvironment::setOptionalResult(
   if (result) {
     return setResultUnsafe(std::forward<T>(value), result);
   }
-  return clearLastNativeError();
+  return checkCallResult(std::forward<T>(value));
 }
 
 template <class T>
 napi_status NodeApiEnvironment::setOptionalResult(
-    T && /*value*/,
+    T &&value,
     std::nullptr_t) noexcept {
-  return clearLastNativeError();
+  return checkCallResult(std::forward<T>(value));
 }
 
 napi_status NodeApiEnvironment::setPredefinedResult(
@@ -6857,6 +6863,18 @@ napi_status NodeApiEnvironment::setResultUnsafe(
     TResult *result) noexcept {
   CHECK_NAPI(checkJSErrorStatus(value, onException));
   return setResultUnsafe(std::move(*value), result);
+}
+
+template <class T>
+napi_status NodeApiEnvironment::checkCallResult(
+    const vm::CallResult<T> &value) noexcept {
+  CHECK_NAPI(checkJSErrorStatus(value, napi_generic_failure));
+  return clearLastNativeError();
+}
+
+template <class T>
+napi_status NodeApiEnvironment::checkCallResult(const T & /*value*/) noexcept {
+  return clearLastNativeError();
 }
 
 } // namespace node_api
