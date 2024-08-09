@@ -11,6 +11,7 @@
 #include <android/log.h>
 #elif defined(__APPLE__)
 #include <os/log.h>
+#include <stdio.h>
 #elif defined(_MSC_VER)
 #include <windows.h>
 #include <TraceLoggingProvider.h>

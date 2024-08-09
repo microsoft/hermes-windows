@@ -567,6 +567,12 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::evaluatePreparedJavaScript(js);
   }
+#if JSI_VERSION >= 12
+  void queueMicrotask(const Function& callback) override {
+    Around around{with_};
+    RD::queueMicrotask(callback);
+  }
+#endif
 #if JSI_VERSION >= 4
   bool drainMicrotasks(int maxMicrotasksHint) override {
     Around around{with_};

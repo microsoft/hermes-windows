@@ -1188,6 +1188,18 @@ Value TraceInterpreter::execFunction(
                 locals);
             break;
           }
+          case RecordType::QueueMicrotask: {
+#if JSI_VERSION >= 12
+            const auto &queueRecord =
+                static_cast<const SynthTrace::QueueMicrotaskRecord &>(*rec);
+            jsi::Function callback =
+                getObjForUse(queueRecord.callbackID_).asFunction(rt_);
+            rt_.queueMicrotask(callback);
+#else
+            throw std::runtime_error("queueMicrotask is not supported");
+#endif
+            break;
+          }
           case RecordType::DrainMicrotasks: {
 #if JSI_VERSION >= 4
             const auto &drainRecord =
