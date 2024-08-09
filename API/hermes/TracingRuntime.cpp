@@ -193,12 +193,6 @@ void TracingRuntime::queueMicrotask(const jsi::Function &callback) {
 }
 #endif
 
-void TracingRuntime::queueMicrotask(const jsi::Function &callback) {
-  RD::queueMicrotask(callback);
-  trace_.emplace_back<SynthTrace::QueueMicrotaskRecord>(
-      getTimeSinceStart(), getUniqueID(callback));
-}
-
 #if JSI_VERSION >= 4
 bool TracingRuntime::drainMicrotasks(int maxMicrotasksHint) {
   auto res = RD::drainMicrotasks(maxMicrotasksHint);
