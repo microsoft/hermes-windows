@@ -27,7 +27,7 @@ param(
     # e.g. "0.0.2209.28001" for pre-release or "0.70.2.0" for release
     [String]$FileVersion = "",
 
-    [switch]$RunTests,
+    [switch]$BuildTests,
     [switch]$Incremental,
     [switch]$UseVS,
     [switch]$ConfigureOnly
@@ -248,7 +248,7 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
     $genArgs = @();
     get-CommonArgs $Platform $Configuration $AppPlatform ([ref]$genArgs)
 
-    $targets = @('libshared');
+    $targets = @('all');
 
     $genArgs += '-DHERMES_ENABLE_DEBUGGER=ON'
     $genArgs += '-DHERMES_ENABLE_INTL=ON'
@@ -280,19 +280,14 @@ function Invoke-Dll-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, 
 
 function Invoke-Test-Build($SourcesPath, $buildPath, $compilerAndToolsBuildPath, $Platform, $Configuration, $AppPlatform,  $incrementalBuild) {
     $genArgs = @();
-    get-CommonArgs([ref]$genArgs)
+    get-CommonArgs $Platform $Configuration $AppPlatform ([ref]$genArgs)
 
-    $genArgs += '-DHERMES_ENABLE_DEBUGGER=On'
+    $targets = @('HermesUnitTests');
 
-    if ($AppPlatform -eq "uwp") {
-        $genArgs += '-DCMAKE_SYSTEM_NAME=WindowsStore'
-        $genArgs += '-DCMAKE_SYSTEM_VERSION="10.0.17763"'
-    } elseif ($Platform -eq "arm64" -or $Platform -eq "arm64ec") {
-        $genArgs += '-DHERMES_MSVC_ARM64=On'
-        $genArgs += "-DIMPORT_HERMESC=$compilerAndToolsBuildPath\ImportHermesc.cmake"
-    }
+    $genArgs += '-DHERMES_ENABLE_DEBUGGER=ON'
+    $genArgs += '-DHERMES_ENABLE_INTL=ON'
 
-    Invoke-BuildImpl $SourcesPath, $buildPath, $genArgs, @('check-hermes') $incrementalBuild $Platform $Configuration $AppPlatform
+    Invoke-BuildImpl $SourcesPath $buildPath $genArgs $targets $incrementalBuild $Platform $Configuration $AppPlatform
 }
 
 function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform) {
@@ -310,10 +305,6 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
     $buildPath = Join-Path $WorkSpacePath "build\$Triplet"
     
     Invoke-Dll-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent
-
-    if ($RunTests.IsPresent) {
-        Invoke-Test-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent
-    }
     
     $finalOutputPath = "$OutputPath\lib\native\$AppPlatform\$Configuration\$Platform";
     if (!(Test-Path -Path $finalOutputPath)) {
@@ -344,6 +335,17 @@ function Invoke-BuildAndCopy($SourcesPath, $WorkSpacePath, $OutputPath, $Platfor
     Copy-Item "$buildPath\build.ninja" -Destination $flagsPath -force | Out-Null
 
     Copy-Headers $SourcesPath $WorkSpacePath $OutputPath $Platform $Configuration $AppPlatform $RNDIR
+
+    if ($BuildTests.IsPresent -and $AppPlatform -eq "win32" -and $Platform -ne "arm64" -and $Platform -ne "arm64ec") {
+        # Build should have already happened, no need to build tests separately
+        Invoke-Test-Build $SourcesPath $buildPath $compilerAndToolsBuildPath $Platform $Configuration $AppPlatform $Incremental.IsPresent
+    
+        $unittestsPath = "$OutputPath\unittests"
+        if (!(Test-Path -Path $unittestsPath)) {
+            New-Item -ItemType "directory" -Path $unittestsPath | Out-Null
+        }
+        Copy-Item "$buildPath\unittests\*" -Include *.exe -Recurse -Destination $unittestsPath -force | Out-Null
+    }
 }
 
 function Copy-Headers($SourcesPath, $WorkSpacePath, $OutputPath, $Platform, $Configuration, $AppPlatform, $RNDIR) {
