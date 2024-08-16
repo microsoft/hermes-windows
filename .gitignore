@@ -17,6 +17,7 @@ buck-out
 .DS_Store
 
 # Win
+artifacts
 workspace
 build.log
 

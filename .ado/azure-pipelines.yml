@@ -10,4 +10,4 @@ pool:
   vmImage: 'windows-latest'
 
 jobs:
-  - template: jobs.yml
+  - template: build-and-test.yml

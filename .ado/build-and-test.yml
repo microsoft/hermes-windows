@@ -1,0 +1,176 @@
+# Build and test
+
+jobs:
+  - job: Build
+    timeoutInMinutes: 120
+    displayName: Build Hermes
+    strategy:
+      matrix:
+        DebugX64Uwp:
+          BuildConfiguration: Debug
+          BuildPlatform: x64
+          BuildAppPlatform: UWP
+        DebugX86Uwp:
+          BuildConfiguration: Debug
+          BuildPlatform: x86
+          BuildAppPlatform: UWP
+        DebugARM64Uwp:
+          BuildConfiguration: Debug
+          BuildPlatform: arm64
+          BuildAppPlatform: UWP
+        DebugX64Win32:
+          BuildConfiguration: Debug
+          BuildPlatform: x64
+          BuildAppPlatform: Desktop
+        DebugX86Win32:
+          BuildConfiguration: Debug
+          BuildPlatform: x86
+          BuildAppPlatform: Desktop
+        DebugARM64Win32:
+          BuildConfiguration: Debug
+          BuildPlatform: arm64
+          BuildAppPlatform: Desktop
+        DebugArm64ECWin32:
+          BuildConfiguration: Debug
+          BuildPlatform: arm64ec
+          BuildAppPlatform: Desktop
+        ReleaseX64Uwp:
+          BuildConfiguration: Release
+          BuildPlatform: x64
+          BuildAppPlatform: UWP
+        ReleaseX86Uwp:
+          BuildConfiguration: Release
+          BuildPlatform: x86
+          BuildAppPlatform: UWP
+        ReleaseARM64Uwp:
+          BuildConfiguration: Release
+          BuildPlatform: arm64
+          BuildAppPlatform: UWP
+        ReleaseX64Win32:
+          BuildConfiguration: Release
+          BuildPlatform: x64
+          BuildAppPlatform: Desktop
+        ReleaseX86Win32:
+          BuildConfiguration: Release
+          BuildPlatform: x86
+          BuildAppPlatform: Desktop
+        ReleaseARM64Win32:
+          BuildConfiguration: Release
+          BuildPlatform: arm64
+          BuildAppPlatform: Desktop
+        ReleaseArm64ECWin32:
+          BuildConfiguration: Release
+          BuildPlatform: arm64ec
+          BuildAppPlatform: Desktop
+    steps:
+      - powershell: |
+          $vsEnvArch = "$(BuildPlatform)".Replace("arm64ec", "arm64")
+          Write-Host "##vso[task.setvariable variable=vsEnvArch]$vsEnvArch"
+        displayName: Determine VS Environment Architecture
+        
+      - task: BatchScript@1
+        inputs:
+          filename: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat'
+          arguments: >
+            -arch=$(vsEnvArch)
+            -app_platform=$(BuildAppPlatform)
+            -vcvars_spectre_libs=spectre
+          modifyEnvironment: true
+        displayName: Initialize Visual Studio Environment
+        
+      - script: mkdir $(Build.ArtifactStagingDirectory)\build
+        displayName: Create build folder
+        workingDirectory: $(Build.ArtifactStagingDirectory)
+        
+      - script: echo ##vso[task.setvariable variable=CmakeGenerateArgs]-DCMAKE_BUILD_TYPE=$(BuildConfiguration) -DHERMES_ENABLE_DEBUGGER=ON -DHERMES_ENABLE_INTL=ON -DHERMESVM_PLATFORM_LOGGING=ON
+        displayName: Set common CmakeGenerateArgs
+        
+      - script: echo ##vso[task.setvariable variable=CmakeGenerateArgs]$(CmakeGenerateArgs) -DHERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB=OFF -DCMAKE_SYSTEM_NAME=WindowsStore -DCMAKE_SYSTEM_VERSION="10.0.17763.0"
+        displayName: Set UWP CmakeGenerateArgs
+        condition: and(succeeded(), eq(variables['BuildAppPlatform'], 'UWP'))
+        
+      - script: echo ##vso[task.setvariable variable=CmakeGenerateArgs]$(CmakeGenerateArgs) -DHERMES_MSVC_ARM64=ON
+        displayName: Set ARM64/ARM64EC CmakeGenerateArgs
+        condition: and(succeeded(), startsWith(variables['BuildPlatform'], 'arm64'))
+      
+      - script: |
+          echo ##vso[task.setvariable variable=CFLAGS]-arm64EC
+          echo ##vso[task.setvariable variable=CXXFLAGS]-arm64EC
+        displayName: Set ARM64EC environment variables
+        condition: and(succeeded(), eq(variables['BuildPlatform'], 'arm64ec'))
+      
+      - script: cmake -G Ninja $(CmakeGenerateArgs) $(Build.SourcesDirectory)
+        displayName: Configure Ninja with Cmake
+        workingDirectory: $(Build.ArtifactStagingDirectory)\build
+
+      - script: ninja hermes hermesc
+        displayName: Build hermes / hermesc with Ninja
+        workingDirectory: $(Build.ArtifactStagingDirectory)\build
+        condition: and(succeeded(), eq(variables['BuildAppPlatform'], 'Desktop'), not(startsWith(variables['BuildPlatform'], 'arm')))
+
+      - script: ninja libshared
+        displayName: Build binaries with Ninja
+        workingDirectory: $(Build.ArtifactStagingDirectory)\build
+      
+      - script: ninja HermesUnitTests
+        displayName: Build tests with Ninja
+        workingDirectory: $(Build.ArtifactStagingDirectory)\build
+        condition: and(succeeded(), eq(variables['BuildAppPlatform'], 'Desktop'), not(startsWith(variables['BuildPlatform'], 'arm')))
+        
+      - script: dir /s /b *.exe *.dll *.pdb
+        displayName: List all output binaries in build folder
+        workingDirectory: $(Build.ArtifactStagingDirectory)\build
+        condition: succeededOrFailed()
+        
+      - powershell: |
+          $vsExtensionPath="${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\Extensions\";
+          $GoogleTestAdapterPath=(Get-ChildItem $vsExtensionPath -Directory | Where-Object -FilterScript {Test-Path  (Join-Path -Path $_.FullName -ChildPath "GoogleTestAdapter.Core.dll")}).FullName
+
+          # Test the path to the google test adapter
+          Test-Path -Path $GoogleTestAdapterPath
+
+          Write-Debug "Setting Google Test Adapter Path to '$GoogleTestAdapterPath' found in '$vsExtensionPath'"
+          Write-Host "##vso[task.setvariable variable=GoogleTestAdapterPath]$GoogleTestAdapterPath"
+        displayName: Set GoogleTestAdapterPath
+        condition: and(succeeded(), eq(variables['BuildAppPlatform'], 'Desktop'), not(startsWith(variables['BuildPlatform'], 'arm'))) # Can't test arm on non-arm machines
+
+      - task: VSTest@2
+        displayName: Run Hermes Unit Tests
+        inputs:
+          testSelector: testAssemblies
+          testAssemblyVer2: |
+            **\*Tests.exe
+          pathtoCustomTestAdapters: $(GoogleTestAdapterPath)
+          searchFolder: $(Build.ArtifactStagingDirectory)\build\unittests
+          runTestsInIsolation: true
+          platform: $(BuildPlatform)
+          configuration: $(BuildConfiguration)
+          publishRunAttachments: true
+          collectDumpOn: onAbortOnly
+          vsTestVersion: latest
+          failOnMinTestsNotRun: true
+        condition: and(succeeded(), eq(variables['BuildAppPlatform'], 'Desktop'), not(startsWith(variables['BuildPlatform'], 'arm'))) # Can't test arm on non-arm machines
+        
+      - script: mkdir artifacts
+        displayName: Create artifacts folder
+        workingDirectory: $(Build.ArtifactStagingDirectory)
+        condition: succeededOrFailed()
+        
+      - task: CopyFiles@2
+        displayName: Copy all binaries from build to the artifacts folder
+        inputs:
+          contents: |
+            'API\hermes_shared\hermes.(dll|pdb)'
+            'bin\hermes.(exe|pdb)'
+            'bin\hermesc.(exe|pdb)'
+            'unittests\**\*Tests.(exe|pdb)'
+          sourceFolder: $(Build.ArtifactStagingDirectory)\build
+          targetFolder: $(Build.ArtifactStagingDirectory)\artifacts
+        condition: succeededOrFailed()
+
+      - task: PublishBuildArtifacts@1
+        displayName: "Publish artifacts"
+        inputs:
+          artifactName: HermesArtifacts.
+          pathtoPublish: $(Build.ArtifactStagingDirectory)\artifacts
+        condition: succeededOrFailed()
