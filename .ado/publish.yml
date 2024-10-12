@@ -71,7 +71,7 @@ resources:
       ref: refs/heads/napi-libnode-v20.9.0
 
 variables:
-  - group: V8-Jsi Secrets
+  - group: Hermes-Windows Secrets
   - name: ArtifactServices.Symbol.AccountName
     value: microsoft
   - name: ArtifactServices.Symbol.PAT
