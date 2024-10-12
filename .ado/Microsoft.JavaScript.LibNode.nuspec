@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>Microsoft.JavaScript.LibNode</id>
+    <version>19.9.0</version>
+    <description>Node.js library</description>
+    <authors>Microsoft</authors>
+    <projectUrl>$RepoUri$</projectUrl>
+    <license type="expression">MIT</license>
+    <copyright>&#169; Microsoft Corporation. All rights reserved.</copyright>
+    <repository type="git" url="$RepoUri$" />
+    <tags>native library node.js node</tags>
+  </metadata>
+  <files>
+    <file src="$nugetroot$\build\native\win-x64\libnode.dll"
+          target="build\native\win-x64\libnode.dll" />
+    <file src="$nugetroot$\build\native\Microsoft.JavaScript.LibNode.targets"
+          target="build\native\Microsoft.JavaScript.LibNode.targets" />
+    <file src="$nugetroot$\NOTICE.txt"
+          target="NOTICE.txt" />
+  </files>
+</package>

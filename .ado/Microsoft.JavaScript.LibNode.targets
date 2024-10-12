@@ -1,0 +1,17 @@
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <LibNodePlatform Condition="'$(LibNodePlatform)' == ''">$(Platform)</LibNodePlatform>
+    <!-- Fix platform name (win32 should be x86) -->
+    <LibNodePlatform Condition="'$(LibNodePlatform)' == 'Win32'">x86</LibNodePlatform>
+
+    <LibNodeAppPlatform Condition="'$(LibNodeAppPlatform)' == ''">win</LibNodeAppPlatform>
+
+    <LibNodeNugetRoot>$(MSBuildThisFileDirectory)..\..\</LibNodeNugetRoot>
+
+    <LibNodePackageRoot>$(LibNodeNugetRoot)</LibNodePackageRoot>
+    <LibNodePackageRoot Condition="'$(LibNodeNugetRootOverride)' != ''">$(LibNodeNugetRootOverride)</LibNodePackageRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ReferenceCopyLocalPaths Include="$(LibNodePackageRoot)build\native\$(LibNodeAppPlatform)-$(LibNodePlatform)\libnode.dll" />
+  </ItemGroup>
+</Project>
