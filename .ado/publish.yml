@@ -22,42 +22,6 @@ parameters:
       TargetRuntime: win-x64
       Platform: windows
       CPU: x64
-    - Name: win_arm64
-      Pool:
-        name: Azure-Pipelines-1ESPT-ExDShared
-        vmImage: windows-latest
-        os: windows
-      TargetRuntime: win-arm64
-      Platform: windows
-      CPU: arm64
-    - Name: osx_x64
-      Pool:
-        name: Azure Pipelines
-        vmImage: macos-latest
-        os: macOS
-      TargetRuntime: osx-x64
-      Platform: macos
-    - Name: osx_arm64
-      Pool:
-        name: Azure Pipelines
-        vmImage: macos-arm64-latest
-        os: macOS
-      TargetRuntime: osx-arm64
-      Platform: macos
-    - Name: linux_x64
-      Pool:
-        name: Azure-Pipelines-1ESPT-ExDShared
-        vmImage: ubuntu-latest
-        os: latest
-      TargetRuntime: linux-x64
-      Platform: linux
-    - Name: linux_arm64
-      Pool:
-        name: Azure-Pipelines-1ESPT-ExDShared
-        vmImage: ubuntu-latest
-        os: latest
-      TargetRuntime: linux-arm64
-      Platform: linux
 resources:
   repositories:
     - repository: OfficePipelineTemplates
