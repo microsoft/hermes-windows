@@ -31,8 +31,8 @@ resources:
     - repository: Nodejs_20
       type: github
       endpoint: Microsoft
-      name: jasongin/nodejs
-      ref: refs/heads/napi-libnode-v20.9.0
+      name: vmoroz/node
+      ref: refs/heads/libnode/v20.x
 
 variables:
   - group: Hermes-Windows Secrets
@@ -87,10 +87,10 @@ extends:
 
                 - script: |
                     git init
-                    git remote add origin https://vmoroz:$(githubAuthToken)@github.com/jasongin/nodejs
-                    git fetch --no-tags --progress --verbose --depth=1 origin napi-libnode-v20.9.0:refs/remotes/origin/napi-libnode-v20.9.0
-                    git switch napi-libnode-v20.9.0
-                  displayName: Check out napi-libnode-v20.9.0
+                    git remote add origin https://vmoroz:$(githubAuthToken)@github.com/vmoroz/node
+                    git fetch --no-tags --progress --verbose --depth=1 origin libnode/v20.x:refs/remotes/origin/libnode/v20.x
+                    git switch libnode/v20.x
+                  displayName: Check out libnode/v20.x
 
                 - task: PowerShell@2
                   displayName: Download nasm
