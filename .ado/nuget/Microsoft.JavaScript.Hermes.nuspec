@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>Microsoft.JavaScript.Hermes$fat_suffix$</id>
+    <version>$version$</version>
+    <title>Hermes JavaScript engine</title>
+    <authors>Microsoft</authors>
+    <description>Hermes JavaScript engine</description>
+    <projectUrl>https://github.com/microsoft/hermes-windows</projectUrl>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <copyright>&#169; Microsoft Corporation. All rights reserved.</copyright>
+    <repository type="git" url="$repoUrl$" branch="$repoBranch$" commit="$repoCommit$" />
+    <language>en-US</language>
+    <tags>native JavaScript JS Hermes library NodeAPI Node-API NAPI</tags>
+  </metadata>
+  <files>
+    <file src="$nugetroot$\build\native\include\**\*.*"
+          target="build\native\include" />
+    <file src="$nugetroot$\lib\native\uwp\release\**\*.*"
+          target="build\native\uwp"
+          exclude="$exclude_bin_files$" />
+    <file src="$nugetroot$\lib\native\win32\release\**\*.*"
+          target="build\native\win32"
+          exclude="$exclude_bin_files$" />
+    <file src="$nugetroot$\build\native\Microsoft.JavaScript.Hermes.props"
+          target="build\native\Microsoft.JavaScript.Hermes$fat_suffix$.props" />
+    <file src="$nugetroot$\build\native\Microsoft.JavaScript.Hermes.targets"
+          target="build\native\Microsoft.JavaScript.Hermes$fat_suffix$.targets" />
+    <file src="$nugetroot$\license\*" target="" />
+    <file src="$nugetroot$\tools\**\*.*" target="tools" />
+  </files>
+</package>

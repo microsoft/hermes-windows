@@ -12,13 +12,4 @@
     <PackageRoot>$(NugetRoot)</PackageRoot>
     <PackageRoot Condition="'$(NugetRootOverride)' != ''">$(NugetRootOverride)</PackageRoot>
   </PropertyGroup>
-  <ItemDefinitionGroup>
-    <ClCompile>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(PackageRoot)\build\native\include</AdditionalIncludeDirectories>
-    </ClCompile>
-  </ItemDefinitionGroup>
-  <ItemGroup Condition="'$(HermesNoDLLCopy)' == ''">
-    <ReferenceCopyLocalPaths Include="$(PackageRoot)build\native\$(HermesAppPlatform)\$(HermesPlatform)\hermes.dll" />
-    <None Include="$(PackageRoot)build\native\$(HermesAppPlatform)\$(HermesPlatform)\hermes.dll" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
 </Project>

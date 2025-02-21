@@ -1,4 +1,10 @@
-# The release branch versions start with the release number
+#
+# Entry point for the CI builds that are run after merging PRs.
+#
+
+# The name is parsed by setVersionNumber.js script which then updates the name of the run.
+#
+# The release branch versions "rnw/*" start with the release number
 # such as "0.69." or "0.70." and follow the revision number.
 # name: 0.70.$(Rev:r)
 #
@@ -9,54 +15,13 @@ name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
 pr: none
 trigger:
   - main
-
-resources:
-  repositories:
-  - repository: OfficePipelineTemplates
-    type: git
-    name: 1ESPipelineTemplates/OfficePipelineTemplates
-    ref: refs/tags/release
+  - rnw/*
 
 variables:
-  - group: Hermes-Windows Secrets
-  - name: ArtifactServices.Symbol.AccountName
-    value: microsoft
-  - name: ArtifactServices.Symbol.PAT
-    value: $(pat-symbols-publish-microsoft)
   - name: tags
     value: production,externalfacing
 
 extends:
-  template: v1/Office.Official.PipelineTemplate.yml@OfficePipelineTemplates
+  template: build.yml@self
   parameters:
-    pool:
-      name: Azure-Pipelines-1ESPT-ExDShared
-      image: windows-latest
-      os: windows
-    sdl:
-      binskim:
-        analyzeTarget: $(Build.ArtifactStagingDirectory)/**/*.dll
-      componentgovernance:
-        ignoreDirectories: $(Build.SourcesDirectory)/website
-      eslint:
-        enableExclusions: true
-        # This repo does not ship any javascript code. But has many test cases for the js engine that fail parsing, have code considered insecure and crash eslint.
-        exclusionPatterns: |
-          '**/*.*'
-      suppression:
-        suppressionFile: $(Build.SourcesDirectory)\.ado\guardian\SDL\.gdnsuppress
-    stages:
-    - stage: main
-      jobs:
-      - job: Setup
-        variables:
-          # Component Governance is ran as part of the Build Job.
-          - name: "skipComponentGovernanceDetection"
-            value: "true"
-        steps:
-          - script: node .ado/scripts/setVersionNumber.js
-            name: setVersions
-            displayName: Compute version numbers
-      - template: .ado/jobs.yml@self
-        parameters:
-          isPublish: true
+    MustPublish: true

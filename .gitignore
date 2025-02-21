@@ -17,7 +17,8 @@ buck-out
 .DS_Store
 
 # Win
-workspace
+/out
+/workspace
 build.log
 
 # CocoaPods testing
