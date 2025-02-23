@@ -48,7 +48,10 @@ resources:
 
 extends:
   # Extend the Office compliant build pipeline template.
-  template: v1/Office.Official.PipelineTemplate.yml@OfficePipelineTemplates
+  ${{ if eq(parameters.MustPublish, true) }}:
+    template: v1/Office.Official.PipelineTemplate.yml@OfficePipelineTemplates
+  ${{ else }}:
+    template: v1/Office.Unofficial.PipelineTemplate.yml@OfficePipelineTemplates
   parameters:
     pool:
       name: Azure-Pipelines-1ESPT-ExDShared
