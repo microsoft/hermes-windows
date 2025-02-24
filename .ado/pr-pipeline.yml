@@ -1,0 +1,18 @@
+#
+# The PR pipeline entry point.
+#
+
+# It is an input for the setVersionNumber.js script which then updates the name of the run.
+name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
+
+# The triggers are overridden by the ADO pipeline definitions.
+trigger: none
+pr: none
+
+extends:
+  template: build-template.yml@self
+  parameters:
+    # Make sure that the PR builds do not publish signed packages.
+    MustPublish: false
+    # It must be false for real builds. Use true only for debugging.
+    FakeBuild: false

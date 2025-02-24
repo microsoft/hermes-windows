@@ -8,6 +8,10 @@ parameters:
 - name: MustPublish
   type: boolean
   default: false
+  # To fake building hermes for faster debugging.
+- name: FakeBuild
+  type: boolean
+  default: false
 
   # Matrix with target platforms for Hermes binaries.
 - name: BuildMatrix
@@ -85,7 +89,7 @@ extends:
       jobs:
 
         #=============================================================================
-        # Set version number.
+        # Set version numbers.
         #=============================================================================
       - job: Set_Versions
         displayName: Set semantic and file versions
@@ -94,19 +98,18 @@ extends:
           # Component Governance is ran as part of the Build Job.
         - name: skipComponentGovernanceDetection
           value: true
-          # Convert MustPublish parameter to a variable to access it in script.
+          # Convert MustPublish parameter to a variable to access it in the script.
         - name: mustPublish
           value: ${{ parameters.MustPublish }}
 
         steps:
+          # Node.js version >= 22.x is required to handle args in JS scripts.
         - task: UseNode@1
           displayName: Use Node.js 22.x
           inputs:
             version: 22.x
 
-        - script: node --version
-          displayName: Show Node.js version
-
+          # Compute the semanticVersion and fileVersion, and then update the build title.
         - script: node .ado\scripts\setVersionNumber.js
           name: setVersions # For output variable prefix
           displayName: Compute version numbers
@@ -128,27 +131,28 @@ extends:
             value: $[ dependencies.Set_Versions.outputs['setVersions.semanticVersion'] ]
           - name: fileVersion
             value: $[ dependencies.Set_Versions.outputs['setVersions.fileVersion'] ]
-          # To fake building hermes for faster debugging
-          - name: fakeBuild
-            value: false
+            # To be used in the build script
           - name: fakeBuildArg
-            value: --no-fake-build
+            ${{ if eq(parameters.FakeBuild, true) }}:
+              value: --fake-build
+            ${{ else }}:
+              value: --no-fake-build
 
           templateContext:
             outputs:
+              # The base template takes care of publishing the artifacts.
             - output: pipelineArtifact
               artifactName: ${{ MatrixEntry.Name }}
               targetPath: $(Build.StagingDirectory)\out\pkg-staging
 
           steps:
+            # Node.js version >= 22.x is required to handle args in JS scripts.
           - task: UseNode@1
             displayName: Use Node.js 22.x
             inputs:
               version: 22.x
 
-          - script: node --version
-            displayName: Show Node.js version
-
+            # Invoke the build specific for the target platform.
           - script: >
               node .ado\scripts\build.js
               --output-path $(Build.StagingDirectory)\out
@@ -160,11 +164,12 @@ extends:
               $(fakeBuildArg)
             displayName: Build binaries
 
+            # Enable after the unit tests are fixed.
           - script: echo TODO - Add Tests here
             displayName: '[Test] - To be Added via bug #77'
 
-          # Sign and publish symbols only for the CI builds.
-          - ${{ if and(eq(parameters.MustPublish, true), ne(variables.fakeBuild, true)) }}:
+            # Sign and publish symbols only for the CI builds and real builds.
+          - ${{ if and(eq(parameters.MustPublish, true), eq(parameters.FakeBuild, false)) }}:
             - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@5
               displayName: CodeSign Binaries
               inputs:
@@ -217,7 +222,6 @@ extends:
       #=============================================================================
       # Create NuGet packages
       #=============================================================================
-
       - job: Create_Hermes_NuGet
         displayName: Create Nuget packages
 
@@ -234,26 +238,25 @@ extends:
 
         templateContext:
           outputs:
+            # The base template takes care of publishing the artifacts.
           - output: pipelineArtifact
             targetPath: $(Build.StagingDirectory)\out\pkg
             artifactName: published-packages
 
         steps:
+          # Node.js version >= 22.x is required to handle args in JS scripts.
         - task: UseNode@1
           displayName: Use Node.js 22.x
           inputs:
             version: 22.x
 
-        - script: node --version
-          displayName: Show Node.js version
-
-        # The substitution tags in the nuspec require that we use at least nuget 4.6.
+          # The substitution tags in the nuspec require that we use at least NuGet 4.6.
         - task: NuGetToolInstaller@0
           displayName: Install NuGet tools
           inputs:
             versionSpec: ">=4.6.0"
 
-        # Download hermes binaries built in previous job.
+          # Download hermes binaries built in previous jobs.
         - ${{ each MatrixEntry in parameters.BuildMatrix }}:
           - task: DownloadPipelineArtifact@2
             displayName: Download ${{ MatrixEntry.Name }} hermes artifacts
@@ -261,7 +264,7 @@ extends:
               artifact: ${{ MatrixEntry.Name }}
               path: $(Build.StagingDirectory)\out\pkg-staging
 
-        # Create NuGet packages.
+          # Create NuGet packages.
         - script: >
             node .ado\scripts\build.js
             --output-path $(Build.StagingDirectory)\out
@@ -271,7 +274,7 @@ extends:
             --file-version "$(fileVersion)"
           displayName: Create NuGet packages
 
-        # Sign the NuGet packages only for CI builds.
+          # Sign the NuGet packages only for CI builds.
         - ${{ if parameters.MustPublish }}:
           - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@5
             displayName: CodeSign NuGets

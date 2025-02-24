@@ -1,5 +1,5 @@
 #
-# Entry point for the CI builds that are run after merging PRs.
+# The CI pipeline entry point.
 #
 
 # The name is parsed by setVersionNumber.js script which then updates the name of the run.
@@ -12,16 +12,18 @@
 # and follow the date and revision number.
 name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
 
+# The triggers are overridden by the ADO pipeline definitions.
+trigger: none
 pr: none
-trigger:
-  - main
-  - rnw/*
 
 variables:
   - name: tags
     value: production,externalfacing
 
 extends:
-  template: build.yml@self
+  template: build-template.yml@self
   parameters:
+    # CI builds must publish the binaries and packages.
     MustPublish: true
+    # It must be false for real builds. Use true only for debugging.
+    FakeBuild: false
