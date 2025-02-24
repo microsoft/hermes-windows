@@ -53,6 +53,9 @@ extends:
   ${{ else }}:
     template: v1/Office.Unofficial.PipelineTemplate.yml@OfficePipelineTemplates
   parameters:
+    settings:
+      ${{ if eq(parameters.MustPublish, false) }}:
+        skipBuildTagsForGitHubPullRequests: true
     pool:
       name: Azure-Pipelines-1ESPT-ExDShared
       image: windows-latest
