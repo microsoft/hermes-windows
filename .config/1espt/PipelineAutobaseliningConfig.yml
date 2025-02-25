@@ -45,3 +45,17 @@ pipelines:
           lastModifiedDate: 2025-02-25
         roslyn:
           lastModifiedDate: 2025-02-25
+  33797:
+    retail:
+      source:
+        credscan:
+          lastModifiedDate: 2025-02-25
+        eslint:
+          lastModifiedDate: 2025-02-25
+        armory:
+          lastModifiedDate: 2025-02-25
+      binary:
+        credscan:
+          lastModifiedDate: 2025-02-25
+        binskim:
+          lastModifiedDate: 2025-02-25
