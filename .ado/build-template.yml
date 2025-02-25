@@ -124,7 +124,7 @@ extends:
           dependsOn:
           - Set_Versions
 
-          timeoutInMinutes: 120
+          timeoutInMinutes: 300
 
           variables:
           - name: semanticVersion
