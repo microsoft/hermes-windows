@@ -406,6 +406,8 @@ std::string NodeApiTestContext::ReadFileText(std::string const &fileName) {
     std::ostringstream ss;
     ss << fileStream.rdbuf();
     text = ss.str();
+  } else {
+    std::cerr << "Failed to open file: " << filePath << '\n';
   }
   return text;
 }
