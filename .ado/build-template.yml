@@ -172,7 +172,7 @@ extends:
             # Run unit tests after the build is finished.
           - script: >
               node .ado\scripts\build.js
-              -no-build
+              --no-build
               --test
               --output-path $(Build.StagingDirectory)\out
               --platform ${{ MatrixEntry.TargetCPU }}
