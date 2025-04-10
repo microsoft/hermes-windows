@@ -165,8 +165,17 @@ extends:
             displayName: Build binaries
 
             # Enable after the unit tests are fixed.
-          - script: echo TODO - Add Tests here
-            displayName: '[Test] - To be Added via bug #77'
+          - script: >
+              node .ado\scripts\build.js
+              --test
+              --output-path $(Build.StagingDirectory)\out
+              --platform ${{ MatrixEntry.TargetCPU }}
+              --configuration release
+              ${{ MatrixEntry.BuildUWP }}
+              --semantic-version "$(semanticVersion)"
+              --file-version "$(fileVersion)"
+              $(fakeBuildArg)
+            displayName: Run unit tests
 
             # Sign and publish symbols only for the CI builds and real builds.
           - ${{ if and(eq(parameters.MustPublish, true), eq(parameters.FakeBuild, false)) }}:

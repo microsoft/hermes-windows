@@ -284,6 +284,8 @@ struct NodeApiTestContext {
       m_nativeModules;
   std::list<std::pair<uint32_t, NodeApiRef>> m_taskQueue;
   uint32_t m_nextTaskId{1};
+
+  static std::string m_testExePath;
 };
 
 // Handles the exceptions after running tests.

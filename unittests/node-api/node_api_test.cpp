@@ -2,8 +2,10 @@
 // Licensed under the MIT License.
 
 #include "node_api_test.h"
+#include <windows.h> // for GetModuleFileNameA
 #include <algorithm>
 #include <cstdarg>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -13,6 +15,8 @@
 extern "C" {
 #include "js-native-api/common.c"
 }
+
+namespace fs = std::filesystem;
 
 int test_printf(std::string &output, const char *format, ...) {
   va_list args1;
@@ -81,6 +85,16 @@ NodeApiRef MakeNodeApiRef(napi_env env, napi_value value) {
   napi_ref ref{};
   THROW_IF_NOT_OK(napi_create_reference(env, value, 1, &ref));
   return NodeApiRef(ref, NodeApiRefDeleter(env));
+}
+
+std::string GetExecutablePath() {
+  char path[MAX_PATH];
+  DWORD length = GetModuleFileNameA(nullptr, path, MAX_PATH);
+  fs::path exePath = fs::path(std::string(path, length));
+  if (exePath.has_parent_path()) {
+    exePath = exePath.parent_path();
+  }
+  return exePath.string();
 }
 
 //=============================================================================
@@ -221,6 +235,8 @@ NodeApiTestErrorHandler NodeApiTest::ExecuteNodeApi(
 //=============================================================================
 // NodeApiTestContext implementation
 //=============================================================================
+
+std::string NodeApiTestContext::m_testExePath = GetExecutablePath();
 
 NodeApiTestContext::NodeApiTestContext(
     napi_env env,
@@ -381,7 +397,11 @@ std::string NodeApiTestContext::ReadScriptText(
 
 std::string NodeApiTestContext::ReadFileText(std::string const &fileName) {
   std::string text;
-  std::ifstream fileStream(fileName);
+  fs::path filePath = fs::path(fileName);
+  if (filePath.is_relative()) {
+    filePath = fs::path(m_testExePath) / filePath;
+  }
+  std::ifstream fileStream(filePath.c_str());
   if (fileStream) {
     std::ostringstream ss;
     ss << fileStream.rdbuf();
