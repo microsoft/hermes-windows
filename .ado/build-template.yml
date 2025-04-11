@@ -169,7 +169,7 @@ extends:
             # Show all built files to help debug issues.
           - script: |
               ls -R $(Build.StagingDirectory)\out
-            displayName: Show all files in the $(Build.StagingDirectory)\out directory
+            displayName: Show all files in the $$(Build.StagingDirectory)\out directory
 
             # Run unit tests after the build is finished.
           - ${{ if eq(MatrixEntry.CanRunTest, true) }}:
