@@ -54,13 +54,18 @@ else()
 endif()
 
 # copy JS Tools package files
-add_custom_target(copyNodeApiJSToolsFiles
+add_custom_command(
+  OUTPUT
+    ${CMAKE_CURRENT_BINARY_DIR}/babel.config.js
+    ${CMAKE_CURRENT_BINARY_DIR}/package.json
+    ${CMAKE_CURRENT_BINARY_DIR}/yarn.lock
   COMMAND ${CMAKE_COMMAND} -E copy_if_different 
     ${CMAKE_CURRENT_SOURCE_DIR}/babel.config.js
     ${CMAKE_CURRENT_SOURCE_DIR}/package.json
     ${CMAKE_CURRENT_SOURCE_DIR}/yarn.lock
     ${CMAKE_CURRENT_BINARY_DIR}
 )
+add_custom_target(copyNodeApiJSToolsFiles)
 
 # run "yarn install"
 add_custom_command(
