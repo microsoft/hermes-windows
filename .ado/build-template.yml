@@ -29,16 +29,18 @@ parameters:
   - Name: win32_x64
     TargetCPU: x64
     BuildUWP: --no-uwp
+    CanRunTest: true
   - Name: win32_x86
     TargetCPU: x86
     BuildUWP: --no-uwp
+    CanRunTest: true
   - Name: win32_arm64
     TargetCPU: arm64
     BuildUWP: --no-uwp
     # ARM64 "Emulation Compatible" is to run ARM64 Hermes DLL in a x64 app
     # on Windows ARM64 in emulation mode.
     # See: https://learn.microsoft.com/en-us/windows/arm/arm64ec
-  - Name: win32_arm64ec 
+  - Name: win32_arm64ec
     TargetCPU: arm64ec
     BuildUWP: --no-uwp
 
@@ -170,18 +172,19 @@ extends:
             displayName: Show all files in the $(Build.StagingDirectory)\out directory
 
             # Run unit tests after the build is finished.
-          - script: >
-              node .ado\scripts\build.js
-              --no-build
-              --test
-              --output-path $(Build.StagingDirectory)\out
-              --platform ${{ MatrixEntry.TargetCPU }}
-              --configuration release
-              ${{ MatrixEntry.BuildUWP }}
-              --semantic-version "$(semanticVersion)"
-              --file-version "$(fileVersion)"
-              $(fakeBuildArg)
-            displayName: Run unit tests
+            ${{ if eq(MatrixEntry.CanRunTest, true) }}:
+            - script: >
+                node .ado\scripts\build.js
+                --no-build
+                --test
+                --output-path $(Build.StagingDirectory)\out
+                --platform ${{ MatrixEntry.TargetCPU }}
+                --configuration release
+                ${{ MatrixEntry.BuildUWP }}
+                --semantic-version "$(semanticVersion)"
+                --file-version "$(fileVersion)"
+                $(fakeBuildArg)
+              displayName: Run unit tests
 
             # Sign and publish symbols only for the CI builds and real builds.
           - ${{ if and(eq(parameters.MustPublish, true), eq(parameters.FakeBuild, false)) }}:
