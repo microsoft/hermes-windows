@@ -37,7 +37,7 @@ class HermesRuntimeHolder : public IEnvHolder {
 };
 
 std::vector<NodeApiTestData> NodeApiEnvFactories() {
-  return {{"../js", [] {
+  return {{"js", [] {
              return std::unique_ptr<IEnvHolder>(new HermesRuntimeHolder());
            }}};
 }
