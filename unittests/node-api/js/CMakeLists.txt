@@ -53,17 +53,30 @@ else()
   set(yarn "yarn")
 endif()
 
-# run "yarn install"
-add_custom_command(
-  OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/node_modules.md5
-  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/yarn.lock
-  COMMAND ${yarn} install --frozen-lockfile
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
-add_custom_target(installNodeApiTestJsTools
-  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/node_modules.md5
+# copy JS Tools package files
+add_custom_target(copyNodeApiJSToolsFiles
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different 
+    ${CMAKE_CURRENT_SOURCE_DIR}/babel.config.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/package.json
+    ${CMAKE_CURRENT_SOURCE_DIR}/yarn.lock
+    ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+# run "yarn install"
+add_custom_command(
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/node_modules.sha1
+  DEPENDS
+    ${CMAKE_CURRENT_BINARY_DIR}/package.json
+    ${CMAKE_CURRENT_BINARY_DIR}/yarn.lock
+  COMMAND ${yarn} install --frozen-lockfile
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+add_custom_target(installNodeApiTestJsTools
+  DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/node_modules.sha1
+)
+add_dependencies(installNodeApiTestJsTools copyNodeApiJSToolsFiles)
+
+# TODO: replace "metro-react-native-babel-preset" with a modern alternative.
 # add the Babel transform commands for each test JS file
 foreach(testJSFile ${testJSFiles})
   # create target directory
@@ -85,7 +98,7 @@ foreach(testJSFile ${testJSFiles})
       "--source-map-target"
         "${CMAKE_CURRENT_BINARY_DIR}/${testJSFile}.map"
       "${CMAKE_CURRENT_SOURCE_DIR}/../js-native-api/${testJSFile}"
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
 
   # build a list of all outputs
@@ -95,7 +108,7 @@ foreach(testJSFile ${testJSFiles})
   )
 endforeach()
 
-# run the Babel transforns for all required output files
+# run the Babel transforms for all required output files
 add_custom_target(transformJSFiles
   DEPENDS ${transformedJSFiles}
 )
@@ -104,7 +117,7 @@ add_dependencies(transformJSFiles installNodeApiTestJsTools)
 # copy Babel runtime support files
 add_custom_target(copyBabelFiles
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_CURRENT_SOURCE_DIR}/node_modules/@babel/runtime/helpers
+    ${CMAKE_CURRENT_BINARY_DIR}/node_modules/@babel/runtime/helpers
     ${CMAKE_CURRENT_BINARY_DIR}/@babel/runtime/helpers
 )
 add_dependencies(copyBabelFiles installNodeApiTestJsTools)
