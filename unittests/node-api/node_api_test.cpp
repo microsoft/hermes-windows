@@ -400,6 +400,10 @@ std::string NodeApiTestContext::ReadFileText(std::string const &fileName) {
   fs::path filePath = fs::path(fileName);
   if (filePath.is_relative()) {
     filePath = fs::path(m_testExePath) / filePath;
+    if (!fs::exists(filePath)) {
+      // MSBuild puts EXE in a Debug or Release subfolder.
+      filePath = fs::path(m_testExePath).parent_path() / fileName;
+    }
   }
   std::ifstream fileStream(filePath.c_str());
   if (fileStream) {
