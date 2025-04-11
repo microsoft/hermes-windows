@@ -172,7 +172,7 @@ extends:
             displayName: Show all files in the $(Build.StagingDirectory)\out directory
 
             # Run unit tests after the build is finished.
-            ${{ if eq(MatrixEntry.CanRunTest, true) }}:
+          - ${{ if eq(MatrixEntry.CanRunTest, true) }}:
             - script: >
                 node .ado\scripts\build.js
                 --no-build
