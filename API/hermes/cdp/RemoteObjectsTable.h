@@ -13,7 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include <hermes/Public/HermesExport.h>
 #include <jsi/jsi.h>
 
 namespace facebook {
@@ -27,14 +26,14 @@ namespace cdp {
  * objects) are placed in the "backtrace" object group. This object group is
  * cleared when the VM resumes.
  */
-HERMES_EXPORT extern const char *BacktraceObjectGroup;
+extern const char *BacktraceObjectGroup;
 
 /**
  * Objects that are created as a result of a console evaluation are placed in
  * the "console" object group. This object group is cleared when the client
  * clears the console.
  */
-HERMES_EXPORT extern const char *ConsoleObjectGroup;
+extern const char *ConsoleObjectGroup;
 
 /**
  * RemoteObjectsTable manages the mapping of string object ids to scope metadata
@@ -48,7 +47,7 @@ HERMES_EXPORT extern const char *ConsoleObjectGroup;
  * `releaseObject("objId")` or `releaseObjectGroup("objGroup")` will remove foo
  * from the table. This matches the behavior of object groups in CDT.
  */
-class HERMES_EXPORT RemoteObjectsTable {
+class RemoteObjectsTable {
  public:
   RemoteObjectsTable();
   ~RemoteObjectsTable();
@@ -73,6 +72,11 @@ class HERMES_EXPORT RemoteObjectsTable {
   std::string addValue(
       ::facebook::jsi::Value value,
       const std::string &objectGroup);
+
+  /// /param objId The object ID.
+  /// /return true if object ID represents a scope in the scope chain of a call
+  /// frame.
+  bool isScopeId(const std::string &objId) const;
 
   /**
    * Retrieves the (frameIndex, scopeIndex) associated with this object id, or

@@ -12,18 +12,20 @@
 #include <string>
 
 #include <hermes/AsyncDebuggerAPI.h>
+#include <hermes/cdp/MessageConverters.h>
 #include <hermes/hermes.h>
-#include <hermes/inspector/chrome/MessageConverters.h>
 
 #include "DomainAgent.h"
+#include "DomainState.h"
 
 namespace facebook {
 namespace hermes {
 namespace cdp {
 
-namespace m = ::facebook::hermes::inspector_modern::chrome::message;
+enum class PausedNotificationReason;
 
-namespace {
+namespace m = ::facebook::hermes::cdp::message;
+
 /// Details about a single Hermes breakpoint, implied by a CDP breakpoint.
 struct HermesBreakpoint {
   debugger::BreakpointID breakpointID;
@@ -35,7 +37,17 @@ struct HermesBreakpoint {
 using CDPBreakpointID = uint32_t;
 
 /// Description of where breakpoints should be created.
-struct CDPBreakpointDescription {
+struct CDPBreakpointDescription : public StateValue {
+  ~CDPBreakpointDescription() override = default;
+  std::unique_ptr<StateValue> copy() const override {
+    auto value = std::make_unique<CDPBreakpointDescription>();
+    value->line = line;
+    value->column = column;
+    value->condition = condition;
+    value->url = url;
+    return value;
+  }
+
   /// Determines whether this breakpoint can be persisted across sessions
   bool persistable() const {
     // Only persist breakpoints that can apply to future scripts (i.e.
@@ -67,7 +79,6 @@ struct HermesBreakpointLocation {
   debugger::BreakpointID id;
   debugger::SourceLocation location;
 };
-} // namespace
 
 /// Handler for the "Debugger" domain of CDP. Accepts events from the runtime,
 /// and CDP requests from the debug client belonging to the "Debugger" domain.
@@ -80,12 +91,18 @@ class DebuggerDomainAgent : public DomainAgent {
       HermesRuntime &runtime,
       debugger::AsyncDebuggerAPI &asyncDebugger,
       SynchronizedOutboundCallback messageCallback,
-      std::shared_ptr<RemoteObjectsTable> objTable_);
+      std::shared_ptr<RemoteObjectsTable> objTable_,
+      DomainState &state);
   ~DebuggerDomainAgent();
 
+  /// Enables the Debugger domain without processing CDP message or sending a
+  /// CDP response. It will still send CDP notifications if needed.
+  void enable();
   /// Handles Debugger.enable request
+  /// @cdp Debugger.enable If domain is already enabled, will return success.
   void enable(const m::debugger::EnableRequest &req);
   /// Handles Debugger.disable request
+  /// @cdp Debugger.disable If domain is already disabled, will return success.
   void disable(const m::debugger::DisableRequest &req);
 
   /// Handles Debugger.pause request
@@ -116,6 +133,7 @@ class DebuggerDomainAgent : public DomainAgent {
   /// Handles Debugger.removeBreakpoint
   void removeBreakpoint(const m::debugger::RemoveBreakpointRequest &req);
   /// Handles Debugger.setBreakpointsActive
+  /// @cdp Debugger.setBreakpointsActive Allowed even if domain is not enabled.
   void setBreakpointsActive(
       const m::debugger::SetBreakpointsActiveRequest &req);
 
@@ -126,12 +144,8 @@ class DebuggerDomainAgent : public DomainAgent {
       debugger::AsyncDebuggerAPI &asyncDebugger,
       debugger::DebuggerEventType event);
 
-  /// Send a Pause notification to the debug client with "other" being the
-  /// reason
-  void sendPausedNotificationToClient();
-  /// Send a Pause notification to the debug client with "exception" being the
-  /// reason
-  void sendPauseOnExceptionNotificationToClient();
+  /// Send a Debugger.paused notification to the debug client
+  void sendPausedNotificationToClient(PausedNotificationReason reason);
   /// Send a Debugger.scriptParsed notification to the debug client
   void sendScriptParsedNotificationToClient(
       const debugger::SourceLocation srcLoc);
@@ -155,6 +169,10 @@ class DebuggerDomainAgent : public DomainAgent {
   bool checkDebuggerEnabled(const m::Request &req);
   bool checkDebuggerPaused(const m::Request &req);
 
+  /// Removes any modifications this agent made to Hermes in order to enable
+  /// debugging
+  void cleanUp();
+
   HermesRuntime &runtime_;
   debugger::AsyncDebuggerAPI &asyncDebugger_;
 
@@ -168,6 +186,8 @@ class DebuggerDomainAgent : public DomainAgent {
   /// CDP breakpoint IDs are assigned by the DebuggerDomainAgent. Keep track of
   /// the next available ID.
   CDPBreakpointID nextBreakpointID_ = 1;
+
+  DomainState &state_;
 
   /// Whether the currently installed breakpoints actually take effect. If
   /// they're supposed to be inactive, then debugger agent will automatically

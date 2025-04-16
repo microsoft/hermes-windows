@@ -298,6 +298,7 @@ class JSParserImpl {
 
   UniqueString *checksIdent_;
   UniqueString *assertsIdent_;
+  UniqueString *impliesIdent_;
 
   UniqueString *componentIdent_;
   UniqueString *hookIdent_;
@@ -317,6 +318,7 @@ class JSParserImpl {
   UniqueString *namespaceIdent_;
   UniqueString *isIdent_;
   UniqueString *inferIdent_;
+  UniqueString *constIdent_;
 #endif
 
   /// String representation of all tokens.
@@ -511,12 +513,22 @@ class JSParserImpl {
   /// Check whether the current token begins a Declaration.
   bool checkDeclaration() {
     if (checkN(
-            TokenKind::rw_function,
-            letIdent_,
-            TokenKind::rw_const,
-            TokenKind::rw_class) ||
+            TokenKind::rw_function, TokenKind::rw_const, TokenKind::rw_class) ||
         (check(asyncIdent_) && checkAsyncFunction())) {
       return true;
+    }
+
+    if (check(letIdent_)) {
+      if (isStrictMode()) {
+        return true;
+      }
+      // In loose mode, 'let' requires more work to check.
+      // let Identifier
+      // let [
+      // let {
+      // are all starts of 'let' declarations.
+      // But 'let' can also be an Identifier in loose mode.
+      return lexer_.isLetFollowedByDeclStart();
     }
 
 #if HERMES_PARSE_FLOW
@@ -1215,7 +1227,10 @@ class JSParserImpl {
   Optional<ESTree::Node *> parsePrimaryTypeAnnotationFlow();
   Optional<ESTree::Node *> parseTypeofTypeAnnotationFlow();
   Optional<ESTree::Node *> parseTupleTypeAnnotationFlow();
-  Optional<ESTree::Node *> parseTupleElementFlow();
+  // \param startsWithDotDotDot whether the element started with '...'
+  Optional<ESTree::Node *> parseTupleElementFlow(
+      SMLoc startLoc,
+      bool startsWithDotDotDot);
   Optional<ESTree::Node *> parseFunctionTypeAnnotationFlow();
   Optional<ESTree::Node *> parseHookTypeAnnotationFlow();
   Optional<ESTree::Node *> parseFunctionOrHookTypeAnnotationFlow(bool hook);
@@ -1331,6 +1346,7 @@ class JSParserImpl {
   enum class EnumKind {
     String,
     Number,
+    BigInt,
     Boolean,
     Symbol,
   };
@@ -1341,6 +1357,8 @@ class JSParserImpl {
         return "string";
       case EnumKind::Number:
         return "number";
+      case EnumKind::BigInt:
+        return "bigint";
       case EnumKind::Boolean:
         return "boolean";
       case EnumKind::Symbol:
@@ -1355,6 +1373,8 @@ class JSParserImpl {
         return EnumKind::String;
       case ESTree::NodeKind::EnumNumberMember:
         return EnumKind::Number;
+      case ESTree::NodeKind::EnumBigIntMember:
+        return EnumKind::BigInt;
       case ESTree::NodeKind::EnumBooleanMember:
         return EnumKind::Boolean;
       default:

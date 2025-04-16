@@ -13,6 +13,7 @@
 #include "hermes/VM/Debugger/DebugCommand.h"
 #include "hermes/VM/Debugger/Debugger.h"
 #include "hermes/VM/HermesValue.h"
+#include "hermes/VM/Runtime.h"
 
 #include <jsi/jsi.h>
 
@@ -68,10 +69,13 @@ Command &Command::operator=(Command &&) = default;
 
 Debugger::Debugger(
     ::facebook::hermes::HermesRuntime *runtime,
-    ::hermes::vm::Debugger *impl)
-    : runtime_(runtime), impl_(impl), state_(this) {
+    ::hermes::vm::Runtime &vmRuntime)
+    : runtime_(runtime),
+      vmRuntime_(vmRuntime),
+      impl_(&vmRuntime.getDebugger()),
+      state_(this) {
   using EvalResultMetadata = ::hermes::vm::Debugger::EvalResultMetadata;
-  impl->setDidPauseCallback(
+  impl_->setDidPauseCallback(
       [this](
           InterpreterState state,
           PauseReason reason,
@@ -81,7 +85,7 @@ Debugger::Debugger(
         if (!eventObserver_)
           return DebugCommand::makeContinue();
         state_.pauseReason_ = reason;
-        state_.stackTrace_ = impl_->getStackTrace(state);
+        state_.stackTrace_ = impl_->getStackTrace();
         state_.evalResult_.value = jsiValueFromHermesValue(evalResult);
         state_.evalResult_.isException = evalResultMd.isException;
         state_.evalResult_.exceptionDetails = evalResultMd.exceptionDetails;
@@ -89,12 +93,17 @@ Debugger::Debugger(
         Command command = eventObserver_->didPause(*this);
         return std::move(*command.debugCommand_);
       });
-  impl->setBreakpointResolvedCallback([this](BreakpointID breakpoint) -> void {
+  impl_->setBreakpointResolvedCallback([this](BreakpointID breakpoint) -> void {
     if (!eventObserver_) {
       return;
     }
     eventObserver_->breakpointResolved(*this, breakpoint);
   });
+}
+
+::facebook::jsi::Value Debugger::getThrownValue() {
+  auto hv = vmRuntime_.getThrownValue();
+  return jsiValueFromHermesValue(hv);
 }
 
 String Debugger::getSourceMappingUrl(uint32_t fileId) const {
@@ -103,6 +112,15 @@ String Debugger::getSourceMappingUrl(uint32_t fileId) const {
 
 std::vector<SourceLocation> Debugger::getLoadedScripts() const {
   return impl_->getLoadedScripts();
+}
+
+StackTrace Debugger::captureStackTrace() const {
+  const ::hermes::inst::Inst *ip = vmRuntime_.getCurrentIP();
+  if (ip == nullptr) {
+    // We're not currently in the interpreter loop, so just return empty stack.
+    return StackTrace{};
+  }
+  return impl_->getStackTrace();
 }
 
 uint64_t Debugger::setBreakpoint(SourceLocation loc) {

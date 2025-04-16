@@ -1,3 +1,45 @@
+## 0.22.0
+
+### `hermes-eslint`
+* Fixed analysis of mapped types' scopes
+
+### `prettier-plugin-hermes-parser`
+* Added support for printing inexact tuple type annotations `[...]`
+* Added support for printing Flow Enums with bigint members
+* Added support for printing the one-sided variant of type guards `implies x is T`
+
+## 0.21.1
+
+### `flow-api-translator`
+* Added support for translating `React.AbstractComponent` with 3 type arguments into TS. The third type argument containing render type information will be ignored.
+
+## 0.21.0
+
+### `hermes-parser`
+* Added support for `as const` expressions
+* Added support for inexact tuple type annotations `[...]`
+* Added support for parsing Flow Enums with bigint members
+* Added support for a one-sided variant to type guards `implies x is T`
+
+## 0.20.1
+
+### `hermes-eslint`
+* Scope analysis support for typeof nodes with type arguments
+
+### `babel-plugin-syntax-hermes-parser`
+* Support for use in beta releases of Babel 8
+
+## 0.20.0
+
+### `prettier-plugin-hermes-parser`
+* Added support for newer unreleased Flow syntax
+
+## 0.19.2
+
+### `hermes-parser`
+
+* Bug fixes in preparation of new feature rollout
+
 ## 0.19.1
 
 ### `hermes-eslint`

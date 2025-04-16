@@ -18,10 +18,10 @@ from collections import namedtuple
 from multiprocessing import Pool, Value
 from os import path
 
-
 try:
     import testsuite.esprima_test_runner as esprima
     from testsuite.testsuite_skiplist import (
+        CONFIGURABLE_HERMES_FEATURES,
         HANDLESAN_SKIP_LIST,
         INTL_TESTS,
         LAZY_SKIP_LIST,
@@ -35,6 +35,7 @@ except ImportError:
 
     # Hacky way to handle non-buck builds that call the file immediately.
     from testsuite_skiplist import (
+        CONFIGURABLE_HERMES_FEATURES,
         HANDLESAN_SKIP_LIST,
         INTL_TESTS,
         LAZY_SKIP_LIST,
@@ -43,7 +44,6 @@ except ImportError:
         SKIP_LIST,
         UNSUPPORTED_FEATURES,
     )
-
 
 ## This is a simple script that runs the hermes compiler on
 ## external test suites.  The script expects to find the hermes compiler under
@@ -292,7 +292,9 @@ def generateSource(content, strict, suite, flags):
 evalMatcher = re.compile(r"\beval\s*\(")
 indirectEvalMatcher = re.compile(r"\(.*,\s*eval\)\s*\(")
 assignEvalMatcher = re.compile(r"=\s*eval\s*;")
-withMatcher = re.compile(r"\bwith\s*\(")
+withMatcher = re.compile(
+    r"(?<!\.)\bwith\s*\("
+)  # Ignores the with statement but keeps the [TypedArray|Array].prototype.with function
 constMatcher = re.compile(r"\bconst\b")
 negativeMatcher = re.compile(
     r"""
@@ -319,6 +321,9 @@ featuresMatcher = re.compile(r"\s*features:\s*\[(.*)\]")
 
 # Alternate features syntax has "features:" and then bullet points using "-".
 featuresMatcher2 = re.compile(r"\s*features:\s*\n(.*)\*\/", re.MULTILINE | re.DOTALL)
+
+# Match the "Features" output of `hermes --version`.
+hermesFeaturesMatcher = re.compile(r"\s*Features:\s*\n(.*\n)", re.MULTILINE | re.DOTALL)
 
 
 def getSuite(filename):
@@ -392,7 +397,7 @@ TestContentParameters = namedtuple(
 )
 
 
-def testShouldRun(filename, content):
+def testShouldRun(filename, content, unsupported_features):
     suite = getSuite(filename)
 
     # Determine flags and strict modes before deciding to skip a test case.
@@ -475,7 +480,7 @@ def testShouldRun(filename, content):
             )
         features.discard("")
         for f in features:
-            if f in UNSUPPORTED_FEATURES + PERMANENT_UNSUPPORTED_FEATURES:
+            if f in unsupported_features or f in PERMANENT_UNSUPPORTED_FEATURES:
                 return TestContentParameters(
                     False,
                     "Skipping unsupported feature: " + f,
@@ -495,6 +500,86 @@ ESPRIMA_TEST_STATUS_MAP = {
 }
 
 
+def runVM(
+    filename,
+    lazy,
+    binary_path,
+    hvm,
+    fileToRun,
+    strictEnabled,
+    negativePhase,
+    skippedType,
+    skiplisted,
+):
+    """
+    Run the target bytecode, return None if passed, otherwise, return the
+    TestFlag and error string.
+    """
+    try:
+        printVerbose("Running with HBC VM: {}".format(filename))
+        # Run the hermes vm.
+        if lazy:
+            binary = path.join(binary_path, "hermes")
+        else:
+            binary = path.join(binary_path, hvm)
+        disableHandleSanFlag = (
+            ["-gc-sanitize-handles=0"]
+            if fileInSkiplist(filename, HANDLESAN_SKIP_LIST)
+            else []
+        )
+        args = (
+            [binary, fileToRun]
+            + es6_args
+            + extra_run_args
+            + disableHandleSanFlag
+            + useMicrotasksFlag
+        )
+        if lazy:
+            args.append("-lazy")
+            if strictEnabled:
+                args.append("-strict")
+            else:
+                args.append("-non-strict")
+        env = {"LC_ALL": "en_US.UTF-8"}
+        if sys.platform == "linux":
+            env["ICU_DATA"] = binary_path
+        printVerbose(" ".join(args))
+        subprocess.check_output(
+            args, timeout=TIMEOUT_VM, stderr=subprocess.STDOUT, env=env
+        )
+
+        if (not lazy and negativePhase == "runtime") or (lazy and negativePhase != ""):
+            printVerbose("FAIL: Expected execution to throw")
+            return (
+                (skippedType, "", 0) if skiplisted else (TestFlag.EXECUTE_FAILED, "", 0)
+            )
+        else:
+            printVerbose("PASS: Execution completed successfully")
+    except subprocess.CalledProcessError as e:
+        if (not lazy and negativePhase != "runtime") or (lazy and negativePhase == ""):
+            printVerbose(
+                "FAIL: Execution of {} threw unexpected error".format(filename)
+            )
+            printVerbose("Return code: {}".format(e.returncode))
+            if e.output:
+                printVerbose("Output:")
+                errString = e.output.decode("utf-8").strip()
+                printVerbose(textwrap.indent(errString, "\t"))
+            else:
+                printVerbose("No output received from process")
+            return (
+                (skippedType, "", 0)
+                if skiplisted
+                else (TestFlag.EXECUTE_FAILED, errString, 0)
+            )
+        else:
+            printVerbose("PASS: Execution of binary threw an error as expected")
+    except subprocess.TimeoutExpired:
+        printVerbose("FAIL: Execution of binary timed out")
+        return (skippedType, "", 0) if skiplisted else (TestFlag.EXECUTE_TIMEOUT, "", 0)
+    return None
+
+
 def runTest(
     filename,
     tests_home,
@@ -506,6 +591,7 @@ def runTest(
     esprima_runner,
     lazy,
     test_intl,
+    unsupported_features,
 ):
     """
     Runs a single js test pointed by filename
@@ -529,9 +615,11 @@ def runTest(
     if skiplisted and not test_skiplist:
         printVerbose(
             "Skipping test in skiplist{}: {}".format(
-                " (permanently)"
-                if skippedType is TestFlag.TEST_PERMANENTLY_SKIPPED
-                else "",
+                (
+                    " (permanently)"
+                    if skippedType is TestFlag.TEST_PERMANENTLY_SKIPPED
+                    else ""
+                ),
                 filename,
             )
         )
@@ -555,7 +643,7 @@ def runTest(
         content = test_contents.read().decode("utf-8")
 
     shouldRun, skipReason, permanent, flags, strictModes = testShouldRun(
-        filename, content
+        filename, content, unsupported_features
     )
 
     js_sources = []
@@ -614,12 +702,26 @@ def runTest(
     # Unsuccessful runs are ignored for simplicity.
     max_duration = 0
     for js_source in js_sources:
+        strictEnabled = ".strict" in js_source
         if lazy:
-            run_vm = True
             fileToRun = js_source
             start = time.time()
+            result = runVM(
+                filename,
+                lazy,
+                binary_path,
+                hvm,
+                fileToRun,
+                strictEnabled,
+                negativePhase,
+                skippedType,
+                skiplisted,
+            )
+            max_duration = max(max_duration, time.time() - start)
+            # Test failed or skipped
+            if result:
+                return result
         else:
-            errString = ""
             fileToRun = js_source + ".hbc"
             for optEnabled in (True, False):
                 printVerbose("\nRunning with Hermes...")
@@ -691,81 +793,23 @@ def runTest(
                         else (TestFlag.COMPILE_TIMEOUT, "", 0)
                     )
 
-        # If the compilation succeeded, run the bytecode with the specified VM.
-        if run_vm:
-            try:
-                printVerbose("Running with HBC VM: {}".format(filename))
-                # Run the hermes vm.
-                if lazy:
-                    binary = path.join(binary_path, "hermes")
-                else:
-                    binary = path.join(binary_path, hvm)
-                disableHandleSanFlag = (
-                    ["-gc-sanitize-handles=0"]
-                    if fileInSkiplist(filename, HANDLESAN_SKIP_LIST)
-                    else []
-                )
-                args = (
-                    [binary, fileToRun]
-                    + es6_args
-                    + extra_run_args
-                    + disableHandleSanFlag
-                    + useMicrotasksFlag
-                )
-                if lazy:
-                    args.append("-lazy")
-                    if strictEnabled:
-                        args.append("-strict")
-                    else:
-                        args.append("-non-strict")
-                env = {"LC_ALL": "en_US.UTF-8"}
-                if sys.platform == "linux":
-                    env["ICU_DATA"] = binary_path
-                printVerbose(" ".join(args))
-                subprocess.check_output(
-                    args, timeout=TIMEOUT_VM, stderr=subprocess.STDOUT, env=env
-                )
-
-                if (not lazy and negativePhase == "runtime") or (
-                    lazy and negativePhase != ""
-                ):
-                    printVerbose("FAIL: Expected execution to throw")
-                    return (
-                        (skippedType, "", 0)
-                        if skiplisted
-                        else (TestFlag.EXECUTE_FAILED, "", 0)
+                # If the compilation succeeded, run the bytecode with the specified VM.
+                if run_vm:
+                    result = runVM(
+                        filename,
+                        lazy,
+                        binary_path,
+                        hvm,
+                        fileToRun,
+                        strictEnabled,
+                        negativePhase,
+                        skippedType,
+                        skiplisted,
                     )
-                else:
-                    printVerbose("PASS: Execution completed successfully")
-            except subprocess.CalledProcessError as e:
-                if (not lazy and negativePhase != "runtime") or (
-                    lazy and negativePhase == ""
-                ):
-                    printVerbose(
-                        "FAIL: Execution of {} threw unexpected error".format(filename)
-                    )
-                    printVerbose("Return code: {}".format(e.returncode))
-                    if e.output:
-                        printVerbose("Output:")
-                        errString = e.output.decode("utf-8").strip()
-                        printVerbose(textwrap.indent(errString, "\t"))
-                    else:
-                        printVerbose("No output received from process")
-                    return (
-                        (skippedType, "", 0)
-                        if skiplisted
-                        else (TestFlag.EXECUTE_FAILED, errString, 0)
-                    )
-                else:
-                    printVerbose("PASS: Execution of binary threw an error as expected")
-            except subprocess.TimeoutExpired:
-                printVerbose("FAIL: Execution of binary timed out")
-                return (
-                    (skippedType, "", 0)
-                    if skiplisted
-                    else (TestFlag.EXECUTE_TIMEOUT, "", 0)
-                )
-        max_duration = max(max_duration, time.time() - start)
+                    # Test failed or skipped
+                    if result:
+                        return result
+                max_duration = max(max_duration, time.time() - start)
 
     if skiplisted:
         # If the test was skiplisted, but it passed successfully, consider that
@@ -1011,6 +1055,29 @@ def test_workdir(workdir, nuke_workdir, **kwargs):
     )
 
 
+def get_hermes_features(binary_path):
+    """
+    Run `hermes/hermesc --version` and extract the features from the output.
+    """
+    hermes_path = path.join(binary_path, "hermes")
+    if not path.exists(hermes_path):
+        # We might only have hermesc binary avaiable, e.g., as in the
+        # hermes-bytecode-compat test.
+        hermes_path = path.join(binary_path, "hermesc")
+    try:
+        output = subprocess.check_output(
+            [hermes_path, "--version"], stderr=subprocess.STDOUT
+        )
+        features = hermesFeaturesMatcher.search(output.decode("utf-8"))
+        if features is not None:
+            return {feature.strip() for feature in features.group(1).splitlines()}
+        else:
+            return set()
+    except subprocess.CalledProcessError as e:
+        print("Failed to run hermes --version: " + e.output.decode("utf-8"))
+        sys.exit(1)
+
+
 def run(
     paths,
     chunk,
@@ -1034,6 +1101,15 @@ def run(
     global verbose
 
     verbose = is_verbose
+
+    # Build a set of unsupported features that include features that can be
+    # configured in Hermes.
+    hermes_features = get_hermes_features(binary_path)
+    unsupported_features = set(UNSUPPORTED_FEATURES) | {
+        test262_feature
+        for hermes_feature, test262_feature in CONFIGURABLE_HERMES_FEATURES.items()
+        if hermes_feature not in hermes_features
+    }
 
     onlyfiles = []
     tests_home = None
@@ -1114,6 +1190,7 @@ def run(
                 esprima_runner,
                 lazy,
                 test_intl,
+                unsupported_features,
             ),
             onlyfiles,
             rangeLeft,

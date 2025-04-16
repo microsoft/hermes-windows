@@ -135,6 +135,14 @@ impl Grammar {
             .iter()
             .map(|(name, operator)| operator.codegen(name))
             .collect();
+        let node_enums: Vec<_> = self
+            .nodes
+            .keys()
+            .map(|key| {
+                let variant = format_ident!("{}", key);
+                quote!(#variant(&'a #variant))
+            })
+            .collect();
 
         quote! {
             #![allow(dead_code)]
@@ -145,7 +153,7 @@ impl Grammar {
             use std::num::NonZeroU32;
             use serde::ser::{Serializer, SerializeMap};
             use serde::{Serialize,Deserialize};
-            use crate::{JsValue, Binding, SourceRange, Number, ESTreeNode};
+            use crate::{JsValue, Binding, SourceRange, Number, ESTreeNode, Range, Introspection};
 
             #(#object_defs)*
 
@@ -155,12 +163,24 @@ impl Grammar {
 
             #(#operator_defs)*
 
-            pub trait Visitor {
+            pub trait Visitor<'ast> {
+                const VISIT_NODE: bool = false;
+                /// Execute on every node if `VISIT_NODE` is `true`
+                /// return `true` to stop traversing into children
+                fn visit_node<T: ESTreeNode + Range>(&mut self, node: &'ast T) -> bool {
+                    return false;
+                }
+
                 #(#object_visitors)*
 
                 #(#node_visitors)*
 
                 #(#enum_visitors)*
+            }
+
+            #[derive(Serialize, Debug)]
+            pub enum Node<'a> {
+                #(#node_enums),*
             }
         }
     }
@@ -191,6 +211,8 @@ impl Grammar {
             use hermes_estree::*;
             use hermes::parser::{NodePtr, NodeKind, NodeLabel };
             use hermes::utf::{utf8_with_surrogates_to_string};
+            use hermes_diagnostics::DiagnosticsResult;
+            use hermes_diagnostics::Diagnostic;
             use crate::generated_extension::*;
 
             #(#nodes)*
@@ -278,7 +300,7 @@ impl Object {
             })
             .collect();
         quote! {
-            fn #visitor_name(&mut self, ast: &#name) {
+            fn #visitor_name(&mut self, ast: &'ast #name) {
                 #(#field_visitors)*
             }
         }
@@ -353,11 +375,20 @@ impl Node {
                 #[serde(default)]
                 pub loc: Option<SourceLocation>,
 
-                #[serde(default)]
-                pub range: Option<SourceRange>,
+                pub range: SourceRange,
             }
 
-            impl ESTreeNode for #name {}
+            impl ESTreeNode for #name {
+                fn as_node_enum(&self) -> Node {
+                    Node::#name(self)
+                }
+            }
+
+            impl Range for #name {
+                fn range(&self) -> SourceRange {
+                    self.range
+                }
+            }
 
             impl Serialize for #name {
                 fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -425,7 +456,10 @@ impl Node {
             })
             .collect();
         quote! {
-            fn #visitor_name(&mut self, ast: &#name) {
+            fn #visitor_name(&mut self, ast: &'ast #name) {
+                if Self::VISIT_NODE && self.visit_node(ast) {
+                    return;
+                }
                 #(#field_visitors)*
             }
         }
@@ -456,7 +490,7 @@ impl Node {
                 if let Some(convert_with) = &field.hermes_convert_with {
                     let convert_with = format_ident!("{}", convert_with);
                     return quote! {
-                        let #field_name = #convert_with(cx, unsafe { hermes::parser::#helper(node) } );
+                        let #field_name = #convert_with(cx, unsafe { hermes::parser::#helper(node) } )?;
                     }
                 }
                 match type_kind {
@@ -479,7 +513,7 @@ impl Node {
                             }
                             _ => {
                                 quote! {
-                                    let #field_name = #type_name::convert(cx, unsafe { hermes::parser::#helper(node) });
+                                    let #field_name = #type_name::convert(cx, unsafe { hermes::parser::#helper(node) })?;
                                 }
                             }
                         }
@@ -493,19 +527,19 @@ impl Node {
                             }
                             _ => {
                                 quote! {
-                                    let #field_name = convert_option(unsafe { hermes::parser::#helper(node) }, |node| #type_name::convert(cx, node));
+                                    let #field_name = convert_option(unsafe { hermes::parser::#helper(node) }, |node| #type_name::convert(cx, node))?;
                                 }
                             }
                         }
                     }
                     TypeKind::Vec => {
                         quote! {
-                            let #field_name = convert_vec(unsafe { hermes::parser::#helper(node) }, |node| #type_name::convert(cx, node));
+                            let #field_name = convert_vec(unsafe { hermes::parser::#helper(node) }, |node| #type_name::convert(cx, node))?;
                         }
                     }
                     TypeKind::VecOfOption => {
                         quote! {
-                            let #field_name = convert_vec_of_option(unsafe { hermes::parser::#helper(node) }, |node| #type_name::convert(cx, node));
+                            let #field_name = convert_vec_of_option(unsafe { hermes::parser::#helper(node) }, |node| #type_name::convert(cx, node))?;
                         }
                     }
                 }
@@ -515,16 +549,18 @@ impl Node {
         let type_ = format_ident!("{}", self.type_.as_ref().unwrap_or(&name_str.to_string()));
         quote! {
             impl FromHermes for #name {
-                fn convert(cx: &mut Context, node: NodePtr) -> Self {
+                fn convert(cx: &mut Context, node: NodePtr) -> DiagnosticsResult<Self> {
                     let node_ref = node.as_ref();
-                    assert_eq!(node_ref.kind, NodeKind::#type_);
                     let range = convert_range(cx, node);
+                    if node_ref.kind != NodeKind::#type_ {
+                        return Err(vec![Diagnostic::invariant(format!("Expected node kind {:?}, got node kind {:?}.", NodeKind::#type_, node_ref.kind), range)]);
+                    }
                     #(#fields)*
-                    Self {
+                    Ok(Self {
                         #(#field_names,)*
                         loc: None,
-                        range: Some(range),
-                    }
+                        range,
+                    })
                 }
             }
         }
@@ -723,6 +759,17 @@ impl Enum {
                 })
             }
         }
+
+        let range_variants = sorted_variants.iter().map(|name| {
+            let variant = format_ident!("{}", name);
+            quote!(Self::#variant(node) => node.range())
+        });
+
+        let name_variants = sorted_variants.iter().map(|name| {
+            let variant = format_ident!("{}", name);
+            quote!(Self::#variant(_) => #name)
+        });
+
         quote! {
             #[derive(Serialize, Clone, Debug)]
             #[serde(untagged)]
@@ -747,6 +794,22 @@ impl Enum {
                     }
                 }
             }
+
+            impl Range for #name {
+                fn range(&self) -> SourceRange {
+                    match self {
+                        #(#range_variants),*
+                    }
+                }
+            }
+
+            impl Introspection for #name {
+                fn name(&self) -> &'static str {
+                    match self {
+                        #(#name_variants),*
+                    }
+                }
+            }
         }
     }
 
@@ -766,7 +829,7 @@ impl Enum {
             })
         }
         quote! {
-            fn #visitor_name(&mut self, ast: &#name) {
+            fn #visitor_name(&mut self, ast: &'ast #name) {
                 match ast {
                     #(#tag_matches),*
                 }
@@ -812,8 +875,8 @@ impl Enum {
 
                     tag_matches.push(quote! {
                         NodeKind::#node_variant => {
-                            let node = #inner_variant::convert(cx, node);
-                            #name::#outer_variant(#outer_variant::#inner_variant(Box::new(node)))
+                            let node = #inner_variant::convert(cx, node)?;
+                            Ok(#name::#outer_variant(#outer_variant::#inner_variant(Box::new(node))))
                         }
                     });
                 }
@@ -835,8 +898,8 @@ impl Enum {
 
                 tag_matches.push(quote! {
                     NodeKind::#node_variant => {
-                        let node = #variant_name::convert(cx, node);
-                        #name::#variant_name(Box::new(node))
+                        let node = #variant_name::convert(cx, node)?;
+                        Ok(#name::#variant_name(Box::new(node)))
                     }
                 })
             }
@@ -844,11 +907,16 @@ impl Enum {
 
         quote! {
             impl FromHermes for #name {
-                fn convert(cx: &mut Context, node: NodePtr) -> Self {
+                fn convert(cx: &mut Context, node: NodePtr) -> DiagnosticsResult<Self> {
                     let node_ref = node.as_ref();
                     match node_ref.kind {
                         #(#tag_matches),*
-                        _ => panic!("Unexpected node kind `{:?}` for `{}`", node_ref.kind, #name_str)
+                        _ => {
+                            let range = convert_range(cx, node);
+                            Err(vec![
+                                Diagnostic::invariant(format!("Unexpected node kind `{:?}` for `{}`", node_ref.kind, #name_str), range)
+                            ])
+                        }
                     }
                 }
             }
@@ -934,9 +1002,9 @@ impl Operator {
 
         quote! {
             impl FromHermesLabel for #name {
-                fn convert(cx: &mut Context, label: NodeLabel) -> Self {
+                fn convert(cx: &mut Context, label: NodeLabel) -> DiagnosticsResult<Self> {
                     let utf_str = utf8_with_surrogates_to_string(label.as_slice()).unwrap();
-                    utf_str.parse().unwrap()
+                    Ok(utf_str.parse().unwrap())
                 }
             }
         }

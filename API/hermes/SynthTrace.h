@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,8 +40,8 @@ class SynthTrace {
   /// A tagged union representing different types available in the trace.
   /// We use a an API very similar to HermesValue, but:
   ///   a) also represent the JSI type PropNameID, and
-  ///   b) the "payloads" for some the types (Objects, Strings, and PropNameIDs)
-  ///      are unique ObjectIDs, rather than actual values.
+  ///   b) the "payloads" for some the types (Objects, Strings, BigInts, Symbols
+  ///   and PropNameIDs) are unique ObjectIDs, rather than actual values.
   /// (This could probably become a std::variant when we could use C++17.)
   class TraceValue {
    public:
@@ -174,42 +175,47 @@ class SynthTrace {
   using TimePoint = std::chrono::steady_clock::time_point;
   using TimeSinceStart = std::chrono::milliseconds;
 
-  static constexpr size_t kHashNumBytes = 20;
+#define SYNTH_TRACE_RECORD_TYPES(RECORD) \
+  RECORD(BeginExecJS)                    \
+  RECORD(EndExecJS)                      \
+  RECORD(Marker)                         \
+  RECORD(CreateObject)                   \
+  RECORD(CreateString)                   \
+  RECORD(CreatePropNameID)               \
+  RECORD(CreateHostObject)               \
+  RECORD(CreateHostFunction)             \
+  RECORD(QueueMicrotask)                 \
+  RECORD(DrainMicrotasks)                \
+  RECORD(GetProperty)                    \
+  RECORD(SetProperty)                    \
+  RECORD(HasProperty)                    \
+  RECORD(GetPropertyNames)               \
+  RECORD(CreateArray)                    \
+  RECORD(ArrayRead)                      \
+  RECORD(ArrayWrite)                     \
+  RECORD(CallFromNative)                 \
+  RECORD(ConstructFromNative)            \
+  RECORD(ReturnFromNative)               \
+  RECORD(ReturnToNative)                 \
+  RECORD(CallToNative)                   \
+  RECORD(GetPropertyNative)              \
+  RECORD(GetPropertyNativeReturn)        \
+  RECORD(SetPropertyNative)              \
+  RECORD(SetPropertyNativeReturn)        \
+  RECORD(GetNativePropertyNames)         \
+  RECORD(GetNativePropertyNamesReturn)   \
+  RECORD(CreateBigInt)                   \
+  RECORD(BigIntToString)                 \
+  RECORD(SetExternalMemoryPressure)      \
+  RECORD(Utf8)                           \
+  RECORD(Global)
 
   /// RecordType is a tag used to differentiate which type of record it is.
   /// There should be a unique tag for each record type.
   enum class RecordType {
-    BeginExecJS,
-    EndExecJS,
-    Marker,
-    CreateObject,
-    CreateString,
-    CreatePropNameID,
-    CreateHostObject,
-    CreateHostFunction,
-    QueueMicrotask,
-    DrainMicrotasks,
-    GetProperty,
-    SetProperty,
-    HasProperty,
-    GetPropertyNames,
-    CreateArray,
-    ArrayRead,
-    ArrayWrite,
-    CallFromNative,
-    ConstructFromNative,
-    ReturnFromNative,
-    ReturnToNative,
-    CallToNative,
-    GetPropertyNative,
-    GetPropertyNativeReturn,
-    SetPropertyNative,
-    SetPropertyNativeReturn,
-    GetNativePropertyNames,
-    GetNativePropertyNamesReturn,
-    CreateBigInt,
-    BigIntToString,
-    SetExternalMemoryPressure,
+#define RECORD(name) name,
+    SYNTH_TRACE_RECORD_TYPES(RECORD)
+#undef RECORD
   };
 
   /// A Record is one element of a trace.
@@ -258,12 +264,6 @@ class SynthTrace {
     }
 
    protected:
-    /// Compare records for equality. Derived classes should override this, call
-    /// their parent, and mark any public versions as "final".
-    virtual bool operator==(const Record &that) const {
-      return getType() == that.getType();
-    }
-
     /// Emit JSON fields into \p os, excluding the closing curly brace.
     /// NOTE: This is overridable, and non-abstract children should call the
     /// parent.
@@ -273,9 +273,9 @@ class SynthTrace {
   /// If \p traceStream is non-null, the trace will be written to that
   /// stream.  Otherwise, no trace is written.
   explicit SynthTrace(
-      ObjectID globalObjID,
       const ::hermes::vm::RuntimeConfig &conf,
-      std::unique_ptr<llvh::raw_ostream> traceStream = nullptr);
+      std::unique_ptr<llvh::raw_ostream> traceStream = nullptr,
+      std::optional<ObjectID> = {});
 
   template <typename T, typename... Args>
   void emplace_back(Args &&...args) {
@@ -287,7 +287,7 @@ class SynthTrace {
     return records_;
   }
 
-  ObjectID globalObjID() const {
+  std::optional<ObjectID> globalObjID() const {
     return globalObjID_;
   }
 
@@ -351,7 +351,11 @@ class SynthTrace {
   /// written to the file.
   std::vector<std::unique_ptr<Record>> records_;
   /// The id of the global object.
-  const ObjectID globalObjID_;
+  /// Note: Keeping this as optional to support replaying the older trace
+  /// records before the change of TracingRuntime's PointerValue based ObjectID.
+  /// We can remove this once we remove old traces.
+  /// TODO: T189113203
+  const std::optional<ObjectID> globalObjID_;
 
  public:
   /// @name Record classes
@@ -371,7 +375,6 @@ class SynthTrace {
 
    protected:
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
-    bool operator==(const Record &that) const override;
   };
 
   /// A BeginExecJSRecord is an event where execution begins of JS source
@@ -401,8 +404,6 @@ class SynthTrace {
       return sourceHash_;
     }
 
-    bool operator==(const Record &that) const override;
-
    private:
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
 
@@ -425,7 +426,6 @@ class SynthTrace {
     explicit ReturnMixin(TraceValue value) : retVal_(value) {}
 
     void toJSONInternal(::hermes::JSONEmitter &json) const;
-    bool operator==(const ReturnMixin &that) const;
   };
 
   /// A EndExecJSRecord is an event where execution of JS source code stops.
@@ -442,7 +442,6 @@ class SynthTrace {
     RecordType getType() const override {
       return type;
     }
-    bool operator==(const Record &that) const final;
     virtual void toJSONInternal(::hermes::JSONEmitter &json) const final;
     std::vector<ObjectID> defs() const override {
       auto defs = MarkerRecord::defs();
@@ -455,12 +454,12 @@ class SynthTrace {
   /// native code.
   struct CreateObjectRecord : public Record {
     static constexpr RecordType type{RecordType::CreateObject};
+    /// The ObjectID of the object that was created by native function calls
+    /// like Runtime::createObject().
     const ObjectID objID_;
 
     explicit CreateObjectRecord(TimeSinceStart time, ObjectID objID)
         : Record(time), objID_(objID) {}
-
-    bool operator==(const Record &that) const override;
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     RecordType getType() const override {
@@ -480,12 +479,16 @@ class SynthTrace {
   /// Hermes BigIntPrimitive) is created by the native code.
   struct CreateBigIntRecord : public Record {
     static constexpr RecordType type{RecordType::CreateBigInt};
+    /// The ObjectID of the BigInt that was created by
+    /// Runtime::createBigIntFromInt64() or Runtime::createBigIntFromUint64().
     const ObjectID objID_;
     enum class Method {
       FromInt64,
       FromUint64,
     };
+    /// The method used for creating the BigInt.
     Method method_;
+    /// The value used for creating the BigInt.
     uint64_t bits_;
 
     CreateBigIntRecord(
@@ -494,8 +497,6 @@ class SynthTrace {
         Method m,
         uint64_t bits)
         : Record(time), objID_(objID), method_(m), bits_(bits) {}
-
-    bool operator==(const Record &that) const override;
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
 
@@ -512,12 +513,16 @@ class SynthTrace {
     }
   };
 
-  /// A BigIntToString is an event where a jsi::BigInt is converted to a
+  /// A BigIntToStringRecord is an event where a jsi::BigInt is converted to a
   /// string by native code
   struct BigIntToStringRecord : public Record {
     static constexpr RecordType type{RecordType::BigIntToString};
+    /// The ObjectID of the string that was returned from
+    /// Runtime::bigintToString().
     const ObjectID strID_;
+    /// The ObjectID of the BigInt that was passed to Runtime::bigintToString().
     const ObjectID bigintID_;
+    /// The radix used for converting the BigInt to a string.
     int radix_;
 
     BigIntToStringRecord(
@@ -526,8 +531,6 @@ class SynthTrace {
         ObjectID bigintID,
         int radix)
         : Record(time), strID_(strID), bigintID_(bigintID), radix_(radix) {}
-
-    bool operator==(const Record &that) const override;
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
 
@@ -548,8 +551,13 @@ class SynthTrace {
   /// Hermes StringPrimitive) is created by the native code.
   struct CreateStringRecord : public Record {
     static constexpr RecordType type{RecordType::CreateString};
+    /// The ObjectID of the string that was created by
+    /// Runtime::createStringFromAscii() or Runtime::createStringFromUtf8().
     const ObjectID objID_;
+    /// The string that was passed to Runtime::createStringFromAscii() or
+    /// Runtime::createStringFromUtf8() when the string was created.
     std::string chars_;
+    /// Whether the string was created from ASCII (true) or UTF8 (false).
     bool ascii_;
 
     // General UTF-8.
@@ -570,8 +578,6 @@ class SynthTrace {
         size_t length)
         : Record(time), objID_(objID), chars_(chars, length), ascii_(true) {}
 
-    bool operator==(const Record &that) const override;
-
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     RecordType getType() const override {
       return type;
@@ -590,9 +596,18 @@ class SynthTrace {
   /// created by the native code.
   struct CreatePropNameIDRecord : public Record {
     static constexpr RecordType type{RecordType::CreatePropNameID};
+    /// The ObjectID of the PropNameID that was created by
+    /// Runtime::createPropNameIDFromXxx() functions.
     const ObjectID propNameID_;
+    /// The string that was passed to Runtime::createPropNameIDFromAscii() or
+    /// Runtime::createPropNameIDFromUtf8().
     std::string chars_;
+    /// The String for Symbol that was passed to
+    /// Runtime::createPropNameIDFromString() or
+    /// Runtime::createPropNameIDFromSymbol().
     const TraceValue traceValue_{TraceValue::encodeUndefinedValue()};
+    /// Whether the PropNameID was created from ASCII, UTF8, jsi::String
+    /// (TRACEVALUE) or jsi::Symbol (TRACEVALUE).
     enum ValueType { ASCII, UTF8, TRACEVALUE } valueType_;
 
     // General UTF-8.
@@ -625,8 +640,6 @@ class SynthTrace {
           traceValue_(traceValue),
           valueType_(TRACEVALUE) {}
 
-    bool operator==(const Record &that) const override;
-
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     RecordType getType() const override {
       return type;
@@ -653,10 +666,13 @@ class SynthTrace {
 
   struct CreateHostFunctionRecord final : public CreateObjectRecord {
     static constexpr RecordType type{RecordType::CreateHostFunction};
+    /// The ObjectID of the PropNameID that was passed to
+    /// Runtime::createFromHostFunction().
     uint32_t propNameID_;
 #ifdef HERMESVM_API_TRACE_DEBUG
     const std::string functionName_;
 #endif
+    /// The number of parameters that the created host function takes.
     const unsigned paramCount_;
 
     CreateHostFunctionRecord(
@@ -675,8 +691,6 @@ class SynthTrace {
           paramCount_(paramCount) {
     }
 
-    bool operator==(const Record &that) const override;
-
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
 
     RecordType getType() const override {
@@ -688,12 +702,17 @@ class SynthTrace {
     }
   };
 
+  /// The base struct for GetPropertyRecord and SetPropertyRecord.
   struct GetOrSetPropertyRecord : public Record {
+    /// The ObjectID of the object that was accessed for its property.
     const ObjectID objID_;
+    /// String or PropNameID passed to getProperty/setProperty.
     const TraceValue propID_;
 #ifdef HERMESVM_API_TRACE_DEBUG
     std::string propNameDbg_;
 #endif
+    /// Returned value from getProperty, or the set value passed for
+    /// setProperty.
     const TraceValue value_;
 
     GetOrSetPropertyRecord(
@@ -713,8 +732,6 @@ class SynthTrace {
           value_(value) {
     }
 
-    bool operator==(const Record &that) const final;
-
     std::vector<ObjectID> uses() const override {
       std::vector<ObjectID> vec{objID_};
       pushIfTrackedValue(propID_, vec);
@@ -726,12 +743,11 @@ class SynthTrace {
 
   struct QueueMicrotaskRecord : public Record {
     static constexpr RecordType type{RecordType::QueueMicrotask};
+    /// The ObjectID of the callback function that was queued.
     const ObjectID callbackID_;
 
     QueueMicrotaskRecord(TimeSinceStart time, ObjectID callbackID)
         : Record(time), callbackID_(callbackID) {}
-
-    bool operator==(const Record &that) const final;
 
     RecordType getType() const override {
       return type;
@@ -746,12 +762,11 @@ class SynthTrace {
 
   struct DrainMicrotasksRecord : public Record {
     static constexpr RecordType type{RecordType::DrainMicrotasks};
+    /// maxMicrotasksHint value passed to Runtime::drainMicrotasks() call.
     int maxMicrotasksHint_;
 
     DrainMicrotasksRecord(TimeSinceStart time, int tasksHint = -1)
         : Record(time), maxMicrotasksHint_(tasksHint) {}
-
-    bool operator==(const Record &that) const final;
 
     RecordType getType() const override {
       return type;
@@ -795,10 +810,12 @@ class SynthTrace {
   /// it cannot influence the trace.)
   struct HasPropertyRecord final : public Record {
     static constexpr RecordType type{RecordType::HasProperty};
+    /// The ObjectID of the object that was accessed for its property.
     const ObjectID objID_;
 #ifdef HERMESVM_API_TRACE_DEBUG
     std::string propNameDbg_;
 #endif
+    /// The property name that was passed to hasProperty().
     const TraceValue propID_;
 
     HasPropertyRecord(
@@ -818,8 +835,6 @@ class SynthTrace {
           propID_(propID) {
     }
 
-    bool operator==(const Record &that) const final;
-
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     RecordType getType() const override {
       return type;
@@ -833,9 +848,11 @@ class SynthTrace {
 
   struct GetPropertyNamesRecord final : public Record {
     static constexpr RecordType type{RecordType::GetPropertyNames};
+    /// The ObjectID of the object that was accessed for its property.
     const ObjectID objID_;
     // Since getPropertyNames always returns an array, this can be an object id
     // rather than a TraceValue.
+    /// The ObjectID of the array that was returned by getPropertyNames().
     const ObjectID propNamesID_;
 
     explicit GetPropertyNamesRecord(
@@ -843,8 +860,6 @@ class SynthTrace {
         ObjectID objID,
         ObjectID propNamesID)
         : Record(time), objID_(objID), propNamesID_(propNamesID) {}
-
-    bool operator==(const Record &that) const final;
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     RecordType getType() const override {
@@ -862,7 +877,9 @@ class SynthTrace {
   /// length.
   struct CreateArrayRecord final : public Record {
     static constexpr RecordType type{RecordType::CreateArray};
+    /// The ObjectID of the array that was created by the createArray().
     const ObjectID objID_;
+    /// The length of the array that was passed to createArray().
     const size_t length_;
 
     explicit CreateArrayRecord(
@@ -870,8 +887,6 @@ class SynthTrace {
         ObjectID objID,
         size_t length)
         : Record(time), objID_(objID), length_(length) {}
-
-    bool operator==(const Record &that) const final;
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     RecordType getType() const override {
@@ -883,8 +898,11 @@ class SynthTrace {
   };
 
   struct ArrayReadOrWriteRecord : public Record {
+    /// The ObjectID of the array that was accessed.
     const ObjectID objID_;
+    /// The index of the element that was accessed in the array.
     const size_t index_;
+    /// The value that was read from or written to the array.
     const TraceValue value_;
 
     explicit ArrayReadOrWriteRecord(
@@ -893,8 +911,6 @@ class SynthTrace {
         size_t index,
         TraceValue value)
         : Record(time), objID_(objID), index_(index), value_(value) {}
-
-    bool operator==(const Record &that) const final;
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     std::vector<ObjectID> uses() const override {
@@ -935,9 +951,10 @@ class SynthTrace {
   };
 
   struct CallRecord : public Record {
-    /// The functionID_ is the id of the function JS object that is called from
-    /// JS.
+    /// The ObjectID of the function JS object that was called from
+    /// JS or native.
     const ObjectID functionID_;
+    /// The value of the this argument passed to the function call.
     const TraceValue thisArg_;
     /// The arguments given to a call (excluding the this parameter),
     /// already JSON stringified.
@@ -952,8 +969,6 @@ class SynthTrace {
           functionID_(functionID),
           thisArg_(thisArg),
           args_(args) {}
-
-    bool operator==(const Record &that) const final;
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     std::vector<ObjectID> uses() const override {
@@ -1013,7 +1028,6 @@ class SynthTrace {
       pushIfTrackedValue(retVal_, uses);
       return uses;
     }
-    bool operator==(const Record &that) const final;
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
   };
 
@@ -1032,7 +1046,6 @@ class SynthTrace {
       pushIfTrackedValue(retVal_, defs);
       return defs;
     }
-    bool operator==(const Record &that) const final;
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
   };
 
@@ -1053,8 +1066,14 @@ class SynthTrace {
   };
 
   struct GetOrSetPropertyNativeRecord : public Record {
+    /// The ObjectID of the host object that was being accessed for its
+    /// property.
     const ObjectID hostObjectID_;
+    /// The ObjectID of the PropNameID that was passed to HostObject::get()
+    /// or HostObject::set().
     const ObjectID propNameID_;
+    /// The UTF-8 string of the PropNameID that was passed to HostObject::get()
+    /// or HostObject::set().
     const std::string propName_;
 
     GetOrSetPropertyNativeRecord(
@@ -1076,7 +1095,6 @@ class SynthTrace {
     }
 
    protected:
-    bool operator==(const Record &that) const override;
   };
 
   /// A GetPropertyNativeRecord is an event where JS tries to access a property
@@ -1089,7 +1107,6 @@ class SynthTrace {
     RecordType getType() const override {
       return type;
     }
-    bool operator==(const Record &that) const final;
   };
 
   struct GetPropertyNativeReturnRecord final : public Record,
@@ -1105,7 +1122,6 @@ class SynthTrace {
       pushIfTrackedValue(retVal_, uses);
       return uses;
     }
-    bool operator==(const Record &that) const final;
 
    protected:
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
@@ -1117,6 +1133,7 @@ class SynthTrace {
   /// can arbitrarily affect the JS heap during the accessor.
   struct SetPropertyNativeRecord final : public GetOrSetPropertyNativeRecord {
     static constexpr RecordType type{RecordType::SetPropertyNative};
+    /// The value that was passed to HostObject::set() call.
     TraceValue value_;
 
     SetPropertyNativeRecord(
@@ -1132,7 +1149,6 @@ class SynthTrace {
               propName),
           value_(value) {}
 
-    bool operator==(const Record &that) const final;
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
     RecordType getType() const override {
       return type;
@@ -1151,10 +1167,6 @@ class SynthTrace {
     RecordType getType() const override {
       return type;
     }
-    bool operator==(const Record &that) const final {
-      // Since there are no fields to compare, any two will always be the same.
-      return Record::operator==(that);
-    }
   };
 
   /// A GetNativePropertyNamesRecord records an event where JS asked for a list
@@ -1162,6 +1174,8 @@ class SynthTrace {
   /// the returned list of property names.
   struct GetNativePropertyNamesRecord : public Record {
     static constexpr RecordType type{RecordType::GetNativePropertyNames};
+    /// The ObjectID of the host object that was being accessed for
+    /// HostObjet::getPropertyNames() call.
     const ObjectID hostObjectID_;
 
     explicit GetNativePropertyNamesRecord(
@@ -1178,20 +1192,20 @@ class SynthTrace {
     std::vector<ObjectID> uses() const override {
       return {hostObjectID_};
     }
-
-    bool operator==(const Record &that) const override;
   };
 
   /// A GetNativePropertyNamesReturnRecord records what property names were
   /// returned by the GetNativePropertyNames query.
   struct GetNativePropertyNamesReturnRecord final : public Record {
     static constexpr RecordType type{RecordType::GetNativePropertyNamesReturn};
-    const std::vector<std::string> propNames_;
+
+    /// Returned list of property names
+    const std::vector<TraceValue> propNameIDs_;
 
     explicit GetNativePropertyNamesReturnRecord(
         TimeSinceStart time,
-        const std::vector<std::string> &propNames)
-        : Record(time), propNames_(propNames) {}
+        const std::vector<TraceValue> &propNameIDs)
+        : Record(time), propNameIDs_(propNameIDs) {}
 
     RecordType getType() const override {
       return type;
@@ -1199,12 +1213,21 @@ class SynthTrace {
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
 
-    bool operator==(const Record &that) const override;
+    std::vector<ObjectID> uses() const override {
+      auto uses = Record::uses();
+      for (const auto &val : propNameIDs_) {
+        pushIfTrackedValue(val, uses);
+      }
+      return uses;
+    }
   };
 
   struct SetExternalMemoryPressureRecord final : public Record {
     static constexpr RecordType type{RecordType::SetExternalMemoryPressure};
+    /// The ObjectID of the object that was passed to
+    /// Runtime::setExternalMemoryPressure() call.
     const ObjectID objID_;
+    /// The value passed to Runtime::setExternalMemoryPressure() call.
     const size_t amount_;
 
     explicit SetExternalMemoryPressureRecord(
@@ -1222,7 +1245,53 @@ class SynthTrace {
     }
 
     void toJSONInternal(::hermes::JSONEmitter &json) const override;
-    bool operator==(const Record &that) const override;
+  };
+
+  /// An Utf8Record is an event where a PropNameID or String or Symbol was
+  /// converted to utf8.
+  struct Utf8Record final : public Record {
+    static constexpr RecordType type{RecordType::Utf8};
+    /// PropNameID, String or Symbol passed to utf8() or symbolToString() as an
+    /// argument
+    const TraceValue objID_;
+    /// Returned string from utf8() or symbolToString()
+    const std::string retVal_;
+
+    explicit Utf8Record(
+        TimeSinceStart time,
+        const TraceValue objID,
+        std::string retval)
+        : Record(time), objID_(objID), retVal_(std::move(retval)) {}
+
+    RecordType getType() const override {
+      return type;
+    }
+
+    std::vector<ObjectID> uses() const override {
+      std::vector<ObjectID> vec;
+      pushIfTrackedValue(objID_, vec);
+      return vec;
+    }
+
+    void toJSONInternal(::hermes::JSONEmitter &json) const override;
+  };
+
+  struct GlobalRecord final : public Record {
+    static constexpr RecordType type{RecordType::Global};
+    const ObjectID objID_; // global's ObjectID returned from Runtime::global().
+
+    explicit GlobalRecord(TimeSinceStart time, ObjectID objID)
+        : Record(time), objID_(objID) {}
+
+    RecordType getType() const override {
+      return type;
+    }
+
+    std::vector<ObjectID> defs() const override {
+      return {objID_};
+    }
+
+    void toJSONInternal(::hermes::JSONEmitter &json) const override;
   };
 
   /// Completes writing of the trace to the trace stream.  If writing
@@ -1230,11 +1299,6 @@ class SynthTrace {
   /// of data.
   void flushAndDisable(const ::hermes::vm::GCExecTrace &gcTrace);
 };
-
-llvh::raw_ostream &operator<<(
-    llvh::raw_ostream &os,
-    SynthTrace::RecordType type);
-std::istream &operator>>(std::istream &is, SynthTrace::RecordType &type);
 
 } // namespace tracing
 } // namespace hermes

@@ -183,6 +183,12 @@ pub trait Visitor_DEPRECATED<'ast> {
             Declaration::TSTypeAliasDeclaration(_declaration) => {
                 todo!("visit TSTypeAliasDeclaration")
             }
+            Declaration::TypeAlias(_) => {
+                todo!("visit TypeAlias")
+            }
+            Declaration::OpaqueType(_) => {
+                todo!("visit OpaqueType")
+            }
         }
     }
 
@@ -305,6 +311,9 @@ pub trait Visitor_DEPRECATED<'ast> {
             }
             Statement::TSTypeAliasDeclaration(_stmt) => {
                 todo!("visit TSTypeAliasDeclaration")
+            }
+            Statement::TypeAlias(_) => {
+                todo!("visit TypeAlias")
             }
         }
     }

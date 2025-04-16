@@ -10,4 +10,6 @@
 
 'use strict';
 
-export {Referencer, ReferencerOptions} from './Referencer';
+// $FlowFixMe[prop-missing]
+export {Referencer} from './Referencer';
+export type {ReferencerOptions} from './Referencer';

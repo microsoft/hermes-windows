@@ -17,7 +17,7 @@
 
 // lint directives to let us do some basic validation of generated files
 /* eslint no-undef: 'error', no-unused-vars: ['error', {vars: "local"}], no-redeclare: 'error' */
-/* global $NonMaybeType, Partial, $ReadOnly, $ReadOnlyArray */
+/* global $NonMaybeType, Partial, $ReadOnly, $ReadOnlyArray, $FlowFixMe */
 
 'use strict';
 
@@ -1070,6 +1070,7 @@ function deserializeTupleTypeAnnotation() {
     type: 'TupleTypeAnnotation',
     loc: this.addEmptyLoc(),
     types: this.deserializeNodeList(),
+    inexact: this.deserializeBoolean(),
   };
 }
 function deserializeTupleTypeSpreadElement() {
@@ -1159,7 +1160,7 @@ function deserializeTypePredicate() {
     loc: this.addEmptyLoc(),
     parameterName: this.deserializeNode(),
     typeAnnotation: this.deserializeNode(),
-    asserts: this.deserializeBoolean(),
+    kind: this.deserializeString(),
   };
 }
 function deserializeInterfaceTypeAnnotation() {
@@ -1468,6 +1469,13 @@ function deserializeAsExpression() {
     typeAnnotation: this.deserializeNode(),
   };
 }
+function deserializeAsConstExpression() {
+  return {
+    type: 'AsConstExpression',
+    loc: this.addEmptyLoc(),
+    expression: this.deserializeNode(),
+  };
+}
 function deserializeInferredPredicate() {
   return {type: 'InferredPredicate', loc: this.addEmptyLoc()};
 }
@@ -1498,6 +1506,15 @@ function deserializeEnumStringBody() {
 function deserializeEnumNumberBody() {
   return {
     type: 'EnumNumberBody',
+    loc: this.addEmptyLoc(),
+    members: this.deserializeNodeList(),
+    explicitType: this.deserializeBoolean(),
+    hasUnknownMembers: this.deserializeBoolean(),
+  };
+}
+function deserializeEnumBigIntBody() {
+  return {
+    type: 'EnumBigIntBody',
     loc: this.addEmptyLoc(),
     members: this.deserializeNodeList(),
     explicitType: this.deserializeBoolean(),
@@ -1539,6 +1556,14 @@ function deserializeEnumStringMember() {
 function deserializeEnumNumberMember() {
   return {
     type: 'EnumNumberMember',
+    loc: this.addEmptyLoc(),
+    id: this.deserializeNode(),
+    init: this.deserializeNode(),
+  };
+}
+function deserializeEnumBigIntMember() {
+  return {
+    type: 'EnumBigIntMember',
     loc: this.addEmptyLoc(),
     id: this.deserializeNode(),
     init: this.deserializeNode(),
@@ -2132,16 +2157,19 @@ module.exports = [
   deserializeTypeParameterInstantiation,
   deserializeTypeCastExpression,
   deserializeAsExpression,
+  deserializeAsConstExpression,
   deserializeInferredPredicate,
   deserializeDeclaredPredicate,
   deserializeEnumDeclaration,
   deserializeEnumStringBody,
   deserializeEnumNumberBody,
+  deserializeEnumBigIntBody,
   deserializeEnumBooleanBody,
   deserializeEnumSymbolBody,
   deserializeEnumDefaultedMember,
   deserializeEnumStringMember,
   deserializeEnumNumberMember,
+  deserializeEnumBigIntMember,
   deserializeEnumBooleanMember,
   deserializeComponentParameter,
   deserializeFlowLast,

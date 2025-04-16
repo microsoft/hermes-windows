@@ -40,7 +40,7 @@ workflows:
 # Default settings for Apple jobs (apple-runtime, test-apple-runtime)
 apple_defaults: &apple_defaults
   macos:
-    xcode: 13.4.1
+    xcode: 15.3
   resource_class: macos.m1.medium.gen1
   working_directory: ~/hermes
   environment:
@@ -54,7 +54,7 @@ jobs:
   android:
     executor:
       name: android/android-machine
-      tag: 2022.04.1
+      tag: 2024.01.1
     working_directory: /home/circleci
     environment:
       HERMES_WS_DIR: /home/circleci
@@ -168,7 +168,10 @@ jobs:
       - run:
           name: Install dependencies
           command: |
-            brew install cmake ninja
+            brew install ninja
+            # TODO: See comment in build-apple-runtime.
+            brew update
+            brew install cmake
       - run:
           name: Build the test application
           command: |
@@ -189,8 +192,17 @@ jobs:
             xcodebuild test \
               -workspace ApplePlatformsIntegrationTests.xcworkspace \
               -configuration Debug \
-              -destination 'platform=iOS Simulator,name=iPhone 11' \
+              -destination 'platform=iOS Simulator,name=iPhone 15' \
               -scheme ApplePlatformsIntegrationMobileTests
+          working_directory: test/ApplePlatformsIntegrationTestApp
+      - run:
+          name: Test Apple Vision application
+          command: |
+            xcodebuild test \
+              -workspace ApplePlatformsIntegrationTests.xcworkspace \
+              -configuration Debug \
+              -destination 'platform=visionOS Simulator,name=Apple Vision Pro' \
+              -scheme ApplePlatformsIntegrationVisionOSTests
           working_directory: test/ApplePlatformsIntegrationTestApp
 
   build-apple-runtime:
@@ -207,8 +219,13 @@ jobs:
       - run:
           name: Install dependencies
           command: |
-            brew install cmake ninja
+            brew install ninja
             sudo gem install cocoapods
+            # TODO: Building for Apple Vision Pro requires a newer version of
+            # CMake than is available by default. Remove "brew update" once the
+            # CircleCI image contains CMake > 3.29.2.
+            brew update
+            brew install cmake
       - run:
           name: Build the iOS frameworks
           command: ./utils/build-ios-framework.sh
@@ -222,6 +239,8 @@ jobs:
             - ~/hermes/build_catalyst
             - ~/hermes/build_iphonesimulator
             - ~/hermes/build_macosx
+            - ~/hermes/build_xros
+            - ~/hermes/build_xrsimulator
             - ~/hermes/destroot
 
   package-apple-runtime:
@@ -236,8 +255,10 @@ jobs:
       - run:
           name: Install dependencies
           command: |
-            brew install cmake ninja
             sudo gem install cocoapods
+            # TODO: See comment in build-apple-runtime.
+            brew update
+            brew install cmake
       - run:
           name: Package the framework
           command: |
@@ -583,7 +604,7 @@ jobs:
               -DIMPORT_HERMESC=build_host/ImportHermesc.cmake \
               -DCMAKE_BUILD_TYPE=Debug -DHERMES_UNICODE_LITE=ON \
               -DCMAKE_CXX_FLAGS=-O2  -DCMAKE_C_FLAGS=-O2 \
-              -DCMAKE_EXE_LINKER_FLAGS="-sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=256KB" \
+              -DCMAKE_EXE_LINKER_FLAGS="-sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=256KB -sGLOBAL_BASE=16384" \
               -DHERMES_ENABLE_DEBUGGER=OFF -DHERMES_SLOW_DEBUG=OFF \
               -DHERMES_IS_MOBILE_BUILD=ON
 
@@ -596,7 +617,7 @@ jobs:
               -DCMAKE_TOOLCHAIN_FILE=$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake \
               -DIMPORT_HERMESC=build_host/ImportHermesc.cmake \
               -DCMAKE_BUILD_TYPE=Release -DHERMES_UNICODE_LITE=ON \
-              -DCMAKE_EXE_LINKER_FLAGS="-sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=256KB -g2" \
+              -DCMAKE_EXE_LINKER_FLAGS="-sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=256KB -sGLOBAL_BASE=16384 -g2" \
               -DHERMES_ENABLE_DEBUGGER=OFF -DHERMES_IS_MOBILE_BUILD=ON
 
             cmake --build build_wasm_opt --target hermesSandboxImpl -j 4
@@ -616,7 +637,7 @@ jobs:
   test-e2e:
     executor:
       name: android/android-machine
-      tag: 2023.06.1
+      tag: 2024.01.1
     working_directory: /home/circleci
     environment:
       REACT_NATIVE_OVERRIDE_HERMES_DIR: /home/circleci/hermes
@@ -650,7 +671,7 @@ jobs:
   test-e2e-intl:
     executor:
       name: android/android-machine
-      tag: 2022.04.1
+      tag: 2024.01.1
     working_directory: /home/circleci
     environment:
       HERMES_WS_DIR: /home/circleci
@@ -664,7 +685,7 @@ jobs:
             # Check out test262 at a pinned revision to reduce flakiness
             git clone https://github.com/tc39/test262
             cd test262
-            git checkout 19da3ca0757248f7595ee09d532bb83dd438f2b5
+            git checkout 62626e083bd506124aac6c799464d76c2c42851b
       - run:
           name: Build Hermes Compiler
           command: |
@@ -691,7 +712,7 @@ jobs:
             # Check out test262 at a pinned revision to reduce flakiness
             git clone https://github.com/tc39/test262
             cd test262
-            git checkout 19da3ca0757248f7595ee09d532bb83dd438f2b5
+            git checkout 62626e083bd506124aac6c799464d76c2c42851b
       - run:
           name: Run Hermes tests and test262 with Intl
           command: |

@@ -35,6 +35,9 @@
                 },
                 "body": {
                     "type": "ClassBody"
+                },
+                "range": {
+                    "type": "SourceRange"
                 }
             }
         },
@@ -49,6 +52,11 @@
                 },
                 "body": {
                     "type": "Option<FunctionBody>"
+                },
+                "return_type": {
+                    "type": "Option<TypeAnnotation>",
+                    "rename": "returnType",
+                    "optional": true
                 },
                 "is_generator": {
                     "type": "bool",
@@ -65,8 +73,7 @@
                     "optional": true
                 },
                 "range": {
-                    "type": "Option<SourceRange>",
-                    "optional": true
+                    "type": "SourceRange"
                 }
             }
         },
@@ -105,10 +112,7 @@
                 "type_annotation": {
                     "type": "Option<TypeAnnotation>",
                     "optional": true,
-                    "rename": "typeAnnotation",
-                    "hermes_default": true,
-                    "TODO": "support HermesParser"
-                }
+                    "rename": "typeAnnotation"                }
             }
         },
         "Literal": {
@@ -647,6 +651,16 @@
                 }
             }
         },
+        "AsExpression": {
+             "fields": {
+                "expression": {
+                    "type": "Expression"
+                },
+                "typeAnnotation": {
+                    "type": "TypeAnnotationEnum"
+                }
+            }
+        },
         "ImportDeclaration": {
             "fields": {
                 "specifiers": {
@@ -899,7 +913,7 @@
                 "is_method": {
                     "type": "bool",
                     "rename": "method",
-                    "TODO": "fixed value `false`" 
+                    "TODO": "fixed value `false`"
                 }
             }
         },
@@ -1091,8 +1105,358 @@
             },
             "TODO": "Non-standard HermesParser node"
         },
+        "TypeAnnotation": {
+            "fields": {
+                "type_annotation": {
+                    "type": "TypeAnnotationEnum",
+                    "rename": "typeAnnotation"
+                }
+            }
+        },
         "TSTypeAnnotation": {},
-        "TSTypeAliasDeclaration": {}
+        "TSTypeAliasDeclaration": {},
+        "ExistsTypeAnnotation": {},
+        "EmptyTypeAnnotation": {},
+        "StringTypeAnnotation": {},
+        "NumberTypeAnnotation": {},
+        "StringLiteralTypeAnnotation": {
+            "fields": {
+                "value": {
+                    "type": "String",
+                    "hermes_convert_with": "convert_string_value"
+                },
+                "raw": {
+                    "type": "String",
+                    "hermes_convert_with": "convert_string_value"
+                }
+            }
+        },
+        "NumberLiteralTypeAnnotation": {
+            "fields": {
+                "value": {
+                    "type": "Number"
+                },
+                "raw": {
+                    "type": "String"
+                }
+            }
+        },
+        "BigIntLiteralTypeAnnotation": {
+            "fields": {
+                "raw": {
+                    "type": "String"
+                }
+            }
+        },
+        "BooleanTypeAnnotation": {},
+        "BooleanLiteralTypeAnnotation": {
+            "fields": {
+                "value": {
+                    "type": "bool"
+                },
+                "raw": {
+                    "type": "String"
+                }
+            }
+        },
+        "NullLiteralTypeAnnotation": {},
+        "SymbolTypeAnnotation": {},
+        "AnyTypeAnnotation": {},
+        "MixedTypeAnnotation": {},
+        "BigIntTypeAnnotation": {},
+        "VoidTypeAnnotation": {},
+        "FunctionTypeAnnotation": {
+            "fields": {
+                "params": {
+                    "type": "Vec<FunctionTypeParam>",
+                    "optional": true
+                },
+                "this":{
+                    "type": "Option<FunctionTypeParam>",
+                    "optional": true
+                },
+                "return_type": {
+                    "type": "FlowTypeAnnotation",
+                    "rename": "returnType"
+                },
+                "rest": {
+                    "type": "Option<FunctionTypeParam>",
+                    "optional": true
+                },
+                "type_parameters": {
+                    "type": "Option<TypeParameterInstantiation>",
+                    "optional": true,
+                    "rename": "typeParameters"
+                }
+            }
+        },
+        "FunctionTypeParam": {
+            "fields": {
+                "name": {
+                    "type": "Option<Identifier>",
+                    "optional": true
+                },
+                "type_annotation": {
+                    "type": "FlowTypeAnnotation",
+                    "rename": "typeAnnotation"
+                },
+                "optional": {
+                    "type": "bool"
+                }
+            }
+        },
+        "GenericTypeAnnotation": {
+            "fields": {
+                "id": {
+                    "type": "TypeIdentifier"
+                },
+                "type_parameters": {
+                    "type": "Option<TypeParameterInstantiation>",
+                    "optional": true,
+                    "rename": "typeParameters"
+                }
+            }
+        },
+        "TypeParameterInstantiation": {
+            "fields": {
+                "params": {
+                    "type": "Vec<FlowTypeAnnotation>"
+                }
+            }
+        },
+        "TypeAlias": {
+            "fields": {
+                "id": {
+                    "type": "Identifier"
+                },
+                "type_parameters": {
+                    "type": "Option<TypeParameterInstantiation>",
+                    "optional": true,
+                    "rename": "typeParameters"
+                },
+                "right": {
+                    "type": "FlowTypeAnnotation"
+                }
+            }
+        },
+        "OpaqueType": {
+            "fields": {
+                "id": {
+                    "type": "Identifier"
+                },
+                "type_parameters": {
+                    "type": "Option<TypeParameterInstantiation>",
+                    "optional": true,
+                    "rename": "typeParameters"
+                },
+                "impltype": {
+                    "type": "FlowTypeAnnotation"
+                },
+                "supertype": {
+                    "type": "Option<FlowTypeAnnotation>",
+                    "optional": true
+                }
+            }
+        },
+        "NullableTypeAnnotation": {
+            "fields": {
+                "type_annotation": {
+                    "type": "FlowTypeAnnotation",
+                    "rename": "typeAnnotation"
+                }
+            }
+        },
+        "QualifiedTypeIdentifier": {
+            "fields": {
+                "qualification": {
+                    "type": "Identifier"
+                },
+                "id": {
+                    "type": "Identifier"
+                }
+            }
+        },
+        "TypeofTypeAnnotation": {
+            "fields": {
+                "argument": {
+                    "type": "TypeIdentifier"
+                }
+            }
+        },
+        "KeyofTypeAnnotation": {
+            "fields": {
+                "argument": {
+                    "type": "FlowTypeAnnotation"
+                }
+            }
+        },
+        "QualifiedTypeofIdentifier": {
+            "fields": {
+                "qualification": {
+                    "type": "TypeIdentifier"
+                },
+                "id": {
+                    "type": "Identifier"
+                }
+            }
+        },
+        "ObjectTypeAnnotation": {
+            "fields": {
+                "properties": {
+                    "type": "Vec<ObjectTypePropertyType>"
+                },
+                "indexers": {
+                    "type": "Vec<ObjectTypeIndexer>"
+                },
+                "call_properties": {
+                    "type": "Vec<ObjectTypeCallProperty>",
+                    "rename": "callProperties"
+                },
+                "internal_slots": {
+                    "type": "Vec<ObjectTypeInternalSlot>",
+                    "rename": "internalSlots"
+                },
+                "inexact": {
+                    "type": "bool"
+                },
+                "exact": {
+                    "type": "bool"
+                }
+            }
+        },
+        "ObjectTypeProperty": {
+            "fields": {
+                "key": {
+                    "type": "ObjectTypePropertyKey"
+                  },
+                  "value": {
+                    "type": "FlowTypeAnnotation"
+                  },
+                  "method": {
+                    "type": "bool"
+                  },
+                  "optional": {
+                    "type": "bool"
+                  },
+                  "is_static": {
+                    "type": "bool",
+                    "rename": "static"
+                  },
+                  "proto": {
+                    "type": "bool"
+                  },
+                  "variance": {
+                    "type": "Option<Variance>",
+                    "optional": true,
+                    "hermes_default": true
+                  },
+                  "kind": {
+                    "type": "PropertyKind"
+                  }
+            }
+        },
+        "ObjectTypeIndexer": {
+            "fields": {
+                "id": {
+                    "type": "Option<Identifier>",
+                    "optional": true
+                  },
+                  "key": {
+                    "type": "FlowTypeAnnotation"
+                  },
+                  "value": {
+                    "type": "FlowTypeAnnotation"
+                  },
+                  "is_static": {
+                    "type": "bool",
+                    "rename": "static"
+                  },
+                  "variance": {
+                    "type": "Option<Variance>",
+                    "optional": true,
+                    "hermes_default": true
+                  }
+            }
+        },
+        "ObjectTypeInternalSlot": {
+            "fields": {
+                "id": {
+                    "type": "Identifier"
+                  },
+                  "value": {
+                    "type": "FlowTypeAnnotation"
+                  },
+                  "optional": {
+                    "type": "bool"
+                  },
+                  "is_static": {
+                    "type": "bool",
+                    "rename": "static"
+                  },
+                  "method": {
+                    "type": "bool"
+                  }
+            }
+        },
+        "ObjectTypeCallProperty": {
+            "fields": {
+                "value": {
+                    "type": "FlowTypeAnnotation"
+                },
+                "is_static": {
+                    "type": "bool",
+                    "rename": "static"
+                }
+            }
+        },
+        "ObjectTypeSpreadProperty": {
+            "fields": {
+                "argument": {
+                    "type": "FlowTypeAnnotation"
+                }
+            }
+        },
+        "UnionTypeAnnotation": {
+            "fields": {
+                "types": {
+                    "type": "Vec<FlowTypeAnnotation>"
+                }
+            }
+        },
+        "IntersectionTypeAnnotation": {
+            "fields": {
+                "types": {
+                    "type": "Vec<FlowTypeAnnotation>"
+                }
+            }
+        },
+        "IndexedAccessType": {
+            "fields": {
+                "objectType": {
+                    "type": "FlowTypeAnnotation"
+                },
+                "indexType": {
+                    "type": "FlowTypeAnnotation"
+                }
+            }
+        },
+        "OptionalIndexedAccessType": {
+            "fields": {
+                "objectType": {
+                    "type": "FlowTypeAnnotation"
+                },
+                "indexType": {
+                    "type": "FlowTypeAnnotation"
+                }
+            }
+        },
+        "TupleTypeAnnotation": {
+            "fields": {
+                "types": {
+                    "type": "Vec<FlowTypeAnnotation>"
+                }
+            }
+        }
     },
     "enums": {
         "Statement": [
@@ -1117,7 +1481,8 @@
             "TSTypeAliasDeclaration",
             "VariableDeclaration",
             "WhileStatement",
-            "WithStatement"
+            "WithStatement",
+            "TypeAlias"
         ],
         "Expression": [
             "ArrayExpression",
@@ -1154,7 +1519,8 @@
             "ThisExpression",
             "UnaryExpression",
             "UpdateExpression",
-            "YieldExpression"
+            "YieldExpression",
+            "AsExpression"
         ],
         "_Literal": [
             "Literal",
@@ -1167,7 +1533,9 @@
             "ClassDeclaration",
             "FunctionDeclaration",
             "VariableDeclaration",
-            "TSTypeAliasDeclaration"
+            "TSTypeAliasDeclaration",
+            "TypeAlias",
+            "OpaqueType"
         ],
         "ImportDeclarationSpecifier": [
             "ImportSpecifier",
@@ -1256,7 +1624,7 @@
             "JSXNamespacedName"
         ],
         "JSXChildItem": [
-            "JSXText", 
+            "JSXText",
             "JSXStringLiteral",
             "JSXExpressionContainer",
             "JSXSpreadChild",
@@ -1278,8 +1646,53 @@
             "PrivateIdentifier",
             "PrivateName"
         ],
-        "TypeAnnotation": [
-            "TSTypeAnnotation"
+        "TypeAnnotationEnum": [
+            "TSTypeAnnotation",
+            "FlowTypeAnnotation"
+        ],
+        "FlowTypeAnnotation": [
+            "ExistsTypeAnnotation",
+            "EmptyTypeAnnotation",
+            "StringTypeAnnotation",
+            "NumberTypeAnnotation",
+            "StringLiteralTypeAnnotation",
+            "NumberLiteralTypeAnnotation",
+            "BigIntLiteralTypeAnnotation",
+            "BooleanTypeAnnotation",
+            "BooleanLiteralTypeAnnotation",
+            "NullLiteralTypeAnnotation",
+            "SymbolTypeAnnotation",
+            "AnyTypeAnnotation",
+            "MixedTypeAnnotation",
+            "BigIntTypeAnnotation",
+            "VoidTypeAnnotation",
+            "FunctionTypeAnnotation",
+            "GenericTypeAnnotation",
+            "NullableTypeAnnotation",
+            "QualifiedTypeIdentifier",
+            "TypeofTypeAnnotation",
+            "KeyofTypeAnnotation",
+            "QualifiedTypeofIdentifier",
+            "ObjectTypeAnnotation",
+            "ObjectTypeProperty",
+            "UnionTypeAnnotation",
+            "IntersectionTypeAnnotation",
+            "IndexedAccessType",
+            "OptionalIndexedAccessType",
+            "TupleTypeAnnotation"
+        ],
+        "ObjectTypePropertyType": [
+            "ObjectTypeProperty",
+            "ObjectTypeSpreadProperty"
+        ],
+        "ObjectTypePropertyKey": [
+            "Identifier",
+            "_Literal"
+        ],
+        "TypeIdentifier": [
+            "Identifier",
+            "QualifiedTypeIdentifier",
+            "QualifiedTypeofIdentifier"
         ]
     },
     "operators": {
@@ -1362,6 +1775,10 @@
             "Method": "method",
             "Get": "get",
             "Set": "set"
+        },
+        "Variance": {
+            "Minus": "minus",
+            "Plus": "plus"
         }
     }
 }

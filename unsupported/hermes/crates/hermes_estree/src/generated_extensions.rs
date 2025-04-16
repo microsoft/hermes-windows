@@ -17,12 +17,23 @@ use crate::ImportDeclarationSpecifier;
 use crate::JSXElementName;
 use crate::JSXMemberExpression;
 use crate::JSXMemberExpressionOrIdentifier;
+use crate::Node;
 use crate::Pattern;
 use crate::SourceRange;
 use crate::SourceType;
 
 /// Sentinel trait to distinguish AST *node* types
-pub trait ESTreeNode {}
+pub trait ESTreeNode {
+    fn as_node_enum(&self) -> Node;
+}
+
+pub trait Range {
+    fn range(&self) -> SourceRange;
+}
+
+pub trait Introspection {
+    fn name(&self) -> &'static str;
+}
 
 impl Default for SourceType {
     fn default() -> Self {
@@ -30,25 +41,15 @@ impl Default for SourceType {
     }
 }
 
-impl Pattern {
-    pub fn range(&self) -> Option<SourceRange> {
-        match self {
-            Self::ArrayPattern(pattern) => pattern.range,
-            Self::AssignmentPattern(pattern) => pattern.range,
-            Self::Identifier(pattern) => pattern.range,
-            Self::ObjectPattern(pattern) => pattern.range,
-            Self::RestElement(pattern) => pattern.range,
-        }
+impl ESTreeNode for Pattern {
+    fn as_node_enum(&self) -> Node {
+        todo!()
     }
 }
 
-impl ImportDeclarationSpecifier {
-    pub fn range(&self) -> Option<SourceRange> {
-        match self {
-            Self::ImportDefaultSpecifier(specifier) => specifier.range,
-            Self::ImportNamespaceSpecifier(specifier) => specifier.range,
-            Self::ImportSpecifier(specifier) => specifier.range,
-        }
+impl ESTreeNode for ImportDeclarationSpecifier {
+    fn as_node_enum(&self) -> Node {
+        todo!()
     }
 }
 
@@ -107,7 +108,17 @@ impl IntoFunction for ArrowFunctionExpression {
     }
 }
 
-impl ESTreeNode for Function {}
+impl Range for Function {
+    fn range(&self) -> SourceRange {
+        self.range
+    }
+}
+
+impl ESTreeNode for Function {
+    fn as_node_enum(&self) -> Node {
+        todo!()
+    }
+}
 
 impl IntoFunction for Function {
     fn function(&self) -> &Function {
@@ -145,7 +156,11 @@ impl IntoClass for ClassExpression {
     }
 }
 
-impl ESTreeNode for Class {}
+impl ESTreeNode for Class {
+    fn as_node_enum(&self) -> Node {
+        todo!()
+    }
+}
 
 impl IntoClass for Class {
     fn class(&self) -> &Class {

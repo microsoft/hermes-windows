@@ -192,10 +192,12 @@ export type ESNode =
   | HookDeclaration
   | EnumDeclaration
   | EnumNumberBody
+  | EnumBigIntBody
   | EnumStringBody
   | EnumStringMember
   | EnumDefaultedMember
   | EnumNumberMember
+  | EnumBigIntMember
   | EnumBooleanBody
   | EnumBooleanMember
   | EnumSymbolBody
@@ -465,6 +467,7 @@ export type Expression =
   | ChainExpression
   | TypeCastExpression
   | AsExpression
+  | AsConstExpression
   | JSXFragment
   | JSXElement;
 
@@ -1286,6 +1289,7 @@ export interface KeyofTypeAnnotation extends BaseNode {
 export interface TupleTypeAnnotation extends BaseNode {
   +type: 'TupleTypeAnnotation';
   +types: $ReadOnlyArray<TypeAnnotationType>;
+  +inexact: boolean;
 }
 export interface TupleTypeSpreadElement extends BaseNode {
   +type: 'TupleTypeSpreadElement';
@@ -1369,7 +1373,7 @@ export interface TypePredicate extends BaseNode {
   +type: 'TypePredicate';
   +parameterName: Identifier;
   +typeAnnotation: TypeAnnotationType | null;
-  +asserts: boolean;
+  +kind: null | 'asserts' | 'implies';
 }
 
 export interface FunctionTypeAnnotation extends BaseNode {
@@ -1536,6 +1540,10 @@ export interface AsExpression extends BaseNode {
   +expression: Expression;
   +typeAnnotation: TypeAnnotationType;
 }
+export interface AsConstExpression extends BaseNode {
+  +type: 'AsConstExpression';
+  +expression: Expression;
+}
 
 interface BaseInterfaceNode extends BaseNode {
   +body: ObjectTypeAnnotation;
@@ -1552,7 +1560,7 @@ export interface InterfaceDeclaration extends BaseInterfaceDeclaration {
 
 export interface InterfaceExtends extends BaseNode {
   +type: 'InterfaceExtends';
-  +id: Identifier;
+  +id: Identifier | QualifiedTypeIdentifier;
   +typeParameters: null | TypeParameterInstantiation;
 
   +parent: InterfaceDeclaration | DeclareInterface;
@@ -1596,7 +1604,12 @@ export interface TypeParameterInstantiation extends BaseNode {
 export interface EnumDeclaration extends BaseNode {
   +type: 'EnumDeclaration';
   +id: Identifier;
-  +body: EnumNumberBody | EnumStringBody | EnumBooleanBody | EnumSymbolBody;
+  +body:
+    | EnumNumberBody
+    | EnumBigIntBody
+    | EnumStringBody
+    | EnumBooleanBody
+    | EnumSymbolBody;
 }
 
 interface BaseEnumBody extends BaseNode {
@@ -1621,6 +1634,23 @@ export interface EnumNumberMember extends BaseNode {
   +init: NumericLiteral;
 
   +parent: EnumNumberBody;
+}
+
+export interface EnumBigIntBody extends BaseInferrableEnumBody {
+  +type: 'EnumBigIntBody';
+  // enum bigint members cannot be defaulted
+  +members: $ReadOnlyArray<EnumBigIntMember>;
+  +explicitType: boolean;
+
+  +parent: EnumDeclaration;
+}
+
+export interface EnumBigIntMember extends BaseNode {
+  +type: 'EnumBigIntMember';
+  +id: Identifier;
+  +init: BigIntLiteral;
+
+  +parent: EnumBigIntBody;
 }
 
 export interface EnumStringBody extends BaseInferrableEnumBody {

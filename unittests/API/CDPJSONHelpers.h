@@ -9,18 +9,21 @@
 #define HERMES_UNITTESTS_API_CDPJSONHELPERS_H
 
 #include <hermes/Parser/JSONParser.h>
+#include <hermes/cdp/MessageTypes.h>
 
 namespace facebook {
 namespace hermes {
 
 using namespace ::hermes::parser;
-namespace m = ::facebook::hermes::inspector_modern::chrome::message;
+namespace m = ::facebook::hermes::cdp::message;
 
 struct JSONScope {
   JSONScope();
   ~JSONScope();
 
+  JSONValue *parse(const std::string &str);
   JSONObject *parseObject(const std::string &str);
+  std::optional<JSONObject *> tryParseObject(const std::string &json);
   std::string getString(JSONObject *obj, std::vector<std::string> paths);
   long long getNumber(JSONObject *obj, std::vector<std::string> paths);
   bool getBoolean(JSONObject *obj, std::vector<std::string> paths);
@@ -32,8 +35,23 @@ struct JSONScope {
 };
 
 struct FrameInfo {
-  FrameInfo(const std::string &functionName, int lineNumber, int scopeCount)
+  FrameInfo(
+      const std::string &functionName,
+      uint32_t lineNumber,
+      uint32_t scopeCount)
       : functionName(functionName),
+        lineNumberMin(lineNumber),
+        lineNumberMax(lineNumber),
+        scopeCount(scopeCount),
+        columnNumber(debugger::kInvalidLocation) {}
+
+  FrameInfo(
+      const std::string &callFrameId,
+      const std::string &functionName,
+      uint32_t lineNumber,
+      uint32_t scopeCount)
+      : callFrameId(callFrameId),
+        functionName(functionName),
         lineNumberMin(lineNumber),
         lineNumberMax(lineNumber),
         scopeCount(scopeCount),
@@ -54,12 +72,22 @@ struct FrameInfo {
     return *this;
   }
 
+  FrameInfo &setThisType(const std::string &type) {
+    thisType = type;
+    return *this;
+  }
+
+  std::optional<std::string> callFrameId;
   std::string functionName;
   uint32_t lineNumberMin;
   uint32_t lineNumberMax;
   uint32_t scopeCount;
   uint32_t columnNumber;
   std::string scriptId;
+  // If set, we optionally verify the type of the 'this' object. The 'this'
+  // object should always exist in Debugger.CallFrame, but it's not necessary to
+  // verify it with every test.
+  std::optional<std::string> thisType;
 };
 
 struct BreakpointLocation {
@@ -94,6 +122,8 @@ std::unique_ptr<T> getValue(
 struct PropInfo {
   PropInfo(const std::string &type) : type(type) {}
 
+  explicit PropInfo() : type("<ignored>"), accessor(true) {}
+
   PropInfo &setSubtype(const std::string &subtypeParam) {
     subtype = subtypeParam;
     return *this;
@@ -110,14 +140,43 @@ struct PropInfo {
     return *this;
   }
 
+  /// \note ignored for internal property descriptors.
+  PropInfo &setConfigurable(bool configurableParam) {
+    configurable = configurableParam;
+    return *this;
+  }
+
+  /// \note ignored for internal property descriptors.
+  PropInfo &setEnumerable(bool enumerableParam) {
+    enumerable = enumerableParam;
+    return *this;
+  }
+
+  /// \note ignored for internal property descriptors.
+  PropInfo &setWritable(bool writableParam) {
+    writable = writableParam;
+    return *this;
+  }
+
+  PropInfo &setAccessor(bool accessorParam) {
+    accessor = accessorParam;
+    return *this;
+  }
+
   std::string type;
   std::optional<std::string> subtype;
   std::optional<m::JSONBlob> value;
   std::optional<std::string> unserializableValue;
+  bool configurable{true};
+  bool enumerable{true};
+  bool writable{true};
+  bool accessor{false};
 };
 
-void ensureErrorResponse(const std::string &message, int id);
-void ensureOkResponse(const std::string &message, int id);
+/// Ensure that \p message is a an error response with the given \p id,
+/// and return the error description.
+std::string ensureErrorResponse(const std::string &message, long long id);
+void ensureOkResponse(const std::string &message, long long id);
 
 void ensureNotification(const std::string &message, const std::string &method);
 
@@ -128,10 +187,18 @@ m::debugger::PausedNotification ensurePaused(
 
 void ensureEvalResponse(
     const std::string &message,
-    int id,
+    long long id,
     const char *expectedValue);
-void ensureEvalResponse(const std::string &message, int id, bool expectedValue);
-void ensureEvalResponse(const std::string &message, int id, int expectedValue);
+void ensureEvalResponse(
+    const std::string &message,
+    long long id,
+    bool expectedValue);
+void ensureEvalResponse(
+    const std::string &message,
+    long long id,
+    int expectedValue);
+
+std::string ensureObjectEvalResponse(const std::string &message, int id);
 
 void ensureEvalException(
     const std::string &message,
@@ -149,9 +216,19 @@ m::debugger::BreakpointId ensureSetBreakpointByUrlResponse(
     int id,
     std::vector<BreakpointLocation> locations);
 
-std::unordered_map<std::string, std::string> ensureProps(
+m::runtime::GetPropertiesResponse ensureProps(
     const std::string &message,
-    const std::unordered_map<std::string, PropInfo> &infos);
+    const std::unordered_map<std::string, PropInfo> &infos,
+    const std::unordered_map<std::string, PropInfo> &internalInfos);
+
+std::string serializeRuntimeCallFunctionOnRequest(
+    const m::runtime::CallFunctionOnRequest &req);
+m::runtime::GetPropertiesResponse parseRuntimeGetPropertiesResponse(
+    const std::string &json);
+
+std::unordered_map<std::string, m::runtime::PropertyDescriptor> indexProps(
+    const std::vector<m::runtime::PropertyDescriptor> &props);
+
 } // namespace hermes
 } // namespace facebook
 

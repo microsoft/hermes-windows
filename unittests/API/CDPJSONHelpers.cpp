@@ -5,28 +5,31 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#ifdef HERMES_ENABLE_DEBUGGER
+
 #include <hermes/DebuggerAPI.h>
 #include <hermes/Support/ErrorHandling.h>
-#include <hermes/inspector/chrome/MessageTypesInlines.h>
-#include <hermes/inspector/chrome/tests/TestHelpers.h>
+#include <hermes/cdp/MessageTypesInlines.h>
 
 #include "CDPJSONHelpers.h"
+#include "CDPTestHelpers.h"
 
-using namespace facebook::hermes::inspector_modern::chrome;
+using namespace facebook::hermes::cdp;
 using namespace hermes::parser;
 
 namespace facebook {
 namespace hermes {
 
-void ensureErrorResponse(const std::string &message, int id) {
+std::string ensureErrorResponse(const std::string &message, long long id) {
   JSLexer::Allocator allocator;
   JSONFactory factory(allocator);
   auto response =
       mustMake<m::ErrorResponse>(mustParseStrAsJsonObj(message, factory));
   EXPECT_EQ(response.id, id);
+  return response.message;
 }
 
-void ensureOkResponse(const std::string &message, int id) {
+void ensureOkResponse(const std::string &message, long long id) {
   JSLexer::Allocator allocator;
   JSONFactory factory(allocator);
   auto response =
@@ -59,7 +62,7 @@ std::unique_ptr<T> getValue(
     std::vector<std::string> paths) {
   value = getJSONValue(value, paths);
   std::unique_ptr<T> target = m::valueFromJson<T>(value);
-  return std::move(target);
+  return target;
 }
 
 const JSONObject *getJSONObject(
@@ -111,7 +114,11 @@ void expectCallFrames(
   for (const FrameInfo &info : infos) {
     const m::debugger::CallFrame &frame = frames[i];
 
-    EXPECT_EQ(frame.callFrameId, std::to_string(i));
+    if (info.callFrameId.has_value()) {
+      EXPECT_EQ(frame.callFrameId, info.callFrameId.value());
+    } else {
+      EXPECT_EQ(frame.callFrameId, std::to_string(i));
+    }
     EXPECT_EQ(frame.functionName, info.functionName);
     EXPECT_GE(frame.location.lineNumber, info.lineNumberMin);
     EXPECT_LE(frame.location.lineNumber, info.lineNumberMax);
@@ -136,6 +143,10 @@ void expectCallFrames(
       }
     }
 
+    if (info.thisType.has_value()) {
+      EXPECT_EQ(frame.thisObj.type, info.thisType.value());
+    }
+
     i++;
   }
 }
@@ -153,17 +164,25 @@ m::debugger::PausedNotification ensurePaused(
   return notification;
 }
 
-std::unordered_map<std::string, std::string> ensureProps(
+m::runtime::GetPropertiesResponse ensureProps(
     const std::string &message,
-    const std::unordered_map<std::string, PropInfo> &infos) {
+    const std::unordered_map<std::string, PropInfo> &infos,
+    const std::unordered_map<std::string, PropInfo> &internalInfos) {
   JSLexer::Allocator allocator;
   JSONFactory factory(allocator);
   auto resp = mustMake<m::runtime::GetPropertiesResponse>(
       mustParseStrAsJsonObj(message, factory));
 
-  std::unordered_map<std::string, std::string> objectIds;
-
   EXPECT_EQ(resp.result.size(), infos.size());
+
+  if (internalInfos.size() > 0) {
+    EXPECT_TRUE(resp.internalProperties.has_value());
+    EXPECT_EQ(resp.internalProperties.value().size(), internalInfos.size());
+  } else {
+    EXPECT_TRUE(
+        !resp.internalProperties.has_value() ||
+        resp.internalProperties.value().size() == 0);
+  }
 
   for (size_t i = 0; i < resp.result.size(); i++) {
     m::runtime::PropertyDescriptor &desc = resp.result[i];
@@ -174,46 +193,111 @@ std::unordered_map<std::string, std::string> ensureProps(
     if (infoIt != infos.end()) {
       const PropInfo &info = infoIt->second;
 
-      EXPECT_TRUE(desc.value.has_value());
+      if (!info.accessor) {
+        EXPECT_TRUE(desc.value.has_value());
 
-      m::runtime::RemoteObject &remoteObj = desc.value.value();
-      EXPECT_EQ(remoteObj.type, info.type);
+        m::runtime::RemoteObject &remoteObj = desc.value.value();
+        EXPECT_EQ(remoteObj.type, info.type);
 
-      if (info.subtype.has_value()) {
-        EXPECT_TRUE(remoteObj.subtype.has_value());
-        EXPECT_EQ(remoteObj.subtype.value(), info.subtype.value());
+        if (info.subtype.has_value()) {
+          EXPECT_TRUE(remoteObj.subtype.has_value());
+          EXPECT_EQ(remoteObj.subtype.value(), info.subtype.value());
+        }
+
+        if (info.value.has_value()) {
+          EXPECT_TRUE(remoteObj.value.has_value());
+          JSLexer::Allocator jsonAlloc;
+          JSONFactory factory(jsonAlloc);
+          EXPECT_TRUE(jsonValsEQ(
+              mustParseStr(remoteObj.value.value(), factory),
+              mustParseStr(info.value.value(), factory)));
+        }
+
+        if (info.unserializableValue.has_value()) {
+          EXPECT_TRUE(remoteObj.unserializableValue.has_value());
+          EXPECT_EQ(
+              remoteObj.unserializableValue.value(),
+              info.unserializableValue.value());
+        }
+
+        if ((info.type == "object" && info.subtype != "null") ||
+            info.type == "function") {
+          EXPECT_TRUE(remoteObj.objectId.has_value());
+        }
       }
 
-      if (info.value.has_value()) {
-        EXPECT_TRUE(remoteObj.value.has_value());
-        JSLexer::Allocator jsonAlloc;
-        JSONFactory factory(jsonAlloc);
-        EXPECT_TRUE(jsonValsEQ(
-            mustParseStr(remoteObj.value.value(), factory),
-            mustParseStr(info.value.value(), factory)));
-      }
-
-      if (info.unserializableValue.has_value()) {
-        EXPECT_TRUE(remoteObj.unserializableValue.has_value());
-        EXPECT_EQ(
-            remoteObj.unserializableValue.value(),
-            info.unserializableValue.value());
-      }
-
-      if ((info.type == "object" && info.subtype != "null") ||
-          info.type == "function") {
-        EXPECT_TRUE(remoteObj.objectId.has_value());
-        objectIds[desc.name] = remoteObj.objectId.value();
+      EXPECT_EQ(desc.configurable, info.configurable);
+      EXPECT_EQ(desc.enumerable, info.enumerable);
+      if (info.accessor) {
+        EXPECT_EQ(desc.writable, std::nullopt);
+      } else {
+        EXPECT_EQ(desc.writable, info.writable);
       }
     }
   }
 
-  return objectIds;
+  if (resp.internalProperties.has_value()) {
+    for (size_t i = 0; i < resp.internalProperties->size(); i++) {
+      m::runtime::InternalPropertyDescriptor &desc =
+          resp.internalProperties.value()[i];
+
+      auto infoIt = internalInfos.find(desc.name);
+      EXPECT_FALSE(infoIt == internalInfos.end()) << desc.name;
+
+      if (infoIt != internalInfos.end()) {
+        const PropInfo &info = infoIt->second;
+
+        EXPECT_FALSE(info.accessor)
+            << "internal properties can't have accessor descriptors";
+
+        EXPECT_TRUE(desc.value.has_value());
+
+        m::runtime::RemoteObject &remoteObj = desc.value.value();
+        EXPECT_EQ(remoteObj.type, info.type);
+
+        if (info.subtype.has_value()) {
+          EXPECT_TRUE(remoteObj.subtype.has_value());
+          EXPECT_EQ(remoteObj.subtype.value(), info.subtype.value());
+        }
+
+        if (info.value.has_value()) {
+          EXPECT_TRUE(remoteObj.value.has_value());
+          JSLexer::Allocator jsonAlloc;
+          JSONFactory factory(jsonAlloc);
+          EXPECT_TRUE(jsonValsEQ(
+              mustParseStr(remoteObj.value.value(), factory),
+              mustParseStr(info.value.value(), factory)));
+        }
+
+        if (info.unserializableValue.has_value()) {
+          EXPECT_TRUE(remoteObj.unserializableValue.has_value());
+          EXPECT_EQ(
+              remoteObj.unserializableValue.value(),
+              info.unserializableValue.value());
+        }
+      }
+    }
+  }
+
+  return resp;
+}
+
+std::unordered_map<std::string, m::runtime::PropertyDescriptor> indexProps(
+    const std::vector<m::runtime::PropertyDescriptor> &props) {
+  JSLexer::Allocator allocator;
+  JSONFactory factory(allocator);
+  std::unordered_map<std::string, m::runtime::PropertyDescriptor> indexedProps;
+  for (const auto &prop : props) {
+    EXPECT_FALSE(indexedProps.count(prop.name))
+        << "Duplicate property name: " << prop.name;
+    indexedProps[prop.name] = clone(prop, factory);
+  }
+  return indexedProps;
 }
 
 void ensureEvalResponse(
     const std::string &message,
-    int id,
+    long long id,
     const char *expectedValue) {
   JSLexer::Allocator allocator;
   JSONFactory factory(allocator);
@@ -230,7 +314,7 @@ void ensureEvalResponse(
 
 void ensureEvalResponse(
     const std::string &message,
-    int id,
+    long long id,
     bool expectedValue) {
   JSLexer::Allocator allocator;
   JSONFactory factory(allocator);
@@ -243,7 +327,10 @@ void ensureEvalResponse(
   EXPECT_FALSE(resp.exceptionDetails.has_value());
 }
 
-void ensureEvalResponse(const std::string &message, int id, int expectedValue) {
+void ensureEvalResponse(
+    const std::string &message,
+    long long id,
+    int expectedValue) {
   JSLexer::Allocator allocator;
   JSONFactory factory(allocator);
   auto resp = mustMake<m::debugger::EvaluateOnCallFrameResponse>(
@@ -253,6 +340,23 @@ void ensureEvalResponse(const std::string &message, int id, int expectedValue) {
   EXPECT_EQ(resp.result.type, "number");
   EXPECT_EQ(std::stoi(*resp.result.value), expectedValue);
   EXPECT_FALSE(resp.exceptionDetails.has_value());
+}
+
+std::string ensureObjectEvalResponse(const std::string &message, int id) {
+  JSLexer::Allocator allocator;
+  JSONFactory factory(allocator);
+  auto resp = mustMake<m::debugger::EvaluateOnCallFrameResponse>(
+      mustParseStrAsJsonObj(message, factory));
+
+  EXPECT_EQ(resp.id, id);
+  EXPECT_EQ(resp.result.type, "object");
+  EXPECT_FALSE(resp.exceptionDetails.has_value());
+
+  EXPECT_TRUE(resp.result.objectId.has_value());
+  EXPECT_TRUE(resp.result.preview.has_value());
+  EXPECT_EQ(resp.result.preview->type, "object");
+
+  return resp.result.objectId.value();
 }
 
 void ensureEvalException(
@@ -266,10 +370,13 @@ void ensureEvalException(
       mustParseStrAsJsonObj(message, factory));
 
   EXPECT_EQ(resp.id, id);
-  EXPECT_TRUE(resp.exceptionDetails.has_value());
+  ASSERT_TRUE(resp.exceptionDetails.has_value());
 
   m::runtime::ExceptionDetails &details = resp.exceptionDetails.value();
   EXPECT_EQ(details.text, exceptionText);
+
+  ASSERT_TRUE(details.exception.has_value());
+  EXPECT_TRUE(details.exception->objectId.has_value());
 
   // TODO: Hermes doesn't seem to populate the line number for the exception?
   EXPECT_EQ(details.lineNumber, 0);
@@ -289,6 +396,8 @@ void ensureEvalException(
 
     i++;
   }
+
+  EXPECT_TRUE(resp.result.objectId.has_value());
 }
 
 m::debugger::BreakpointId ensureSetBreakpointResponse(
@@ -326,7 +435,7 @@ m::debugger::BreakpointId ensureSetBreakpointByUrlResponse(
       resp.breakpointId,
       std::to_string(facebook::hermes::debugger::kInvalidBreakpoint));
   EXPECT_EQ(resp.locations.size(), locations.size());
-  for (int i = 0; i < locations.size(); i++) {
+  for (size_t i = 0; i != locations.size(); i++) {
     if (locations[i].scriptId) {
       EXPECT_EQ(resp.locations[i].scriptId, locations[i].scriptId);
     }
@@ -337,6 +446,19 @@ m::debugger::BreakpointId ensureSetBreakpointByUrlResponse(
     }
   }
   return resp.breakpointId;
+}
+
+std::string serializeRuntimeCallFunctionOnRequest(
+    const m::runtime::CallFunctionOnRequest &req) {
+  return req.toJsonStr();
+}
+
+m::runtime::GetPropertiesResponse parseRuntimeGetPropertiesResponse(
+    const std::string &json) {
+  JSLexer::Allocator allocator;
+  JSONFactory factory(allocator);
+  return mustMake<m::runtime::GetPropertiesResponse>(
+      mustParseStrAsJsonObj(json, factory));
 }
 
 struct JSONScope::Private {
@@ -350,8 +472,16 @@ JSONScope::JSONScope() : private_(std::make_unique<Private>()) {}
 
 JSONScope::~JSONScope() {}
 
+JSONValue *JSONScope::parse(const std::string &json) {
+  return mustParseStr(json, private_->factory);
+}
+
 JSONObject *JSONScope::parseObject(const std::string &json) {
   return mustParseStrAsJsonObj(json, private_->factory);
+}
+
+std::optional<JSONObject *> JSONScope::tryParseObject(const std::string &json) {
+  return parseStrAsJsonObj(json, private_->factory);
 }
 
 std::string JSONScope::getString(
@@ -384,3 +514,5 @@ const JSONArray *JSONScope::getArray(
 
 } // namespace hermes
 } // namespace facebook
+
+#endif // HERMES_ENABLE_DEBUGGER

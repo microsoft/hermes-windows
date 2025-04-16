@@ -7,21 +7,25 @@
 
 #include "DebuggerDomainAgent.h"
 
-#include <hermes/inspector/chrome/RemoteObjectConverters.h>
+#include <hermes/cdp/RemoteObjectConverters.h>
 
 namespace facebook {
 namespace hermes {
 namespace cdp {
 
 using namespace facebook::hermes::debugger;
-using namespace facebook::hermes::inspector_modern::chrome;
+
+static const char *const kBreakpointsKey = "breakpoints";
+
+enum class PausedNotificationReason { kException, kOther, kStep };
 
 DebuggerDomainAgent::DebuggerDomainAgent(
     int32_t executionContextID,
     HermesRuntime &runtime,
     AsyncDebuggerAPI &asyncDebugger,
     SynchronizedOutboundCallback messageCallback,
-    std::shared_ptr<RemoteObjectsTable> objTable)
+    std::shared_ptr<RemoteObjectsTable> objTable,
+    DomainState &state)
     : DomainAgent(
           executionContextID,
           std::move(messageCallback),
@@ -29,13 +33,37 @@ DebuggerDomainAgent::DebuggerDomainAgent(
       runtime_(runtime),
       asyncDebugger_(asyncDebugger),
       debuggerEventCallbackId_(kInvalidDebuggerEventCallbackID),
+      state_(state),
       enabled_(false),
-      paused_(false) {}
+      paused_(false) {
+  std::unique_ptr<StateValue> value = state_.getCopy({kBreakpointsKey});
+  if (value) {
+    DictionaryStateValue *dict =
+        dynamic_cast<DictionaryStateValue *>(value.get());
+    assert(
+        dict != nullptr &&
+        "Expecting a DictionaryStateValue for the \"breakpoints\" key");
+    for (auto &[key, stateValue] : dict->values) {
+      CDPBreakpointDescription *bpStateValue =
+          dynamic_cast<CDPBreakpointDescription *>(stateValue.get());
+      assert(
+          dict != nullptr &&
+          "Expecting a CDPBreakpointDescription for each breakpoint");
+
+      CDPBreakpointID id = std::stoull(key);
+      cdpBreakpoints_.emplace(id, CDPBreakpoint(*bpStateValue));
+
+      // Ensure we don't re-use persisted breakpoint IDs; advance the ID counter
+      // past any imported breakpoints.
+      if (id >= nextBreakpointID_) {
+        nextBreakpointID_ = id + 1;
+      }
+    }
+  }
+}
 
 DebuggerDomainAgent::~DebuggerDomainAgent() {
-  // Also remove DebuggerEventCallback here in case we don't receive a
-  // Debugger.disable command prior to destruction.
-  asyncDebugger_.removeDebuggerEventCallback_TS(debuggerEventCallbackId_);
+  cleanUp();
 }
 
 void DebuggerDomainAgent::handleDebuggerEvent(
@@ -51,7 +79,7 @@ void DebuggerDomainAgent::handleDebuggerEvent(
       break;
     case DebuggerEventType::Exception:
       paused_ = true;
-      sendPauseOnExceptionNotificationToClient();
+      sendPausedNotificationToClient(PausedNotificationReason::kException);
       break;
     case DebuggerEventType::Resumed:
       if (paused_) {
@@ -63,30 +91,34 @@ void DebuggerDomainAgent::handleDebuggerEvent(
     case DebuggerEventType::Breakpoint:
       if (breakpointsActive_) {
         paused_ = true;
-        sendPausedNotificationToClient();
+        sendPausedNotificationToClient(PausedNotificationReason::kOther);
       } else {
         asyncDebugger_.resumeFromPaused(AsyncDebugCommand::Continue);
       }
       break;
     case DebuggerEventType::DebuggerStatement:
+      paused_ = true;
+      sendPausedNotificationToClient(PausedNotificationReason::kOther);
+      break;
     case DebuggerEventType::StepFinish:
+      paused_ = true;
+      sendPausedNotificationToClient(PausedNotificationReason::kStep);
+      break;
     case DebuggerEventType::ExplicitPause:
       paused_ = true;
-      sendPausedNotificationToClient();
+      sendPausedNotificationToClient(PausedNotificationReason::kOther);
       break;
+    default:
+      assert(false && "unknown DebuggerEventType");
+      asyncDebugger_.resumeFromPaused(AsyncDebugCommand::Continue);
   }
 }
 
-void DebuggerDomainAgent::enable(const m::debugger::EnableRequest &req) {
+void DebuggerDomainAgent::enable() {
   if (enabled_) {
-    sendResponseToClient(m::makeErrorResponse(
-        req.id,
-        m::ErrorCode::InvalidRequest,
-        "Debugger domain already enabled"));
     return;
   }
   enabled_ = true;
-  sendResponseToClient(m::makeOkResponse(req.id));
 
   // The debugger just got enabled; inform the client about all scripts.
   for (auto &srcLoc : runtime_.getDebugger().getLoadedScripts()) {
@@ -136,29 +168,38 @@ void DebuggerDomainAgent::enable(const m::debugger::EnableRequest &req) {
   // clients and the program could have already been paused.
   if (asyncDebugger_.isWaitingForCommand()) {
     paused_ = true;
-    sendPausedNotificationToClient();
+    sendPausedNotificationToClient(PausedNotificationReason::kOther);
   }
 }
 
-void DebuggerDomainAgent::disable(const m::debugger::DisableRequest &req) {
-  if (!checkDebuggerEnabled(req)) {
-    return;
-  }
+void DebuggerDomainAgent::enable(const m::debugger::EnableRequest &req) {
+  // Match V8 behavior of returning success even if domain is already enabled
+  enable();
+  sendResponseToClient(m::makeOkResponse(req.id));
+}
 
+void DebuggerDomainAgent::cleanUp() {
   // This doesn't support other debug clients also setting breakpoints. If we
   // need that functionality, then we might need to track breakpoints set by
   // this client and only remove those.
   runtime_.getDebugger().deleteAllBreakpoints();
 
-  asyncDebugger_.removeDebuggerEventCallback_TS(debuggerEventCallbackId_);
-  debuggerEventCallbackId_ = kInvalidDebuggerEventCallbackID;
+  if (debuggerEventCallbackId_ != kInvalidDebuggerEventCallbackID) {
+    asyncDebugger_.removeDebuggerEventCallback_TS(debuggerEventCallbackId_);
+    debuggerEventCallbackId_ = kInvalidDebuggerEventCallbackID;
+  }
+
   // This doesn't work well if there are other debug clients that also toggle
   // this flag. If we need that functionality, then DebuggerAPI needs to be
   // changed.
   runtime_.getDebugger().setShouldPauseOnScriptLoad(false);
+}
 
+void DebuggerDomainAgent::disable(const m::debugger::DisableRequest &req) {
+  if (enabled_) {
+    cleanUp();
+  }
   enabled_ = false;
-
   sendResponseToClient(m::makeOkResponse(req.id));
 }
 
@@ -239,31 +280,37 @@ void DebuggerDomainAgent::evaluateOnCallFrame(
     return;
   }
 
+  // Copy members of req before returning from this function.
+  long long reqId = req.id;
+  std::string objectGroup = req.objectGroup.value_or("");
+  ObjectSerializationOptions serializationOptions;
+  serializationOptions.returnByValue = req.returnByValue.value_or(false);
+  serializationOptions.generatePreview = req.generatePreview.value_or(false);
+
   uint32_t frameIndex = (uint32_t)atoi(req.callFrameId.c_str());
   asyncDebugger_.evalWhilePaused(
       req.expression,
       frameIndex,
-      [&req, this](HermesRuntime &runtime, const debugger::EvalResult &result) {
+      [reqId,
+       objectGroup = std::move(objectGroup),
+       serializationOptions = std::move(serializationOptions),
+       this](HermesRuntime &runtime, const debugger::EvalResult &result) {
         m::debugger::EvaluateOnCallFrameResponse resp;
-        resp.id = req.id;
+        resp.id = reqId;
         if (result.isException) {
-          resp.exceptionDetails =
-              m::runtime::makeExceptionDetails(result.exceptionDetails);
+          resp.exceptionDetails = m::runtime::makeExceptionDetails(
+              runtime, result, *objTable_, objectGroup);
+          // In V8, @cdp Debugger.evaluateOnCallFrame populates the `result`
+          // field with the exception value.
+          resp.result = m::runtime::makeRemoteObjectForError(
+              runtime, result.value, *objTable_, objectGroup);
         } else {
-          auto remoteObjPtr = std::make_shared<m::runtime::RemoteObject>();
-
-          std::string objectGroup = req.objectGroup.value_or("");
-          bool byValue = req.returnByValue.value_or(false);
-          bool generatePreview = req.generatePreview.value_or(false);
-          *remoteObjPtr = m::runtime::makeRemoteObject(
-              runtime_,
+          resp.result = m::runtime::makeRemoteObject(
+              runtime,
               result.value,
               *objTable_,
               objectGroup,
-              byValue,
-              generatePreview);
-
-          resp.result = std::move(*remoteObjPtr);
+              serializationOptions);
         }
         sendResponseToClient(resp);
       });
@@ -377,29 +424,80 @@ void DebuggerDomainAgent::removeBreakpoint(
 
   // Remove the CDP breakpoint
   cdpBreakpoints_.erase(cdpBreakpoint);
+
+  // Get a Transaction, which will be committed when exiting the scope of the
+  // function. All state modifications should be done within this Transaction.
+  DomainState::Transaction transaction = state_.transaction();
+  transaction.remove({kBreakpointsKey, req.breakpointId});
+
   sendResponseToClient(m::makeOkResponse(req.id));
 }
 
 void DebuggerDomainAgent::setBreakpointsActive(
     const m::debugger::SetBreakpointsActiveRequest &req) {
-  if (!checkDebuggerEnabled(req)) {
+  if (!enabled_) {
+    sendResponseToClient(m::makeOkResponse(req.id));
     return;
   }
   breakpointsActive_ = req.active;
   sendResponseToClient(m::makeOkResponse(req.id));
 }
 
-void DebuggerDomainAgent::sendPausedNotificationToClient() {
+void DebuggerDomainAgent::sendPausedNotificationToClient(
+    PausedNotificationReason reason) {
   m::debugger::PausedNotification note;
-  note.reason = "other";
-  note.callFrames = m::debugger::makeCallFrames(
-      runtime_.getDebugger().getProgramState(), *objTable_, runtime_);
-  sendNotificationToClient(note);
-}
+  switch (reason) {
+    case PausedNotificationReason::kException: {
+      note.reason = "exception";
 
-void DebuggerDomainAgent::sendPauseOnExceptionNotificationToClient() {
-  m::debugger::PausedNotification note;
-  note.reason = "exception";
+      // Although the documentation lists the "data" field as optional for the
+      // @cdp Debugger.paused event:
+      // https://chromedevtools.github.io/devtools-protocol/tot/Debugger/#event-paused
+      // it is accessed unconditionally by the front-end when the pause reason
+      // is "exception". "data" is passed in as "auxData" via:
+      // https://github.com/facebookexperimental/rn-chrome-devtools-frontend/blob/9a23d4c7c4c2d1a3d9e913af38d6965f474c4284/front_end/core/sdk/DebuggerModel.ts#L994
+      // and "auxData" stored in a DebuggerPausedDetails instance:
+      // https://github.com/facebookexperimental/rn-chrome-devtools-frontend/blob/9a23d4c7c4c2d1a3d9e913af38d6965f474c4284/front_end/core/sdk/DebuggerModel.ts#L642
+      // which then has its fields accessed in:
+      // https://github.com/facebookexperimental/rn-chrome-devtools-frontend/blob/main/front_end/panels/sources/DebuggerPausedMessage.ts#L225
+      // If the "data" ("auxData") object is absent, accessing its fields will
+      // throw, breaking the display of pause information. Thus, we always
+      // populate "data" with an object. The "data" field has no schema in the
+      // protocol metadata that we use to generate message structures, so we
+      // need to manually construct a JSON object here. The structure expected
+      // by the front-end (specifically, the "description" field) can be
+      // inferred from the field access at the URL above. The front-end does
+      // gracefully handle missing fields on the "data" object, so we can
+      // consider the "description" field optional.
+      std::string data;
+      llvh::raw_string_ostream dataStream{data};
+      ::hermes::JSONEmitter dataJson{dataStream};
+      dataJson.openDict();
+
+      jsi::Value thrownValue = runtime_.getDebugger().getThrownValue();
+      if (!thrownValue.isUndefined()) {
+        std::string description = thrownValue.toString(runtime_).utf8(runtime_);
+        dataJson.emitKeyValue("description", description);
+      } else {
+        // No exception description to report, but emitting an empty "data"
+        // object will at least prevent the front-end from throwing.
+        assert(false && "Exception pause missing thrown value");
+      }
+
+      dataJson.closeDict();
+      dataStream.flush();
+      note.data = std::move(data);
+    } break;
+    case PausedNotificationReason::kOther:
+      note.reason = "other";
+      break;
+    case PausedNotificationReason::kStep:
+      note.reason = "step";
+      break;
+    default:
+      assert(false && "unknown PausedNotificationReason");
+      note.reason = "other";
+  }
   note.callFrames = m::debugger::makeCallFrames(
       runtime_.getDebugger().getProgramState(), *objTable_, runtime_);
   sendNotificationToClient(note);
@@ -467,6 +565,14 @@ DebuggerDomainAgent::createCDPBreakpoint(
 
   if (hermesBreakpoint) {
     breakpoint.hermesBreakpoints.push_back(hermesBreakpoint.value());
+  }
+
+  // Get a Transaction, which will be committed when exiting the scope of the
+  // function. All state modifications should be done within this Transaction.
+  DomainState::Transaction transaction = state_.transaction();
+  if (description.persistable()) {
+    transaction.add(
+        {kBreakpointsKey, std::to_string(breakpointID)}, description);
   }
 
   return {breakpointID, breakpoint};
@@ -548,7 +654,7 @@ bool DebuggerDomainAgent::checkDebuggerEnabled(const m::Request &req) {
 }
 
 bool DebuggerDomainAgent::checkDebuggerPaused(const m::Request &req) {
-  if (!paused_) {
+  if (!paused_ && !asyncDebugger_.isWaitingForCommand()) {
     sendResponseToClient(m::makeErrorResponse(
         req.id, m::ErrorCode::InvalidRequest, "Debugger is not paused"));
     return false;

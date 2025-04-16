@@ -1492,7 +1492,7 @@ tailCall:
         ip = NEXTINST(LoadThisNS);
         DISPATCH;
       }
-    coerceThisSlowPath : {
+    coerceThisSlowPath: {
       CAPTURE_IP(res = toObject(runtime, tmpHandle));
       if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
         goto exception;
@@ -1576,7 +1576,7 @@ tailCall:
         goto doCall;
       }
 
-    doCall : {
+    doCall: {
 #ifdef HERMES_ENABLE_DEBUGGER
       // Check for an async debugger request.
       if (uint8_t asyncFlags =
@@ -1759,12 +1759,27 @@ tailCall:
 
       CASE(Ret) {
 #ifdef HERMES_ENABLE_DEBUGGER
-        // Check for an async debugger request.
-        if (uint8_t asyncFlags =
-                runtime.testAndClearDebuggerAsyncBreakRequest()) {
-          RUN_DEBUGGER_ASYNC_BREAK(asyncFlags);
-          gcScope.flushToSmallCount(KEEP_HANDLES);
-          DISPATCH;
+        // Check for an async debugger request, but skip it if we're single
+        // stepping. The only case where we'd be single stepping a Ret is if it
+        // was replaced with Debugger OpCode and we're coming here from
+        // stepFunction(). This does take away a chance to handle AsyncBreak. An
+        // AsyncBreak request could be either Explicit or Implicit. The Explicit
+        // case is to have the program being executed to pause. There isn't a
+        // need to pause at a particular location. Also, since we just came from
+        // a breakpoint, handling Explicit AsyncBreak for single step isn't so
+        // important. The other possible kind is an Implicit AsyncBreak, which
+        // is used for debug clients to interrupt the runtime to execute their
+        // own code. Not processing AsyncBreak just means that the Implicit
+        // AsyncBreak needs to wait for the next opportunity to interrupt the
+        // runtime, which should be fine. There is no contract for when the
+        // interrupt should happen.
+        if (!SingleStep) {
+          if (uint8_t asyncFlags =
+                  runtime.testAndClearDebuggerAsyncBreakRequest()) {
+            RUN_DEBUGGER_ASYNC_BREAK(asyncFlags);
+            gcScope.flushToSmallCount(KEEP_HANDLES);
+            DISPATCH;
+          }
         }
 #endif
 
@@ -1950,7 +1965,7 @@ tailCall:
         nextIP = NEXTINST(CreateClosureLongIndex);
         goto createClosure;
       }
-    createClosure : {
+    createClosure: {
       auto *runtimeModule = curCodeBlock->getRuntimeModule();
       CAPTURE_IP(
           O1REG(CreateClosure) =
@@ -1976,7 +1991,7 @@ tailCall:
         nextIP = NEXTINST(CreateAsyncClosureLongIndex);
         goto createAsyncClosure;
       }
-    createAsyncClosure : {
+    createAsyncClosure: {
       auto *runtimeModule = curCodeBlock->getRuntimeModule();
       CAPTURE_IP_ASSIGN(
           O1REG(CreateAsyncClosure),
@@ -2002,7 +2017,7 @@ tailCall:
         nextIP = NEXTINST(CreateGeneratorClosureLongIndex);
         goto createGeneratorClosure;
       }
-    createGeneratorClosure : {
+    createGeneratorClosure: {
       auto *runtimeModule = curCodeBlock->getRuntimeModule();
       CAPTURE_IP_ASSIGN(
           O1REG(CreateGeneratorClosure),
@@ -2201,7 +2216,7 @@ tailCall:
         idVal = ip->iGetById.op4;
         nextIP = NEXTINST(GetById);
       }
-    getById : {
+    getById: {
       ++NumGetById;
       // NOTE: it is safe to use OnREG(GetById) here because all instructions
       // have the same layout: opcode, registers, non-register operands, i.e.
@@ -2391,7 +2406,7 @@ tailCall:
         idVal = ip->iPutById.op4;
         nextIP = NEXTINST(PutById);
       }
-    putById : {
+    putById: {
       ++NumPutById;
       if (LLVM_LIKELY(O1REG(PutById).isObject())) {
         CAPTURE_IP_ASSIGN(
@@ -2565,7 +2580,7 @@ tailCall:
         nextIP = NEXTINST(PutOwnByIndex);
         idVal = ip->iPutOwnByIndex.op3;
       }
-    putOwnByIndex : {
+    putOwnByIndex: {
       tmpHandle = HermesValue::encodeUntrustedNumberValue(idVal);
       CAPTURE_IP(JSObject::defineOwnComputedPrimitive(
           Handle<JSObject>::vmcast(&O1REG(PutOwnByIndex)),
@@ -3146,7 +3161,7 @@ tailCall:
         nextIP = NEXTINST(PutNewOwnById);
         idVal = ip->iPutNewOwnById.op3;
       }
-    putOwnById : {
+    putOwnById: {
       assert(
           O1REG(PutNewOwnById).isObject() &&
           "Object argument of PutNewOwnById must be an object");
@@ -3178,7 +3193,7 @@ tailCall:
         idVal = ip->iDelById.op3;
         nextIP = NEXTINST(DelById);
       }
-    DelById : {
+    DelById: {
       if (LLVM_LIKELY(O2REG(DelById).isObject())) {
         CAPTURE_IP_ASSIGN(
             auto status,
@@ -3350,7 +3365,7 @@ tailCall:
         nextIP = NEXTINST(LoadConstBigIntLongIndex);
         goto doLoadConstBigInt;
       }
-    doLoadConstBigInt : {
+    doLoadConstBigInt: {
       CAPTURE_IP_ASSIGN(
           auto res,
           BigIntPrimitive::fromBytes(
@@ -3451,14 +3466,16 @@ tailCall:
 #ifdef HERMES_RUN_WASM
       // Asm.js/Wasm Intrinsics
       CASE(Add32) {
-        O1REG(Add32) = HermesValue::encodeUntrustedNumberValue((
-            int32_t)(int64_t)(O2REG(Add32).getNumber() + O3REG(Add32).getNumber()));
+        O1REG(Add32) = HermesValue::encodeUntrustedNumberValue(
+            (int32_t)(int64_t)(O2REG(Add32).getNumber() +
+                               O3REG(Add32).getNumber()));
         ip = NEXTINST(Add32);
         DISPATCH;
       }
       CASE(Sub32) {
-        O1REG(Sub32) = HermesValue::encodeUntrustedNumberValue((
-            int32_t)(int64_t)(O2REG(Sub32).getNumber() - O3REG(Sub32).getNumber()));
+        O1REG(Sub32) = HermesValue::encodeUntrustedNumberValue(
+            (int32_t)(int64_t)(O2REG(Sub32).getNumber() -
+                               O3REG(Sub32).getNumber()));
         ip = NEXTINST(Sub32);
         DISPATCH;
       }

@@ -441,10 +441,7 @@ struct SnapshotRootAcceptor : public SnapshotAcceptor,
 
 } // namespace
 
-void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
-  JSONEmitter json(os);
-  HeapSnapshot snap(json, gcCallbacks_.getStackTracesTree());
-
+void GCBase::createSnapshotImpl(GC &gc, HeapSnapshot &snap) {
   const auto rootScan = [&gc, &snap, this]() {
     {
       // Make the super root node and add edges to each root section.
@@ -540,6 +537,11 @@ void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
             stackTracesTreeNode ? stackTracesTreeNode->id : 0);
       };
   gc.forAllObjs(snapshotForObject);
+  // Scan all WeakMapEntrySlot so that PrimitiveNodeAcceptor won't miss
+  // primitives stored as WeakMap values.
+  weakMapEntrySlots_.forEach([&primitiveAcceptor](WeakMapEntrySlot &slot) {
+    primitiveAcceptor.accept(slot.mappedValue);
+  });
   // Write the singleton number nodes into the snapshot.
   primitiveAcceptor.writeAllNodes();
   snap.endSection(HeapSnapshot::Section::Nodes);
@@ -548,7 +550,7 @@ void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
   rootScan();
   // No need to run the primitive scan again, as it only adds nodes, not edges.
   // Add edges between objects in the heap.
-  forAllObjs(snapshotForObject);
+  gc.forAllObjs(snapshotForObject);
   snap.endSection(HeapSnapshot::Section::Edges);
 
   snap.emitAllocationTraceInfo();
@@ -562,6 +564,36 @@ void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
     cell->getVT()->snapshotMetaData.addLocations(cell, gc, snap);
   });
   snap.endSection(HeapSnapshot::Section::Locations);
+}
+
+void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
+  // Chrome 125 requires correct node count and edge count in the "snapshot"
+  // field, which is at the beginning of the heap snapshot. We do two passes to
+  // populate the correct node/edge count. First, we create a dummy HeapSnapshot
+  // instance with a no-op JSON emitter, and invoke createSnapshotImpl() with
+  // it. From that instance we can get the node count and edge count, and use
+  // them to create a HeapSnapShot instance in the second pass.
+  JSONEmitter dummyJSON{llvh::nulls()};
+  HeapSnapshot dummySnap{dummyJSON, 0, 0, 0, gcCallbacks_.getStackTracesTree()};
+  createSnapshotImpl(gc, dummySnap);
+
+  // Second pass, write out the real snapshot with the correct node_count and
+  // edge_count.
+  JSONEmitter json{os};
+  HeapSnapshot snap{
+      json,
+      dummySnap.getNodeCount(),
+      dummySnap.getEdgeCount(),
+      dummySnap.getTraceFunctionCount(),
+      gcCallbacks_.getStackTracesTree()};
+  createSnapshotImpl(gc, snap);
+  // Check if the node/edge counts of the two passes are equal.
+  assert(
+      dummySnap.getNodeCount() == snap.getNodeCount() &&
+      "Node count of two passes of createSnapshotImpl are not equal");
+  assert(
+      dummySnap.getEdgeCount() == snap.getEdgeCount() &&
+      "Edge count of two passes of createSnapshotImpl are not equal");
 }
 
 void GCBase::snapshotAddGCNativeNodes(HeapSnapshot &snap) {
@@ -695,8 +727,7 @@ void GCBase::DebugHeapInfo::assertInvariants() const {
 }
 #endif
 
-void GCBase::dump(llvh::raw_ostream &, bool) { /* nop */
-}
+void GCBase::dump(llvh::raw_ostream &, bool) { /* nop */ }
 
 void GCBase::printStats(JSONEmitter &json) {
   json.emitKeyValue("type", "hermes");
@@ -1081,8 +1112,8 @@ void GCBase::IDTracker::moveObject(
   }
 }
 
-llvh::SmallVector<HeapSnapshot::NodeID, 1>
-    &GCBase::IDTracker::getExtraNativeIDs(HeapSnapshot::NodeID node) {
+llvh::SmallVector<HeapSnapshot::NodeID, 1> &
+GCBase::IDTracker::getExtraNativeIDs(HeapSnapshot::NodeID node) {
   std::lock_guard<Mutex> lk{mtx_};
   // The operator[] will default construct the vector to be empty if it doesn't
   // exist.

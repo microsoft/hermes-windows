@@ -22,6 +22,7 @@ use hermes_estree::IntoFunction;
 use hermes_estree::JSXElementName;
 use hermes_estree::Pattern;
 use hermes_estree::Program;
+use hermes_estree::Range;
 use hermes_estree::SourceRange;
 use hermes_estree::Statement;
 use hermes_estree::VariableDeclarationKind;
@@ -62,7 +63,7 @@ pub struct UnresolvedReference {
     pub ast: AstNode,
     pub name: String,
     pub kind: ReferenceKind,
-    pub range: Option<SourceRange>,
+    pub range: SourceRange,
     // The next declaration id at the time the reference was created
     // this is used to detect a subset of TDZ violations, where a
     // reference is trivially known to refer to a let/const declaration
@@ -226,7 +227,7 @@ impl Analyzer {
         name: &str,
         ast: AstNode,
         kind: ReferenceKind,
-        range: Option<SourceRange>,
+        range: SourceRange,
     ) {
         self.unresolved.push(UnresolvedReference {
             scope: self.current,
@@ -306,7 +307,7 @@ impl Analyzer {
         left: &ForInInit,
         right: &Expression,
         body: &Statement,
-        _range: Option<SourceRange>,
+        _range: SourceRange,
     ) {
         let mut for_scope: Option<ScopeId> = None;
         match left {
@@ -334,7 +335,7 @@ impl Analyzer {
     }
 }
 
-impl Visitor for Analyzer {
+impl Visitor<'_> for Analyzer {
     fn visit_import_declaration_specifier(
         &mut self,
         ast: &hermes_estree::ImportDeclarationSpecifier,

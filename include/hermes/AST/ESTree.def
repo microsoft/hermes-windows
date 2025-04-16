@@ -794,9 +794,10 @@ ESTREE_NODE_2_ARGS(
     QualifiedTypeofIdentifier, Flow,
     NodePtr, qualification, false,
     NodePtr, id, false)
-ESTREE_NODE_1_ARGS(
+ESTREE_NODE_2_ARGS(
     TupleTypeAnnotation, Flow,
-    NodeList, types, false)
+    NodeList, types, false,
+    NodeBoolean, inexact, false)
 ESTREE_NODE_2_ARGS(
     TupleTypeSpreadElement, Flow,
     NodePtr, label, true,
@@ -842,7 +843,7 @@ ESTREE_NODE_3_ARGS(
     TypePredicate, Flow,
     NodePtr, parameterName, false,
     NodePtr, typeAnnotation, true,
-    NodeBoolean, asserts, false)
+    NodeString, kind, true)
 
 ESTREE_NODE_2_ARGS(
     InterfaceTypeAnnotation, Flow,
@@ -1024,6 +1025,9 @@ ESTREE_NODE_2_ARGS(
     AsExpression, Flow,
     NodePtr, expression, false,
     NodePtr, typeAnnotation, false)
+ESTREE_NODE_1_ARGS(
+    AsConstExpression, Flow,
+    NodePtr, expression, false)
 
 ESTREE_NODE_0_ARGS(InferredPredicate, Flow)
 ESTREE_NODE_1_ARGS(
@@ -1046,6 +1050,11 @@ ESTREE_NODE_3_ARGS(
     NodeBoolean, explicitType, false,
     NodeBoolean, hasUnknownMembers, false)
 ESTREE_NODE_3_ARGS(
+    EnumBigIntBody, Flow,
+    NodeList, members, false,
+    NodeBoolean, explicitType, false,
+    NodeBoolean, hasUnknownMembers, false)
+ESTREE_NODE_3_ARGS(
     EnumBooleanBody, Flow,
     NodeList, members, false,
     NodeBoolean, explicitType, false,
@@ -1064,6 +1073,10 @@ ESTREE_NODE_2_ARGS(
     NodePtr, init, false)
 ESTREE_NODE_2_ARGS(
     EnumNumberMember, Flow,
+    NodePtr, id, false,
+    NodePtr, init, false)
+ESTREE_NODE_2_ARGS(
+    EnumBigIntMember, Flow,
     NodePtr, id, false,
     NodePtr, init, false)
 ESTREE_NODE_2_ARGS(

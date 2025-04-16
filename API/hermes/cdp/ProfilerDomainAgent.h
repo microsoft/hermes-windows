@@ -8,8 +8,8 @@
 #ifndef HERMES_CDP_PROFILERDOMAINAGENT_H
 #define HERMES_CDP_PROFILERDOMAINAGENT_H
 
+#include <hermes/cdp/MessageConverters.h>
 #include <hermes/hermes.h>
-#include <hermes/inspector/chrome/MessageConverters.h>
 
 #include "DomainAgent.h"
 
@@ -39,4 +39,4 @@ class ProfilerDomainAgent : public DomainAgent {
 } // namespace hermes
 } // namespace facebook
 
-#endif // HERMES_CDP_DEBUGGERDOMAINAGENT_H
+#endif // HERMES_CDP_PROFILERDOMAINAGENT_H

@@ -8,27 +8,32 @@
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 mod generated_extension;
 
+use generated_extension::convert_comment;
+use generated_extension::convert_smloc;
+pub use generated_extension::Comment;
 use generated_extension::Context;
 use generated_extension::FromHermes;
 use hermes::parser::HermesParser;
-use hermes::parser::ParserDialect;
-use hermes::parser::ParserFlags;
+pub use hermes::parser::ParserDialect;
+pub use hermes::parser::ParserFlags;
 use hermes::utf::utf8_with_surrogates_to_string;
 use hermes_diagnostics::Diagnostic;
 use hermes_estree::Program;
+use hermes_estree::SourceRange;
 use juno_support::NullTerminatedBuf;
 
-pub fn parse(source: &str, _file: &str) -> Result<Program, Vec<Diagnostic>> {
+pub struct ParseResult {
+    pub ast: Program,
+    pub comments: Vec<Comment>,
+}
+
+pub fn parse(
+    source: &str,
+    _file: &str,
+    flags: ParserFlags,
+) -> Result<ParseResult, Vec<Diagnostic>> {
     let buf = NullTerminatedBuf::from_str_check(source);
-    let result = HermesParser::parse(
-        ParserFlags {
-            dialect: ParserDialect::TypeScript,
-            enable_jsx: true,
-            store_doc_block: true,
-            strict_mode: true,
-        },
-        &buf,
-    );
+    let result = HermesParser::parse(flags, &buf);
     let mut cx = Context::new(&buf);
     if result.has_errors() {
         let error_messages = result.messages();
@@ -36,10 +41,24 @@ pub fn parse(source: &str, _file: &str) -> Result<Program, Vec<Diagnostic>> {
             .iter()
             .map(|diag| {
                 let message = utf8_with_surrogates_to_string(diag.message.as_slice()).unwrap();
-                Diagnostic::invalid_syntax(message, None)
+                let start = convert_smloc(&cx, diag.loc) as u32;
+                Diagnostic::invalid_syntax(
+                    message,
+                    SourceRange {
+                        start,
+                        end: start + 1,
+                    },
+                )
             })
             .collect());
     }
 
-    Ok(FromHermes::convert(&mut cx, result.root().unwrap()))
+    let ast = FromHermes::convert(&mut cx, result.root().unwrap())?;
+    let comments = result
+        .comments()
+        .iter()
+        .map(|comment| convert_comment(&mut cx, comment))
+        .collect();
+
+    Ok(ParseResult { ast, comments })
 }

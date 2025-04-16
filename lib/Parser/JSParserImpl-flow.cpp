@@ -1633,12 +1633,65 @@ Optional<ESTree::Node *> JSParserImpl::parseReturnTypeAnnotationFlow(
       returnType = setLocation(
           start,
           getPrevTokenEndLoc(),
-          new (context_) ESTree::TypePredicateNode(id, typeAnnotation, true));
+          new (context_)
+              ESTree::TypePredicateNode(id, typeAnnotation, assertsIdent_));
     } else {
       returnType = *optType;
     }
+  } else if (check(impliesIdent_)) {
+    // TypePredicate (implies = true) or TypeAnnotation:
+    //   TypeAnnotation
+    //   implies IdentifierName is TypeAnnotation
+
+    //   implies IdentifierName is TypeAnnotation
+    //   ^
+    auto optType = parseTypeAnnotationFlow(None, allowAnonFunctionType);
+    if (!optType)
+      return None;
+
+    if (check(TokenKind::identifier)) {
+      // Validate the "implies" token was an identifier not a more complex type.
+      if (auto *generic = dyn_cast<ESTree::GenericTypeAnnotationNode>(*optType);
+          !(generic && !generic->_typeParameters)) {
+        error(
+            tok_->getStartLoc(),
+            "invalid return annotation. 'implies' type guard needs to be followed by identifier");
+        return None;
+      }
+
+      //   implies IdentifierName is TypeAnnotation
+      //           ^
+      ESTree::Node *id = setLocation(
+          tok_,
+          tok_,
+          new (context_)
+              ESTree::IdentifierNode(tok_->getIdentifier(), nullptr, false));
+      advance(JSLexer::GrammarContext::Type);
+
+      //   implies IdentifierName is TypeAnnotation
+      //                          ^
+      if (!checkAndEat(isIdent_, JSLexer::GrammarContext::Type)) {
+        error(
+            tok_->getStartLoc(),
+            "expecting 'is' after parameter of 'implies' type guard");
+        return None;
+      }
+      //   implies IdentifierName is TypeAnnotation
+      //                             ^
+      auto optTypeT = parseTypeAnnotationFlow(None, allowAnonFunctionType);
+      if (!optTypeT)
+        return None;
+      returnType = setLocation(
+          start,
+          getPrevTokenEndLoc(),
+          new (context_)
+              ESTree::TypePredicateNode(id, *optTypeT, impliesIdent_));
+    } else {
+      // implies (as type -- okay)
+      returnType = *optType;
+    }
   } else {
-    // TypePredicate (asserts = false) or TypeAnnotation:
+    // TypePredicate (asserts = false && implies = false) or TypeAnnotation:
     //   TypeAnnotation
     //   IdentifierName is TypeAnnotation
 
@@ -1656,7 +1709,7 @@ Optional<ESTree::Node *> JSParserImpl::parseReturnTypeAnnotationFlow(
       returnType = setLocation(
           start,
           getPrevTokenEndLoc(),
-          new (context_) ESTree::TypePredicateNode(*optId, *optType, false));
+          new (context_) ESTree::TypePredicateNode(*optId, *optType, nullptr));
     } else {
       returnType = *optType;
     }
@@ -2313,15 +2366,31 @@ Optional<ESTree::Node *> JSParserImpl::parseTupleTypeAnnotationFlow() {
   SMLoc start = advance(JSLexer::GrammarContext::Type).Start;
 
   ESTree::NodeList types{};
+  bool inexact = false;
 
   while (!check(TokenKind::r_square)) {
-    auto optType = parseTupleElementFlow();
-    if (!optType)
-      return None;
-    types.push_back(**optType);
+    SMLoc startLoc = tok_->getStartLoc();
+    bool startsWithDotDotDot =
+        checkAndEat(TokenKind::dotdotdot, JSLexer::GrammarContext::Type);
 
-    if (!checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type))
-      break;
+    // ...]
+    if (startsWithDotDotDot && check(TokenKind::r_square)) {
+      inexact = true;
+      // ...,
+    } else if (startsWithDotDotDot && check(TokenKind::comma)) {
+      error(
+          tok_->getSourceRange(),
+          "trailing commas after inexact tuple types are not allowed");
+      advance(JSLexer::GrammarContext::Type);
+    } else {
+      auto optType = parseTupleElementFlow(startLoc, startsWithDotDotDot);
+      if (!optType)
+        return None;
+      types.push_back(**optType);
+
+      if (!checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type))
+        break;
+    }
   }
 
   if (!need(
@@ -2334,12 +2403,13 @@ Optional<ESTree::Node *> JSParserImpl::parseTupleTypeAnnotationFlow() {
   return setLocation(
       start,
       advance(JSLexer::GrammarContext::Type).End,
-      new (context_) ESTree::TupleTypeAnnotationNode(std::move(types)));
+      new (context_)
+          ESTree::TupleTypeAnnotationNode(std::move(types), inexact));
 }
 
-Optional<ESTree::Node *> JSParserImpl::parseTupleElementFlow() {
-  SMLoc startLoc = tok_->getStartLoc();
-
+Optional<ESTree::Node *> JSParserImpl::parseTupleElementFlow(
+    SMLoc startLoc,
+    bool startsWithDotDotDot) {
   ESTree::Node *label = nullptr;
   ESTree::Node *elementType = nullptr;
   ESTree::Node *variance = nullptr;
@@ -2347,7 +2417,7 @@ Optional<ESTree::Node *> JSParserImpl::parseTupleElementFlow() {
   // ...Identifier : Type
   // ...Type
   // ^
-  if (checkAndEat(TokenKind::dotdotdot, JSLexer::GrammarContext::Type)) {
+  if (startsWithDotDotDot) {
     auto optType = parseTypeAnnotationBeforeColonFlow();
     if (!optType)
       return None;
@@ -2630,6 +2700,7 @@ JSParserImpl::parseFunctionOrGroupTypeAnnotationFlow() {
   }
 
   if (!isFunction) {
+    type->incParens();
     return type;
   }
 
@@ -3746,6 +3817,8 @@ Optional<ESTree::Node *> JSParserImpl::parseEnumDeclarationFlow(
       optKind = EnumKind::String;
     } else if (checkAndEat(numberIdent_)) {
       optKind = EnumKind::Number;
+    } else if (checkAndEat(bigintIdent_)) {
+      optKind = EnumKind::BigInt;
     } else if (checkAndEat(booleanIdent_)) {
       optKind = EnumKind::Boolean;
     } else if (checkAndEat(symbolIdent_)) {
@@ -3896,6 +3969,12 @@ Optional<ESTree::Node *> JSParserImpl::parseEnumBodyFlow(
           end,
           new (context_) ESTree::EnumNumberBodyNode(
               std::move(members), hasExplicitType, hasUnknownMembers));
+    case EnumKind::BigInt:
+      return setLocation(
+          start,
+          end,
+          new (context_) ESTree::EnumBigIntBodyNode(
+              std::move(members), hasExplicitType, hasUnknownMembers));
     case EnumKind::Boolean:
       return setLocation(
           start,
@@ -3940,6 +4019,24 @@ Optional<ESTree::Node *> JSParserImpl::parseEnumMemberFlow() {
           new (context_) ESTree::StringLiteralNode(tok_->getStringLiteral()));
       member = setLocation(
           id, tok_, new (context_) ESTree::EnumStringMemberNode(id, init));
+    } else if (check(TokenKind::minus)) {
+      SMLoc start = tok_->getStartLoc();
+      advance();
+      if (check(TokenKind::numeric_literal)) {
+        // Negate the literal.
+        double value = -tok_->getNumericLiteral();
+        ESTree::Node *init = setLocation(
+            start, tok_, new (context_) ESTree::NumericLiteralNode(value));
+        member = setLocation(
+            id, tok_, new (context_) ESTree::EnumNumberMemberNode(id, init));
+      } else {
+        errorExpected(
+            TokenKind::numeric_literal,
+            "in negated enum member initializer",
+            "start of negated enum member",
+            id->getStartLoc());
+        return None;
+      }
     } else if (check(TokenKind::numeric_literal)) {
       ESTree::Node *init = setLocation(
           tok_,
@@ -3947,12 +4044,20 @@ Optional<ESTree::Node *> JSParserImpl::parseEnumMemberFlow() {
           new (context_) ESTree::NumericLiteralNode(tok_->getNumericLiteral()));
       member = setLocation(
           id, tok_, new (context_) ESTree::EnumNumberMemberNode(id, init));
+    } else if (check(TokenKind::bigint_literal)) {
+      ESTree::Node *init = setLocation(
+          tok_,
+          tok_,
+          new (context_) ESTree::BigIntLiteralNode(tok_->getBigIntLiteral()));
+      member = setLocation(
+          id, tok_, new (context_) ESTree::EnumBigIntMemberNode(id, init));
     } else {
       errorExpected(
           {TokenKind::rw_true,
            TokenKind::rw_false,
            TokenKind::string_literal,
-           TokenKind::numeric_literal},
+           TokenKind::numeric_literal,
+           TokenKind::bigint_literal},
           "in enum member initializer",
           "start of enum member",
           id->getStartLoc());

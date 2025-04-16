@@ -172,7 +172,7 @@ llvh::Optional<uint32_t> Debugger::findJumpTarget(
 #undef DEFINE_JUMP_LONG_VARIANT
 }
 
-void Debugger::breakAtPossibleNextInstructions(InterpreterState &state) {
+void Debugger::breakAtPossibleNextInstructions(const InterpreterState &state) {
   auto nextOffset = state.codeBlock->getNextOffset(state.offset);
   // Set a breakpoint at the next instruction in the code block if this is not
   // the last instruction.
@@ -195,6 +195,20 @@ void Debugger::breakAtPossibleNextInstructions(InterpreterState &state) {
         jumpTarget.getValue(),
         runtime_.getCurrentFrameOffset());
   }
+}
+
+inst::OpCode Debugger::getRealOpCode(CodeBlock *block, uint32_t offset) const {
+  auto breakpointOpt = getBreakpointLocation(block, offset);
+  if (breakpointOpt) {
+    const auto *inst =
+        reinterpret_cast<const inst::Inst *>(&(breakpointOpt->opCode));
+    return inst->opCode;
+  }
+
+  auto opcodes = block->getOpcodeArray();
+  assert(offset < opcodes.size() && "opCode offset out of bounds");
+  const auto *inst = reinterpret_cast<const inst::Inst *>(&opcodes[offset]);
+  return inst->opCode;
 }
 
 ExecutionStatus Debugger::runDebugger(
@@ -265,7 +279,7 @@ ExecutionStatus Debugger::runDebugger(
           while (!locationOpt.hasValue() || locationOpt->statement == 0 ||
                  sameStatementDifferentInstruction(state, preStepState_)) {
             // Move to the next source location.
-            OpCode curCode = state.codeBlock->getOpCode(state.offset);
+            OpCode curCode = getRealOpCode(state.codeBlock, state.offset);
 
             if (curCode == OpCode::Ret) {
               // We're stepping out now.
@@ -282,6 +296,7 @@ ExecutionStatus Debugger::runDebugger(
             if (shouldSingleStep(curCode)) {
               ExecutionStatus status = stepInstruction(state);
               if (status == ExecutionStatus::EXCEPTION) {
+                breakpointExceptionHandler(state);
                 isDebugging_ = false;
                 return status;
               }
@@ -424,7 +439,7 @@ ExecutionStatus Debugger::debuggerLoop(
             // NOTE: this loop doesn't actually allocate any handles presently,
             // but it could, and clearing all handles is really cheap.
             gcScope.flushToSmallCount(KEEP_HANDLES);
-            OpCode curCode = state.codeBlock->getOpCode(state.offset);
+            OpCode curCode = getRealOpCode(state.codeBlock, state.offset);
 
             if (curCode == OpCode::Ret) {
               breakpointCaller();
@@ -598,20 +613,28 @@ auto Debugger::getCallFrameInfo(const CodeBlock *codeBlock, uint32_t ipOffset)
   return frameInfo;
 }
 
-auto Debugger::getStackTrace(InterpreterState state) const -> StackTrace {
+auto Debugger::getStackTrace() const -> StackTrace {
+  // It's ok for the frame to be a native frame (i.e. null CodeBlock and null
+  // IP), but there must be a frame.
+  assert(
+      runtime_.getCurrentFrame() &&
+      "Must have at least one stack frame to call this function");
   using fhd::CallFrameInfo;
   GCScopeMarkerRAII marker{runtime_};
   MutableHandle<> displayName{runtime_};
   MutableHandle<JSObject> propObj{runtime_};
   std::vector<CallFrameInfo> frames;
   // Note that we are iterating backwards from the top.
-  // Also note that each frame saves its caller's code block and IP. The initial
-  // one comes from the paused state.
-  const CodeBlock *codeBlock = state.codeBlock;
-  uint32_t ipOffset = state.offset;
+  // Also note that each frame saves its caller's code block and IP (the
+  // SavedCodeBlock and SavedIP). We obtain the current code location by getting
+  // the Callee CodeBlock of the top frame.
+  const CodeBlock *codeBlock =
+      runtime_.getCurrentFrame()->getCalleeCodeBlock(runtime_);
+  const inst::Inst *ip = runtime_.getCurrentIP();
   GCScopeMarkerRAII marker2{runtime_};
   for (auto cf : runtime_.getStackFrames()) {
     marker2.flush();
+    uint32_t ipOffset = (codeBlock && ip) ? codeBlock->getOffsetOf(ip) : 0;
     CallFrameInfo frameInfo = getCallFrameInfo(codeBlock, ipOffset);
     if (auto callableHandle = Handle<Callable>::dyn_vmcast(
             Handle<>(&cf.getCalleeClosureOrCBRef()))) {
@@ -636,8 +659,8 @@ auto Debugger::getStackTrace(InterpreterState state) const -> StackTrace {
     frames.push_back(frameInfo);
 
     codeBlock = cf.getSavedCodeBlock();
-    const Inst *const savedIP = cf.getSavedIP();
-    if (!codeBlock && savedIP) {
+    ip = cf.getSavedIP();
+    if (!codeBlock && ip) {
       // If we have a saved IP but no saved code block, this was a bound call.
       // Go up one frame and get the callee code block but use the current
       // frame's saved IP.
@@ -647,8 +670,6 @@ auto Debugger::getStackTrace(InterpreterState state) const -> StackTrace {
         codeBlock = parentCB;
       }
     }
-
-    ipOffset = (codeBlock && savedIP) ? codeBlock->getOffsetOf(savedIP) : 0;
   }
   return StackTrace(std::move(frames));
 }
@@ -910,10 +931,10 @@ ExecutionStatus Debugger::stepInstruction(InterpreterState &state) {
   auto *codeBlock = state.codeBlock;
   uint32_t offset = state.offset;
   assert(
-      codeBlock->getOpCode(offset) != OpCode::Ret &&
+      getRealOpCode(codeBlock, offset) != OpCode::Ret &&
       "can't stepInstruction in Ret, use step-out semantics instead");
   assert(
-      shouldSingleStep(codeBlock->getOpCode(offset)) &&
+      shouldSingleStep(getRealOpCode(codeBlock, offset)) &&
       "can't stepInstruction through Call, use step-in semantics instead");
   auto locationOpt = getBreakpointLocation(codeBlock, offset);
   ExecutionStatus status;
@@ -1419,6 +1440,10 @@ auto Debugger::getLoadedScripts() const -> std::vector<SourceLocation> {
   for (auto &runtimeModule : runtime_.getRuntimeModules()) {
     if (!runtimeModule.isInitialized()) {
       // Uninitialized module.
+      continue;
+    }
+    // Only include a RuntimeModule if it's the root module
+    if (runtimeModule.getLazyRootModule() != &runtimeModule) {
       continue;
     }
 

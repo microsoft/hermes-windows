@@ -11,8 +11,8 @@
 #include <mutex>
 #include <string>
 
+#include <hermes/cdp/MessageTypes.h>
 #include <hermes/cdp/RemoteObjectsTable.h>
-#include <hermes/inspector/chrome/MessageTypes.h>
 
 #if defined(__clang__) && (!defined(SWIG)) && \
     defined(_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS)
@@ -27,12 +27,7 @@ namespace facebook {
 namespace hermes {
 namespace cdp {
 
-namespace m = ::facebook::hermes::inspector_modern::chrome::message;
-namespace old_cdp = ::facebook::hermes::inspector_modern::chrome;
-
-/// Fixed execution context ID because Hermes doesn't currently support realms
-/// or Web Workers.
-static constexpr int32_t kHermesExecutionContextId = 1;
+namespace m = ::facebook::hermes::cdp::message;
 
 /// A wrapper around std::function<void(...)> to make it safe to use from
 /// multiple threads. The wrapper implements an invalidate function so that one

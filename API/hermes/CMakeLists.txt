@@ -7,13 +7,13 @@
 add_hermes_library(compileJS CompileJS.cpp LINK_LIBS hermesPublic hermesHBCBackend)
 
 if(HERMES_ENABLE_DEBUGGER)
-  if(HERMES_ENABLE_TOOLS AND NOT WIN32)
-    add_subdirectory(inspector/chrome/cli)
-  endif()
-
   # Some inspector sources need to be built without RTTI because they consume
   # internal data structures compiled without RTTI.
   set(INSPECTOR_NO_EH_RTTI_SOURCES
+    cdp/JSONValueInterfaces.cpp
+    cdp/MessageConverters.cpp
+    cdp/MessageInterfaces.cpp
+    cdp/MessageTypes.cpp
     inspector/chrome/JSONValueInterfaces.cpp
     inspector/chrome/MessageConverters.cpp
     inspector/chrome/MessageInterfaces.cpp
@@ -32,17 +32,24 @@ if(HERMES_ENABLE_DEBUGGER)
 
   set(CDP_API_SOURCES
     cdp/CDPAgent.cpp
+    cdp/CallbackOStream.cpp
     cdp/ConsoleMessage.cpp
     cdp/DebuggerDomainAgent.cpp
+    cdp/HeapProfilerDomainAgent.cpp
     cdp/ProfilerDomainAgent.cpp
+    cdp/RemoteObjectConverters.cpp
     cdp/RemoteObjectsTable.cpp
     cdp/RuntimeDomainAgent.cpp
+    cdp/ConsoleMessage.cpp
+    cdp/CDPDebugAPI.cpp
+    cdp/DomainState.cpp
   )
 
   set(INSPECTOR_API_SOURCES
     inspector/chrome/CallbackOStream.cpp
     inspector/chrome/CDPHandler.cpp
     inspector/chrome/RemoteObjectConverters.cpp
+    inspector/chrome/RemoteObjectsTable.cpp
     inspector/RuntimeAdapter.cpp
     ${CDP_API_SOURCES}
     ${INSPECTOR_NO_EH_RTTI_SOURCES}
@@ -79,7 +86,7 @@ if(HERMES_THREAD_SAFETY_ANALYSIS)
   )
   if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     set_property(SOURCE ${TSA_SOURCES} APPEND_STRING PROPERTY
-      COMPILE_FLAGS "-Wthread-safety -Werror=thread-safety-analysis -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS")
+      COMPILE_FLAGS "-Wthread-safety -Werror=thread-safety-analysis -Werror=thread-safety-precise -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS")
   endif()
 endif()
 
