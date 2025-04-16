@@ -445,7 +445,8 @@ enum class DiagKind : uint32_t {
 DiagKind toDiagKind(llvh::SourceMgr::DiagKind k) {
   switch (k) {
     default:
-      assert(false);
+      assert(false && "Invalid DiagKind");
+      [[fallthrough]];
     case llvh::SourceMgr::DK_Error:
       return DiagKind::Error;
     case llvh::SourceMgr::DK_Warning:
@@ -607,14 +608,17 @@ hermes_parser_parse(ParserFlags flags, const char *source, size_t len) {
       break;
     case ParserDialect::Flow:
       parserCtx->context_.setParseFlow(hermes::ParseFlowSetting::ALL);
+      parserCtx->context_.setParseFlowComponentSyntax(true);
       break;
     case ParserDialect::FlowUnambiguous:
       parserCtx->context_.setParseFlow(hermes::ParseFlowSetting::UNAMBIGUOUS);
+      parserCtx->context_.setParseFlowComponentSyntax(true);
       break;
     case ParserDialect::FlowDetect:
       parserCtx->context_.setParseFlow(
           parser::hasFlowPragma(comments) ? ParseFlowSetting::ALL
                                           : ParseFlowSetting::UNAMBIGUOUS);
+      parserCtx->context_.setParseFlowComponentSyntax(true);
       break;
     case ParserDialect::TypeScript:
       parserCtx->context_.setParseTS(true);

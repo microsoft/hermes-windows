@@ -68,7 +68,8 @@ class CDPAgentImpl {
       CDPDebugAPI &cdpDebugAPI,
       EnqueueRuntimeTaskFunc enqueueRuntimeTaskCallback,
       SynchronizedOutboundCallback messageCallback,
-      State &state);
+      State &state,
+      std::shared_ptr<std::atomic_bool> destroyedDomainAgentsImpl);
   ~CDPAgentImpl();
 
   /// Schedule initialization of handlers for each message domain.
@@ -102,7 +103,12 @@ class CDPAgentImpl {
         ConsoleMessageStorage &consoleMessageStorage,
         ConsoleMessageDispatcher &consoleMessageDispatcher,
         SynchronizedOutboundCallback messageCallback,
-        std::unique_ptr<DomainState> debuggerAgentState);
+        std::unique_ptr<DomainState> debuggerAgentState,
+        std::shared_ptr<std::atomic_bool> destroyedDomainAgentsImpl);
+    ~DomainAgentsImpl();
+
+    /// Create the domain handlers and subscribing to any external events.
+    void initialize();
 
     /// Process a CDP \p command encoded in JSON using the appropriate domain
     /// handler.
@@ -146,6 +152,8 @@ class CDPAgentImpl {
     std::unique_ptr<HeapProfilerDomainAgent> heapProfilerAgent_;
 
     std::unique_ptr<DomainState> debuggerAgentState_;
+
+    std::shared_ptr<std::atomic_bool> destroyedDomainAgentsImpl_;
   };
 
   /// Wrapper for DomainAgentsImpl. This is used to ensure the entirety of
@@ -159,40 +167,30 @@ class CDPAgentImpl {
         int32_t executionContextID,
         CDPDebugAPI &cdpDebugAPI,
         SynchronizedOutboundCallback messageCallback,
-        std::unique_ptr<DomainState> debuggerAgentState);
+        std::unique_ptr<DomainState> debuggerAgentState,
+        std::shared_ptr<std::atomic_bool> destroyedDomainAgentsImpl);
 
-    /// Create the domain handlers and subscribing to any external events.
+    /// Forwards the call to the underlying DomainAgentsImpl.
     void initialize();
 
     /// Releasing any domain handlers and event subscriptions.
     void dispose();
 
-    /// Process a CDP \p command encoded in JSON using the appropriate domain
-    /// handler.
-    void handleCommand(std::shared_ptr<message::Request> command);
-
-    /// Enable the Runtime domain without processing a CDP command or sending a
-    /// CDP response.
-    void enableRuntimeDomain();
-
-    /// Enable the Debugger domain without processing a CDP command or sending a
-    /// CDP response.
-    void enableDebuggerDomain();
-
     /// Get the Debugger domain state to be persisted.
     std::unique_ptr<DomainState> getDebuggerAgentState();
 
-   private:
-    /// Variables that will be used initialize DomainAgentsImpl
-    int32_t executionContextID_;
-    HermesRuntime &runtime_;
-    debugger::AsyncDebuggerAPI &asyncDebuggerAPI_;
-    ConsoleMessageStorage &consoleMessageStorage_;
-    ConsoleMessageDispatcher &consoleMessageDispatcher_;
-    SynchronizedOutboundCallback messageCallback_;
-    std::unique_ptr<DomainState> debuggerAgentState_;
+    /// Whenever we need to schedule tasks with RuntimeTaskRunner, we must only
+    /// pass weak pointer of DomainAgentsImpl and not a strong reference. Using
+    /// a weak pointer will not prevent DomainAgents::dispose() from destroying
+    /// DomainAgentsImpl if there is no Runtime.evaluate running. If there is
+    /// Runtime.evaluate running, then the weak pointer would need to be upgrade
+    /// to a strong reference and then the actual destruction of
+    /// DomainAgentsImpl would happen at the end of the Runtime.evaluate.
+    std::weak_ptr<DomainAgentsImpl> getImplWeakPtr() const;
 
-    std::unique_ptr<DomainAgentsImpl> impl_{};
+   private:
+    /// This is a shared_ptr so that we can give out weak_ptr.
+    std::shared_ptr<DomainAgentsImpl> impl_{};
   };
 
   /// Callback function for sending CDP response back. This is using the
@@ -212,7 +210,8 @@ CDPAgentImpl::CDPAgentImpl(
     CDPDebugAPI &cdpDebugAPI,
     EnqueueRuntimeTaskFunc enqueueRuntimeTaskCallback,
     SynchronizedOutboundCallback messageCallback,
-    State &state)
+    State &state,
+    std::shared_ptr<std::atomic_bool> destroyedDomainAgentsImpl)
     : messageCallback_(std::move(messageCallback)),
       runtimeTaskRunner_(
           cdpDebugAPI.asyncDebuggerAPI(),
@@ -223,7 +222,8 @@ CDPAgentImpl::CDPAgentImpl(
           messageCallback_,
           (state && state->debuggerAgentState)
               ? std::move(state->debuggerAgentState)
-              : std::make_unique<DomainState>())) {}
+              : std::make_unique<DomainState>(),
+          std::move(destroyedDomainAgentsImpl))) {}
 
 CDPAgentImpl::~CDPAgentImpl() {
   // Call DomainAgents::dispose on the runtime thread, only keeping a copy of
@@ -271,24 +271,32 @@ void CDPAgentImpl::handleCommand(std::string json) {
 
   // Call DomainAgents::handleCommand on the runtime thread.
   TaskQueues queues = messageTaskQueues(command->method);
-  RuntimeTask task = [domainAgents = domainAgents_,
+  RuntimeTask task = [weakDomainAgentsImpl = domainAgents_->getImplWeakPtr(),
                       command = std::move(command)](HermesRuntime &) mutable {
-    domainAgents->handleCommand(std::move(command));
+    if (auto strongDomainAgents = weakDomainAgentsImpl.lock()) {
+      strongDomainAgents->handleCommand(std::move(command));
+    }
   };
   runtimeTaskRunner_.enqueueTask(task, queues);
 }
 
 void CDPAgentImpl::enableRuntimeDomain() {
   runtimeTaskRunner_.enqueueTask(
-      [domainAgents = domainAgents_](HermesRuntime &) {
-        domainAgents->enableRuntimeDomain();
+      [weakDomainAgentsImpl =
+           domainAgents_->getImplWeakPtr()](HermesRuntime &) {
+        if (auto strongDomainAgents = weakDomainAgentsImpl.lock()) {
+          strongDomainAgents->enableRuntimeDomain();
+        }
       });
 }
 
 void CDPAgentImpl::enableDebuggerDomain() {
   runtimeTaskRunner_.enqueueTask(
-      [domainAgents = domainAgents_](HermesRuntime &) {
-        domainAgents->enableDebuggerDomain();
+      [weakDomainAgentsImpl =
+           domainAgents_->getImplWeakPtr()](HermesRuntime &) {
+        if (auto strongDomainAgents = weakDomainAgentsImpl.lock()) {
+          strongDomainAgents->enableDebuggerDomain();
+        }
       });
 }
 
@@ -304,7 +312,8 @@ CDPAgentImpl::DomainAgentsImpl::DomainAgentsImpl(
     ConsoleMessageStorage &consoleMessageStorage,
     ConsoleMessageDispatcher &consoleMessageDispatcher,
     SynchronizedOutboundCallback messageCallback,
-    std::unique_ptr<DomainState> debuggerAgentState)
+    std::unique_ptr<DomainState> debuggerAgentState,
+    std::shared_ptr<std::atomic_bool> destroyedDomainAgentsImpl)
     : executionContextID_(executionContextID),
       runtime_(runtime),
       asyncDebuggerAPI_(asyncDebuggerAPI),
@@ -312,10 +321,14 @@ CDPAgentImpl::DomainAgentsImpl::DomainAgentsImpl(
       consoleMessageDispatcher_(consoleMessageDispatcher),
       messageCallback_(std::move(messageCallback)),
       objTable_(std::make_shared<RemoteObjectsTable>()),
-      debuggerAgentState_(std::move(debuggerAgentState)) {
+      debuggerAgentState_(std::move(debuggerAgentState)),
+      destroyedDomainAgentsImpl_(std::move(destroyedDomainAgentsImpl)) {
   assert(
       debuggerAgentState_ != nullptr &&
       "debuggerAgentState_ shouldn't ever be null");
+}
+
+void CDPAgentImpl::DomainAgentsImpl::initialize() {
   debuggerAgent_ = std::make_unique<DebuggerDomainAgent>(
       executionContextID_,
       runtime_,
@@ -335,6 +348,12 @@ CDPAgentImpl::DomainAgentsImpl::DomainAgentsImpl(
       executionContextID_, runtime_, messageCallback_, objTable_);
   heapProfilerAgent_ = std::make_unique<HeapProfilerDomainAgent>(
       executionContextID_, runtime_, messageCallback_, objTable_);
+}
+
+CDPAgentImpl::DomainAgentsImpl::~DomainAgentsImpl() {
+  if (destroyedDomainAgentsImpl_) {
+    *destroyedDomainAgentsImpl_ = true;
+  }
 }
 
 void CDPAgentImpl::DomainAgentsImpl::handleCommand(
@@ -469,50 +488,40 @@ CDPAgentImpl::DomainAgents::DomainAgents(
     int32_t executionContextID,
     CDPDebugAPI &cdpDebugAPI,
     SynchronizedOutboundCallback messageCallback,
-    std::unique_ptr<DomainState> debuggerAgentState)
-    : executionContextID_(executionContextID),
-      runtime_(cdpDebugAPI.runtime()),
-      asyncDebuggerAPI_(cdpDebugAPI.asyncDebuggerAPI()),
-      consoleMessageStorage_(cdpDebugAPI.consoleMessageStorage_),
-      consoleMessageDispatcher_(cdpDebugAPI.consoleMessageDispatcher_),
-      messageCallback_(std::move(messageCallback)),
-      debuggerAgentState_(std::move(debuggerAgentState)) {}
+    std::unique_ptr<DomainState> debuggerAgentState,
+    std::shared_ptr<std::atomic_bool> destroyedDomainAgentsImpl)
+    // Allocate using new to ensure the memory is separate from the shared_ptr
+    // control block. Since we don't control when the integrator queue discards
+    // their queued tasks, allocating this way allows us to be in control of
+    // when DomainAgentsImpl gets cleaned up.
+    : impl_(std::shared_ptr<DomainAgentsImpl>(new DomainAgentsImpl(
+          executionContextID,
+          cdpDebugAPI.runtime(),
+          cdpDebugAPI.asyncDebuggerAPI(),
+          cdpDebugAPI.consoleMessageStorage_,
+          cdpDebugAPI.consoleMessageDispatcher_,
+          std::move(messageCallback),
+          std::move(debuggerAgentState),
+          std::move(destroyedDomainAgentsImpl)))) {}
 
 void CDPAgentImpl::DomainAgents::initialize() {
-  impl_ = std::make_unique<DomainAgentsImpl>(
-      executionContextID_,
-      runtime_,
-      asyncDebuggerAPI_,
-      consoleMessageStorage_,
-      consoleMessageDispatcher_,
-      std::move(messageCallback_),
-      std::move(debuggerAgentState_));
+  impl_->initialize();
 }
 
 void CDPAgentImpl::DomainAgents::dispose() {
   impl_.reset();
 }
 
-void CDPAgentImpl::DomainAgents::handleCommand(
-    std::shared_ptr<message::Request> command) {
-  assert(impl_ != nullptr);
-  impl_->handleCommand(std::move(command));
-}
-
-void CDPAgentImpl::DomainAgents::enableRuntimeDomain() {
-  assert(impl_ != nullptr);
-  impl_->enableRuntimeDomain();
-}
-
-void CDPAgentImpl::DomainAgents::enableDebuggerDomain() {
-  assert(impl_ != nullptr);
-  impl_->enableDebuggerDomain();
-}
-
 std::unique_ptr<DomainState>
 CDPAgentImpl::DomainAgents::getDebuggerAgentState() {
   assert(impl_ != nullptr);
   return impl_->getDebuggerAgentState();
+}
+
+std::weak_ptr<CDPAgentImpl::DomainAgentsImpl>
+CDPAgentImpl::DomainAgents::getImplWeakPtr() const {
+  assert(impl_ != nullptr);
+  return impl_;
 }
 
 std::unique_ptr<CDPAgent> CDPAgent::create(
@@ -526,7 +535,8 @@ std::unique_ptr<CDPAgent> CDPAgent::create(
       cdpDebugAPI,
       enqueueRuntimeTaskCallback,
       messageCallback,
-      std::move(state)));
+      std::move(state),
+      nullptr));
 }
 
 CDPAgent::CDPAgent(
@@ -534,13 +544,15 @@ CDPAgent::CDPAgent(
     CDPDebugAPI &cdpDebugAPI,
     EnqueueRuntimeTaskFunc enqueueRuntimeTaskCallback,
     OutboundMessageFunc messageCallback,
-    State state)
+    State state,
+    std::shared_ptr<std::atomic_bool> destroyedDomainAgents)
     : impl_(std::make_unique<CDPAgentImpl>(
           executionContextID,
           cdpDebugAPI,
           enqueueRuntimeTaskCallback,
           SynchronizedOutboundCallback(messageCallback),
-          state)) {
+          state,
+          destroyedDomainAgents)) {
   impl_->initializeDomainAgents();
 }
 

@@ -17,6 +17,7 @@
 #include <hermes/CompileJS.h>
 #include <hermes/Support/JSONEmitter.h>
 #include <hermes/Support/SerialExecutor.h>
+#include <hermes/VM/HeapSnapshot.h>
 #include <hermes/cdp/CDPAgent.h>
 #include <hermes/cdp/CDPDebugAPI.h>
 #include <hermes/cdp/JSONValueInterfaces.h>
@@ -40,6 +41,9 @@ using namespace std::chrono_literals;
 using namespace std::placeholders;
 
 constexpr auto kDefaultUrl = "url";
+#ifndef HERMES_MEMORY_INSTRUMENTATION
+constexpr auto kMemoryInstrumentationSubstring = "memory instrumentation";
+#endif
 
 // A function passed to Runtime.callFunctionOn in order to invoke a getter. See
 // https://github.com/facebookexperimental/rn-chrome-devtools-frontend/blob/58eff7d6a4ed165a3350c8817c1ec5724eab5cb7/front_end/ui/legacy/components/object_ui/ObjectPropertiesSection.ts#L1125-L1132
@@ -65,19 +69,20 @@ T waitFor(
   return future.get();
 }
 
-m::runtime::CallArgument makeValueCallArgument(std::string val) {
+static m::runtime::CallArgument makeValueCallArgument(std::string val) {
   m::runtime::CallArgument ret;
   ret.value = val;
   return ret;
 }
 
-m::runtime::CallArgument makeUnserializableCallArgument(std::string val) {
+static m::runtime::CallArgument makeUnserializableCallArgument(
+    std::string val) {
   m::runtime::CallArgument ret;
   ret.unserializableValue = std::move(val);
   return ret;
 }
 
-m::runtime::CallArgument makeObjectIdCallArgument(
+static m::runtime::CallArgument makeObjectIdCallArgument(
     m::runtime::RemoteObjectId objectId) {
   m::runtime::CallArgument ret;
   ret.objectId = std::move(objectId);
@@ -145,7 +150,8 @@ class CDPAgentTest : public ::testing::Test {
   /// \p messageID specifies the id of the snapshot request.
   /// \p ignoreTrackingNotifications indicates whether lastSeenObjectId and
   /// heapStatsUpdate notifications are tolerated before the snapshot arrives.
-  void expectHeapSnapshot(
+  /// \return the completed heap snapshot JSON object
+  JSONObject *expectHeapSnapshot(
       int messageID,
       bool ignoreTrackingNotifications = false);
 
@@ -204,6 +210,9 @@ class CDPAgentTest : public ::testing::Test {
 
   std::atomic<bool> stopFlag_{};
 
+  std::shared_ptr<std::atomic_bool> destroyedDomainAgentsImpl_ =
+      std::make_shared<std::atomic_bool>(false);
+
   std::mutex testSignalMutex_;
   std::condition_variable testSignalCondition_;
   bool testSignalled_ = false;
@@ -225,11 +234,13 @@ class CDPAgentTest : public ::testing::Test {
 void CDPAgentTest::SetUp() {
   setupRuntimeTestInfra();
 
-  cdpAgent_ = CDPAgent::create(
+  cdpAgent_ = std::unique_ptr<CDPAgent>(new CDPAgent(
       kTestExecutionContextId_,
       *cdpDebugAPI_,
       std::bind(&CDPAgentTest::handleRuntimeTask, this, _1),
-      std::bind(&CDPAgentTest::handleResponse, this, _1));
+      std::bind(&CDPAgentTest::handleResponse, this, _1),
+      {},
+      destroyedDomainAgentsImpl_));
 }
 
 void CDPAgentTest::setupRuntimeTestInfra() {
@@ -372,7 +383,7 @@ void CDPAgentTest::expectErrorMessageContaining(
   ASSERT_NE(errorMessage.find(substring), std::string::npos);
 }
 
-void CDPAgentTest::expectHeapSnapshot(
+JSONObject *CDPAgentTest::expectHeapSnapshot(
     int messageID,
     bool ignoreTrackingNotifications) {
   // Expect chunk notifications until the snapshot object is complete. Fail if
@@ -389,12 +400,14 @@ void CDPAgentTest::expectHeapSnapshot(
       continue;
     }
 
-    ASSERT_EQ(method, "HeapProfiler.addHeapSnapshotChunk");
+    EXPECT_EQ(method, "HeapProfiler.addHeapSnapshotChunk");
     snapshot << jsonScope_.getString(note, {"params", "chunk"});
   } while (!jsonScope_.tryParseObject(snapshot.str()).has_value());
 
   // Expect the snapshot response after all chunks have been received.
   ensureOkResponse(waitForMessage(), messageID);
+
+  return jsonScope_.parseObject(snapshot.str());
 }
 
 jsi::Value CDPAgentTest::shouldStop(
@@ -673,6 +686,97 @@ TEST_F(CDPAgentTest, CDPAgentCanReenter) {
     cdpAgent->handleCommand(
         R"({"id": )" + std::to_string(commandID) +
         R"(, "method": "Unsupported.Message"})");
+  });
+}
+
+TEST_F(CDPAgentTest, CDPAgentTaskRunsAfterCleanUp) {
+  int msgId = 1;
+  auto setStopFlag = llvh::make_scope_exit([this] { stopFlag_.store(true); });
+
+  sendAndCheckResponse("Runtime.enable", msgId++);
+
+  // Start a long-running expression, which simulates uninterruptable JavaScript
+  // work
+  scheduleScript(R"(
+    signalTest();
+
+    while (!shouldStop()) {}
+  )");
+  // Wait for the script to start
+  waitForTestSignal();
+
+  // Schedule Runtime.evaluate. This will be queued, but not executed yet due to
+  // the previous long-running code.
+  sendRequest("Runtime.evaluate", msgId + 0, [](::hermes::JSONEmitter &params) {
+    params.emitKeyValue("expression", R"(while(!shouldStop()); 1+1)");
+  });
+
+  // Clean up CDPAgent. We allow this to be done without synchronization with
+  // the runtime thread.
+  cdpAgent_.reset();
+
+  // We expect destroying CDPAgent will queue cleanup logic with the interrupt
+  // queue. Schedule a task on the interrupt queue so we know when that cleanup
+  // logic finishes running.
+  AsyncDebuggerAPI &asyncDebuggerAPI = cdpDebugAPI_->asyncDebuggerAPI();
+  waitFor<bool>([&asyncDebuggerAPI](auto promise) {
+    asyncDebuggerAPI.triggerInterrupt_TS(
+        [promise](HermesRuntime &) { promise->set_value(true); });
+  });
+
+  // The interrupt queue will be able to run before the queued Runtime.evaluate
+  // task, so we expect DomainAgents to be cleaned up by this time.
+  EXPECT_TRUE(*destroyedDomainAgentsImpl_);
+
+  // Allow the JavaScript code from scheduleScript to finish, so the queued
+  // Runtime.evaluate task can start.
+  stopFlag_.store(true);
+
+  // Expect the queued Runtime.evaluate to do nothing.
+}
+
+TEST_F(CDPAgentTest, CDPAgentCleanUpWhileTaskRunning) {
+  int msgId = 1;
+  auto setStopFlag = llvh::make_scope_exit([this] { stopFlag_.store(true); });
+
+  sendAndCheckResponse("Runtime.enable", msgId++);
+
+  sendRequest("Runtime.evaluate", msgId + 0, [](::hermes::JSONEmitter &params) {
+    params.emitKeyValue("expression", R"(
+      signalTest();
+
+      while (!shouldStop()) {}
+      )");
+  });
+  // Wait for Runtime.evaluate to start
+  waitForTestSignal();
+
+  // At this point Runtime.evaluate is currently running via the integrator
+  // queue. We now destroy CDPAgent, which will do some cleanup logic via the
+  // interrupt queue, thus interrupting Runtime.evaluate while it's running.
+  cdpAgent_.reset();
+
+  // We expect destroying CDPAgent will queue cleanup logic with the interrupt
+  // queue. Schedule a task on the interrupt queue so we know when that cleanup
+  // logic finishes running.
+  AsyncDebuggerAPI &asyncDebuggerAPI = cdpDebugAPI_->asyncDebuggerAPI();
+  waitFor<bool>([&asyncDebuggerAPI](auto promise) {
+    asyncDebuggerAPI.triggerInterrupt_TS(
+        [promise](HermesRuntime &) { promise->set_value(true); });
+  });
+
+  // Since Runtime.evaluate is still running, it will still hold onto a strong
+  // reference of DomainAgentsImpl. That's why DomainAgentsImpl won't actually
+  // have been destroyed here.
+  EXPECT_FALSE(*destroyedDomainAgentsImpl_);
+
+  // Allow the JavaScript code for Runtime.evaluate to run to finish.
+  stopFlag_.store(true);
+
+  runtimeThread_->add([this]() {
+    // Expect the DomainAgentsImpl to finally be cleaned up after
+    // Runtime.evaluate finishes.
+    EXPECT_TRUE(*destroyedDomainAgentsImpl_);
   });
 }
 
@@ -3291,13 +3395,14 @@ TEST_F(CDPAgentTest, RuntimeValidatesExecutionContextId) {
   expectErrorMessageContaining(kExecutionContextSubstring, msgId++);
 }
 
-TEST_F(CDPAgentTest, HeapProfilerSnapshot) {
+TEST_F(CDPAgentTest, HeapProfilerSnapshotCaptureNumeric) {
+  int msgId = 1;
+
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   auto setStopFlag = llvh::make_scope_exit([this] {
     // break out of loop
     stopFlag_.store(true);
   });
-
-  int msgId = 1;
 
   scheduleScript(R"(
       while(!shouldStop());
@@ -3307,15 +3412,80 @@ TEST_F(CDPAgentTest, HeapProfilerSnapshot) {
   sendRequest(
       "HeapProfiler.takeHeapSnapshot", msgId, [](::hermes::JSONEmitter &json) {
         json.emitKeyValue("reportProgress", false);
+        json.emitKeyValue("captureNumericValue", true);
       });
-  expectHeapSnapshot(msgId);
+  JSONObject *root = expectHeapSnapshot(msgId);
+  const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
+
+  bool found = false;
+  auto nodesIt = nodes.begin();
+  const auto nodesEnd = nodes.end();
+  while (nodesIt != nodesEnd) {
+    auto type = static_cast<::hermes::vm::HeapSnapshot::NodeType>(
+        static_cast<unsigned>(llvh::cast<JSONNumber>(*nodesIt)->getValue()));
+    if (type == ::hermes::vm::HeapSnapshot::NodeType::Number) {
+      found = true;
+    }
+    nodesIt += ::hermes::vm::HeapSnapshot::V8_SNAPSHOT_NODE_FIELD_COUNT;
+  }
+  EXPECT_TRUE(found);
 
   // Expect no more chunks are pending.
   expectNothing();
+#else
+  sendRequest(
+      "HeapProfiler.takeHeapSnapshot", msgId, [](::hermes::JSONEmitter &json) {
+        json.emitKeyValue("reportProgress", false);
+        json.emitKeyValue("captureNumericValue", true);
+      });
+  expectErrorMessageContaining(kMemoryInstrumentationSubstring, msgId);
+#endif // HERMES_MEMORY_INSTRUMENTATION
+}
+
+TEST_F(CDPAgentTest, HeapProfilerSnapshotNoNumeric) {
+  int msgId = 1;
+
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+  auto setStopFlag = llvh::make_scope_exit([this] {
+    // break out of loop
+    stopFlag_.store(true);
+  });
+
+  scheduleScript(R"(
+      while(!shouldStop());
+  )");
+
+  // Request a heap snapshot and expect it to arrive.
+  // Expect captureNumericValue to default to false when not provided.
+  sendRequest(
+      "HeapProfiler.takeHeapSnapshot", msgId, [](::hermes::JSONEmitter &json) {
+        json.emitKeyValue("reportProgress", false);
+      });
+  JSONObject *root = expectHeapSnapshot(msgId);
+  const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
+  auto nodesIt = nodes.begin();
+  const auto nodesEnd = nodes.end();
+  while (nodesIt != nodesEnd) {
+    auto type = static_cast<::hermes::vm::HeapSnapshot::NodeType>(
+        static_cast<unsigned>(llvh::cast<JSONNumber>(*nodesIt)->getValue()));
+    EXPECT_NE(type, ::hermes::vm::HeapSnapshot::NodeType::Number);
+    nodesIt += ::hermes::vm::HeapSnapshot::V8_SNAPSHOT_NODE_FIELD_COUNT;
+  }
+
+  // Expect no more chunks are pending.
+  expectNothing();
+#else
+  sendRequest(
+      "HeapProfiler.takeHeapSnapshot", msgId, [](::hermes::JSONEmitter &json) {
+        json.emitKeyValue("reportProgress", false);
+      });
+  expectErrorMessageContaining(kMemoryInstrumentationSubstring, msgId);
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 TEST_F(CDPAgentTest, HeapProfilerSnapshotRemoteObject) {
   int msgId = 1;
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   scheduleScript(R"(
     storeValue([1, 2, 3]);
     signalTest();
@@ -3400,6 +3570,20 @@ TEST_F(CDPAgentTest, HeapProfilerSnapshotRemoteObject) {
   // because Hermes doesn't do uniquing.
   testObject(globalObjID, "object", "Object", "Object", nullptr);
   testObject(storedObjID, "object", "Array", "Array(3)", "array");
+#else
+  sendRequest(
+      "HeapProfiler.getObjectByHeapObjectId",
+      msgId,
+      [](::hermes::JSONEmitter &json) {
+        json.emitKeyValue("objectId", "123");
+      });
+  expectErrorMessageContaining(kMemoryInstrumentationSubstring, msgId++);
+  sendRequest(
+      "HeapProfiler.getHeapObjectId", msgId, [](::hermes::JSONEmitter &json) {
+        json.emitKeyValue("objectId", "123");
+      });
+  expectErrorMessageContaining(kMemoryInstrumentationSubstring, msgId);
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 TEST_F(CDPAgentTest, HeapProfilerCollectGarbage) {
@@ -3441,6 +3625,7 @@ TEST_F(CDPAgentTest, HeapProfilerCollectGarbage) {
 
 TEST_F(CDPAgentTest, HeapProfilerTrackHeapObjects) {
   int msgId = 1;
+#ifdef HERMES_MEMORY_INSTRUMENTATION
 
   sendAndCheckResponse("HeapProfiler.startTrackingHeapObjects", msgId++);
 
@@ -3490,11 +3675,18 @@ TEST_F(CDPAgentTest, HeapProfilerTrackHeapObjects) {
 
   // Expect no further responses or notifications.
   expectNothing();
+#else
+  sendRequest("HeapProfiler.startTrackingHeapObjects", msgId);
+  expectErrorMessageContaining(kMemoryInstrumentationSubstring, msgId++);
+  sendRequest("HeapProfiler.stopTrackingHeapObjects", msgId);
+  expectErrorMessageContaining(kMemoryInstrumentationSubstring, msgId);
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 TEST_F(CDPAgentTest, HeapProfilerSampling) {
   int msgId = 1;
 
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   // Start sampling.
   {
     sendRequest(
@@ -3532,6 +3724,12 @@ TEST_F(CDPAgentTest, HeapProfilerSampling) {
       jsonScope_.getArray(resp, {"result", "profile", "samples"})->size(), 0);
   // Don't test the content of the JSON, that is tested via the
   // SamplingHeapProfilerTest.
+#else
+  sendRequest("HeapProfiler.startSampling", msgId);
+  expectErrorMessageContaining(kMemoryInstrumentationSubstring, msgId++);
+  sendRequest("HeapProfiler.stopSampling", msgId);
+  expectErrorMessageContaining(kMemoryInstrumentationSubstring, msgId);
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 #endif // HERMES_ENABLE_DEBUGGER

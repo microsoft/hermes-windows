@@ -49,6 +49,16 @@
 
 #include "llvh/Config/config.h"
 
+#if defined __has_attribute
+  #if __has_attribute(fallthrough)
+    #define FALLTHROUGH __attribute__ ((fallthrough))
+  #else
+    #define FALLTHROUGH (void)0
+  #endif
+#else
+  #define FALLTHROUGH (void)0
+#endif
+
 /* character-class table */
 static struct cclass {
 	const char *name;
@@ -277,7 +287,7 @@ static char nuls[10];		/* place to point scanner in event of error */
 #else
 #define	DUPMAX	255
 #endif
-#define	INFINITY	(DUPMAX + 1)
+#define REGINFINITY (DUPMAX + 1)
 
 #ifndef NDEBUG
 static int never = 0;		/* for use in asserts; shuts lint up */
@@ -537,7 +547,7 @@ p_ere_exp(struct parse *p)
 		break;
 	case '{':		/* okay as ordinary except if digit follows */
 		REQUIRE(!MORE() || !isdigit((uch)PEEK()), REG_BADRPT);
-		/* FALLTHROUGH */
+		FALLTHROUGH;
 	default:
 		ordinary(p, c);
 		break;
@@ -581,7 +591,7 @@ p_ere_exp(struct parse *p)
 				count2 = p_count(p);
 				REQUIRE(count <= count2, REG_BADBR);
 			} else		/* single number with comma */
-				count2 = INFINITY;
+				count2 = REGINFINITY;
 		} else		/* just a single number */
 			count2 = count;
 		repeat(p, pos, count, count2);
@@ -733,7 +743,7 @@ p_simp_re(struct parse *p,
 		break;
 	case '*':
 		REQUIRE(starordinary, REG_BADRPT);
-		/* FALLTHROUGH */
+		FALLTHROUGH;
 	default:
 		ordinary(p, (char)c);
 		break;
@@ -752,7 +762,7 @@ p_simp_re(struct parse *p,
 				count2 = p_count(p);
 				REQUIRE(count <= count2, REG_BADBR);
 			} else		/* single number with comma */
-				count2 = INFINITY;
+				count2 = REGINFINITY;
 		} else		/* just a single number */
 			count2 = count;
 		repeat(p, pos, count, count2);
@@ -1116,7 +1126,7 @@ repeat(struct parse *p,
 #	define	N	2
 #	define	INF	3
 #	define	REP(f, t)	((f)*8 + (t))
-#	define	MAP(n)	(((n) <= 1) ? (n) : ((n) == INFINITY) ? INF : N)
+#	define	MAP(n)	(((n) <= 1) ? (n) : ((n) == REGINFINITY) ? INF : N)
 	sopno copy;
 
 	if (p->error != 0)	/* head off possible runaway recursion */
@@ -1635,7 +1645,7 @@ findmust(struct parse *p, struct re_guts *g)
 					return;
 				}
 			} while (OP(s) != O_QUEST && OP(s) != O_CH);
-			/* fallthrough */
+			FALLTHROUGH;
 		default:		/* things that break a sequence */
 			if (newlen > g->mlen) {		/* ends one */
 				start = newstart;

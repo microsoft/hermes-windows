@@ -136,7 +136,7 @@ std::error_code GCBase::createSnapshotToFile(const std::string &fileName) {
   if (code) {
     return code;
   }
-  createSnapshot(os);
+  createSnapshot(os, true);
   return std::error_code{};
 }
 
@@ -191,13 +191,13 @@ struct PrimitiveNodeAcceptor : public SnapshotAcceptor {
   void accept(GCCell *&ptr, const char *name) override {}
 
   void acceptHV(HermesValue &hv, const char *) override {
-    if (hv.isNumber()) {
+    if (tracker_.isTrackingNumberIDs() && hv.isNumber()) {
       seenNumbers_.insert(hv.getNumber());
     }
   }
 
   void acceptSHV(SmallHermesValue &hv, const char *) override {
-    if (hv.isNumber()) {
+    if (tracker_.isTrackingNumberIDs() && hv.isNumber()) {
       seenNumbers_.insert(hv.getNumber(pointerBase_));
     }
   }
@@ -233,18 +233,29 @@ struct PrimitiveNodeAcceptor : public SnapshotAcceptor {
         GCBase::IDTracker::reserved(GCBase::IDTracker::ReservedObjectID::False),
         0,
         0);
-    for (double num : seenNumbers_) {
-      // A number never has any edges, so just make a node for it.
+    if (tracker_.isTrackingNumberIDs()) {
+      for (double num : seenNumbers_) {
+        // A number never has any edges, so just make a node for it.
+        snap_.beginNode();
+        // Convert the number value to a string, according to the JS conversion
+        // routines.
+        char buf[hermes::NUMBER_TO_STRING_BUF_SIZE];
+        size_t len = hermes::numberToString(num, buf, sizeof(buf));
+        snap_.endNode(
+            HeapSnapshot::NodeType::Number,
+            llvh::StringRef{buf, len},
+            tracker_.getNumberID(num),
+            // Numbers are zero-sized in the heap because they're stored inline.
+            0,
+            0);
+      }
+    } else {
       snap_.beginNode();
-      // Convert the number value to a string, according to the JS conversion
-      // routines.
-      char buf[hermes::NUMBER_TO_STRING_BUF_SIZE];
-      size_t len = hermes::numberToString(num, buf, sizeof(buf));
       snap_.endNode(
-          HeapSnapshot::NodeType::Number,
-          llvh::StringRef{buf, len},
-          tracker_.getNumberID(num),
-          // Numbers are zero-sized in the heap because they're stored inline.
+          HeapSnapshot::NodeType::Object,
+          "number",
+          GCBase::IDTracker::reserved(
+              GCBase::IDTracker::ReservedObjectID::Number),
           0,
           0);
     }
@@ -340,10 +351,14 @@ struct SnapshotRootAcceptor : public SnapshotAcceptor,
   using SnapshotAcceptor::accept;
   using WeakRootAcceptor::acceptWeak;
 
-  SnapshotRootAcceptor(GCBase &gc, HeapSnapshot &snap)
+  SnapshotRootAcceptor(
+      GCBase &gc,
+      HeapSnapshot &snap,
+      GCBase::SavedNumRootEdges &numRootEdges)
       : SnapshotAcceptor(gc.getPointerBase(), snap),
         WeakAcceptorDefault(gc.getPointerBase()),
-        gc_(gc) {}
+        gc_(gc),
+        numRootEdges_(numRootEdges) {}
 
   void accept(GCCell *&ptr, const char *name) override {
     pointerAccept(ptr, name, false);
@@ -388,6 +403,27 @@ struct SnapshotRootAcceptor : public SnapshotAcceptor,
 #define ROOT_SECTION(name) "(" #name ")",
 #include "hermes/VM/RootSections.def"
     };
+
+    // If we haven't visited this section before, save its current edge count.
+    auto sectionIdx = static_cast<unsigned>(currentSection_);
+    if (!numRootEdges_[sectionIdx].hasValue()) {
+      numRootEdges_[sectionIdx] = snap_.getCurEdgeCount();
+    } else {
+      // Compare the edge count of this scan with the first scan, if some roots
+      // are newly dropped, we will add dummy edges to make sure all following
+      // scans have the same edge count as the first scan in a single call of
+      // createSnapshot().
+      auto savedEdgeCount = numRootEdges_[sectionIdx].getValue();
+      assert(
+          savedEdgeCount >= snap_.getCurEdgeCount() &&
+          "Unexpected new edges added");
+      const auto id = GCBase::IDTracker::reserved(
+          GCBase::IDTracker::ReservedObjectID::Undefined);
+      for (auto i = snap_.getCurEdgeCount(); i < savedEdgeCount; ++i) {
+        snap_.addIndexedEdge(HeapSnapshot::EdgeType::Element, nextEdge_++, id);
+      }
+    }
+
     snap_.endNode(
         HeapSnapshot::NodeType::Synthetic,
         rootNames[static_cast<unsigned>(currentSection_)],
@@ -405,9 +441,11 @@ struct SnapshotRootAcceptor : public SnapshotAcceptor,
  private:
   GCBase &gc_;
   llvh::DenseSet<HeapSnapshot::NodeID> seenIDs_;
-  // For unnamed edges, use indices instead.
+  /// For unnamed edges, use indices instead.
   unsigned nextEdge_{0};
   Section currentSection_{Section::InvalidSection};
+  /// Number of edges for each root section.
+  GCBase::SavedNumRootEdges &numRootEdges_;
 
   void pointerAccept(GCCell *ptr, const char *name, bool weak) {
     assert(
@@ -441,8 +479,11 @@ struct SnapshotRootAcceptor : public SnapshotAcceptor,
 
 } // namespace
 
-void GCBase::createSnapshotImpl(GC &gc, HeapSnapshot &snap) {
-  const auto rootScan = [&gc, &snap, this]() {
+void GCBase::createSnapshotImpl(
+    GC &gc,
+    HeapSnapshot &snap,
+    SavedNumRootEdges &numRootEdges) {
+  const auto rootScan = [&gc, &snap, &numRootEdges, this]() {
     {
       // Make the super root node and add edges to each root section.
       SnapshotRootSectionAcceptor rootSectionAcceptor(getPointerBase(), snap);
@@ -478,7 +519,7 @@ void GCBase::createSnapshotImpl(GC &gc, HeapSnapshot &snap) {
       // Within a root section, there might be duplicates. The root acceptor
       // filters out duplicate edges because there cannot be duplicate edges to
       // nodes reachable from the super root.
-      SnapshotRootAcceptor rootAcceptor(gc, snap);
+      SnapshotRootAcceptor rootAcceptor(gc, snap, numRootEdges);
       markRoots(rootAcceptor, true);
       markWeakRoots(rootAcceptor, /*markLongLived*/ true);
     }
@@ -566,7 +607,13 @@ void GCBase::createSnapshotImpl(GC &gc, HeapSnapshot &snap) {
   snap.endSection(HeapSnapshot::Section::Locations);
 }
 
-void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
+void GCBase::createSnapshot(
+    GC &gc,
+    llvh::raw_ostream &os,
+    bool captureNumericValue) {
+  if (!captureNumericValue) {
+    idTracker_.stopTrackingNumberIDs();
+  }
   // Chrome 125 requires correct node count and edge count in the "snapshot"
   // field, which is at the beginning of the heap snapshot. We do two passes to
   // populate the correct node/edge count. First, we create a dummy HeapSnapshot
@@ -575,7 +622,11 @@ void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
   // them to create a HeapSnapShot instance in the second pass.
   JSONEmitter dummyJSON{llvh::nulls()};
   HeapSnapshot dummySnap{dummyJSON, 0, 0, 0, gcCallbacks_.getStackTracesTree()};
-  createSnapshotImpl(gc, dummySnap);
+  // Array for saving the number of edges for each root section. We set the
+  // value the first time we visit a root section, and make sure the same number
+  // of edges are added in a single call of this function.
+  SavedNumRootEdges numRootEdges;
+  createSnapshotImpl(gc, dummySnap, numRootEdges);
 
   // Second pass, write out the real snapshot with the correct node_count and
   // edge_count.
@@ -586,7 +637,7 @@ void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
       dummySnap.getEdgeCount(),
       dummySnap.getTraceFunctionCount(),
       gcCallbacks_.getStackTracesTree()};
-  createSnapshotImpl(gc, snap);
+  createSnapshotImpl(gc, snap, numRootEdges);
   // Check if the node/edge counts of the two passes are equal.
   assert(
       dummySnap.getNodeCount() == snap.getNodeCount() &&
@@ -594,6 +645,7 @@ void GCBase::createSnapshot(GC &gc, llvh::raw_ostream &os) {
   assert(
       dummySnap.getEdgeCount() == snap.getEdgeCount() &&
       "Edge count of two passes of createSnapshotImpl are not equal");
+  idTracker_.startTrackingNumberIDs();
 }
 
 void GCBase::snapshotAddGCNativeNodes(HeapSnapshot &snap) {
@@ -650,9 +702,10 @@ void GCBase::checkTripwire(size_t dataSize) {
       return gc_->createSnapshotToFile(path);
     }
 
-    std::error_code createSnapshot(std::ostream &os) override {
+    std::error_code createSnapshot(std::ostream &os, bool captureNumericValue)
+        override {
       llvh::raw_os_ostream ros(os);
-      gc_->createSnapshot(ros);
+      gc_->createSnapshot(ros, captureNumericValue);
       return std::error_code{};
     }
 
@@ -666,7 +719,8 @@ void GCBase::checkTripwire(size_t dataSize) {
       return std::error_code(ENOSYS, std::system_category());
     }
 
-    std::error_code createSnapshot(std::ostream &os) override {
+    std::error_code createSnapshot(std::ostream &os, bool captureNumericValue)
+        override {
       return std::error_code(ENOSYS, std::system_category());
     }
   } ctx;
@@ -1122,13 +1176,18 @@ GCBase::IDTracker::getExtraNativeIDs(HeapSnapshot::NodeID node) {
 
 HeapSnapshot::NodeID GCBase::IDTracker::getNumberID(double num) {
   std::lock_guard<Mutex> lk{mtx_};
-  auto &numberRef = numberIDMap_[num];
-  // If the entry didn't exist, the value was initialized to 0.
-  if (numberRef != 0) {
-    return numberRef;
+  if (isTrackingNumberIDs_) {
+    auto &numberRef = numberIDMap_[num];
+    // If the entry didn't exist, the value was initialized to 0.
+    if (numberRef != 0) {
+      return numberRef;
+    }
+    // Else, it is a number that hasn't been seen before.
+    return numberRef = nextNumberID();
+  } else {
+    return GCBase::IDTracker::reserved(
+        GCBase::IDTracker::ReservedObjectID::Number);
   }
-  // Else, it is a number that hasn't been seen before.
-  return numberRef = nextNumberID();
 }
 
 llvh::Optional<CompressedPointer> GCBase::IDTracker::getObjectForID(
@@ -1159,9 +1218,24 @@ bool GCBase::IDTracker::hasNativeIDs() {
   return !nativeIDMap_.empty();
 }
 
-bool GCBase::IDTracker::isTrackingIDs() {
+bool GCBase::IDTracker::hasTrackedObjectIDs() {
   std::lock_guard<Mutex> lk{mtx_};
   return !objectIDMap_.empty();
+}
+
+bool GCBase::IDTracker::isTrackingNumberIDs() {
+  std::lock_guard<Mutex> lk{mtx_};
+  return isTrackingNumberIDs_;
+}
+
+void GCBase::IDTracker::startTrackingNumberIDs() {
+  std::lock_guard<Mutex> lk{mtx_};
+  isTrackingNumberIDs_ = true;
+}
+
+void GCBase::IDTracker::stopTrackingNumberIDs() {
+  std::lock_guard<Mutex> lk{mtx_};
+  isTrackingNumberIDs_ = false;
 }
 
 HeapSnapshot::NodeID GCBase::IDTracker::getObjectID(CompressedPointer cell) {

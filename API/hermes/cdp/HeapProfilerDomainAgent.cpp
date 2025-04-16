@@ -18,6 +18,11 @@ namespace facebook {
 namespace hermes {
 namespace cdp {
 
+#ifndef HERMES_MEMORY_INSTRUMENTATION
+constexpr auto kNoInstrumentation =
+    "Runtime built without memory instrumentation.";
+#endif
+
 namespace {
 class NullBuffer : public std::streambuf {
  public:
@@ -58,10 +63,21 @@ HeapProfilerDomainAgent::~HeapProfilerDomainAgent() {
 /// Handles HeapProfiler.takeHeapSnapshot request
 void HeapProfilerDomainAgent::takeHeapSnapshot(
     const m::heapProfiler::TakeHeapSnapshotRequest &req) {
-  sendSnapshot(req.id, req.reportProgress && *req.reportProgress);
+#ifdef HERMES_MEMORY_INSTRUMENTATION
+  sendSnapshot(
+      req.id,
+      req.reportProgress && *req.reportProgress,
+      req.captureNumericValue && *req.captureNumericValue);
+#else
+  sendResponseToClient(m::makeErrorResponse(
+      req.id, m::ErrorCode::InvalidRequest, kNoInstrumentation));
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
-void HeapProfilerDomainAgent::sendSnapshot(int reqId, bool reportProgress) {
+void HeapProfilerDomainAgent::sendSnapshot(
+    int reqId,
+    bool reportProgress,
+    bool captureNumericValue) {
   if (reportProgress) {
     // A progress notification with finished = true indicates the
     // snapshot has been captured and is ready to be sent.  Our
@@ -90,13 +106,15 @@ void HeapProfilerDomainAgent::sendSnapshot(int reqId, bool reportProgress) {
           return true;
         });
 
-    runtime_.instrumentation().createSnapshotToStream(cos);
+    runtime_.instrumentation().createSnapshotToStream(
+        cos, {captureNumericValue});
   }
   sendResponseToClient(m::makeOkResponse(reqId));
 }
 
 void HeapProfilerDomainAgent::getObjectByHeapObjectId(
     const m::heapProfiler::GetObjectByHeapObjectIdRequest &req) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   uint64_t objID = atoi(req.objectId.c_str());
   jsi::Value val = runtime_.getObjectForID(objID);
   if (val.isNull()) {
@@ -118,10 +136,15 @@ void HeapProfilerDomainAgent::getObjectByHeapObjectId(
   resp.id = req.id;
   resp.result = std::move(remoteObj);
   sendResponseToClient(resp);
+#else
+  sendResponseToClient(m::makeErrorResponse(
+      req.id, m::ErrorCode::InvalidRequest, kNoInstrumentation));
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 void HeapProfilerDomainAgent::getHeapObjectId(
     const m::heapProfiler::GetHeapObjectIdRequest &req) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   uint64_t snapshotID = 0;
   if (const jsi::Value *valuePtr = objTable_->getValue(req.objectId)) {
     snapshotID = runtime_.getUniqueID(*valuePtr);
@@ -140,6 +163,10 @@ void HeapProfilerDomainAgent::getHeapObjectId(
     sendResponseToClient(m::makeErrorResponse(
         req.id, m::ErrorCode::ServerError, "Object is not available"));
   }
+#else
+  sendResponseToClient(m::makeErrorResponse(
+      req.id, m::ErrorCode::InvalidRequest, kNoInstrumentation));
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 void HeapProfilerDomainAgent::collectGarbage(
@@ -150,6 +177,7 @@ void HeapProfilerDomainAgent::collectGarbage(
 
 void HeapProfilerDomainAgent::startTrackingHeapObjects(
     const m::heapProfiler::StartTrackingHeapObjectsRequest &req) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   if (trackingHeapObjectStackTraces_) {
     sendResponseToClient(m::makeErrorResponse(
         req.id, m::ErrorCode::InvalidRequest, "Already tracking heap objects"));
@@ -200,10 +228,15 @@ void HeapProfilerDomainAgent::startTrackingHeapObjects(
         // there's a huge amount of allocation and freeing.
         sendNotificationToClient(heapStatsNote);
       });
+#else
+  sendResponseToClient(m::makeErrorResponse(
+      req.id, m::ErrorCode::InvalidRequest, kNoInstrumentation));
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 void HeapProfilerDomainAgent::stopTrackingHeapObjects(
     const m::heapProfiler::StopTrackingHeapObjectsRequest &req) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   if (!trackingHeapObjectStackTraces_) {
     sendResponseToClient(m::makeErrorResponse(
         req.id, m::ErrorCode::InvalidRequest, "Not tracking heap objects"));
@@ -212,11 +245,19 @@ void HeapProfilerDomainAgent::stopTrackingHeapObjects(
 
   runtime_.instrumentation().stopTrackingHeapObjectStackTraces();
   trackingHeapObjectStackTraces_ = false;
-  sendSnapshot(req.id, req.reportProgress && *req.reportProgress);
+  sendSnapshot(
+      req.id,
+      req.reportProgress && *req.reportProgress,
+      req.captureNumericValue && *req.captureNumericValue);
+#else
+  sendResponseToClient(m::makeErrorResponse(
+      req.id, m::ErrorCode::InvalidRequest, kNoInstrumentation));
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 void HeapProfilerDomainAgent::startSampling(
     const m::heapProfiler::StartSamplingRequest &req) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   // This is the same default sampling interval that Chrome uses.
   // https://chromedevtools.github.io/devtools-protocol/tot/HeapProfiler/#method-startSampling
   constexpr size_t kDefaultSamplingInterval = 1 << 15;
@@ -225,10 +266,15 @@ void HeapProfilerDomainAgent::startSampling(
   runtime_.instrumentation().startHeapSampling(samplingInterval);
   samplingHeap_ = true;
   sendResponseToClient(m::makeOkResponse(req.id));
+#else
+  sendResponseToClient(m::makeErrorResponse(
+      req.id, m::ErrorCode::InvalidRequest, kNoInstrumentation));
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 void HeapProfilerDomainAgent::stopSampling(
     const m::heapProfiler::StopSamplingRequest &req) {
+#ifdef HERMES_MEMORY_INSTRUMENTATION
   if (!samplingHeap_) {
     sendResponseToClient(m::makeErrorResponse(
         req.id, m::ErrorCode::InvalidRequest, "Heap sampling not active"));
@@ -249,6 +295,10 @@ void HeapProfilerDomainAgent::stopSampling(
   resp.id = req.id;
   resp.profile = std::move(*profile);
   sendResponseToClient(resp);
+#else
+  sendResponseToClient(m::makeErrorResponse(
+      req.id, m::ErrorCode::InvalidRequest, kNoInstrumentation));
+#endif // HERMES_MEMORY_INSTRUMENTATION
 }
 
 } // namespace cdp

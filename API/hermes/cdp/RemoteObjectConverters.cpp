@@ -18,6 +18,25 @@ namespace m = ::facebook::hermes::cdp::message;
 
 constexpr size_t kMaxPreviewProperties = 10;
 
+// Parity with V8. 13 Aug, 2024
+// https://source.chromium.org/chromium/chromium/src/+/main:v8/src/inspector/value-mirror.cc;l=191-201;drc=bdc48d1b1312cc40c00282efb1c9c5f41dcdca9a
+static std::string abbreviateString(const std::string &str) {
+  const std::string::size_type kMaxLength = 100;
+  const std::string kEllipsis = "…";
+  if (str.length() <= kMaxLength) {
+    return str;
+  }
+
+  return str.substr(0, kMaxLength - 1) + kEllipsis;
+}
+
+static bool isObjectInstanceOfError(
+    const jsi::Object &obj,
+    facebook::jsi::Runtime &runtime) {
+  return obj.instanceOf(
+      runtime, runtime.global().getPropertyAsFunction(runtime, "Error"));
+}
+
 static m::runtime::PropertyPreview generatePropertyPreview(
     facebook::jsi::Runtime &runtime,
     const std::string &name,
@@ -56,6 +75,11 @@ static m::runtime::PropertyPreview generatePropertyPreview(
       preview.subtype = "array";
       preview.value = "Array(" +
           std::to_string(obj.getArray(runtime).length(runtime)) + ")";
+    } else if (isObjectInstanceOfError(obj, runtime)) {
+      preview.type = "object";
+      preview.subtype = "error";
+      preview.value = abbreviateString(
+          obj.getProperty(runtime, "stack").toString(runtime).utf8(runtime));
     } else {
       preview.type = "object";
       preview.value = "Object";
@@ -81,7 +105,7 @@ static m::runtime::ObjectPreview generateArrayPreview(
     try {
       desc = generatePropertyPreview(
           runtime, indexString, obj.getValueAtIndex(runtime, i));
-    } catch (const jsi::JSError &err) {
+    } catch (const jsi::JSError &) {
       desc.name = indexString;
       desc.type = "string";
       desc.value = "<Exception>";
@@ -120,7 +144,7 @@ static m::runtime::ObjectPreview generateObjectPreview(
       // Chrome instead detects getters and makes you click to invoke.
       desc = generatePropertyPreview(
           runtime, propName.utf8(runtime), obj.getProperty(runtime, propName));
-    } catch (const jsi::JSError &err) {
+    } catch (const jsi::JSError &) {
       desc.name = propName.utf8(runtime);
       desc.type = "string";
       desc.value = "<Exception>";
@@ -308,6 +332,16 @@ m::runtime::RemoteObject m::runtime::makeRemoteObject(
       result.description = "Array(" + std::to_string(arrayCount) + ")";
       if (options.generatePreview) {
         result.preview = generateArrayPreview(runtime, array);
+      }
+    } else if (isObjectInstanceOfError(obj, runtime)) {
+      result.type = "object";
+      result.subtype = "error";
+      // T198854404 we should report subclasses of Error here, e.g. TypeError
+      result.className = "Error";
+      result.description =
+          obj.getProperty(runtime, "stack").toString(runtime).utf8(runtime);
+      if (options.generatePreview) {
+        result.preview = generateObjectPreview(runtime, obj);
       }
     } else {
       result.type = "object";

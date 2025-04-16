@@ -592,6 +592,7 @@ class GCBase {
       Null,
       True,
       False,
+      Number,
       FirstNonReservedID,
     };
 
@@ -622,7 +623,19 @@ class GCBase {
         return llvh::BitsToDouble(HermesValue::encodeNullValue().getRaw());
       }
       static unsigned getHashValue(double val) {
-        return std::hash<uint64_t>{}(llvh::DoubleToBits(val));
+        uint64_t bits = llvh::DoubleToBits(val);
+        // Representation of small floating values may have many lower bits as
+        // 0's. Hash functions that generate 64bits hashes identical to the
+        // input integer values (e.g., std::hash) may cause a lot of collisions,
+        // since the hash values are truncated to 32bits. The LLVM hash_value
+        // function has the nice property that each input bit affects each
+        // output bit with close probability, so the hash value after truncating
+        // is still good. On a random number set of uniform distribution (with
+        // 1/16 being random doubles and the rest integers) in the range of
+        // [-1000000, 1000000], with size 80M, this performs pretty well. In
+        // practice, most numbers in the heap would be small integers, so use
+        // this for now until we see other extreme cases.
+        return llvh::hash_value(bits);
       }
       static bool isEqual(double LHS, double RHS) {
         return llvh::DoubleToBits(LHS) == llvh::DoubleToBits(RHS);
@@ -631,8 +644,17 @@ class GCBase {
 
     explicit IDTracker();
 
-    /// Return true if IDs are being tracked.
-    bool isTrackingIDs();
+    /// Return true if Object IDs have been tracked.
+    bool hasTrackedObjectIDs();
+
+    /// Return true if Number IDs are being tracked.
+    bool isTrackingNumberIDs();
+
+    /// Start assigning unique IDs to numbers passed to \p getNumberID
+    void startTrackingNumberIDs();
+
+    /// Stop assigning unique IDs to numbers passed to \p getNumberID
+    void stopTrackingNumberIDs();
 
     /// Get the unique object id of the given object.
     /// If one does not yet exist, start tracking it.
@@ -662,8 +684,11 @@ class GCBase {
     llvh::SmallVector<HeapSnapshot::NodeID, 1> &getExtraNativeIDs(
         HeapSnapshot::NodeID node);
 
-    /// Assign a unique ID to a literal number value that occurs in the heap.
-    /// Can be used to make fake nodes that will display their numeric value.
+    /// If \p isTrackingNumberIDs_ is true, then assign a unique ID to a literal
+    /// number value that occurs in the heap. Can be used to make fake nodes
+    /// that will display their numeric value. Otherwise if \p
+    /// isTrackingNumberIDs_ is false, then simply returns the reserved ID
+    /// representing Number.
     HeapSnapshot::NodeID getNumberID(double num);
 
     /// Get the object pointer for the given ID. This is the inverse of \c
@@ -762,6 +787,9 @@ class GCBase {
     /// Map of numeric values to IDs. Used to give numbers in the heap a unique
     /// node.
     llvh::DenseMap<double, HeapSnapshot::NodeID, DoubleComparator> numberIDMap_;
+
+    /// Whether to assign an unique ID to the number given to \p getNumberID
+    bool isTrackingNumberIDs_ = true;
   };
 
   enum class HeapKind { HadesGC, MallocGC };
@@ -971,12 +999,26 @@ class GCBase {
   /// \return An error code on failure, else an empty error code.
   std::error_code createSnapshotToFile(const std::string &fileName);
 
+  /// An edges counter array for each root section. The counter is uninitialized
+  /// if a root section is not visited yet.
+  using SavedNumRootEdges = std::array<
+      llvh::Optional<HeapSizeType>,
+      static_cast<unsigned>(RootSectionAcceptor::Section::NumSections)>;
+
   /// Creates a snapshot of the heap, which includes information about what
   /// objects exist, their sizes, and what they point to.
-  virtual void createSnapshot(llvh::raw_ostream &os) = 0;
-  void createSnapshot(GC &gc, llvh::raw_ostream &os);
-  /// Actual implementation of writing the snapshot.
-  void createSnapshotImpl(GC &gc, HeapSnapshot &snap);
+  virtual void createSnapshot(
+      llvh::raw_ostream &os,
+      bool captureNumericValue) = 0;
+  void createSnapshot(GC &gc, llvh::raw_ostream &os, bool captureNumericValue);
+  /// Actual implementation of writing the snapshot. If \p numRootEdges is
+  /// uninitialized, it will be populated with the edge counts for each root
+  /// section. Otherwise, it will be used to pad the output with additional
+  /// edges if necessary so they match the recorded count.
+  void createSnapshotImpl(
+      GC &gc,
+      HeapSnapshot &snap,
+      SavedNumRootEdges &numRootEdges);
 
   /// Subclasses can override and add more specific native memory usage.
   virtual void snapshotAddGCNativeNodes(HeapSnapshot &snap);
@@ -1104,11 +1146,11 @@ class GCBase {
 
   bool isTrackingIDs() {
 #ifdef HERMES_MEMORY_INSTRUMENTATION
-    return getIDTracker().isTrackingIDs() ||
+    return getIDTracker().hasTrackedObjectIDs() ||
         getAllocationLocationTracker().isEnabled() ||
         getSamplingAllocationTracker().isEnabled();
 #else
-    return getIDTracker().isTrackingIDs();
+    return getIDTracker().hasTrackedObjectIDs();
 #endif
   }
 
