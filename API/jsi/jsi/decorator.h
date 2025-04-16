@@ -188,6 +188,12 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   PropNameID createPropNameIDFromString(const String& str) override {
     return plain_.createPropNameIDFromString(str);
   };
+#if JSI_VERSION >= 19
+  PropNameID createPropNameIDFromUtf16(const char16_t* utf16, size_t length)
+      override {
+    return plain_.createPropNameIDFromUtf16(utf16, length);
+  }
+#endif
 #if JSI_VERSION >= 5
   PropNameID createPropNameIDFromSymbol(const Symbol& sym) override {
     return plain_.createPropNameIDFromSymbol(sym);
@@ -231,9 +237,47 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   String createStringFromUtf8(const uint8_t* utf8, size_t length) override {
     return plain_.createStringFromUtf8(utf8, length);
   };
+#if JSI_VERSION >= 19
+  String createStringFromUtf16(const char16_t* utf16, size_t length) override {
+    return plain_.createStringFromUtf16(utf16, length);
+  }
+#endif
   std::string utf8(const String& s) override {
     return plain_.utf8(s);
   }
+
+#if JSI_VERSION >= 14
+  std::u16string utf16(const String& str) override {
+    return plain_.utf16(str);
+  }
+  std::u16string utf16(const PropNameID& sym) override {
+    return plain_.utf16(sym);
+  }
+#endif
+
+#if JSI_VERSION >= 16
+  void getStringData(
+      const jsi::String& str,
+      void* ctx,
+      void (
+          *cb)(void* ctx, bool ascii, const void* data, size_t num)) override {
+    plain_.getStringData(str, ctx, cb);
+  }
+
+  void getPropNameIdData(
+      const jsi::PropNameID& sym,
+      void* ctx,
+      void (
+          *cb)(void* ctx, bool ascii, const void* data, size_t num)) override {
+    plain_.getPropNameIdData(sym, ctx, cb);
+  }
+#endif
+
+#if JSI_VERSION >= 18
+  Object createObjectWithPrototype(const Value& prototype) override {
+    return plain_.createObjectWithPrototype(prototype);
+  }
+#endif
 
   Object createObject() override {
     return plain_.createObject();
@@ -270,6 +314,16 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
 #if JSI_VERSION >= 11
   void setExternalMemoryPressure(const Object& obj, size_t amt) override {
     plain_.setExternalMemoryPressure(obj, amt);
+  }
+#endif
+
+#if JSI_VERSION >= 17
+  void setPrototypeOf(const Object& object, const Value& prototype) override {
+    plain_.setPrototypeOf(object, prototype);
+  }
+
+  Value getPrototypeOf(const Object& object) override {
+    return plain_.getPrototypeOf(object);
   }
 #endif
 
@@ -432,17 +486,29 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
     plain().instrumentation().stopHeapSampling(os);
   }
 
+#if JSI_VERSION >= 13
   void createSnapshotToFile(
       const std::string& path,
       const HeapSnapshotOptions& options) override {
     plain().instrumentation().createSnapshotToFile(path, options);
   }
+#else
+  void createSnapshotToFile(const std::string& path) override {
+    plain().instrumentation().createSnapshotToFile(path);
+  }
+#endif
 
+#if JSI_VERSION >= 13
   void createSnapshotToStream(
       std::ostream& os,
       const HeapSnapshotOptions& options) override {
     plain().instrumentation().createSnapshotToStream(os, options);
   }
+#else
+  void createSnapshotToStream(std::ostream& os) override {
+    plain().instrumentation().createSnapshotToStream(os);
+  }
+#endif
 
   std::string flushAndDisableBridgeTrafficTrace() override {
     return const_cast<Plain&>(plain())
@@ -610,10 +676,12 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::cloneSymbol(pv);
   };
+#if JSI_VERSION >= 6
   Runtime::PointerValue* cloneBigInt(const Runtime::PointerValue* pv) override {
     Around around{with_};
     return RD::cloneBigInt(pv);
   };
+#endif
   Runtime::PointerValue* cloneString(const Runtime::PointerValue* pv) override {
     Around around{with_};
     return RD::cloneString(pv);
@@ -638,14 +706,23 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::createPropNameIDFromUtf8(utf8, length);
   };
+#if JSI_VERSION >= 19
+  PropNameID createPropNameIDFromUtf16(const char16_t* utf16, size_t length)
+      override {
+    Around around{with_};
+    return RD::createPropNameIDFromUtf16(utf16, length);
+  }
+#endif
   PropNameID createPropNameIDFromString(const String& str) override {
     Around around{with_};
     return RD::createPropNameIDFromString(str);
   };
+#if JSI_VERSION >= 5
   PropNameID createPropNameIDFromSymbol(const Symbol& sym) override {
     Around around{with_};
     return RD::createPropNameIDFromSymbol(sym);
   };
+#endif
   std::string utf8(const PropNameID& id) override {
     Around around{with_};
     return RD::utf8(id);
@@ -660,6 +737,7 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     return RD::symbolToString(sym);
   };
 
+#if JSI_VERSION >= 8
   BigInt createBigIntFromInt64(int64_t i) override {
     Around around{with_};
     return RD::createBigIntFromInt64(i);
@@ -684,6 +762,7 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::bigintToString(bi, i);
   };
+#endif
 
   String createStringFromAscii(const char* str, size_t length) override {
     Around around{with_};
@@ -693,15 +772,59 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::createStringFromUtf8(utf8, length);
   };
+#if JSI_VERSION >= 19
+  String createStringFromUtf16(const char16_t* utf16, size_t length) override {
+    Around around{with_};
+    return RD::createStringFromUtf16(utf16, length);
+  }
+#endif
   std::string utf8(const String& s) override {
     Around around{with_};
     return RD::utf8(s);
   }
 
+#if JSI_VERSION >= 14
+  std::u16string utf16(const String& str) override {
+    Around around{with_};
+    return RD::utf16(str);
+  }
+  std::u16string utf16(const PropNameID& sym) override {
+    Around around{with_};
+    return RD::utf16(sym);
+  }
+#endif
+
+#if JSI_VERSION >= 16
+  void getStringData(
+      const jsi::String& str,
+      void* ctx,
+      void (
+          *cb)(void* ctx, bool ascii, const void* data, size_t num)) override {
+    Around around{with_};
+    RD::getStringData(str, ctx, cb);
+  }
+
+  void getPropNameIdData(
+      const jsi::PropNameID& sym,
+      void* ctx,
+      void (
+          *cb)(void* ctx, bool ascii, const void* data, size_t num)) override {
+    Around around{with_};
+    RD::getPropNameIdData(sym, ctx, cb);
+  }
+#endif
+
   Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override {
     Around around{with_};
     return RD::createValueFromJsonUtf8(json, length);
   };
+
+#if JSI_VERSION >= 18
+  Object createObjectWithPrototype(const Value& prototype) override {
+    Around around{with_};
+    return RD::createObjectWithPrototype(prototype);
+  }
+#endif
 
   Object createObject() override {
     Around around{with_};
@@ -720,6 +843,7 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     return RD::getHostFunction(f);
   };
 
+#if JSI_VERSION >= 7
   bool hasNativeState(const Object& o) override {
     Around around{with_};
     return RD::hasNativeState(o);
@@ -733,6 +857,19 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     RD::setNativeState(o, state);
   };
+#endif
+
+#if JSI_VERSION >= 17
+  void setPrototypeOf(const Object& object, const Value& prototype) override {
+    Around around{with_};
+    RD::setPrototypeOf(object, prototype);
+  }
+
+  Value getPrototypeOf(const Object& object) override {
+    Around around{with_};
+    return RD::getPrototypeOf(object);
+  }
+#endif
 
   Value getProperty(const Object& o, const PropNameID& name) override {
     Around around{with_};
@@ -867,10 +1004,13 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::strictEquals(a, b);
   };
+
+#if JSI_VERSION >= 6
   bool strictEquals(const BigInt& a, const BigInt& b) const override {
     Around around{with_};
     return RD::strictEquals(a, b);
   };
+#endif
 
   bool strictEquals(const String& a, const String& b) const override {
     Around around{with_};
@@ -886,11 +1026,13 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     return RD::instanceOf(o, f);
   };
 
+#if JSI_VERSION >= 11
   void setExternalMemoryPressure(const jsi::Object& obj, size_t amount)
       override {
     Around around{with_};
     RD::setExternalMemoryPressure(obj, amount);
   };
+#endif
 
  private:
   // Wrap an RAII type around With& to guarantee after always happens.
