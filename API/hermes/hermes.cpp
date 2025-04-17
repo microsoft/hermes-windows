@@ -631,6 +631,19 @@ class HermesRuntimeImpl final : public HermesRuntime,
   jsi::String createStringFromUtf8(const uint8_t *utf8, size_t length) override;
   std::string utf8(const jsi::String &) override;
 
+  std::u16string utf16(const jsi::String &str) override;
+  std::u16string utf16(const jsi::PropNameID &sym) override;
+
+  void getStringData(
+      const jsi::String &str,
+      void *ctx,
+      void (*cb)(void *ctx, bool ascii, const void *data, size_t num)) override;
+
+  void getPropNameIdData(
+      const jsi::PropNameID &sym,
+      void *ctx,
+      void (*cb)(void *ctx, bool ascii, const void *data, size_t num)) override;
+
 #if JSI_VERSION >= 2
   jsi::Value createValueFromJsonUtf8(const uint8_t *json, size_t length)
       override;
@@ -639,6 +652,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
   jsi::Object createObject() override;
   jsi::Object createObject(std::shared_ptr<jsi::HostObject> ho) override;
   std::shared_ptr<jsi::HostObject> getHostObject(const jsi::Object &) override;
+  jsi::Object createObjectWithPrototype(const jsi::Value &prototype) override;
   jsi::HostFunctionType &getHostFunction(const jsi::Function &) override;
 
 #if JSI_VERSION >= 7
@@ -669,6 +683,10 @@ class HermesRuntimeImpl final : public HermesRuntime,
   bool isHostObject(const jsi::Object &) const override;
   bool isHostFunction(const jsi::Function &) const override;
   jsi::Array getPropertyNames(const jsi::Object &) override;
+
+  void setPrototypeOf(const jsi::Object &object, const jsi::Value &prototype)
+      override;
+  jsi::Value getPrototypeOf(const jsi::Object &object) override;
 
   jsi::WeakObject createWeakObject(const jsi::Object &) override;
   jsi::Value lockWeakObject(
@@ -828,8 +846,9 @@ class HermesRuntimeImpl final : public HermesRuntime,
             vm::TwineChar16{"Exception in HostObject::getPropertyNames: "} +
             rt_.utf16FromErrorWhat(ex, buf));
       } catch (...) {
-        return rt_.runtime_.raiseError(vm::TwineChar16{
-            "Exception in HostObject::getPropertyNames: <unknown>"});
+        return rt_.runtime_.raiseError(
+            vm::TwineChar16{
+                "Exception in HostObject::getPropertyNames: <unknown>"});
       }
     };
   };
@@ -1828,6 +1847,56 @@ std::string HermesRuntimeImpl::utf8(const jsi::String &str) {
       vm::StringPrimitive::createStringView(runtime_, stringHandle(str)));
 }
 
+std::u16string HermesRuntimeImpl::utf16(const jsi::String &str) {
+  auto *stringPrim = phv(str).getString();
+  if (stringPrim->isASCII()) {
+    auto arrayRef = stringPrim->getStringRef<char>();
+    return std::u16string(arrayRef.begin(), arrayRef.end());
+  }
+  auto arrayRef = stringPrim->getStringRef<char16_t>();
+  return std::u16string(arrayRef.data(), arrayRef.size());
+}
+
+std::u16string HermesRuntimeImpl::utf16(const jsi::PropNameID &sym) {
+  vm::SymbolID id = phv(sym).getSymbol();
+  auto *stringPrim = runtime_.getStringPrimFromSymbolID(id);
+  if (stringPrim->isASCII()) {
+    auto arrayRef = stringPrim->getStringRef<char>();
+    return std::u16string(arrayRef.begin(), arrayRef.end());
+  }
+  auto arrayRef = stringPrim->getStringRef<char16_t>();
+  return std::u16string(arrayRef.data(), arrayRef.size());
+}
+
+void HermesRuntimeImpl::getStringData(
+    const jsi::String &str,
+    void *ctx,
+    void (*cb)(void *ctx, bool ascii, const void *data, size_t num)) {
+  auto *stringPrim = phv(str).getString();
+  if (stringPrim->isASCII()) {
+    auto arrayRef = stringPrim->getStringRef<char>();
+    cb(ctx, true, arrayRef.data(), arrayRef.size());
+  } else {
+    auto arrayRef = stringPrim->getStringRef<char16_t>();
+    cb(ctx, false, arrayRef.data(), arrayRef.size());
+  }
+}
+
+void HermesRuntimeImpl::getPropNameIdData(
+    const jsi::PropNameID &sym,
+    void *ctx,
+    void (*cb)(void *ctx, bool ascii, const void *data, size_t num)) {
+  vm::SymbolID id = phv(sym).getSymbol();
+  auto *stringPrim = runtime_.getStringPrimFromSymbolID(id);
+  if (stringPrim->isASCII()) {
+    auto arrayRef = stringPrim->getStringRef<char>();
+    cb(ctx, true, arrayRef.data(), arrayRef.size());
+  } else {
+    auto arrayRef = stringPrim->getStringRef<char16_t>();
+    cb(ctx, false, arrayRef.data(), arrayRef.size());
+  }
+}
+
 #if JSI_VERSION >= 2
 jsi::Value HermesRuntimeImpl::createValueFromJsonUtf8(
     const uint8_t *json,
@@ -1854,6 +1923,19 @@ jsi::Object HermesRuntimeImpl::createObject(
       runtime_, std::make_unique<JsiProxy>(*this, ho));
   checkStatus(objRes.getStatus());
   return add<jsi::Object>(*objRes);
+}
+
+jsi::Object HermesRuntimeImpl::createObjectWithPrototype(
+    const jsi::Value &prototype) {
+  if (!prototype.isObject() && !prototype.isNull()) {
+    throw jsi::JSError(
+        *this, "Object prototype argument must be an Object or null");
+  }
+
+  auto object = vm::JSObject::create(
+      runtime_,
+      vm::Handle<vm::JSObject>::dyn_vmcast(vmHandleFromValue(prototype)));
+  return add<jsi::Object>(object.getHermesValue());
 }
 
 std::shared_ptr<jsi::HostObject> HermesRuntimeImpl::getHostObject(
@@ -1968,8 +2050,9 @@ void HermesRuntimeImpl::setExternalMemoryPressure(
     // This is the first time adding external memory to this object. Create a
     // new NativeState. We use the context pointer to store the external memory
     // amount.
-    auto nsHnd = runtime_.makeHandle(vm::NativeState::create(
-        runtime_, reinterpret_cast<void *>(0), debitMem));
+    auto nsHnd = runtime_.makeHandle(
+        vm::NativeState::create(
+            runtime_, reinterpret_cast<void *>(0), debitMem));
 
     // Use defineNewOwnProperty to create the new property since we know it
     // doesn't exist. Note that this also bypasses the extensibility check on
@@ -2004,6 +2087,32 @@ void HermesRuntimeImpl::setExternalMemoryPressure(
   }
 
   ns->setContext(reinterpret_cast<void *>(amt));
+}
+
+void HermesRuntimeImpl::setPrototypeOf(
+    const jsi::Object &object,
+    const jsi::Value &prototype) {
+  if (!prototype.isObject() && !prototype.isNull()) {
+    throw jsi::JSError(
+        *this, "Object prototype argument must be an Object or null");
+  }
+
+  auto cr = vm::JSObject::setParent(
+      vm::vmcast<vm::JSObject>(phv(object)),
+      runtime_,
+      vm::dyn_vmcast<vm::JSObject>(hvFromValue(prototype)),
+      vm::PropOpFlags().plusThrowOnError());
+  checkStatus(cr.getStatus());
+}
+
+jsi::Value HermesRuntimeImpl::getPrototypeOf(const jsi::Object &object) {
+  vm::CallResult<vm::PseudoHandle<vm::JSObject>> cr =
+      vm::JSObject::getPrototypeOf(handle(object), runtime_);
+  checkStatus(cr.getStatus());
+  if (!*cr) {
+    return jsi::Value::null();
+  }
+  return valueFromHermesValue(cr->getHermesValue());
 }
 
 jsi::Value HermesRuntimeImpl::getProperty(
@@ -2129,8 +2238,9 @@ jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
 }
 
 jsi::WeakObject HermesRuntimeImpl::createWeakObject(const jsi::Object &obj) {
-  return addWeak(vm::WeakRoot<vm::JSObject>(
-      static_cast<vm::JSObject *>(phv(obj).getObject()), runtime_));
+  return addWeak(
+      vm::WeakRoot<vm::JSObject>(
+          static_cast<vm::JSObject *>(phv(obj).getObject()), runtime_));
 }
 
 jsi::Value HermesRuntimeImpl::lockWeakObject(
@@ -2154,9 +2264,10 @@ jsi::Array HermesRuntimeImpl::createArray(size_t length) {
 jsi::ArrayBuffer HermesRuntimeImpl::createArrayBuffer(
     std::shared_ptr<jsi::MutableBuffer> buffer) {
   vm::GCScope gcScope(runtime_);
-  auto buf = runtime_.makeHandle(vm::JSArrayBuffer::create(
-      runtime_,
-      vm::Handle<vm::JSObject>::vmcast(&runtime_.arrayBufferPrototype)));
+  auto buf = runtime_.makeHandle(
+      vm::JSArrayBuffer::create(
+          runtime_,
+          vm::Handle<vm::JSObject>::vmcast(&runtime_.arrayBufferPrototype)));
   auto size = buffer->size();
   auto *data = buffer->data();
   auto *ctx = new std::shared_ptr<jsi::MutableBuffer>(std::move(buffer));
@@ -2553,8 +2664,9 @@ std::unique_ptr<HermesRuntime> makeHermesRuntime(
   // Only HermesRuntime can create a debugger instance.  This requires
   // the setter and not using make_unique, so the call to new is here
   // in this function, which is a friend of debugger::Debugger.
-  ret->setDebugger(std::unique_ptr<debugger::Debugger>(
-      new debugger::Debugger(ret.get(), ret->runtime_)));
+  ret->setDebugger(
+      std::unique_ptr<debugger::Debugger>(
+          new debugger::Debugger(ret.get(), ret->runtime_)));
 #else
   ret->setDebugger(std::make_unique<debugger::Debugger>());
 #endif
@@ -2585,8 +2697,9 @@ std::unique_ptr<jsi::ThreadSafeRuntime> makeThreadSafeHermesRuntime(
   // Only HermesRuntime can create a debugger instance.  This requires
   // the setter and not using make_unique, so the call to new is here
   // in this function, which is a friend of debugger::Debugger.
-  hermesRt.setDebugger(std::unique_ptr<debugger::Debugger>(
-      new debugger::Debugger(&hermesRt, hermesRt.runtime_)));
+  hermesRt.setDebugger(
+      std::unique_ptr<debugger::Debugger>(
+          new debugger::Debugger(&hermesRt, hermesRt.runtime_)));
 #else
   hermesRt.setDebugger(std::make_unique<debugger::Debugger>());
 #endif

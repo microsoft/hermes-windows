@@ -24,6 +24,7 @@ pub enum NodeKind {
     HookDeclaration,
     _FunctionLikeLast,
     _StatementFirst,
+    MatchStatement,
     _LoopStatementFirst,
     WhileStatement,
     DoWhileStatement,
@@ -34,6 +35,7 @@ pub enum NodeKind {
     DebuggerStatement,
     EmptyStatement,
     BlockStatement,
+    StaticBlock,
     BreakStatement,
     ContinueStatement,
     ThrowStatement,
@@ -110,6 +112,23 @@ pub enum NodeKind {
     RestElement,
     AssignmentPattern,
     _PatternLast,
+    MatchStatementCase,
+    MatchExpression,
+    MatchExpressionCase,
+    _MatchPatternFirst,
+    MatchWildcardPattern,
+    MatchLiteralPattern,
+    MatchUnaryPattern,
+    MatchIdentifierPattern,
+    MatchBindingPattern,
+    MatchObjectPattern,
+    MatchArrayPattern,
+    MatchOrPattern,
+    MatchAsPattern,
+    MatchMemberPattern,
+    _MatchPatternLast,
+    MatchObjectPatternProperty,
+    MatchRestPattern,
     _JSXFirst,
     JSXIdentifier,
     JSXMemberExpression,
@@ -316,6 +335,9 @@ extern "C" {
     pub fn hermes_get_HookDeclaration_body(node: NodePtr) -> NodePtr;
     pub fn hermes_get_HookDeclaration_typeParameters(node: NodePtr) -> NodePtrOpt;
     pub fn hermes_get_HookDeclaration_returnType(node: NodePtr) -> NodePtrOpt;
+    // MatchStatement
+    pub fn hermes_get_MatchStatement_argument(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchStatement_cases(node: NodePtr) -> NodeListRef;
     // WhileStatement
     pub fn hermes_get_WhileStatement_body(node: NodePtr) -> NodePtr;
     pub fn hermes_get_WhileStatement_test(node: NodePtr) -> NodePtr;
@@ -338,6 +360,8 @@ extern "C" {
     pub fn hermes_get_ForStatement_body(node: NodePtr) -> NodePtr;
     // BlockStatement
     pub fn hermes_get_BlockStatement_body(node: NodePtr) -> NodeListRef;
+    // StaticBlock
+    pub fn hermes_get_StaticBlock_body(node: NodePtr) -> NodeListRef;
     // BreakStatement
     pub fn hermes_get_BreakStatement_label(node: NodePtr) -> NodePtrOpt;
     // ContinueStatement
@@ -567,6 +591,47 @@ extern "C" {
     // AssignmentPattern
     pub fn hermes_get_AssignmentPattern_left(node: NodePtr) -> NodePtr;
     pub fn hermes_get_AssignmentPattern_right(node: NodePtr) -> NodePtr;
+    // MatchStatementCase
+    pub fn hermes_get_MatchStatementCase_pattern(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchStatementCase_body(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchStatementCase_guard(node: NodePtr) -> NodePtrOpt;
+    // MatchExpression
+    pub fn hermes_get_MatchExpression_argument(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchExpression_cases(node: NodePtr) -> NodeListRef;
+    // MatchExpressionCase
+    pub fn hermes_get_MatchExpressionCase_pattern(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchExpressionCase_body(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchExpressionCase_guard(node: NodePtr) -> NodePtrOpt;
+    // MatchLiteralPattern
+    pub fn hermes_get_MatchLiteralPattern_literal(node: NodePtr) -> NodePtr;
+    // MatchUnaryPattern
+    pub fn hermes_get_MatchUnaryPattern_argument(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchUnaryPattern_operator(node: NodePtr) -> NodeLabel;
+    // MatchIdentifierPattern
+    pub fn hermes_get_MatchIdentifierPattern_id(node: NodePtr) -> NodePtr;
+    // MatchBindingPattern
+    pub fn hermes_get_MatchBindingPattern_id(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchBindingPattern_kind(node: NodePtr) -> NodeLabel;
+    // MatchObjectPattern
+    pub fn hermes_get_MatchObjectPattern_properties(node: NodePtr) -> NodeListRef;
+    pub fn hermes_get_MatchObjectPattern_rest(node: NodePtr) -> NodePtrOpt;
+    // MatchArrayPattern
+    pub fn hermes_get_MatchArrayPattern_elements(node: NodePtr) -> NodeListRef;
+    pub fn hermes_get_MatchArrayPattern_rest(node: NodePtr) -> NodePtrOpt;
+    // MatchOrPattern
+    pub fn hermes_get_MatchOrPattern_patterns(node: NodePtr) -> NodeListRef;
+    // MatchAsPattern
+    pub fn hermes_get_MatchAsPattern_pattern(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchAsPattern_target(node: NodePtr) -> NodePtr;
+    // MatchMemberPattern
+    pub fn hermes_get_MatchMemberPattern_base(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchMemberPattern_property(node: NodePtr) -> NodePtr;
+    // MatchObjectPatternProperty
+    pub fn hermes_get_MatchObjectPatternProperty_key(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchObjectPatternProperty_pattern(node: NodePtr) -> NodePtr;
+    pub fn hermes_get_MatchObjectPatternProperty_shorthand(node: NodePtr) -> bool;
+    // MatchRestPattern
+    pub fn hermes_get_MatchRestPattern_argument(node: NodePtr) -> NodePtrOpt;
     // JSXIdentifier
     pub fn hermes_get_JSXIdentifier_name(node: NodePtr) -> NodeLabel;
     // JSXMemberExpression
@@ -817,6 +882,7 @@ extern "C" {
     pub fn hermes_get_TypeParameterDeclaration_params(node: NodePtr) -> NodeListRef;
     // TypeParameter
     pub fn hermes_get_TypeParameter_name(node: NodePtr) -> NodeLabel;
+    pub fn hermes_get_TypeParameter_const(node: NodePtr) -> bool;
     pub fn hermes_get_TypeParameter_bound(node: NodePtr) -> NodePtrOpt;
     pub fn hermes_get_TypeParameter_variance(node: NodePtr) -> NodePtrOpt;
     pub fn hermes_get_TypeParameter_default(node: NodePtr) -> NodePtrOpt;

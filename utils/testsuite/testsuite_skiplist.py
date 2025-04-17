@@ -1946,6 +1946,22 @@ SKIP_LIST = [
     "types/render_types/renders_maybe.js",
     # Import attributes
     "flow/dynamic_import/migrated_0005.js",
+    # Tuples
+    "flow/types/tuples/variance.js",
+    "flow/types/tuples/labeled.js",
+    # TODO comment attachment
+    "flow/match/expression-no-final-case-separator.js",
+    "flow/match/statement.js",
+    # Type parameter tests
+    # TODO in/out modifiers not supported
+    "flow/types/type_params/class_const_params.js",
+    # TODO comment attachment differences in function_const_params.js
+    "flow/types/type_params/function_const_params.js",
+    # BigInt
+    "flow/bigint/valid-hex.js",
+    "flow/bigint/valid-octal-new.js",
+    "flow/bigint/numeric-separators.js",
+    "flow/bigint/valid-binary.js",
     ### Failing Flow tests end ###
 ]
 

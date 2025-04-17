@@ -151,8 +151,11 @@ void SemanticValidator::visit(IdentifierNode *identifier) {
   if (identifier->_name == kw_.identEval && !astContext_.getEnableEval())
     sm_.error(identifier->getSourceRange(), "'eval' is disabled");
 
-  if (identifier->_name == kw_.identArguments)
+  if (identifier->_name == kw_.identArguments) {
+    if (forbidArguments_)
+      sm_.error(identifier->getSourceRange(), "invalid use of 'arguments'");
     curFunction()->semInfo->usesArguments = true;
+  }
 }
 
 /// Process a function declaration by creating a new FunctionContext.
@@ -605,8 +608,7 @@ void SemanticValidator::visit(YieldExpressionNode *yieldExpr) {
 }
 
 void SemanticValidator::visit(AwaitExpressionNode *awaitExpr) {
-  if (curFunction()->isGlobalScope() ||
-      (curFunction()->node && !ESTree::isAsync(curFunction()->node)))
+  if (forbidAwaitExpression_)
     sm_.error(awaitExpr->getSourceRange(), "'await' not in an async function");
 
   visitESTreeChildren(*this, awaitExpr);
@@ -658,6 +660,36 @@ void SemanticValidator::visit(PrivateNameNode *node) {
 void SemanticValidator::visit(ClassPrivatePropertyNode *node) {
   if (compile_)
     sm_.error(node->getSourceRange(), "private properties are not supported");
+  visitESTreeNode(*this, node->_key);
+  {
+    SaveAndRestore<bool> oldForbidAwait{forbidAwaitExpression_, true};
+    // ES14.0 15.7.1
+    // It is a Syntax Error if Initializer is present and ContainsArguments of
+    // Initializer is true.
+    SaveAndRestore<bool> oldForbidArguments{forbidArguments_, true};
+    visitESTreeNode(*this, node->_value);
+  }
+}
+
+void SemanticValidator::visit(ClassPropertyNode *node) {
+  visitESTreeNode(*this, node->_key);
+  {
+    SaveAndRestore<bool> oldForbidAwait{forbidAwaitExpression_, true};
+    // ES14.0 15.7.1
+    // It is a Syntax Error if Initializer is present and ContainsArguments of
+    // Initializer is true.
+    SaveAndRestore<bool> oldForbidArguments{forbidArguments_, true};
+    visitESTreeNode(*this, node->_value);
+  }
+}
+
+void SemanticValidator::visit(StaticBlockNode *node) {
+  if (compile_)
+    sm_.error(node->getSourceRange(), "class static blocks are not supported");
+  // ES14.0 15.7.1
+  // It is a Syntax Error if ClassStaticBlockStatementList Contains await is
+  // true.
+  llvh::SaveAndRestore<bool> oldForbidAwait{forbidAwaitExpression_, true};
   visitESTreeChildren(*this, node);
 }
 
@@ -883,6 +915,16 @@ void SemanticValidator::visitFunction(
       }
     }
   }
+
+  // 'await' forbidden outside async functions.
+  llvh::SaveAndRestore<bool> oldForbidAwait{
+      forbidAwaitExpression_, !ESTree::isAsync(node)};
+  // Forbidden-ness of 'arguments' passes through arrow functions because they
+  // use the same 'arguments'.
+  llvh::SaveAndRestore<bool> oldForbidArguments{
+      forbidArguments_,
+      llvh::isa<ESTree::ArrowFunctionExpressionNode>(node) ? forbidArguments_
+                                                           : false};
 
   visitParamsAndBody(node);
 }
