@@ -45,6 +45,7 @@ public class PlatformNumberFormatterICU implements IPlatformNumberFormatter {
   PlatformNumberFormatterICU() {}
 
   @RequiresApi(api = Build.VERSION_CODES.N)
+  @SuppressWarnings("deprecation")
   private void initialize(
       NumberFormat numberFormat,
       ILocaleObject<?> localeObject,
@@ -155,24 +156,35 @@ public class PlatformNumberFormatterICU implements IPlatformNumberFormatter {
       android.icu.text.DecimalFormat decimalFormat = (android.icu.text.DecimalFormat) mNumberFormat;
       android.icu.text.DecimalFormatSymbols symbols = decimalFormat.getDecimalFormatSymbols();
 
-      switch (signDisplay) {
-        case NEVER:
-          decimalFormat.setPositivePrefix("");
-          decimalFormat.setPositiveSuffix("");
+      if (Build.VERSION.SDK_INT >= 31) {
+        switch (signDisplay) {
+          case NEVER:
+            decimalFormat.setSignAlwaysShown(false);
+            break;
+          case ALWAYS:
+          case EXCEPTZERO:
+            decimalFormat.setSignAlwaysShown(true);
+            break;
+        }
+      } else {
+        switch (signDisplay) {
+          case NEVER:
+            decimalFormat.setPositivePrefix("");
+            decimalFormat.setPositiveSuffix("");
 
-          decimalFormat.setNegativePrefix("");
-          decimalFormat.setNegativeSuffix("");
+            decimalFormat.setNegativePrefix("");
+            decimalFormat.setNegativeSuffix("");
 
-          break;
-        case ALWAYS:
-        case EXCEPTZERO:
-          if (!decimalFormat.getNegativePrefix().isEmpty())
-            decimalFormat.setPositivePrefix(new String(new char[] {symbols.getPlusSign()}));
+            break;
+          case ALWAYS:
+          case EXCEPTZERO:
+            if (!decimalFormat.getNegativePrefix().isEmpty())
+              decimalFormat.setPositivePrefix(new String(new char[] {symbols.getPlusSign()}));
 
-          if (!decimalFormat.getNegativeSuffix().isEmpty())
-            decimalFormat.setPositiveSuffix(new String(new char[] {symbols.getPlusSign()}));
-
-          break;
+            if (!decimalFormat.getNegativeSuffix().isEmpty())
+              decimalFormat.setPositiveSuffix(new String(new char[] {symbols.getPlusSign()}));
+            break;
+        }
       }
     }
 

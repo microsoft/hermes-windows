@@ -108,6 +108,7 @@ class CDPAgentTest : public ::testing::Test {
   void TearDown() override;
 
   void setupRuntimeTestInfra();
+  void preserveStateAndResetTestEnv(bool saveAgentInRuntimeThread);
 
   void scheduleScript(
       const std::string &script,
@@ -303,6 +304,45 @@ void CDPAgentTest::TearDown() {
   });
 
   runtimeThread_.reset();
+}
+
+void CDPAgentTest::preserveStateAndResetTestEnv(bool saveAgentInRuntimeThread) {
+  State state;
+  if (saveAgentInRuntimeThread) {
+    // Save CDPAgent state on the runtime thread and shut everything down.
+    waitFor<bool>([this, &state](auto promise) {
+      runtimeThread_->add([this, &state, promise]() {
+        state = cdpAgent_->getState();
+        cdpAgent_.reset();
+        cdpDebugAPI_.reset();
+        promise->set_value(true);
+      });
+    });
+  } else {
+    // Save CDPAgent state on non-runtime thread and shut everything down.
+    state = cdpAgent_->getState();
+    cdpAgent_.reset();
+    waitFor<bool>([this](auto promise) {
+      runtimeThread_->add([this, promise]() {
+        cdpDebugAPI_.reset();
+        promise->set_value(true);
+      });
+    });
+  }
+  // Can't destroy runtime_ in the runtimeThread_ due to handleRuntimeTask()
+  // still uses runtime_.
+  runtimeThread_.reset();
+  runtime_.reset();
+
+  // Set everything up again, but with the persisted state this time for
+  // CDPAgent.
+  setupRuntimeTestInfra();
+  cdpAgent_ = CDPAgent::create(
+      kTestExecutionContextId_,
+      *cdpDebugAPI_,
+      std::bind(&CDPAgentTest::handleRuntimeTask, this, _1),
+      std::bind(&CDPAgentTest::handleResponse, this, _1),
+      std::move(state));
 }
 
 void CDPAgentTest::waitForScheduledScripts() {
@@ -1923,42 +1963,13 @@ TEST_F(CDPAgentTest, DebuggerRestoreState) {
   ensureSetBreakpointByUrlResponse(waitForMessage(), msgId++, {});
 
   for (int i = 0; i < 2; i++) {
-    State state;
     if (i == 0) {
       // Save CDPAgent state on non-runtime thread and shut everything down.
-      state = cdpAgent_->getState();
-      cdpAgent_.reset();
-      waitFor<bool>([this](auto promise) {
-        runtimeThread_->add([this, promise]() {
-          cdpDebugAPI_.reset();
-          promise->set_value(true);
-        });
-      });
+      preserveStateAndResetTestEnv(false);
     } else {
       // Save CDPAgent state on the runtime thread and shut everything down.
-      waitFor<bool>([this, &state](auto promise) {
-        runtimeThread_->add([this, &state, promise]() {
-          state = cdpAgent_->getState();
-          cdpAgent_.reset();
-          cdpDebugAPI_.reset();
-          promise->set_value(true);
-        });
-      });
+      preserveStateAndResetTestEnv(true);
     }
-    // Can't destroy runtime_ in the runtimeThread_ due to handleRuntimeTask()
-    // still uses runtime_.
-    runtimeThread_.reset();
-    runtime_.reset();
-
-    // Set everything up again, but with the persisted state this time for
-    // CDPAgent.
-    setupRuntimeTestInfra();
-    cdpAgent_ = CDPAgent::create(
-        kTestExecutionContextId_,
-        *cdpDebugAPI_,
-        std::bind(&CDPAgentTest::handleRuntimeTask, this, _1),
-        std::bind(&CDPAgentTest::handleResponse, this, _1),
-        std::move(state));
 
     sendAndCheckResponse("Debugger.enable", msgId++);
     scheduleScript(R"(
@@ -1986,11 +1997,96 @@ TEST_F(CDPAgentTest, DebuggerRestoreState) {
 
 TEST_F(CDPAgentTest, DebuggerDeactivateBreakpointsWhileDisabled) {
   int msgId = 1;
+
+  sendAndCheckResponse("Debugger.enable", msgId++);
+
+  std::string script = R"(
+    debugger;      // line 1
+    x=100          //      2
+    debugger;      //      3
+    x=101;         //      4
+  )";
+  std::string scriptUrl = "theScript";
+
+  scheduleScript(script, scriptUrl);
+  expectNotification("Debugger.scriptParsed");
+
+  // Expect the debugger statement on line #1 to trigger
+  ensurePaused(waitForMessage(), "other", {{"global", 1, 1}});
+
+  // First, create breakpoints that will be persisted.
+  sendRequest(
+      "Debugger.setBreakpointByUrl",
+      msgId,
+      [scriptUrl](::hermes::JSONEmitter &json) {
+        json.emitKeyValue("url", scriptUrl);
+        json.emitKeyValue("lineNumber", 2);
+        json.emitKeyValue("columnNumber", 0);
+      });
+  ensureSetBreakpointByUrlResponse(waitForMessage(), msgId++, {{2}});
+
+  sendRequest(
+      "Debugger.setBreakpointByUrl",
+      msgId,
+      [scriptUrl](::hermes::JSONEmitter &json) {
+        json.emitKeyValue("url", scriptUrl);
+        json.emitKeyValue("lineNumber", 4);
+        json.emitKeyValue("columnNumber", 0);
+      });
+  ensureSetBreakpointByUrlResponse(waitForMessage(), msgId++, {{4}});
+
+  // Preserve breakpoints
+  preserveStateAndResetTestEnv(false);
+
+  // Disable breakpoints before enabling debugger
   sendRequest(
       "Debugger.setBreakpointsActive", msgId, [](::hermes::JSONEmitter &json) {
         json.emitKeyValue("active", false);
       });
   ensureOkResponse(waitForMessage(), msgId++);
+
+  sendAndCheckResponse("Debugger.enable", msgId++);
+
+  scheduleScript(script, scriptUrl);
+  expectNotification("Debugger.scriptParsed");
+
+  expectNotification("Debugger.breakpointResolved");
+  expectNotification("Debugger.breakpointResolved");
+
+  // Expect the debugger statement on line #1 to trigger
+  ensurePaused(waitForMessage(), "other", {{"global", 1, 1}});
+
+  // Resume
+  sendAndCheckResponse("Debugger.resume", msgId++);
+  ensureNotification(waitForMessage(), "Debugger.resumed");
+
+  // Expect the breakpoint on line #2 to be skipped.
+  // Now hitting debugger statement on line #3.
+  auto pausedNotification =
+      ensurePaused(waitForMessage(), "other", {{"global", 3, 1}});
+  if (pausedNotification.callFrames[0].location.lineNumber == 2) {
+    FAIL()
+        << "Debugger paused on the breakpoint at line #2. Expected to skip this breakpoint and pause on the debugger statement on line #3. ";
+    return;
+  }
+
+  // Re-enable breakpoints
+  sendRequest(
+      "Debugger.setBreakpointsActive", msgId, [](::hermes::JSONEmitter &json) {
+        json.emitKeyValue("active", true);
+      });
+  ensureOkResponse(waitForMessage(), msgId++);
+
+  // Resume
+  sendAndCheckResponse("Debugger.resume", msgId++);
+  ensureNotification(waitForMessage(), "Debugger.resumed");
+
+  // Expect the breakpoint on line #4 to trigger
+  ensurePaused(waitForMessage(), "other", {{"global", 4, 1}});
+
+  // Continue and exit
+  sendAndCheckResponse("Debugger.resume", msgId++);
+  ensureNotification(waitForMessage(), "Debugger.resumed");
 }
 
 TEST_F(CDPAgentTest, DebuggerActivateBreakpoints) {
@@ -2397,8 +2493,12 @@ TEST_F(CDPAgentTest, RuntimeGetProperties) {
 
   // all old object ids should be invalid after resuming
   for (std::string oldObjId : objIds) {
-    getAndEnsureProps(
-        msgId++, oldObjId, std::unordered_map<std::string, PropInfo>{});
+    sendRequest(
+        "Runtime.getProperties", msgId, [&](::hermes::JSONEmitter &json) {
+          json.emitKeyValue("objectId", oldObjId);
+        });
+
+    ensureErrorResponse(waitForMessage(), msgId++);
   }
 
   sendAndCheckResponse("Debugger.resume", msgId++);

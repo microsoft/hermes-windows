@@ -274,6 +274,7 @@ bool JSParserImpl::parseComponentParametersFlow(
       if (!optRestElem)
         return false;
       paramList.push_back(*optRestElem.getValue());
+      checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type);
       break;
     }
 
@@ -616,6 +617,8 @@ Optional<ESTree::Node *> JSParserImpl::parseComponentTypeRestParameterFlow(
   } else {
     typeAnnotation = *optLeft;
   }
+
+  checkAndEat(TokenKind::comma, JSLexer::GrammarContext::Type);
 
   return setLocation(
       start,

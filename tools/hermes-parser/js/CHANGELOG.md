@@ -1,3 +1,20 @@
+## 0.25.1
+
+### `babel-plugin-syntax-hermes-parser`
+* Add `parseLangTypes` option to enable skipping plugin for non-Flow files
+
+## 0.25.0
+
+### `flow-api-translator`
+* Support `React.RefSetter` translation and remove support for incorrect `React.Ref` translation.
+
+## 0.24.0
+
+### `hermes-parser`
+* Allow trailing comma after rest param in component declaration
+* Allow trailing comma after rest param for component types
+* Don't allow newline after async in method proper
+
 ## 0.23.1
 
 ### `hermes-transform`

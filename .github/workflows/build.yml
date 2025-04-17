@@ -179,7 +179,7 @@ jobs:
           build_macosx
           destroot
     - name: Install dependencies
-      run: brew install cmake ninja
+      run: brew install cmake ninja && xcodebuild -downloadPlatform visionOS && xcodebuild -downloadPlatform tvOS
     - name: Build the test application
       run: pod install
       working-directory: test/ApplePlatformsIntegrationTestApp
@@ -200,6 +200,22 @@ jobs:
           -configuration Debug \
           -destination 'platform=iOS Simulator,name=iPhone 14' \
           -scheme ApplePlatformsIntegrationMobileTests
+      working-directory: test/ApplePlatformsIntegrationTestApp
+    - name: Test Apple Vision application
+      run: |-
+        xcodebuild test \
+          -workspace ApplePlatformsIntegrationTests.xcworkspace \
+          -configuration Debug \
+          -destination 'platform=visionOS Simulator,name=Apple Vision Pro' \
+          -scheme ApplePlatformsIntegrationVisionOSTests
+      working-directory: test/ApplePlatformsIntegrationTestApp
+    - name: Test Apple TV application
+      run: |-
+        xcodebuild test \
+          -workspace ApplePlatformsIntegrationTests.xcworkspace \
+          -configuration Debug \
+          -destination 'platform=tvOS Simulator,name=Apple TV' \
+          -scheme ApplePlatformsIntegrationTVOSTests
       working-directory: test/ApplePlatformsIntegrationTestApp
   package-apple-runtime:
     runs-on: macos-latest
@@ -494,7 +510,7 @@ jobs:
   test-e2e:
     runs-on: ubuntu-22.04
     env:
-      ANDROID_NDK: /usr/local/lib/android/sdk/ndk/26.1.10909125
+      ANDROID_NDK: /usr/local/lib/android/sdk/ndk/27.1.12297006
       HERMES_WS_DIR: /home/runner/work/hermes
       REACT_NATIVE_OVERRIDE_HERMES_DIR: /home/runner/work/hermes/hermes
     steps:
@@ -518,7 +534,7 @@ jobs:
       uses: ReactiveCircus/android-emulator-runner@v2.30.1
       with:
         api-level: 29
-        ndk: 26.1.10909125
+        ndk: 27.1.12297006
         cmake: 3.22.1
         script: |
           cd ../react-native && ./gradlew -PreactNativeArchitectures=x86 :packages:rn-tester:android:app:installHermesRelease
@@ -528,7 +544,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       HERMES_WS_DIR: /home/runner/work/hermes
-      ANDROID_NDK: /usr/local/lib/android/sdk/ndk/26.1.10909125
+      ANDROID_NDK: /usr/local/lib/android/sdk/ndk/27.1.12297006
     steps:
     - name: Checkout Hermes
       uses: actions/checkout@v4.1.0
@@ -537,7 +553,7 @@ jobs:
         cd "$HERMES_WS_DIR"
         git clone https://github.com/tc39/test262
         cd test262
-        git checkout 19da3ca0757248f7595ee09d532bb83dd438f2b5
+        git checkout 62626e083bd506124aac6c799464d76c2c42851b
     - name: Build Hermes Compiler
       run: |-
         cd "$HERMES_WS_DIR"
@@ -564,10 +580,33 @@ jobs:
         # Check out test262 at a pinned revision to reduce flakiness
         git clone https://github.com/tc39/test262
         cd test262
-        git checkout 19da3ca0757248f7595ee09d532bb83dd438f2b5
+        git checkout 62626e083bd506124aac6c799464d76c2c42851b
     - name: Run Hermes tests and test262 with Intl
       run: |-
         cmake -S hermes -B build -GNinja -DHERMES_ENABLE_INTL=ON
         cmake --build ./build
         cmake --build ./build --target check-hermes
+        python3 hermes/utils/testsuite/run_testsuite.py --test-intl test262/test -b build/bin
+  test-linux-test262:
+    runs-on: ubuntu-20.04
+    steps:
+    - uses: actions/checkout@v4.1.0
+      with:
+        path: hermes
+    - name: Setup dependencies
+      run: |-
+        sudo apt update
+        sudo apt install -y git openssh-client cmake build-essential \
+            libreadline-dev libicu-dev zip python3
+        # Check out test262 at a pinned revision to reduce flakiness
+        git clone https://github.com/tc39/test262
+        cd test262
+        git checkout 62626e083bd506124aac6c799464d76c2c42851b
+    - name: Run test262 with Intl
+      run: |-
+        cmake -S hermes -B build -DHERMES_ENABLE_INTL=ON -DCMAKE_CXX_FLAGS=-O2 -DCMAKE_C_FLAGS=-O2
+        cmake --build ./build -j 4
+        # Not running Hermes test until more of Intl is built out:
+        # toLocaleLowerCase and toLocaleUpperCase are the two main ones.
+        # cmake --build ./build --target check-hermes -j 4
         python3 hermes/utils/testsuite/run_testsuite.py --test-intl test262/test -b build/bin
