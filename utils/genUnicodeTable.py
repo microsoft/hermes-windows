@@ -57,7 +57,7 @@ class UnicodeDataFiles:
         if filename not in cls.__cache:
             data = cls.__local_or_fetch(cls.URLS[filename], filename)
             cls.__cache[filename] = {
-                "sha1": hashlib.sha1(data).hexdigest(),
+                "sha1": hashlib.sha1(data).hexdigest(), # nosec
                 "lines": cls.__data_to_lines(data),
             }
         return cls.__cache[filename]
