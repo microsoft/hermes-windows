@@ -11,7 +11,6 @@
 #include <hermes/TraceInterpreter.h>
 #include <hermes/TracingRuntime.h>
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <hermes/hermes.h>
@@ -396,16 +395,13 @@ TEST_F(SynthTraceSerializationTest, Utf8Record) {
 }
 
 TEST_F(SynthTraceSerializationTest, Utf16Record) {
-  // TODO: (vmoroz) Fix for MSVC
-#if 0
   auto serialized =
       R"({"type":"Utf16Record","time":0,"objID":"string:123","retval":"hi\ud83d\udc4b"})";
   EXPECT_EQ(
       serialized,
       to_string(SynthTrace::Utf16Record(
-          dummyTime, SynthTrace::encodeString(123), u"hi👋")));
-#endif
-  auto serialized =
+          dummyTime, SynthTrace::encodeString(123), u"hi\xd83d\xdc4b")));
+  serialized =
       R"({"type":"Utf16Record","time":0,"objID":"string:111","retval":"\ud83d"})";
   EXPECT_EQ(
       serialized,
@@ -414,16 +410,13 @@ TEST_F(SynthTraceSerializationTest, Utf16Record) {
 }
 
 TEST_F(SynthTraceSerializationTest, GetStringDataRecord) {
-  // TODO: (vmoroz) Fix for MSVC
-#if 0
   auto serialized =
       R"({"type":"GetStringDataRecord","time":0,"objID":"string:123","strData":"\nhello\ud83d\udc4b\\"})";
   EXPECT_EQ(
       serialized,
       to_string(SynthTrace::GetStringDataRecord(
-          dummyTime, SynthTrace::encodeString(123), u"\nhello👋\\")));
-#endif
-  auto serialized =
+          dummyTime, SynthTrace::encodeString(123), u"\nhello\xd83d\xdc4b\\")));
+  serialized =
       R"({"type":"GetStringDataRecord","time":0,"objID":"propNameID:111","strData":"\ud83d"})";
   EXPECT_EQ(
       serialized,

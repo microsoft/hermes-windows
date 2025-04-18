@@ -1785,7 +1785,7 @@ ExecutionStatus Runtime::assertBuiltinsUnmodified() {
     if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    auto currentBuiltin = dyn_vmcast<NativeFunction>(std::move(cr->get()));
+    auto currentBuiltin = dyn_vmcast<NativeFunction>(cr->get());
     if (!currentBuiltin || currentBuiltin != builtins_[methodIndex]) {
       return raiseTypeError(
           TwineChar16{
@@ -1914,13 +1914,17 @@ uint64_t Runtime::gcStableHashHermesValue(Handle<HermesValue> value) {
     }
     default:
       assert(!value->isPointer() && "Unhandled pointer type");
-      if (value->isNumber() && value->getNumber() == 0) {
+      if (value->isNumber()) {
+        // We need to check for NaNs because they may differ in the sign bit,
+        // but they should have the same hash value.
+        if (LLVM_UNLIKELY(value->isNaN()))
+          return llvh::hash_value(HermesValue::encodeNaNValue().getRaw());
         // To normalize -0 to 0.
-        return 0;
-      } else {
-        // For everything else, we just take advantage of HermesValue.
-        return llvh::hash_value(value->getRaw());
+        if (value->getNumber() == 0)
+          return 0;
       }
+      // For everything else, we just take advantage of HermesValue.
+      return llvh::hash_value(value->getRaw());
   }
 }
 
@@ -2100,7 +2104,8 @@ void Runtime::onGCEvent(GCEventKind kind, const std::string &extraInfo) {
   if (samplingProfiler) {
     switch (kind) {
       case GCEventKind::CollectionStart:
-        samplingProfiler->suspend(extraInfo);
+        samplingProfiler->suspend(
+            SamplingProfiler::SuspendFrameInfo::Kind::GC, extraInfo);
         break;
       case GCEventKind::CollectionEnd:
         samplingProfiler->resume();

@@ -12,16 +12,17 @@
 
 #if HERMESVM_SAMPLING_PROFILER_AVAILABLE
 
+#include "hermes/Public/SamplingProfiler.h"
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/JSNativeFunctions.h"
 #include "hermes/VM/Runtime.h"
 
 #include "llvh/ADT/DenseMap.h"
-#include "llvh/ADT/SmallVector.h"
 
 #include <chrono>
 #include <mutex>
 #include <unordered_set>
+#include <vector>
 
 namespace hermes {
 namespace vm {
@@ -56,8 +57,29 @@ class SamplingProfiler {
   /// been registered with the sampling profiler yet, and therefore can be moved
   /// by the GC.
   using NativeFunctionFrameInfo = size_t;
-  /// GC frame info. Pointing to string in suspendEventExtraInfoSet_.
-  using SuspendFrameInfo = const std::string *;
+
+  /// Details about a suspend frame.
+  struct SuspendFrameInfo {
+    /// GC frame info. Pointing to string in gcEventExtraInfoSet_.
+    using GCFrameInfo = const std::string *;
+
+    /// Cause of the suspension.
+    enum class Kind {
+      /// Suspended to perform GC actions. The gcFrame field contains additional
+      /// details specific to the GC.
+      GC,
+      /// Suspended to perform debugger actions.
+      Debugger,
+      /// Multiple suspensions have occurred.
+      Multiple,
+    } kind;
+    /// Extra information about GC suspensions. Only valid when \c kind is
+    /// \c GC. Pointing to string in gcEventExtraInfoSet_; it is optional
+    /// and can be null to indicate no extra info.
+    /// We can't directly use std::string here because it is
+    /// inside a union.
+    GCFrameInfo gcFrame;
+  };
 
   // This will break with more than one RuntimeModule(like FB4a, eval() call or
   // lazy compilation etc...). It is simply a temporary thing to get started.
@@ -80,11 +102,7 @@ class SamplingProfiler {
       LoomNativeFrameInfo nativeFunctionPtrForLoom;
       /// Native function frame info storage used for "regular" profiling.
       NativeFunctionFrameInfo nativeFrame;
-      /// Suspend frame info. Pointing to string
-      /// in suspendExtraInfoSet_; it is optional and
-      /// can be null to indicate no extra info.
-      /// We can't directly use std::string here because it is
-      /// inside a union.
+      /// Suspend frame info.
       SuspendFrameInfo suspendFrame;
     };
     FrameKind kind;
@@ -97,14 +115,14 @@ class SamplingProfiler {
     /// Timestamp when the stack trace is taken.
     TimeStampType timeStamp;
     /// Captured stack frames.
-    llvh::SmallVector<StackFrame, 8> stack;
+    std::vector<StackFrame> stack;
 
     explicit StackTrace(uint32_t preallocatedSize) : stack(preallocatedSize) {}
     explicit StackTrace(
         ThreadId tid,
         TimeStampType ts,
-        const llvh::SmallVector<StackFrame, 8>::iterator stackStart,
-        const llvh::SmallVector<StackFrame, 8>::iterator stackEnd)
+        const std::vector<StackFrame>::iterator stackStart,
+        const std::vector<StackFrame>::iterator stackEnd)
         : tid(tid), timeStamp(ts), stack(stackStart, stackEnd) {}
   };
 
@@ -157,7 +175,7 @@ class SamplingProfiler {
 
  protected:
   /// Sampled stack traces overtime. Protected by runtimeDataLock_.
-  llvh::SmallVector<StackTrace, 8> sampledStacks_;
+  std::vector<StackTrace> sampledStacks_;
 
  private:
   // Threading: the suspendCount/preSuspendStack are accessed by both the VM
@@ -174,16 +192,19 @@ class SamplingProfiler {
   /// Prellocated map that contains thread names mapping.
   ThreadNamesMap threadNames_;
 
+  /// Thread ID of the currently registered thread.
+  ThreadId threadID_;
+
   /// Unique GC event extra info strings container.
-  std::unordered_set<std::string> suspendEventExtraInfoSet_;
+  std::unordered_set<std::string> gcEventExtraInfoSet_;
 
   /// Domains to be kept alive for sampled RuntimeModules. Protected by
   /// runtimeDataLock_.
-  llvh::SmallVector<Domain *, 8> domains_;
+  std::vector<Domain *> domains_;
 
   /// NativeFunctions to be kept alive for sampled NativeFunctionFrameInfo.
   /// Protected by runtimeDataLock_.
-  llvh::SmallVector<NativeFunction *, 8> nativeFunctions_;
+  std::vector<NativeFunction *> nativeFunctions_;
 
  protected:
   Runtime &runtime_;
@@ -223,7 +244,9 @@ class SamplingProfiler {
  private:
   /// Record JS stack at time of suspension, caller must hold
   /// runtimeDataLock_.
-  void recordPreSuspendStack(std::string_view extraInfo);
+  void recordPreSuspendStack(
+      SuspendFrameInfo::Kind reason,
+      llvh::StringRef gcFrame);
 
  protected:
   /// Clear previous stored samples.
@@ -248,6 +271,10 @@ class SamplingProfiler {
   /// Dump sampled stack to \p OS in chrome trace format.
   void dumpChromeTrace(llvh::raw_ostream &OS);
 
+  /// Dump sampled stack trace to data structure that can be used by third
+  /// parties.
+  facebook::hermes::sampling_profiler::Profile dumpAsProfile();
+
   /// Dump the sampled stack to \p OS in the format expected by the
   /// Profiler.stop return type. See
   ///
@@ -269,8 +296,11 @@ class SamplingProfiler {
   static bool disable();
 
   /// Suspends the sample profiling. Every call to suspend must be matched by a
-  /// call to resume.
-  void suspend(std::string_view reason);
+  /// call to resume. \c reason indicates the cause of suspension. If \c reason
+  /// is GC, \c gcFrame can provide extra details, otherwise it is ignored.
+  void suspend(
+      SuspendFrameInfo::Kind reason,
+      llvh::StringRef gcSuspendDetails = "");
 
   /// Resumes the sample profiling. There must have been a previous call to
   /// suspend() that hansn't been resume()d yet.
@@ -290,7 +320,7 @@ class SuspendSamplingProfilerRAII {
  public:
   explicit SuspendSamplingProfilerRAII(
       Runtime &runtime,
-      std::string_view reason = "")
+      SamplingProfiler::SuspendFrameInfo::Kind reason)
       : profiler_(runtime.samplingProfiler.get()) {
     if (profiler_) {
       profiler_->suspend(reason);

@@ -228,15 +228,12 @@ TEST(JSONEmitterTest, EmitUTF16) {
   llvh::raw_string_ostream OS(storage);
   JSONEmitter json(OS);
 
-  std::u16string str = u"hi👋";
+  std::u16string str = u"hi\xd83d\xdc4b";
   json.openDict();
   json.emitKeyValue("str", llvh::ArrayRef(str.data(), str.size()));
   json.closeDict();
 
-  // TODO: (vmoroz) Fix for MSVC
-#if 0
   const char *expected = R"#({"str":"hi\ud83d\udc4b"})#";
   EXPECT_EQ(OS.str(), expected);
-#endif
 }
 }; // anonymous namespace

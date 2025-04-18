@@ -18,6 +18,7 @@
 #include "llvh/Support/Compiler.h"
 
 #include "ChromeTraceSerializer.h"
+#include "ProfileGenerator.h"
 #include "SamplingProfilerSampler.h"
 
 #include <fcntl.h>
@@ -121,13 +122,14 @@ uint32_t SamplingProfiler::walkRuntimeStack(
       }
     }
   }
-  sampleStorage.tid = oscompat::global_thread_id();
+  sampleStorage.tid = threadID_;
   sampleStorage.timeStamp = std::chrono::steady_clock::now();
   return count;
 }
 
-SamplingProfiler::SamplingProfiler(Runtime &runtime) : runtime_{runtime} {
-  threadNames_[oscompat::global_thread_id()] = oscompat::thread_name();
+SamplingProfiler::SamplingProfiler(Runtime &runtime)
+    : threadID_{oscompat::global_thread_id()}, runtime_{runtime} {
+  threadNames_[threadID_] = oscompat::thread_name();
   sampling_profiler::Sampler::get()->registerRuntime(this);
 }
 
@@ -207,6 +209,16 @@ void SamplingProfiler::serializeInDevToolsFormat(llvh::raw_ostream &OS) {
   clear();
 }
 
+facebook::hermes::sampling_profiler::Profile SamplingProfiler::dumpAsProfile() {
+  std::lock_guard<std::mutex> lk(runtimeDataLock_);
+
+  facebook::hermes::sampling_profiler::Profile profile =
+      ProfileGenerator::generate(*this, sampledStacks_);
+
+  clear();
+  return profile;
+}
+
 bool SamplingProfiler::enable(double meanHzFreq) {
   return sampling_profiler::Sampler::get()->enable(meanHzFreq);
 }
@@ -220,26 +232,28 @@ void SamplingProfiler::clear() {
   // Release all strong roots.
   domains_.clear();
   nativeFunctions_.clear();
-  // TODO: keep thread names that are still in use.
-  threadNames_.clear();
 }
 
-void SamplingProfiler::suspend(std::string_view extraInfo) {
+void SamplingProfiler::suspend(
+    SuspendFrameInfo::Kind reason,
+    llvh::StringRef gcSuspendDetails) {
   // Need to check whether the profiler is enabled without holding the
   // runtimeDataLock_. Otherwise, we'd have a lock inversion.
   bool enabled = sampling_profiler::Sampler::get()->enabled();
 
   std::lock_guard<std::mutex> lk(runtimeDataLock_);
-  if (++suspendCount_ > 1 || extraInfo.empty()) {
-    // If there are multiple nested suspend calls use a default "suspended"
-    // label for the suspend entry in the call stack. Also use the default
-    // when no extra info is provided.
-    extraInfo = "suspended";
+  if (++suspendCount_ > 1) {
+    // If there are multiple nested suspend calls use a default "multiple" frame
+    // kind for the suspend entry in the call stack.
+    reason = SuspendFrameInfo::Kind::Multiple;
+  } else if (reason == SuspendFrameInfo::Kind::GC && gcSuspendDetails.empty()) {
+    // If no GC reason was provided, use a default "suspend" value.
+    gcSuspendDetails = "suspend";
   }
 
   // Only record the stack trace for the first suspend() call.
   if (LLVM_UNLIKELY(enabled && suspendCount_ == 1)) {
-    recordPreSuspendStack(extraInfo);
+    recordPreSuspendStack(reason, gcSuspendDetails);
   }
 }
 
@@ -251,10 +265,15 @@ void SamplingProfiler::resume() {
   }
 }
 
-void SamplingProfiler::recordPreSuspendStack(std::string_view extraInfo) {
-  std::pair<std::unordered_set<std::string>::iterator, bool> retPair =
-      suspendEventExtraInfoSet_.emplace(extraInfo);
-  SuspendFrameInfo suspendExtraInfo = &(*(retPair.first));
+void SamplingProfiler::recordPreSuspendStack(
+    SuspendFrameInfo::Kind reason,
+    llvh::StringRef gcFrame) {
+  SuspendFrameInfo suspendExtraInfo{reason, nullptr};
+  if (reason == SuspendFrameInfo::Kind::GC) {
+    std::pair<std::unordered_set<std::string>::iterator, bool> retPair =
+        gcEventExtraInfoSet_.emplace(gcFrame);
+    suspendExtraInfo.gcFrame = &(*(retPair.first));
+  }
 
   auto &leafFrame = preSuspendStackStorage_.stack[0];
   leafFrame.kind = StackFrame::FrameKind::SuspendFrame;
@@ -281,7 +300,8 @@ bool operator==(
       return left.nativeFrame == right.nativeFrame;
 
     case SamplingProfiler::StackFrame::FrameKind::SuspendFrame:
-      return left.suspendFrame == right.suspendFrame;
+      return left.suspendFrame.kind == right.suspendFrame.kind &&
+          left.suspendFrame.gcFrame == right.suspendFrame.gcFrame;
 
     default:
       llvm_unreachable("Unknown frame kind");

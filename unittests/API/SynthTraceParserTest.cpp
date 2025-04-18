@@ -320,12 +320,9 @@ TEST_F(SynthTraceParserTest, ParseUtf16Record) {
       dynamic_cast<const SynthTrace::Utf16Record &>(*trace.records().at(1));
   ASSERT_EQ(record1.retVal_, u"\xd83d");
 
-  // TODO: (vmoroz) Fix for MSVC
-#if 0
   auto record2 =
       dynamic_cast<const SynthTrace::Utf16Record &>(*trace.records().at(2));
-  ASSERT_EQ(record2.retVal_, u"nice👍");
-#endif
+  ASSERT_EQ(record2.retVal_, u"nice\xd83d\xdc4d");
 }
 
 TEST_F(SynthTraceParserTest, ParseGetStringDataRecord) {
@@ -358,13 +355,11 @@ TEST_F(SynthTraceParserTest, ParseGetStringDataRecord) {
   auto parseResult = parseSynthTrace(bufFromStr(src));
   SynthTrace &trace = std::get<0>(parseResult);
 
-  // TODO: (vmoroz) Fix for MSVC
-#if 0
   auto record0 = dynamic_cast<const SynthTrace::GetStringDataRecord &>(
       *trace.records().at(0));
-  ASSERT_EQ(record0.strData_, u"\nhello👋\\");
+  ASSERT_EQ(record0.strData_, u"\nhello\xd83d\xdc4b\\");
   ASSERT_EQ(record0.objID_, SynthTrace::encodeString(1110));
-#endif
+
   auto record1 = dynamic_cast<const SynthTrace::GetStringDataRecord &>(
       *trace.records().at(1));
   ASSERT_EQ(record1.strData_, u"\xd83d");

@@ -181,7 +181,7 @@ class ChromeTraceFormat {
   static ChromeTraceFormat create(
       uint32_t pid,
       const SamplingProfiler::ThreadNamesMap &threadNames,
-      const llvh::SmallVector<SamplingProfiler::StackTrace, 8> &sampledStacks);
+      const std::vector<SamplingProfiler::StackTrace> &sampledStacks);
 
   uint32_t getPid() const {
     return pid_;

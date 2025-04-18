@@ -54,6 +54,7 @@ set(source_files
   Profiler/ChromeTraceSerializer.cpp
   Profiler/CodeCoverageProfiler.cpp
   Profiler/InlineCacheProfiler.cpp
+  Profiler/ProfileGenerator.cpp
   Profiler/SamplingProfiler.cpp
   Profiler/SamplingProfilerPosix.cpp
   Profiler/SamplingProfilerWindows.cpp
@@ -175,6 +176,10 @@ set(link_libs
   hermesPublic
   dtoa
 )
+
+if (WIN32)
+  list(APPEND link_libs winmm)
+endif()
 
 if(HERMES_ENABLE_INTL)
   list(APPEND link_libs hermesPlatformIntl)

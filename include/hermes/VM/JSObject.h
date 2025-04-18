@@ -455,8 +455,6 @@ class JSObject : public GCCell {
 
   /// \return the `__proto__` internal property, which may be nullptr.
   JSObject *getParent(Runtime &runtime) const {
-    assert(
-        !flags_.proxyObject && "getParent cannot be used with proxy objects");
     return parent_.get(runtime);
   }
 
@@ -1050,7 +1048,8 @@ class JSObject : public GCCell {
   /// Calls ObjectVTable::getOwnIndexed.
   static HermesValue
   getOwnIndexed(PseudoHandle<JSObject> self, Runtime &runtime, uint32_t index) {
-    return self->getVT()->getOwnIndexed(std::move(self), runtime, index);
+    const auto *vtable = self->getVT();
+    return vtable->getOwnIndexed(std::move(self), runtime, index);
   }
 
   /// Calls ObjectVTable::setOwnIndexed.

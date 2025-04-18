@@ -15,7 +15,6 @@
 #include "hermes/VM/VMExperiments.h"
 #include "llvh/Support/SHA1.h"
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <hermes/CompileJS.h>
@@ -107,7 +106,8 @@ TEST_F(SynthTraceTest, PropNameIDUtf8) {
 }
 
 TEST_F(SynthTraceTest, PropNameIDUtf16) {
-  const std::string utf8 = "hello👍\n";
+  // 👍 in UTF8 encoding is 0xf0 0x9f 0x91 0x8d
+  const std::string utf8 = "hello\xf0\x9f\x91\x8d\n";
   const jsi::PropNameID name = jsi::PropNameID::forUtf8(*rt, utf8);
   name.utf16(*rt);
 
@@ -119,13 +119,12 @@ TEST_F(SynthTraceTest, PropNameIDUtf16) {
       SynthTrace::CreatePropNameIDRecord(
           records[0]->time_, objId, (const uint8_t *)utf8.c_str(), utf8.size()),
       *records[0]);
-// TODO: (vmoroz) Fix for MSVC
-#if 0
   EXPECT_EQ_RECORD(
       SynthTrace::Utf16Record(
-          records[1]->time_, SynthTrace::encodePropNameID(objId), u"hello👍\n"),
+          records[1]->time_,
+          SynthTrace::encodePropNameID(objId),
+          u"hello\xd83d\xdc4d\n"),
       *records[1]);
-#endif
 }
 
 TEST_F(SynthTraceTest, StringUtf8) {
@@ -148,7 +147,8 @@ TEST_F(SynthTraceTest, StringUtf8) {
 }
 
 TEST_F(SynthTraceTest, StringUtf16) {
-  const std::string utf8 = "hello👍\n";
+  // 👍 in UTF8 encoding is 0xf0 0x9f 0x91 0x8d
+  const std::string utf8 = "hello\xf0\x9f\x91\x8d\n";
 
   const jsi::String str = jsi::String::createFromUtf8(*rt, utf8);
   str.utf16(*rt);
@@ -160,19 +160,18 @@ TEST_F(SynthTraceTest, StringUtf16) {
       SynthTrace::CreateStringRecord(
           records[0]->time_, objId, (const uint8_t *)utf8.data(), utf8.size()),
       *records[0]);
-
-  // TODO: (vmoroz) Fix for MSVC
-#if 0
   EXPECT_EQ_RECORD(
       SynthTrace::Utf16Record(
-          records[1]->time_, SynthTrace::encodeString(objId), u"hello👍\n"),
+          records[1]->time_,
+          SynthTrace::encodeString(objId),
+          u"hello\xd83d\xdc4d\n"),
       *records[1]);
-#endif
 }
 
 TEST_F(SynthTraceTest, GetStringData) {
   const std::string ascii = "foo";
-  const std::string emoji = "hello👋";
+  // 👋 in UTF8 encoding is 0xf0 0x9f 0x91 0x8b
+  const std::string emoji = "hello\xf0\x9f\x91\x8b";
 
   auto cb = [](bool ascii, const void *data, size_t num) {};
 
@@ -202,14 +201,12 @@ TEST_F(SynthTraceTest, GetStringData) {
           (const uint8_t *)emoji.data(),
           emoji.size()),
       *records[2]);
-
-  // TODO: (vmoroz) Fix for MSVC
-#if 0
   EXPECT_EQ_RECORD(
       SynthTrace::GetStringDataRecord(
-          records[3]->time_, SynthTrace::encodeString(emojiId), u"hello👋"),
+          records[3]->time_,
+          SynthTrace::encodeString(emojiId),
+          u"hello\xd83d\xdc4b"),
       *records[3]);
-#endif
 }
 
 TEST_F(SynthTraceTest, SymbolToString) {
@@ -420,7 +417,7 @@ TEST_F(SynthTraceTest, GetProperty) {
       records[3]->time_, SynthTrace::encodeUndefined());
   EXPECT_EQ_RECORD(rtnExpect0, *records[3]);
   EXPECT_EQ_RECORD(
-      SynthTrace::CreatePropNameIDRecord(
+      SynthTrace::CreatePropNameIDWithValueRecord(
           records[4]->time_, aPropID, SynthTrace::encodeString(aStringID)),
       *records[4]);
   auto gprExpect1 = SynthTrace::GetPropertyRecord(
@@ -774,10 +771,9 @@ TEST_F(SynthTraceTest, HostObjectProxy) {
                 jsi::PropNameID::forAscii(rt, cs.getHappened.c_str())),
             setHappenedPropName(
                 jsi::PropNameID::forAscii(rt, cs.setHappened.c_str())),
-            getPropertyNamesHappenedPropName(
-                jsi::PropNameID::forAscii(
-                    rt,
-                    cs.getPropertyNamesHappened.c_str())),
+            getPropertyNamesHappenedPropName(jsi::PropNameID::forAscii(
+                rt,
+                cs.getPropertyNamesHappened.c_str())),
             global(global),
             trt(rt) {}
       jsi::Value get(jsi::Runtime &rt, const jsi::PropNameID &name) override {
@@ -1053,9 +1049,8 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
           this.yRes = o.y;
         }) ();
     )###";
-    codeHash = llvh::SHA1::hash(
-        llvh::makeArrayRef(
-            reinterpret_cast<const uint8_t *>(code.data()), code.size()));
+    codeHash = llvh::SHA1::hash(llvh::makeArrayRef(
+        reinterpret_cast<const uint8_t *>(code.data()), code.size()));
 
     rt->evaluateJavaScript(
         std::unique_ptr<jsi::StringBuffer>(new jsi::StringBuffer(code)), "");
@@ -1313,12 +1308,11 @@ struct SynthTraceRuntimeTest : public ::testing::Test {
   std::unique_ptr<TracingHermesRuntime> traceRt;
 
   SynthTraceRuntimeTest()
-      : config(
-            ::hermes::vm::RuntimeConfig::Builder()
-                .withSynthTraceMode(
-                    ::hermes::vm::SynthTraceMode::TracingAndReplaying)
-                .withMicrotaskQueue(true)
-                .build()),
+      : config(::hermes::vm::RuntimeConfig::Builder()
+                   .withSynthTraceMode(
+                       ::hermes::vm::SynthTraceMode::TracingAndReplaying)
+                   .withMicrotaskQueue(true)
+                   .build()),
         traceRt(makeTracingHermesRuntime(
             makeHermesRuntime(config),
             config,
@@ -1455,8 +1449,7 @@ function foo(a, b, c){
     rt.global().getPropertyAsFunction(rt, "foo").call(rt, obj, obj, obj);
   }
   replay();
-  {
-  }
+  {}
 }
 
 TEST_F(SynthTraceReplayTest, CreateObjectReplay) {
@@ -1496,16 +1489,14 @@ TEST_F(SynthTraceReplayTest, CreateObjectReplay) {
 TEST_F(SynthTraceReplayTest, UTF16Replay) {
   {
     auto &rt = *traceRt;
-    jsi::String emoji = eval(rt, "'\\ud83d\\udc4d'").getString(rt);
-    rt.global().setProperty(rt, "emoji", emoji);
+    // UTF-16 encoding for 👍 is 0xd83d 0xdc4d
+    jsi::String emoji = jsi::String::createFromUtf16(rt, u"\xd83d\xdc4d");
     emoji.utf16(rt);
 
-    jsi::String loneHighSurrogate = eval(rt, "'\\ud83d'").getString(rt);
-    rt.global().setProperty(rt, "loneHighSurrogate", loneHighSurrogate);
+    jsi::String loneHighSurrogate = jsi::String::createFromUtf16(rt, u"\xd83d");
     loneHighSurrogate.utf16(rt);
 
-    jsi::String ascii = eval(rt, "'hello'").getString(rt);
-    rt.global().setProperty(rt, "hello", ascii);
+    jsi::String ascii = jsi::String::createFromUtf16(rt, u"hello");
     ascii.utf16(rt);
   }
 
@@ -1518,13 +1509,14 @@ TEST_F(SynthTraceReplayTest, GetStringDataReplay) {
   {
     auto &rt = *traceRt;
     auto cb = [](bool ascii, const void *data, size_t num) {};
-    jsi::String emoji = eval(rt, "'\\ud83d\\udc4d'").getString(rt);
+    // UTF-16 encoding for 👍 is 0xd83d 0xdc4d
+    jsi::String emoji = jsi::String::createFromUtf16(rt, u"\xd83d\xdc4d");
     emoji.getStringData(rt, cb);
 
-    jsi::String loneHighSurrogate = eval(rt, "'\\ud83d'").getString(rt);
+    jsi::String loneHighSurrogate = jsi::String::createFromUtf16(rt, u"\xd83d");
     loneHighSurrogate.getStringData(rt, cb);
 
-    jsi::String ascii = eval(rt, "'hello'").getString(rt);
+    jsi::String ascii = jsi::String::createFromUtf16(rt, u"hello");
     ascii.getStringData(rt, cb);
   }
 
@@ -1535,18 +1527,16 @@ TEST_F(SynthTraceReplayTest, GetPropNameIdDataReplay) {
   {
     auto &rt = *traceRt;
     auto cb = [](bool ascii, const void *data, size_t num) {};
-    jsi::String emoji = eval(rt, "'\\ud83d\\udc4d'").getString(rt);
-    auto emojiProp = jsi::PropNameID::forString(rt, emoji);
-    emojiProp.getPropNameIdData(rt, cb);
+    // UTF-16 encoding for 👍 is 0xd83d 0xdc4d
+    jsi::PropNameID emoji = jsi::PropNameID::forUtf16(rt, u"\xd83d\xdc4d");
+    emoji.getPropNameIdData(rt, cb);
 
-    jsi::String loneHighSurrogate = eval(rt, "'\\ud83d'").getString(rt);
-    auto loneHighSurrogateProp =
-        jsi::PropNameID::forString(rt, loneHighSurrogate);
-    loneHighSurrogateProp.getPropNameIdData(rt, cb);
+    jsi::PropNameID loneHighSurrogate =
+        jsi::PropNameID::forUtf16(rt, u"\xd83d");
+    loneHighSurrogate.getPropNameIdData(rt, cb);
 
-    jsi::String ascii = eval(rt, "'hello'").getString(rt);
-    auto asciiProp = jsi::PropNameID::forString(rt, ascii);
-    asciiProp.getPropNameIdData(rt, cb);
+    jsi::PropNameID ascii = jsi::PropNameID::forUtf16(rt, u"hello");
+    ascii.getPropNameIdData(rt, cb);
   }
 
   replay();

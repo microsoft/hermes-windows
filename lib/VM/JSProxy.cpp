@@ -67,7 +67,7 @@ findTrap(Handle<JSObject> selfHandle, Runtime &runtime, Predefined::Str name) {
         runtime.makeHandle(std::move(*trapVal)),
         " is not a Proxy trap function");
   }
-  return runtime.makeHandle<Callable>(std::move(trapVal->get()));
+  return runtime.makeHandle<Callable>(trapVal->get());
 }
 
 } // namespace detail
@@ -98,9 +98,11 @@ void JSProxyBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
 PseudoHandle<JSProxy> JSProxy::create(Runtime &runtime) {
   JSProxy *proxy = runtime.makeAFixed<JSProxy>(
       runtime,
-      Handle<JSObject>::vmcast(&runtime.objectPrototype),
+      // Proxy should not have an observable prototype, so we just set it to
+      // null.
+      Runtime::makeNullHandle<JSObject>(),
       runtime.getHiddenClassForPrototype(
-          runtime.objectPrototypeRawPtr, JSObject::numOverlapSlots<JSProxy>()));
+          nullptr, JSObject::numOverlapSlots<JSProxy>()));
 
   proxy->flags_.proxyObject = true;
 

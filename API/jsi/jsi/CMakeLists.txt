@@ -24,7 +24,6 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   list(APPEND jsi_compile_flags "/Qspectre")
   list(APPEND jsi_compile_flags "/sdl")
 endif()
-
 target_compile_options(jsi PRIVATE ${jsi_compile_flags})
 
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/API/jsi/" DESTINATION include

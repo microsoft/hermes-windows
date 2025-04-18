@@ -928,12 +928,44 @@ const getTransforms = (
               cloneJSDocCommentsToNewNode(member, newNode);
               classMembers.push(newNode);
             } else {
+              const [key, computed] = (() => {
+                const _key = member.key;
+                if (_key.type === 'Identifier' && _key.name.startsWith('@@')) {
+                  const name = _key.name.slice(2);
+                  if (['iterator', 'asyncIterator'].includes(name)) {
+                    return [
+                      {
+                        type: 'MemberExpression',
+                        computed: false,
+                        object: {
+                          type: 'Identifier',
+                          name: 'Symbol',
+                          optional: false,
+                          loc: DUMMY_LOC,
+                        },
+                        optional: false,
+                        property: {
+                          type: 'Identifier',
+                          name,
+                          optional: false,
+                          loc: DUMMY_LOC,
+                        },
+                        loc: DUMMY_LOC,
+                      },
+                      true,
+                    ];
+                  }
+                }
+
+                return [member.key, member.computed];
+              })();
+
               const newNode: TSESTree.MethodDefinitionAmbiguous = {
                 type: 'MethodDefinition',
                 loc: DUMMY_LOC,
                 accessibility: member.accessibility,
-                computed: member.computed ?? false,
-                key: member.key,
+                computed: computed ?? false,
+                key,
                 kind: member.kind,
                 optional: member.optional,
                 override: false,
@@ -1030,8 +1062,9 @@ const getTransforms = (
         superClass:
           superClass == null
             ? null
-            : // Bug: superclass.id can be qualified
-              transform.Identifier((superClass.id: $FlowFixMe), false),
+            : superClass.id.type === 'QualifiedTypeIdentifier'
+            ? transform.QualifiedTypeIdentifier(superClass.id)
+            : transform.Identifier((superClass.id: $FlowFixMe), false),
         superTypeParameters:
           superClass?.typeParameters == null
             ? undefined
@@ -1056,6 +1089,16 @@ const getTransforms = (
             | TSESTree.TSDeclareFunction
             | TSESTree.TSTypeAliasDeclaration
           ),
+          TSESTree.ExportDefaultDeclaration,
+        ]
+      | [
+          (
+            | TSESTree.VariableDeclaration
+            | TSESTree.ClassDeclaration
+            | TSESTree.TSDeclareFunction
+            | TSESTree.TSTypeAliasDeclaration
+          ),
+          TSESTree.TSTypeAliasDeclaration,
           TSESTree.ExportDefaultDeclaration,
         ] {
       if (node.default === true) {
@@ -1204,6 +1247,38 @@ const getTransforms = (
             // intentional fallthrough to the "default" handling
           }
 
+          case 'TypeofTypeAnnotation': {
+            if (
+              declaration.type === 'TypeofTypeAnnotation' &&
+              declaration.argument.type === 'Identifier'
+            ) {
+              const name = declaration.argument.name;
+              const exportedVar = topScope.set.get(name);
+              if (exportedVar != null && exportedVar.defs.length === 1) {
+                const def = exportedVar.defs[0];
+
+                switch (def.type) {
+                  case 'ClassName': {
+                    return {
+                      type: 'ExportDefaultDeclaration',
+                      declaration: {
+                        type: 'Identifier',
+                        decorators: [],
+                        name,
+                        optional: false,
+                        loc: DUMMY_LOC,
+                      },
+                      exportKind: 'value',
+                      loc: DUMMY_LOC,
+                    };
+                  }
+                }
+              }
+            }
+
+            // intentional fallthrough to the "default" handling
+          }
+
           default: {
             /*
             flow allows syntax like
@@ -1242,6 +1317,29 @@ const getTransforms = (
                 ],
                 declare: true,
                 kind: 'const',
+              },
+              {
+                type: 'TSTypeAliasDeclaration',
+                declare: true,
+                id: {
+                  type: 'Identifier',
+                  decorators: [],
+                  name: SPECIFIER,
+                  optional: false,
+                  loc: DUMMY_LOC,
+                },
+                typeAnnotation: {
+                  type: 'TSTypeQuery',
+                  exprName: {
+                    type: 'Identifier',
+                    decorators: [],
+                    name: SPECIFIER,
+                    optional: false,
+                    loc: DUMMY_LOC,
+                  },
+                  loc: DUMMY_LOC,
+                },
+                loc: DUMMY_LOC,
               },
               {
                 type: 'ExportDefaultDeclaration',
@@ -2587,7 +2685,7 @@ const getTransforms = (
                 },
               },
             };
-          // React.MixedElement -> JSX.Element
+          // React.MixedElement -> React.JSX.Element
           case 'React$MixedElement':
           case 'React.MixedElement': {
             assertHasExactlyNTypeParameters(0);
@@ -2598,9 +2696,18 @@ const getTransforms = (
                 type: 'TSQualifiedName',
                 loc: DUMMY_LOC,
                 left: {
-                  type: 'Identifier',
+                  type: 'TSQualifiedName',
                   loc: DUMMY_LOC,
-                  name: 'JSX',
+                  left: {
+                    type: 'Identifier',
+                    loc: DUMMY_LOC,
+                    name: 'React',
+                  },
+                  right: {
+                    type: 'Identifier',
+                    loc: DUMMY_LOC,
+                    name: 'JSX',
+                  },
                 },
                 right: {
                   type: 'Identifier',
@@ -2742,8 +2849,8 @@ const getTransforms = (
               },
             };
           }
-          // React.ElementConfig<A> ->  JSX.LibraryManagedAttributes<A, React.ComponentProps<A>>
-          // React$ElementConfig<A> ->  JSX.LibraryManagedAttributes<A, React.ComponentProps<A>>
+          // React.ElementConfig<A> ->  React.JSX.LibraryManagedAttributes<A, React.ComponentProps<A>>
+          // React$ElementConfig<A> ->  React.JSX.LibraryManagedAttributes<A, React.ComponentProps<A>>
           case 'React.ElementConfig':
           case 'React$ElementConfig': {
             const [param] = assertHasExactlyNTypeParameters(1);
@@ -2754,9 +2861,18 @@ const getTransforms = (
                 type: 'TSQualifiedName',
                 loc: DUMMY_LOC,
                 left: {
-                  type: 'Identifier',
+                  type: 'TSQualifiedName',
                   loc: DUMMY_LOC,
-                  name: 'JSX',
+                  left: {
+                    type: 'Identifier',
+                    loc: DUMMY_LOC,
+                    name: 'React',
+                  },
+                  right: {
+                    type: 'Identifier',
+                    loc: DUMMY_LOC,
+                    name: 'JSX',
+                  },
                 },
                 right: {
                   type: 'Identifier',
@@ -3285,7 +3401,10 @@ const getTransforms = (
             }
 
             const spreadType = transformTypeAnnotationType(property.argument);
-            if (spreadType.type !== 'TSTypeReference') {
+            if (
+              spreadType.type !== 'TSTypeReference' &&
+              spreadType.type !== 'TSTypeQuery'
+            ) {
               return unsupportedAnnotation(
                 property,
                 'object types with complex spreads',

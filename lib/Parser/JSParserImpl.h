@@ -191,6 +191,8 @@ class JSParserImpl {
       128
 #elif defined(_MSC_VER) && defined(HERMES_SLOW_DEBUG)
       128
+#elif defined(_MSC_VER) && defined(__clang__) && !defined(NDEBUG)
+      128
 #elif defined(_MSC_VER)
       512
 #else
@@ -1113,6 +1115,7 @@ class JSParserImpl {
 #if HERMES_PARSE_TS
     return parseTypeAnnotationTS(wrappedStart);
 #endif
+    llvm_unreachable("Must be parsing types");
   }
 
   Optional<ESTree::Node *> parseReturnTypeAnnotation(
@@ -1127,6 +1130,19 @@ class JSParserImpl {
 #if HERMES_PARSE_TS
     return parseTypeAnnotationTS(wrappedStart);
 #endif
+    llvm_unreachable("Must be parsing types");
+  }
+
+  Optional<ESTree::Node *> parseTypeArguments() {
+    assert(context_.getParseFlow() || context_.getParseTS());
+#if HERMES_PARSE_FLOW
+    if (context_.getParseFlow())
+      return parseTypeArgsFlow();
+#endif
+#if HERMES_PARSE_TS
+    return parseTSTypeArguments();
+#endif
+    llvm_unreachable("Must be parsing types");
   }
 #endif
 
