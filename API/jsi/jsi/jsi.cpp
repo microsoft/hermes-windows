@@ -170,7 +170,7 @@ std::u16string convertUTF8ToUTF16(const std::string& utf8) {
 #if JSI_VERSION >= 19
 // Given a unsigned number, which is less than 16, return the hex character.
 inline char hexDigit(unsigned x) {
-  return x < 10 ? '0' + x : 'A' + (x - 10);
+  return static_cast<char>(x < 10 ? '0' + x : 'A' + (x - 10));
 }
 
 // Given a sequence of UTF 16 code units, return true if all code units are

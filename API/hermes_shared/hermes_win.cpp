@@ -427,6 +427,7 @@ class ConfigWrapper {
       auto crashManager = std::make_shared<CrashManagerImpl>();
       config.withCrashMgr(crashManager);
     }
+    config.withMicrotaskQueue(true);
     return config.build();
   }
 
