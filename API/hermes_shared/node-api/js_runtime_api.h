@@ -49,6 +49,8 @@ JSR_API jsr_config_set_inspector_break_on_start(jsr_config config, bool value);
 
 JSR_API jsr_config_enable_gc_api(jsr_config config, bool value);
 
+JSR_API jsr_config_set_explicit_microtasks(jsr_config config, bool value);
+
 //=============================================================================
 // jsr_config task runner
 //=============================================================================

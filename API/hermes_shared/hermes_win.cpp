@@ -383,6 +383,11 @@ class ConfigWrapper {
     return napi_status::napi_ok;
   }
 
+  napi_status setExplicitMicrotasks(bool value) {
+    explicitMicrotasks_ = value;
+    return napi_status::napi_ok;
+  }
+
   napi_status setTaskRunner(std::unique_ptr<TaskRunner> taskRunner) {
     taskRunner_ = std::move(taskRunner);
     return napi_status::napi_ok;
@@ -427,7 +432,7 @@ class ConfigWrapper {
       auto crashManager = std::make_shared<CrashManagerImpl>();
       config.withCrashMgr(crashManager);
     }
-    config.withMicrotaskQueue(true);
+    config.withMicrotaskQueue(explicitMicrotasks_);
     return config.build();
   }
 
@@ -437,6 +442,7 @@ class ConfigWrapper {
   std::string inspectorRuntimeName_;
   uint16_t inspectorPort_{};
   bool inspectorBreakOnStart_{};
+  bool explicitMicrotasks_{};
   std::shared_ptr<TaskRunner> taskRunner_;
   std::shared_ptr<ScriptCache> scriptCache_;
 };
@@ -622,6 +628,10 @@ JSR_API jsr_config_set_inspector_break_on_start(jsr_config config, bool value) {
 JSR_API jsr_config_enable_gc_api(jsr_config /*config*/, bool /*value*/) {
   // We do nothing for now.
   return napi_ok;
+}
+
+JSR_API jsr_config_set_explicit_microtasks(jsr_config config, bool value) {
+  return CHECKED_CONFIG(config)->setExplicitMicrotasks(value);
 }
 
 JSR_API jsr_config_set_task_runner(

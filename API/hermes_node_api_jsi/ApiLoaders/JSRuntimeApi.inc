@@ -17,6 +17,7 @@
 JSR_FUNC(jsr_collect_garbage)
 JSR_FUNC(jsr_config_enable_gc_api)
 JSR_FUNC(jsr_config_enable_inspector)
+JSR_FUNC(jsr_config_set_explicit_microtasks)
 JSR_FUNC(jsr_config_set_inspector_break_on_start)
 JSR_FUNC(jsr_config_set_inspector_port)
 JSR_FUNC(jsr_config_set_inspector_runtime_name)
