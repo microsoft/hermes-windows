@@ -28,6 +28,7 @@
           target="build\native\Microsoft.JavaScript.Hermes$fat_suffix$.props" />
     <file src="$nugetroot$\build\native\Microsoft.JavaScript.Hermes.targets"
           target="build\native\Microsoft.JavaScript.Hermes$fat_suffix$.targets" />
+    <file src="$nugetroot$\lib\uap\_._" target="build\uap\" />
     <file src="$nugetroot$\license\*" target="" />
     <file src="$nugetroot$\tools\**\*.*" target="tools" />
   </files>
