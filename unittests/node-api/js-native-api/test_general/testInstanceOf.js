@@ -1,16 +1,9 @@
 'use strict';
 const common = require('../../common');
-const fs = require('fs');
 const assert = require('assert');
 
 // Addon is referenced through the eval expression in testFile
 const addon = require(`./build/${common.buildType}/test_general`);
-const path = require('path');
-
-// This test depends on a number of V8 tests.
-const v8TestsDir = path.resolve(__dirname, '..', '..', '..', 'deps', 'v8',
-                                'test', 'mjsunit');
-const v8TestsDirExists = fs.existsSync(v8TestsDir);
 
 // The following assert functions are referenced by v8's unit tests
 // See for instance deps/v8/test/mjsunit/instanceof.js
@@ -32,27 +25,85 @@ function assertEquals(leftHandSide, rightHandSide) {
 // eslint-disable-next-line no-unused-vars
 function assertThrows(statement) {
   assert.throws(function() {
-    eval(statement);
+    addon.testNapiRun(statement);
   }, Error);
 }
 
-function testFile(fileName) {
+function testFile(contents) {
   try {
-    const contents = fs.readFileSync(fileName, { encoding: 'utf8' });
-    eval(contents.replace(/[(]([^\s(]+)\s+instanceof\s+([^)]+)[)]/g,
-                          '(addon.doInstanceOf($1, $2))'));
+    // Function(contents)();
+    addon.testNapiRun(contents);
   } catch (err) {
     // This test depends on V8 test files, which may not exist in downloaded
     // archives. Emit a warning if the tests cannot be found instead of failing.
-    if (err.code === 'ENOENT' && !v8TestsDirExists)
-      process.emitWarning(`test file ${fileName} does not exist.`);
-    else
-      throw err;
+    throw err;
   }
 }
+const FileContent = 
+    `print("instanceof");
+    //CHECK-LABEL: instanceof
 
-testFile(path.join(v8TestsDir, 'instanceof.js'));
-testFile(path.join(v8TestsDir, 'instanceof-2.js'));
+    try {
+        1 instanceof 2;
+    } catch (e) {
+        print("caught", e.name, e.message);
+    }
+    //CHECK-NEXT: caught TypeError right operand of 'instanceof' is not an object
+
+    function foo () {}
+    foo.prototype = 1;
+
+    print(1 instanceof foo);
+    //CHECK-NEXT: false
+
+    try {
+        ({}) instanceof foo;
+    } catch (e) {
+        print("caught", e.name, e.message);
+    }
+    //CHECK-NEXT: caught TypeError function's '.prototype' is not an object in 'instanceof'
+
+    function BaseObj() {}
+
+    print({} instanceof BaseObj);
+    //CHECK-NEXT: false
+
+    print( (new BaseObj()) instanceof BaseObj);
+    //CHECK-NEXT: true
+
+    function ChildObj() {}
+    ChildObj.prototype = Object.create(BaseObj.prototype);
+
+    print( (new ChildObj()) instanceof BaseObj);
+    //CHECK-NEXT: true
+    print( (new ChildObj()) instanceof ChildObj);
+    //CHECK-NEXT: true
+
+    var BoundBase = BaseObj.bind(1,2).bind(3,4);
+    var BoundChild = ChildObj.bind(1,2).bind(3,4);
+
+    print( (new ChildObj()) instanceof BoundBase);
+    //CHECK-NEXT: true
+    print( (new ChildObj()) instanceof BoundChild);
+    //CHECK-NEXT: true
+
+    var a = new Proxy({}, {});
+    var b = Object.create(a);
+    var c = Object.create(b);
+    a.__proto__ = c;
+    try {
+        b instanceof Date;
+    } catch (e) {
+        print("caught", e.name, e.message);
+    }
+    //CHECK-NEXT: caught RangeError Maximum prototype chain length exceeded
+
+    function A(){}
+    Object.defineProperty(A, Symbol.hasInstance, {value: function(){return true;}})
+    print(undefined instanceof A);
+    //CHECK-NEXT: true`;
+
+testFile(FileContent);
 
 // We can only perform this test if we have a working Symbol.hasInstance
 if (typeof Symbol !== 'undefined' && 'hasInstance' in Symbol &&
