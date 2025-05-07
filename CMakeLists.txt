@@ -617,7 +617,7 @@ endif()
 # This adds the correct -rpath link flag as necessary.
 function(hermes_link_icu target_name)
   get_target_property(target_type ${target_name} TYPE)
-  # target_link_libraries(${target_name} ${ICU_LIBRARIES})
+  target_link_libraries(${target_name} ${ICU_LIBRARIES})
 
   if (HERMES_USE_STATIC_ICU)
     if ((NOT EMSCRIPTEN) AND target_type MATCHES "EXECUTABLE|STATIC_LIBRARY")

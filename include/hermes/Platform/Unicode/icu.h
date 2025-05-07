@@ -31,15 +31,13 @@
 #define U_HIDE_OBSOLETE_API 1
 #define U_HIDE_INTERNAL_API 1
 #define U_NO_DEFAULT_INCLUDE_UTF_HEADERS 1
-// #include "unicode/ucnv.h"
-// #include "unicode/ucol.h"
-// #include "unicode/udat.h"
-// #include "unicode/uloc.h"
-// #include "unicode/uniset.h"
-// #include "unicode/unorm2.h"
-// #include "unicode/ustring.h"
-#include <icucommon.h>
-#include <icui18n.h>
+#include "unicode/ucnv.h"
+#include "unicode/ucol.h"
+#include "unicode/udat.h"
+#include "unicode/uloc.h"
+#include "unicode/uniset.h"
+#include "unicode/unorm2.h"
+#include "unicode/ustring.h"
 #elif defined(__ANDROID__) && defined(HERMES_FACEBOOK_BUILD)
 #include <unicode/ucnv.h>
 #include <unicode/uloc.h>

@@ -9,7 +9,6 @@ set(source_files
    PlatformUnicodeICU.cpp
    PlatformUnicodeLite.cpp
    PlatformUnicodeEmscripten.cpp
-   PlatformUnicodeWinGlob.cpp
    CharacterProperties.cpp
 )
 
@@ -28,8 +27,6 @@ else()
       LINK_LIBS
       ${CORE_FOUNDATION}
   )
-
-  target_link_libraries(hermesPlatformUnicode ${ICU_LIBRARIES})
 endif()
 
 hermes_link_icu(hermesPlatformUnicode)
