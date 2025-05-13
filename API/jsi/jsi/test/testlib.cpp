@@ -1065,8 +1065,6 @@ TEST_P(JSITest, JSErrorDoesNotInfinitelyRecurse) {
 
   rt.global().setProperty(rt, "Error", globalError);
 }
-// TODO: (vmoroz) Restore after JSI for Node-API is fixed.
-#if 0
 TEST_P(JSITest, JSErrorStackOverflowHandling) {
   rt.global().setProperty(
       rt,
@@ -1090,7 +1088,6 @@ TEST_P(JSITest, JSErrorStackOverflowHandling) {
     EXPECT_NE(std::string(ex.what()).find("exceeded"), std::string::npos);
   }
 }
-#endif
 
 TEST_P(JSITest, ScopeDoesNotCrashTest) {
   Scope scope(rt);
