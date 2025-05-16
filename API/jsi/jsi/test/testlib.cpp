@@ -1082,7 +1082,7 @@ TEST_P(JSITest, JSErrorStackOverflowHandling) {
             return function("function() { return 0; }").call(rt);
           }));
   try {
-    eval("(function f() { f(); })()");
+    eval("(function f() { callSomething(); f(); })()");
     FAIL();
   } catch (const JSError& ex) {
     EXPECT_NE(std::string(ex.what()).find("exceeded"), std::string::npos);
