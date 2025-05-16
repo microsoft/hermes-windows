@@ -51,16 +51,15 @@ TEST_P(NodeApiTest, test_general_NapiRun) {
   });
 }
 
-// TODO: [vmoroz] The test uses external V8 tests
-// TEST_P(NodeApiTest, test_general_InstanceOf) {
-//   ResetStatics();
-//   ExecuteNodeApi([](NodeApiTestContext *testContext, napi_env env) {
-//     testContext->AddNativeModule(
-//         "./build/x86/test_general",
-//         [](napi_env env, napi_value exports) { return Init(env, exports); });
-//     testContext->RunTestScript("test_general/testInstanceOf.js");
-//   });
-// }
+TEST_P(NodeApiTest, test_general_InstanceOf) {
+  ResetStatics();
+  ExecuteNodeApi([](NodeApiTestContext *testContext, napi_env env) {
+    testContext->AddNativeModule(
+        "./build/x86/test_general",
+        [](napi_env env, napi_value exports) { return Init(env, exports); });
+    testContext->RunTestScript("test_general/testInstanceOf.js");
+  });
+}
 
 TEST_P(NodeApiTest, test_general_Globals) {
   ResetStatics();
