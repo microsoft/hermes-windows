@@ -27,7 +27,7 @@ class CompressedPointer {
   using RawType = uintptr_t;
 #endif
 
-  explicit CompressedPointer() = default;
+  CompressedPointer() = default;
   constexpr explicit CompressedPointer(std::nullptr_t) : ptr_() {}
 
   static CompressedPointer fromRaw(RawType r) {
