@@ -12,7 +12,7 @@ FetchContent_GetProperties(folly)
 include(CMakePrintHelpers)
 
 if(NOT folly_POPULATED)
-  FetchContent_Populate(folly)
+  FetchContent_MakeAvailable(folly)
 
   file(READ ${folly_SOURCE_DIR}/folly/portability/Builtins.h file_text)
   string(REPLACE
