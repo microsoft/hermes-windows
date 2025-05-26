@@ -2432,8 +2432,7 @@ jsi::JSError NodeApiJsiRuntime::makeJSError(Args &&...args) {
       (status == napi_pending_exception || jsErrorType != napi_undefined)) {
     AutoRestore<bool> setValue(
         const_cast<NodeApiJsiRuntime *>(this)->hasPendingJSError_, true);
-    if (jsErrorType == napi_object &&
-        instanceOf(jsError, getNodeApiValue(cachedValue_.Error))) {
+    if (jsErrorType == napi_object) {
       rewriteErrorMessage(jsError);
     }
     throw jsi::JSError(
@@ -2466,7 +2465,7 @@ void NodeApiJsiRuntime::rewriteErrorMessage(napi_value jsError) const {
     jsrApi_->napi_get_and_clear_last_exception(env_, &ignoreJSError);
   } else if (typeOf(message) == napi_string) {
     // JSI unit tests expect V8- or JSC-like messages for the stack overflow.
-    if (stringToStdString(message) == "Out of stack space") {
+    if (stringToStdString(message).find("Maximum call stack") != std::string::npos) {
       setProperty(
           jsError,
           getNodeApiValue(propertyId_.message),
