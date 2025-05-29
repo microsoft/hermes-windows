@@ -25,9 +25,9 @@ target_link_libraries(libshared PRIVATE
   hermesParser)
 target_link_options(libshared PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 
-if (WIN32)
+if(WIN32)
   configure_file(version.rc.in version.rc @ONLY)
-  target_sources(libshared PRIVATE  ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+  target_sources(libshared PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 endif()
 
 # Export the required header directory
@@ -53,11 +53,16 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   # Generate PDBs
   set(compile_flags "${compile_flags} /Zi")
 
+  # Temporary avoid the optimization for speed since VS 17.14.0 has auto-vectorization issues.
+  set(compile_flags "${compile_flags} /O1")
+
   set(link_flags_debug "/DEBUG")
+
   # Use /OPT:NOICF because hermes associates function pointer with its name.
   # The optimization that merges functions with the same body breaks that code.
   # See getFunctionNameImpl in lib\VM\JSNativeFunctions.cpp.
   set(link_flags_release "/DEBUG;/DEBUGTYPE:CV$<COMMA>FIXUP;/OPT:REF;/OPT:NOICF;/INCREMENTAL:NO")
+
   if(CMAKE_VS_PLATFORM_NAME MATCHES "^(x64|x86|Win32)$")
     # CETCOMPAT is not supported by ARM or ARM64
     list(APPEND link_flags_release "/CETCOMPAT")
@@ -67,6 +72,7 @@ endif()
 set_target_properties(libshared PROPERTIES
   COMPILE_FLAGS "${compile_flags}"
   LINK_OPTIONS "$<IF:$<CONFIG:Debug>,${link_flags_debug},${link_flags_release}>"
+
   # To make sure that the resulting DLL name is hermes.dll
   OUTPUT_NAME hermes
 )
