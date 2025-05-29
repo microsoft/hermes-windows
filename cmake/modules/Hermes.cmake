@@ -94,6 +94,9 @@ function(hermes_update_compile_flags name)
     
     # Ensure debug symbols are generated for all sources.
     set(flags "${flags} /Zi")
+
+    # Temporary avoid the optimization for speed since VS 17.14.0 has auto-vectorization issues.
+    set(flags "${flags} /O1")
   #endif ()
 
   if (NOT HERMES_ENABLE_EH_RTTI)
