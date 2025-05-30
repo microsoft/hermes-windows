@@ -2,7 +2,7 @@ include(FetchContent)
 
 FetchContent_Declare(
   folly
-  URL      https://codeload.github.com/facebook/folly/tar.gz/refs/tags/v2020.01.13.00
+  URL      https://github.com/facebook/folly/archive/v2020.01.13.00.tar.gz
   URL_HASH SHA256=b851e02310536cefbbc1e7bbcc2dfedb277bf9f4f87c1bed1dc4d7a22f574fa4
   DOWNLOAD_EXTRACT_TIMESTAMP true
 )
