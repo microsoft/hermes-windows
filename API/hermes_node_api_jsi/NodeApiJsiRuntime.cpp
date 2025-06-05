@@ -2466,7 +2466,8 @@ void NodeApiJsiRuntime::rewriteErrorMessage(napi_value jsError) const {
     jsrApi_->napi_get_and_clear_last_exception(env_, &ignoreJSError);
   } else if (typeOf(message) == napi_string) {
     // JSI unit tests expect V8- or JSC-like messages for the stack overflow.
-    if (stringToStdString(message) == "Out of stack space") {
+    std::string messageStr = stringToStdString(message);
+    if (messageStr == "Out of stack space" ||  messageStr.find("Maximum call stack")  != std::string::npos) {
       setProperty(
           jsError,
           getNodeApiValue(propertyId_.message),

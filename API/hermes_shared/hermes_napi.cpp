@@ -4992,14 +4992,14 @@ napi_status NodeApiEnvironment::isInstanceOf(
 
   CHECK_ARG(object);
   CHECK_ARG(constructor);
+  CHECK_ARG(result);
   napi_value ctorValue;
   CHECK_NAPI(coerceToObject(constructor, &ctorValue));
   RETURN_STATUS_IF_FALSE(
       vm::vmisa<vm::Callable>(*phv(ctorValue)), napi_function_expected);
-  return setResult(
-      vm::instanceOfOperator_RJS(
-          runtime_, makeHandle(object), makeHandle(constructor)),
-      result);
+  vm::CallResult<bool> instance=vm::instanceOfOperator_RJS(
+      runtime_, makeHandle(object), makeHandle(constructor));
+  return setResultUnsafe(std::move(*instance),result);
 }
 
 template <class TLambda>
