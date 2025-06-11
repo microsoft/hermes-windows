@@ -1032,13 +1032,78 @@ std::u16string NumberFormat::format(double number) noexcept {
 }
 
 std::vector<std::unordered_map<std::u16string, std::u16string>>
-NumberFormat::formatToParts(double number) noexcept {
-  std::unordered_map<std::u16string, std::u16string> part;
-  part[u"type"] = u"integer";
-  // This isn't right, but I didn't want to do more work for a stub.
-  std::string s = std::to_string(number);
-  part[u"value"] = {s.begin(), s.end()};
-  return std::vector<std::unordered_map<std::u16string, std::u16string>>{part};
+DateTimeFormatWindows::formatToParts(double jsTimeValue) noexcept {
+  std::vector<std::unordered_map<std::u16string, std::u16string>> parts;
+  UErrorCode status = U_ZERO_ERROR;
+  UDate date = static_cast<UDate>(jsTimeValue);
+
+  // First, get the formatted string length
+  int32_t length = udat_formatForFields(dtf_, date, nullptr, 0, nullptr, &status);
+  if (status != U_BUFFER_OVERFLOW_ERROR) return parts;
+
+  status = U_ZERO_ERROR;
+  std::u16string buffer(length, u'\0');
+  UFieldPositionIterator *fpi = ufieldpositer_open(&status);
+  if (U_FAILURE(status))
+    return parts;
+
+  udat_formatForFields(
+      dtf_, date, reinterpret_cast<UChar *>(&buffer[0]), length, fpi, &status);
+
+  if (U_SUCCESS(status)) {
+    int32_t field = 0;
+    int32_t begin = 0;
+    int32_t end = 0;
+    int32_t lastEnd = 0;
+    while ((field = ufieldpositer_next(fpi, &begin, &end)) >= 0) {
+      // Add literal part before this field
+      if (begin > lastEnd) {
+        std::u16string literal = buffer.substr(lastEnd, begin - lastEnd);
+        parts.push_back({{u"type", u"literal"}, {u"value", literal}});
+      }
+      std::u16string value = buffer.substr(begin, end - begin);
+      std::u16string type;
+
+      switch (field) {
+        case UDAT_YEAR_FIELD:
+          type = u"year";
+          break;
+        case UDAT_MONTH_FIELD:
+          type = u"month";
+          break;
+        case UDAT_DATE_FIELD:
+          type = u"day";
+          break;
+        case UDAT_HOUR0_FIELD:
+          type = u"hour";
+          break;
+        case UDAT_MINUTE_FIELD:
+          type = u"minute";
+          break;
+        case UDAT_SECOND_FIELD:
+          type = u"second";
+          break;
+        case UDAT_DAY_OF_WEEK_FIELD:
+          type = u"weekday";
+          break;
+        case UDAT_AM_PM_FIELD:
+          type = u"dayPeriod";
+          break;
+        default:
+          type = u"literal";
+          break;
+      }
+
+      parts.push_back({{u"type", type}, {u"value", value}});
+      lastEnd = end;
+    }
+    if (lastEnd < length) {
+      std::u16string trailing = buffer.substr(lastEnd);
+      parts.push_back({{u"type", u"literal"}, {u"value", trailing}});
+    }
+  }
+  ufieldpositer_close(fpi);
+  return parts;
 }
 
 } // namespace platform_intl
