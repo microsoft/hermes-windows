@@ -5,13 +5,34 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// This file includes shared code between Apple and Windows implementation of Intl APIs
+// This file includes shared code between Apple, Windows and ICU implementation of
+// Intl APIs
+#include "hermes/Platform/Intl/PlatformIntlShared.h"
 #include "hermes/Platform/Intl/PlatformIntl.h"
+#include "impl_icu/LocaleBCP47Object.h"
 
 using namespace ::hermes;
 
 namespace hermes {
 namespace platform_intl {
+
+// https://tc39.es/ecma402/#sec-intl.getcanonicallocales
+vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
+    vm::Runtime &runtime,
+    const std::vector<std::u16string> &locales) {
+  // 1. Let ll be ? CanonicalizeLocaleList(locales).
+  auto localeBcp47ObjectsRes =
+      impl_icu::LocaleBCP47Object::canonicalizeLocaleList(runtime, locales);
+  if (LLVM_UNLIKELY(localeBcp47ObjectsRes == vm::ExecutionStatus::EXCEPTION)) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  // 2. Return CreateArrayFromList(ll).
+  std::vector<std::u16string> canonicalLocales;
+  for (const auto &localeBcp47Object : *localeBcp47ObjectsRes) {
+    canonicalLocales.push_back(localeBcp47Object.getCanonicalizedLocaleId());
+  }
+  return canonicalLocales;
+}
 
 // https://402.ecma-international.org/8.0/#sec-bestavailablelocale
 std::optional<std::u16string> bestAvailableLocale(
@@ -87,7 +108,7 @@ std::optional<bool> getOptionBool(
 }
 
 // Implementation of
-// https://402.ecma-international.org/8.0/#sec-todatetimeoptions
+/// https://402.ecma-international.org/8.0/#sec-todatetimeoptions
 vm::CallResult<Options> toDateTimeOptions(
     vm::Runtime &runtime,
     Options options,
@@ -170,6 +191,20 @@ vm::CallResult<Options> toDateTimeOptions(
   }
   // 13. return options
   return options;
+}
+
+/// https://402.ecma-international.org/8.0/#sec-case-sensitivity-and-case-mapping
+std::u16string toASCIIUppercase(std::u16string_view tz) {
+  std::u16string result;
+  std::uint8_t offset = 'a' - 'A';
+  for (char16_t c16 : tz) {
+    if (c16 >= 'a' && c16 <= 'z') {
+      result.push_back((char)c16 - offset);
+    } else {
+      result.push_back(c16);
+    }
+  }
+  return result;
 }
 
 } // namespace platform_intl
