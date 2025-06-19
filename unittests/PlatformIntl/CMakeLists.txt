@@ -13,6 +13,5 @@ if(${HERMES_ENABLE_INTL})
 
   # target_link_libraries(PlatformIntlTests hermesapi)
 endif()
-
-add_hermes_unittest(BCP47ParserTests BCP47ParserTest.cpp)
-target_link_libraries(BCP47ParserTests hermesBCP47Parser)
+  add_hermes_unittest(BCP47ParserTests BCP47ParserTest.cpp)
+  target_link_libraries(BCP47ParserTests hermesBCP47Parser)
