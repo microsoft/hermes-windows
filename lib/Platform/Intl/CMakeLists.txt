@@ -23,7 +23,7 @@ if(HERMES_ENABLE_INTL)
     target_compile_options(hermesPlatformIntl PRIVATE -fobjc-arc)
   else()
     add_hermes_library(hermesPlatformIntl STATIC
-        PlatformIntlICU.cpp
+        # PlatformIntlICU.cpp # To be uncommented after Intl is enabled. 
         PlatformIntlShared.cpp
         PlatformIntlWindows.cpp
         impl_icu/Collator.cpp

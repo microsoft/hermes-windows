@@ -17,6 +17,7 @@ namespace hermes {
 namespace platform_intl {
 
 // https://tc39.es/ecma402/#sec-intl.getcanonicallocales
+/* To Do - There is already impl of this function in PlatformWindows.cpp.
 vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
     vm::Runtime &runtime,
     const std::vector<std::u16string> &locales) {
@@ -33,7 +34,7 @@ vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
   }
   return canonicalLocales;
 }
-
+*/
 // https://402.ecma-international.org/8.0/#sec-bestavailablelocale
 std::optional<std::u16string> bestAvailableLocale(
     const std::vector<std::u16string> &availableLocales,
