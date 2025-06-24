@@ -30,7 +30,7 @@ if(HERMES_ENABLE_INTL)
         impl_icu/IntlUtils.cpp
         impl_icu/LocaleConverter.cpp
         impl_icu/LocaleBCP47Object.cpp
-        impl_icu/LocaleResolver.cpp
+        # impl_icu/LocaleResolver.cpp # To be uncommented after Intl is enabled.
         impl_icu/OptionHelpers.cpp
         LINK_LIBS
         hermesBCP47Parser
