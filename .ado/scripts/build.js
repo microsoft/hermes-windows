@@ -28,14 +28,12 @@ const options = {
   help: { type: "boolean", default: false },
   configure: { type: "boolean", default: false },
   build: { type: "boolean", default: true },
-  "no-build": { type: "boolean", default: false },
   test: { type: "boolean", default: false },
   pack: { type: "boolean", default: false },
   "clean-all": { type: "boolean", default: false },
   "clean-build": { type: "boolean", default: false },
   "clean-tools": { type: "boolean", default: false },
   "clean-pkg": { type: "boolean", default: false },
-  "output-path": { type: "string", default: "out" },
   uwp: { type: "boolean", default: false },
   platform: {
     type: "string",
@@ -751,14 +749,10 @@ function getVCVarsAllBat() {
 
   // Add -prerelease flag to detect Preview installations
   const versionJson = JSON.parse(
-    execSync(`"${vsWhere}" -format json -version 17 -prerelease`).toString()
+    execSync(`"${vsWhere}" -format json -version 17`).toString()
   );
   if (versionJson.length > 1) {
     console.warn("More than one VS install detected, picking the first one");
-  }
-
-  if (!versionJson || versionJson.length === 0) {
-    throw new Error("No Visual Studio 2022 installation found. Please install Visual Studio 2022 with C++ tools.");
   }
 
   const installationPath = versionJson[0].installationPath;
