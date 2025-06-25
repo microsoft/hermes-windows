@@ -60,11 +60,6 @@ const options = {
 // To access parsed args values, use args.<option-name>.
 const { values: args } = parseArgs({ options, allowNegative: true });
 
-// Handle --no-build flag
-if (args["no-build"]) {
-  args.build = false;
-  console.log("--no-build flag detected: skipping build step");
-}
 
 // To be used in help message.
 const scriptRelativePath = path.relative(process.cwd(), __filename);
@@ -747,7 +742,6 @@ function getVCVarsAllBat() {
     throw new Error("Could not find vswhere.exe");
   }
 
-  // Add -prerelease flag to detect Preview installations
   const versionJson = JSON.parse(
     execSync(`"${vsWhere}" -format json -version 17`).toString()
   );
