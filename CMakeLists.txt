@@ -80,14 +80,7 @@ endif()
 # We must replace dots with commas.
 string(REPLACE "." "," HERMES_FILE_VERSION_BIN ${HERMES_FILE_VERSION})
 
-find_package(Python3 COMPONENTS Interpreter)
-if (Python3_Interpreter_FOUND)
-  set(Python_EXECUTABLE ${Python3_EXECUTABLE})
-  set(Python_Interpreter_FOUND TRUE)
-else()
-  find_package(Python COMPONENTS Interpreter)
-endif()
-
+find_package(Python COMPONENTS Interpreter)
 if (NOT Python_Interpreter_FOUND)
   message(FATAL_ERROR "Unable to find Python interpreter, required for builds and testing.
 Please install Python or specify the PYTHON_EXECUTABLE CMake variable.")

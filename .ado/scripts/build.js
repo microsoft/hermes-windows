@@ -371,6 +371,7 @@ function cmakeBuild(buildParams) {
     onBuildCompleted(buildParams);
   }
 }
+
 function cmakeTest(buildParams) {
   const { buildPath, platform, configuration } = buildParams;
   
@@ -380,21 +381,16 @@ function cmakeTest(buildParams) {
   }
 
   // Ensure build directory exists
-  if (!fs.existsSync(buildPath)) {
-    throw new Error(`Build directory not found: ${buildPath}
-This usually means you need to build first. Try running:
-  node .ado\\scripts\\build.js --build --platform ${platform} --configuration ${configuration} --output-path ${args["output-path"]}`);
+  if (!fs.existsSync(buildParams.buildPath)) {
+    cmakeBuild(buildParams);
   }
-
-  console.log(`Running Hermes test suite in ${buildPath}`);
-  console.log(`Platform: ${platform}, Configuration: ${configuration}`);
 
   // Run tests via check-hermes target
   try {
-    runCMakeCommand("cmake --build . --target check-hermes", buildParams);
-    console.log("✓ Hermes test suite completed successfully");
+    runCMakeCommand("cmake --build . --target check-hermes --config Release", buildParams);
+    console.log("Hermes test suite completed successfully");
   } catch (error) {
-    console.error("❌ Hermes tests failed:", error.message);
+    console.error("Hermes tests failed:", error.message);
     throw error;
   }
 }
