@@ -371,154 +371,32 @@ function cmakeBuild(buildParams) {
     onBuildCompleted(buildParams);
   }
 }
-
 function cmakeTest(buildParams) {
-  const { buildPath, platform, isUwp } = buildParams;
+  const { buildPath, platform, configuration } = buildParams;
   
   if (isCrossPlatformBuild(buildParams)) {
     console.log("Skip testing for UWP and ARM64/ARM64EC builds");
     return;
   }
 
-  // Ensure build directory exists - critical for --no-build scenarios
+  // Ensure build directory exists
   if (!fs.existsSync(buildPath)) {
     throw new Error(`Build directory not found: ${buildPath}
 This usually means you need to build first. Try running:
-  node .ado\\scripts\\build.js --build --platform ${platform} --configuration ${buildParams.configuration} --output-path ${buildParams.outputPath}`);
+  node .ado\\scripts\\build.js --build --platform ${platform} --configuration ${configuration} --output-path ${args["output-path"]}`);
   }
 
-  // Validate Windows test environment for JavaScript integration tests
-  validateWindowsTestEnvironment();
+  console.log(`Running Hermes test suite in ${buildPath}`);
+  console.log(`Platform: ${platform}, Configuration: ${configuration}`);
 
-  console.log(`Running comprehensive Hermes test suite in ${buildPath}`);
-  console.log(`Platform: ${platform}, Configuration: ${buildParams.configuration}`);
-
-  // Run C++ unit tests via CTest
-  console.log("\n=== Running C++ Unit Tests (CTest) ===");
-  try {
-    //runCMakeCommand("ctest --output-on-failure", buildParams);
-    console.log("✓ C++ unit tests completed successfully");
-  } catch (error) {
-    console.error("❌ C++ unit tests failed:", error.message);
-    // Continue to JavaScript integration tests even if CTest fails
-    console.warn("Continuing with JavaScript integration tests...");
-  }
-
-  // Run comprehensive Hermes regression tests (test/ + unittests/ via check-hermes)
-  console.log("\n=== Running Hermes Comprehensive Test Suite (check-hermes) ===");
-  console.log("This includes:");
-  console.log("  • JavaScript integration tests from test/ directory");
-  console.log("  • C++ unit tests from unittests/ directory"); 
-  console.log("  • ECMAScript compliance validation");
-  console.log("  • Hermes bytecode generation tests");
-  console.log("  • Performance regression tests");
-  console.log("  • Cross-platform compatibility validation");
-  
+  // Run tests via check-hermes target
   try {
     runCMakeCommand("cmake --build . --target check-hermes", buildParams);
-    console.log("✓ Hermes comprehensive test suite completed successfully");
-    console.log("✓ Validated ~2,391+ tests including JavaScript language compliance");
-    console.log("✓ Performance critical paths validated for React Native integration");
+    console.log("✓ Hermes test suite completed successfully");
   } catch (error) {
-    console.error("❌ Hermes regression tests failed:", error.message);
-    if (error.message.includes('bash')) {
-      console.error("Hint: Ensure bash is available in your PATH for LIT framework");
-      console.error("Install Git for Windows or WSL to resolve bash dependency");
-    }
+    console.error("❌ Hermes tests failed:", error.message);
     throw error;
   }
-}
-
-function validateWindowsTestEnvironment() {
-  if (process.platform !== 'win32') {
-    return; // Not Windows, bash should be available
-  }
-
-  console.log("=== Validating Windows Test Environment ===");
-  
-  // Check if bash is already available in PATH
-  try {
-    const bashVersion = execSync('bash --version', { encoding: 'utf8', stdio: 'pipe' });
-    console.log("✓ bash detected in PATH - JavaScript integration tests should work");
-    console.log(`  Version: ${bashVersion.split('\n')[0]}`);
-    
-    // Try to get bash path via where command
-    let bashPath;
-    try {
-      bashPath = execSync('where bash', { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n')[0];
-      console.log(`  Location: ${bashPath}`);
-      
-      if (bashPath.toLowerCase().includes('system32')) {
-        console.log("  Note: Using WSL bash - configuring LIT environment variables");
-      } else {
-        console.log("  Note: Using Git bash - optimal for LIT framework");
-      }
-    } catch (whereError) {
-      // where command failed but bash works - this is WSL bash
-      console.log("  Location: WSL bash (accessible via PATH but not locatable via 'where')");
-      console.log("  Note: Detected WSL bash - will configure LIT framework accordingly");
-      bashPath = 'bash'; // Use bash directly from PATH
-    }
-    
-    return bashPath;
-  } catch (error) {
-    console.log("bash not found in PATH, searching common locations...");
-  }
-
-  // Common bash locations on Windows
-  const bashPaths = [
-    'C:\\Program Files\\Git\\bin\\bash.exe',
-    'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
-    'C:\\msys64\\usr\\bin\\bash.exe',
-    'C:\\Windows\\System32\\bash.exe', // WSL
-    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Git', 'bin', 'bash.exe')
-  ];
-
-  // Try to find bash in common locations
-  for (const bashPath of bashPaths) {
-    if (fs.existsSync(bashPath)) {
-      console.log(`✓ Found bash at: ${bashPath}`);
-      const bashDir = path.dirname(bashPath);
-      
-      // Add to PATH for this session
-      if (!process.env.PATH.includes(bashDir)) {
-        process.env.PATH = `${bashDir};${process.env.PATH}`;
-        console.log("✓ Added bash to PATH for this session");
-      }
-      
-      // Verify it works
-      try {
-        const bashVersion = execSync('bash --version', { encoding: 'utf8', stdio: 'pipe' });
-        console.log(`✓ bash is now working: ${bashVersion.split('\n')[0]}`);
-        return bashPath;
-      } catch (testError) {
-        console.warn(`⚠️  Found bash at ${bashPath} but it doesn't work: ${testError.message}`);
-        continue;
-      }
-    }
-  }
-
-  console.warn(`
-⚠️  WARNING: bash not found for LIT framework
-JavaScript integration tests (check-hermes) will fail without proper bash setup.
-
-Your environment shows bash is working, but the LIT framework cannot detect it.
-This is common with WSL bash installations.
-
-Solutions:
-1. Install Git for Windows bash: https://git-scm.com/download/win
-   winget install Git.Git
-2. Run tests in Git Bash instead of PowerShell
-3. Use WSL directly: wsl -- bash
-
-For CI/CD pipeline:
-- Consider using Ubuntu agents for comprehensive JavaScript testing
-- Ensure proper bash environment setup in Windows agents
-
-C++ unit tests (ctest) will continue to work regardless.
-  `);
-  
-  return null;
 }
 
 function cmakeBuildHermesCompiler(buildParams) {
