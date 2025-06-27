@@ -60,6 +60,7 @@ const options = {
 // To access parsed args values, use args.<option-name>.
 const { values: args } = parseArgs({ options, allowNegative: true });
 
+
 // To be used in help message.
 const scriptRelativePath = path.relative(process.cwd(), __filename);
 
@@ -372,16 +373,26 @@ function cmakeBuild(buildParams) {
 }
 
 function cmakeTest(buildParams) {
+  const { buildPath, platform, configuration } = buildParams;
+  
   if (isCrossPlatformBuild(buildParams)) {
     console.log("Skip testing for UWP and ARM64/ARM64EC builds");
     return;
   }
 
+  // Ensure build directory exists
   if (!fs.existsSync(buildParams.buildPath)) {
     cmakeBuild(buildParams);
   }
 
-  runCMakeCommand("ctest --output-on-failure", buildParams);
+  // Run tests via check-hermes target
+  try {
+    runCMakeCommand("cmake --build . --target check-hermes --config Release", buildParams);
+    console.log("Hermes test suite completed successfully");
+  } catch (error) {
+    console.error("Hermes tests failed:", error.message);
+    throw error;
+  }
 }
 
 function cmakeBuildHermesCompiler(buildParams) {
