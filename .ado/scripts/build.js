@@ -377,11 +377,19 @@ function cmakeTest(buildParams) {
     return;
   }
 
+  // Ensure build directory exists
   if (!fs.existsSync(buildParams.buildPath)) {
     cmakeBuild(buildParams);
   }
 
-  runCMakeCommand("ctest --output-on-failure", buildParams);
+  // Run tests via check-hermes target
+  try {
+    runCMakeCommand("cmake --build . --target check-hermes --config Release", buildParams);
+    console.log("Hermes test suite completed successfully");
+  } catch (error) {
+    console.error("Hermes tests failed:", error.message);
+    throw error;
+  }
 }
 
 function cmakeBuildHermesCompiler(buildParams) {
@@ -606,7 +614,7 @@ function getVCVarsAllBat() {
   }
 
   const versionJson = JSON.parse(
-    execSync(`"${vsWhere}" -format json -version 17`).toString()
+    execSync(`"${vsWhere}" -format json -version 17 -prerelease`).toString()
   );
   if (versionJson.length > 1) {
     console.warn("More than one VS install detected, picking the first one");
