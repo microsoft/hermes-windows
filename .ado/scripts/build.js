@@ -373,7 +373,6 @@ function cmakeBuild(buildParams) {
 }
 
 function cmakeTest(buildParams) {
-  const { buildPath, platform, configuration } = buildParams;
   
   if (isCrossPlatformBuild(buildParams)) {
     console.log("Skip testing for UWP and ARM64/ARM64EC builds");
@@ -617,7 +616,7 @@ function getVCVarsAllBat() {
   }
 
   const versionJson = JSON.parse(
-    execSync(`"${vsWhere}" -format json -version 17`).toString()
+    execSync(`"${vsWhere}" -format json -version 17 -prerelease`).toString()
   );
   if (versionJson.length > 1) {
     console.warn("More than one VS install detected, picking the first one");
