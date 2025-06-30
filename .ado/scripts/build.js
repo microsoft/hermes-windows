@@ -60,7 +60,6 @@ const options = {
 // To access parsed args values, use args.<option-name>.
 const { values: args } = parseArgs({ options, allowNegative: true });
 
-
 // To be used in help message.
 const scriptRelativePath = path.relative(process.cwd(), __filename);
 
@@ -373,7 +372,6 @@ function cmakeBuild(buildParams) {
 }
 
 function cmakeTest(buildParams) {
-  
   if (isCrossPlatformBuild(buildParams)) {
     console.log("Skip testing for UWP and ARM64/ARM64EC builds");
     return;
