@@ -94,9 +94,6 @@ function(hermes_update_compile_flags name)
     
     # Ensure debug symbols are generated for all sources.
     set(flags "${flags} /Zi")
-
-    # Temporary avoid the optimization for speed since VS 17.14.0 has auto-vectorization issues.
-    set(flags "${flags} /O1")
   #endif ()
 
   if (NOT HERMES_ENABLE_EH_RTTI)
@@ -119,6 +116,12 @@ function(hermes_update_compile_flags name)
     # Update target props, since all sources are C++.
     set_property(TARGET ${name} APPEND_STRING PROPERTY
       COMPILE_FLAGS "${flags}")
+  endif ()
+
+  if (MSVC)
+    # Temporary avoid the auto-vectorization optimization since VS 17.14.0 produces incorrect code.
+    # Set /O1 only for Release configs using modern CMake target_compile_options.
+    target_compile_options(${name} PRIVATE $<$<CONFIG:Release>:/O1>)
   endif ()
 endfunction()
 
