@@ -53,9 +53,6 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   # Generate PDBs
   set(compile_flags "${compile_flags} /Zi")
 
-  # Temporary avoid the optimization for speed since VS 17.14.0 has auto-vectorization issues.
-  set(compile_flags "${compile_flags} /O1")
-
   set(link_flags_debug "/DEBUG")
 
   # Use /OPT:NOICF because hermes associates function pointer with its name.
@@ -76,3 +73,9 @@ set_target_properties(libshared PROPERTIES
   # To make sure that the resulting DLL name is hermes.dll
   OUTPUT_NAME hermes
 )
+
+if (MSVC)
+  # Temporary avoid the auto-vectorization optimization since VS 17.14.0 produces incorrect code.
+  # Set /O1 only for Release configs using modern CMake target_compile_options.
+  target_compile_options(libshared PRIVATE $<$<CONFIG:Release>:/O1>)
+endif()
