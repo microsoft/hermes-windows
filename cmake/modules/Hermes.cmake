@@ -36,19 +36,26 @@ if (MSVC)
 #  string(REPLACE "/DUNICODE" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 endif (MSVC)
 
-# set stack reserved size to ~10MB
-if (MSVC)
+if(WIN32)
+  # set stack reserved size to ~10MB
   # CMake previously automatically set this value for MSVC builds, but the
   # behavior was changed in CMake 2.8.11 (Issue 12437) to use the MSVC default
   # value (1 MB) which is not enough for some of our stack overflow tests.
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10000000")
-elseif (MINGW) # FIXME: Also cygwin?
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,16777216")
-endif ()
+  if(MSVC)
+    # MSVC or clang-cl (MSVC-compatible)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")
+  elseif(CLANG)
+    # Plain Clang with lld-link
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,/STACK:10485760")
+  elseif(MINGW) # FIXME: Also cygwin?
+    # MinGW (GNU ld)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
+  endif()
+endif()
 
 if (MSVC)
   # FastDebug Flavor
-  # 1. Optmize for speed.
+  # 1. Optimize for speed.
   # 2. Enable full Inlining
   # 3. Link against debug flavored VCRT
   # Note: /O2 and RTC1 are incompatible
@@ -88,13 +95,13 @@ function(hermes_update_compile_flags name)
 
   set(flags "")
 
-  #if (MSVC)
+  if (MSVC)
     # enable function-level linking
     set(flags "${flags} /Gy")
     
     # Ensure debug symbols are generated for all sources.
     set(flags "${flags} /Zi")
-  #endif ()
+  endif ()
 
   if (NOT HERMES_ENABLE_EH_RTTI)
     if (GCC_COMPATIBLE)

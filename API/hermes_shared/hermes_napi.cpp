@@ -4876,7 +4876,7 @@ napi_status NodeApiEnvironment::callFunction(
   RETURN_STATUS_IF_FALSE(vm::vmisa<vm::Callable>(*phv(func)), napi_invalid_arg);
   vm::Handle<vm::Callable> funcHandle = makeHandle<vm::Callable>(func);
 
-  if (argCount >= std::numeric_limits<uint32_t>::max() ||
+  if (argCount >= static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
       !runtime_.checkAvailableStack(static_cast<uint32_t>(argCount))) {
     return GENERIC_FAILURE("Unable to call function: stack overflow");
   }
@@ -4885,7 +4885,7 @@ napi_status NodeApiEnvironment::callFunction(
       runtime_,
       static_cast<uint32_t>(argCount),
       funcHandle.getHermesValue(),
-      /*newTarget:*/ getUndefined(),
+      /*newTarget:*/ vm::HermesValue::encodeUndefinedValue(),
       *phv(thisArg)};
   if (LLVM_UNLIKELY(newFrame.overflowed())) {
     CHECK_NAPI(checkJSErrorStatus(runtime_.raiseStackOverflow(
@@ -4995,11 +4995,16 @@ napi_status NodeApiEnvironment::isInstanceOf(
   CHECK_ARG(result);
   napi_value ctorValue;
   CHECK_NAPI(coerceToObject(constructor, &ctorValue));
-  RETURN_STATUS_IF_FALSE(
-      vm::vmisa<vm::Callable>(*phv(ctorValue)), napi_function_expected);
-  vm::CallResult<bool> instance=vm::instanceOfOperator_RJS(
-      runtime_, makeHandle(object), makeHandle(constructor));
-  return setResultUnsafe(std::move(*instance),result);
+  if (!vm::vmisa<vm::Callable>(*phv(ctorValue))) {
+    throwJSTypeError(
+        "ERR_NAPI_CONS_FUNCTION", "Constructor must be a function");
+    return ERROR_STATUS(
+        napi_function_expected, "Constructor must be a function");
+  }
+  return setResult(
+      vm::instanceOfOperator_RJS(
+          runtime_, makeHandle(object), makeHandle(constructor)),
+      result);
 }
 
 template <class TLambda>

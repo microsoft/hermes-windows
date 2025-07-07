@@ -2419,31 +2419,89 @@ jsi::JSError NodeApiJsiRuntime::makeJSError(Args &&...args) {
   return jsi::JSError(*this, errorStream.str());
 }
 
-// Throws jsi::JSError or jsi::JSINativeException from Node-API error.
 [[noreturn]] void NodeApiJsiRuntime::throwJSException(
     napi_status status) const {
+  auto formatStatusError = [](napi_status status) -> std::string {
+    // TODO: (vmoroz) use a more sophisticated error formatting.
+    std::ostringstream errorStream;
+    errorStream << "A call to Node-API returned error code 0x" << std::hex
+                << static_cast<int>(status) << '.';
+    return errorStream.str();
+  };
+
+  NodeApiScope scope{*this};
+  // Retrieve the exception value and clear as we will rethrow it as a C++
+  // exception.
   napi_value jsError{};
   CHECK_NAPI_ELSE_CRASH(
       jsrApi_->napi_get_and_clear_last_exception(env_, &jsError));
   napi_valuetype jsErrorType;
   CHECK_NAPI_ELSE_CRASH(jsrApi_->napi_typeof(env_, jsError, &jsErrorType));
-
-  if (!hasPendingJSError_ &&
-      (status == napi_pending_exception || jsErrorType != napi_undefined)) {
-    AutoRestore<bool> setValue(
-        const_cast<NodeApiJsiRuntime *>(this)->hasPendingJSError_, true);
-    if (jsErrorType == napi_object &&
-        instanceOf(jsError, getNodeApiValue(cachedValue_.Error))) {
-      rewriteErrorMessage(jsError);
-    }
-    throw jsi::JSError(
-        *const_cast<NodeApiJsiRuntime *>(this), toJsiValue(jsError));
-  } else {
-    std::ostringstream errorStream;
-    errorStream << "A call to Node-API returned error code 0x" << std::hex
-                << status << '.';
-    throw jsi::JSINativeException(errorStream.str().c_str());
+  if (jsErrorType == napi_undefined) {
+    throw jsi::JSINativeException(formatStatusError(status).c_str());
   }
+  jsi::Value jsiJSError = toJsiValue(jsError);
+
+  std::string msg = "No message";
+  std::string stack = "No stack";
+  if (jsErrorType == napi_string) {
+    // If the exception is a string, use it as the message.
+    msg = stringToStdString(jsError);
+  } else if (jsErrorType == napi_object) {
+    // If the exception is an object try to retrieve its message and stack
+    // properties.
+
+    /// Attempt to retrieve a string property \p sym from \c jsError and store
+    /// it in \p out. Ignore any catchable errors and non-string properties.
+    auto getStrProp = [this, jsError](const char *sym, std::string &out) {
+      napi_value value{};
+      napi_status propStatus =
+          jsrApi_->napi_get_named_property(env_, jsError, sym, &value);
+      if (propStatus != napi_ok) {
+        // An exception was thrown while retrieving the property, if it is
+        // catchable, suppress it. Otherwise, rethrow this exception without
+        // trying to invoke any more JavaScript.
+        napi_value newJSError{};
+        CHECK_NAPI_ELSE_CRASH(
+            jsrApi_->napi_get_and_clear_last_exception(env_, &newJSError));
+        napi_valuetype newJSErrorType;
+        CHECK_NAPI_ELSE_CRASH(
+            jsrApi_->napi_typeof(env_, newJSError, &newJSErrorType));
+
+        if (propStatus != napi_cannot_run_js)
+          return;
+
+        // An uncatchable error occurred, it is unsafe to do anything that
+        // might execute more JavaScript.
+        if (newJSErrorType != napi_undefined) {
+          throw jsi::JSError(
+              toJsiValue(newJSError),
+              "Uncatchable exception thrown while creating error",
+              "No stack");
+        } else {
+          std::ostringstream errorStream;
+          errorStream << "A call to Node-API returned error code 0x" << std::hex
+                      << propStatus << '.';
+          throw jsi::JSINativeException(errorStream.str().c_str());
+        }
+      }
+
+      // If the property is a string, update out. Otherwise ignore it.
+      napi_valuetype valueType;
+      CHECK_NAPI_ELSE_CRASH(jsrApi_->napi_typeof(env_, value, &valueType));
+      if (valueType == napi_string) {
+        out = stringToStdString(value);
+      }
+    };
+
+    getStrProp("message", msg);
+    getStrProp("stack", stack);
+  }
+
+  // Use the constructor of jsi::JSError that cannot run additional
+  // JS, since that may then result in additional exceptions and infinite
+  // recursion.
+  throw jsi::JSError(std::move(jsiJSError), msg, stack);
 }
 
 // Throws jsi::JSINativeException with a message.
