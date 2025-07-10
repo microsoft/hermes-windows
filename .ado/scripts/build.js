@@ -608,7 +608,7 @@ function getVCVarsAllBat() {
   }
 
   const versionJson = JSON.parse(
-    execSync(`"${vsWhere}" -format json -version 17 -prerelease`).toString()
+    execSync(`"${vsWhere}" -format json -version 17`).toString()
   );
   if (versionJson.length > 1) {
     console.warn("More than one VS install detected, picking the first one");
