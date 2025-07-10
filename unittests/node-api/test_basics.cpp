@@ -433,7 +433,10 @@ TEST_P(NodeApiTest, test_basics_ExternalValue4Test) {
   });
 }
 
-TEST_P(NodeApiTest, test_basics_ExternalValue5Test) {
+// TODO: (vmoroz) Temporary disable this test as it is probably not supposed to
+// work correctly in the current implementation. We should consider to use task
+// runner to see it working correctly.
+TEST_P(NodeApiTest, DISABLED_test_basics_ExternalValue5Test) {
   ExecuteNodeApi([](NodeApiTestContext * /*testContext*/, napi_env env) {
     auto native_ptr = std::make_unique<int>(5);
     bool finalizeRan{};

@@ -49,15 +49,16 @@ set(HERMES_ENABLE_EH_RTTI ON)
 # we need to set this one.
 set(LLVM_ENABLE_RTTI ON)
 
+if (MSVC)
+  # Enable exception handling
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
 
-# Enable exeption
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
+  # Enable RTTI
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR")
 
-# Enable RTTI
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR")
-
-# Generate PDBs
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi")
+  # Generate PDBs
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi")
+endif()
 
 add_hermes_unittest(NodeApiTests ${NodeApiTests} LINK_LIBS hermesNodeApi)
 target_link_libraries(NodeApiTests hermesNodeApi libshared)

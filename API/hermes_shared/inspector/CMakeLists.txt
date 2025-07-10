@@ -137,27 +137,29 @@ target_include_directories(hermesinspector PUBLIC
   ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
   ${REACT_NATIVE_SOURCE_72}/ReactCommon)
 
-# Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
-set(compile_flags " /await ")
+if (MSVC)
+  # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
+  set(compile_flags " /await ")
 
-# Assuming inspector don't use exceptions
-set(compile_flags "${compile_flags} /EHs-c-")
+  # Assuming inspector don't use exceptions
+  set(compile_flags "${compile_flags} /EHs-c-")
 
-# inspector use rtti
-set(compile_flags "${compile_flags} /GR")
+  # inspector use rtti
+  set(compile_flags "${compile_flags} /GR")
 
-# Generate PDBs
-set(compile_flags "${compile_flags} /Zi")
+  # Generate PDBs
+  set(compile_flags "${compile_flags} /Zi")
 
-set(link_flags_debug "/DEBUG")
-set(link_flags_release "/DEBUG;/OPT:REF;/OPT:ICF;/INCREMENTAL:NO")
-if(CMAKE_VS_PLATFORM_NAME MATCHES "^(x64|x86|Win32)$")
-  # CETCOMPAT is not supported by ARM or ARM64
-  list(APPEND link_flags_release "/CETCOMPAT")
+  set(link_flags_debug "/DEBUG")
+  set(link_flags_release "/DEBUG;/OPT:REF;/OPT:ICF;/INCREMENTAL:NO")
+  if(CMAKE_VS_PLATFORM_NAME MATCHES "^(x64|x86|Win32)$")
+    # CETCOMPAT is not supported by ARM or ARM64
+    list(APPEND link_flags_release "/CETCOMPAT")
+  endif()
+
+  set_target_properties(hermesinspector PROPERTIES
+    COMPILE_FLAGS "${compile_flags}"
+    LINK_OPTIONS "$<IF:$<CONFIG:Debug>,${link_flags_debug},${link_flags_release}>"
+    OUTPUT_NAME hermesinspector
+  )
 endif()
-
-set_target_properties(hermesinspector PROPERTIES
-  COMPILE_FLAGS "${compile_flags}"
-  LINK_OPTIONS "$<IF:$<CONFIG:Debug>,${link_flags_debug},${link_flags_release}>"
-  OUTPUT_NAME hermesinspector
-)

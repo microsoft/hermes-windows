@@ -35,6 +35,7 @@ const options = {
   "clean-tools": { type: "boolean", default: false },
   "clean-pkg": { type: "boolean", default: false },
   uwp: { type: "boolean", default: false },
+  msvc: { type: "boolean", default: false },
   platform: {
     type: "string",
     multiple: true,
@@ -95,6 +96,9 @@ Options:
   })
   --uwp                   Should we build for UWP or Win32? (default: ${
     options.uwp.default
+  })
+  --msvc                  Use MSVC compiler instead of Clang (default: ${
+    options.msvc.default
   })
   --platform              Target platform(s) (default: ${options.platform.default.join(
     ", "
@@ -165,6 +169,7 @@ function main() {
   console.log(`          clean-tools: ${args["clean-tools"]}`);
   console.log(`            clean-pkg: ${args["clean-pkg"]}`);
   console.log(`                  uwp: ${args.uwp}`);
+  console.log(`                 msvc: ${args.msvc}`);
   console.log(`             platform: ${args.platform}`);
   console.log(`        configuration: ${args.configuration}`);
   console.log(`          output-path: ${args["output-path"]}`);
@@ -299,6 +304,12 @@ function getAppPlatformName(isUwp) {
   return isUwp ? "uwp" : "win32";
 }
 
+function getCMakePreset({ msvc, configuration }) {
+  const compiler = msvc ? "msvc" : "clang";
+  const configType = configuration === "release" ? "release" : "debug";
+  return `ninja-${compiler}-${configType}`;
+}
+
 function cleanAll() {
   deleteDir(args["output-path"]);
 }
@@ -317,21 +328,50 @@ function cleanPkg(runParams) {
 }
 
 function cmakeConfigure(buildParams) {
-  const { isUwp, platform, configuration, toolsPath } = buildParams;
+  const { isUwp, platform, configuration, toolsPath, forceNativeBuild } =
+    buildParams;
 
   cmakeBuildHermesCompiler(buildParams);
 
-  const genArgs = ["-G Ninja"];
+  const preset = getCMakePreset({ msvc: args.msvc, configuration });
+  console.log(`Using CMake preset: ${preset}`);
 
-  const cmakeConfiguration =
-    configuration === "release" ? "Release" : "FastDebug";
-  genArgs.push(`-DCMAKE_BUILD_TYPE=${cmakeConfiguration}`);
-  genArgs.push("-DHERMESVM_PLATFORM_LOGGING=ON");
+  const genArgs = [`--preset=${preset}`, `-B\"${buildParams.buildPath}\"`];
+
+  // Add cross-compilation target for non-x64 platforms when using Clang
+  if (platform !== "x64" && !args.msvc) {
+    let targetTriple = "";
+    if (platform === "x86") {
+      targetTriple = "i686-pc-windows-msvc";
+    } else if (platform === "arm64") {
+      targetTriple = "aarch64-pc-windows-msvc";
+    } else if (platform === "arm64ec") {
+      targetTriple = "aarch64ec-pc-windows-msvc";
+    }
+
+    if (targetTriple) {
+      // Append to existing preset flags rather than replacing them.
+      // The entire flag string must be quoted to be treated as a single argument.
+      genArgs.push(
+        `-DCMAKE_C_FLAGS="-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview -target ${targetTriple}"`
+      );
+      genArgs.push(
+        `-DCMAKE_CXX_FLAGS="-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview -target ${targetTriple}"`
+      );
+    }
+  }
+
+  // Force native build to prevent CMAKE_CROSSCOMPILING=TRUE
+  // Apply for tools build (forceNativeBuild=true) or for x64 native builds
+  if (forceNativeBuild || platform === "x64") {
+    genArgs.push("-DHERMES_FORCE_NATIVE_BUILD=ON");
+  }
 
   if (args["file-version"] && args["file-version"] !== "0.0.0.0") {
     genArgs.push(`-DHERMES_FILE_VERSION=${args["file-version"]}`);
   }
 
+  genArgs.push("-DHERMESVM_PLATFORM_LOGGING=ON");
   genArgs.push("-DHERMES_ENABLE_DEBUGGER=ON");
   genArgs.push("-DHERMES_ENABLE_INTL=ON");
 
@@ -402,6 +442,7 @@ function cmakeBuildHermesCompiler(buildParams) {
       buildPath: toolsPath,
       targets: "hermesc",
       onBuildCompleted: undefined,
+      forceNativeBuild: true, // Flag to indicate this is a native tools build
     });
   }
 }

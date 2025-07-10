@@ -40,7 +40,7 @@ target_include_directories(libshared PUBLIC
   ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
   ${REACT_NATIVE_SOURCE_72}/ReactCommon)
 
-if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
+if(MSVC)
   # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
   set(compile_flags "")
 
