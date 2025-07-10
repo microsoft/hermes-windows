@@ -383,13 +383,7 @@ function cmakeTest(buildParams) {
   }
 
   // Run tests via check-hermes target
-  try {
-    runCMakeCommand("cmake --build . --target check-hermes --config Release", buildParams);
-    console.log("Hermes test suite completed successfully");
-  } catch (error) {
-    console.error("Hermes tests failed:", error.message);
-    throw error;
-  }
+  runCMakeCommand("cmake --build . --target check-hermes --config Release", buildParams);
 }
 
 function cmakeBuildHermesCompiler(buildParams) {
