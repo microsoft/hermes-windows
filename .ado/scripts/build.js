@@ -362,8 +362,8 @@ function cmakeConfigure(buildParams) {
   }
 
   // Force native build to prevent CMAKE_CROSSCOMPILING=TRUE
-  // Apply for tools build (forceNativeBuild=true) or for x64 native builds
-  if (forceNativeBuild || platform === "x64") {
+  // Apply for tools build (forceNativeBuild=true), x64 native builds, and x86 builds
+  if (forceNativeBuild || platform === "x64" || platform === "x86") {
     genArgs.push("-DHERMES_FORCE_NATIVE_BUILD=ON");
   }
 
@@ -473,8 +473,9 @@ function runCMakeCommand(command, buildParams) {
 }
 
 function isCrossPlatformBuild({ isUwp, platform }) {
-  // Return true if we either build for UWP and ARM64/ARM64EC.
-  // In these cases we must build x64 tools and cannot run unit tests.
+  // Return true if we either build for UWP or ARM64/ARM64EC.
+  // x86 can run natively on x64 machines, so it's not considered cross-platform.
+  // In true cross-platform cases we must build x64 tools and cannot run unit tests.
   return isUwp || platform.startsWith("arm64");
 }
 
