@@ -99,7 +99,7 @@ Options:
   })
   --msvc                  Use MSVC compiler instead of Clang (default: ${
     options.msvc.default
-  })
+  }) [Note: ARM64EC temporarily uses MSVC due to Clang 19.x issue]
   --platform              Target platform(s) (default: ${options.platform.default.join(
     ", "
   )}) [valid values: ${options.platform.validSet.join(", ")}]
@@ -304,8 +304,11 @@ function getAppPlatformName(isUwp) {
   return isUwp ? "uwp" : "win32";
 }
 
-function getCMakePreset({ msvc, configuration }) {
-  const compiler = msvc ? "msvc" : "clang";
+function getCMakePreset({ msvc, configuration, platform }) {
+  // Force MSVC for ARM64EC due to Clang 19.x linker issues (LLVM #113658)
+  // This will be reverted when Clang 20 is available
+  const usemsvc = msvc || platform === "arm64ec";
+  const compiler = usemsvc ? "msvc" : "clang";
   const configType = configuration === "release" ? "release" : "debug";
   return `ninja-${compiler}-${configType}`;
 }
@@ -333,20 +336,20 @@ function cmakeConfigure(buildParams) {
 
   cmakeBuildHermesCompiler(buildParams);
 
-  const preset = getCMakePreset({ msvc: args.msvc, configuration });
+  const preset = getCMakePreset({ msvc: args.msvc, configuration, platform });
   console.log(`Using CMake preset: ${preset}`);
 
   const genArgs = [`--preset=${preset}`, `-B\"${buildParams.buildPath}\"`];
 
   // Add cross-compilation target for non-x64 platforms when using Clang
-  if (platform !== "x64" && !args.msvc) {
+  // Note: ARM64EC is temporarily excluded due to Clang 19.x linker issues (LLVM #113658)
+  // This will be re-enabled when Clang 20 is available
+  if (platform !== "x64" && !args.msvc && platform !== "arm64ec") {
     let targetTriple = "";
     if (platform === "x86") {
       targetTriple = "i686-pc-windows-msvc";
     } else if (platform === "arm64") {
       targetTriple = "aarch64-pc-windows-msvc";
-    } else if (platform === "arm64ec") {
-      targetTriple = "aarch64ec-pc-windows-msvc";
     }
 
     if (targetTriple) {
@@ -387,7 +390,8 @@ function cmakeConfigure(buildParams) {
     );
     
     // Add UWP-specific linker flags when using Clang
-    if (!args.msvc) {
+    // ARM64EC uses MSVC due to Clang 19.x linker issues (LLVM #113658)
+    if (!args.msvc && platform !== "arm64ec") {
       genArgs.push('-DCMAKE_EXE_LINKER_FLAGS="-Wl,/DEBUG:FULL -Wl,/APPCONTAINER -lwindowsapp"');
       genArgs.push('-DCMAKE_SHARED_LINKER_FLAGS="-Wl,/DEBUG:FULL -Wl,/APPCONTAINER -lwindowsapp"');
     }
