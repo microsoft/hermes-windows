@@ -385,6 +385,12 @@ function cmakeConfigure(buildParams) {
     genArgs.push(
       `-DIMPORT_HERMESC=\"${path.join(toolsPath, "ImportHermesc.cmake")}\"`
     );
+    
+    // Add UWP-specific linker flags when using Clang
+    if (!args.msvc) {
+      genArgs.push('-DCMAKE_EXE_LINKER_FLAGS="-Wl,/DEBUG:FULL -Wl,/APPCONTAINER -lwindowsapp"');
+      genArgs.push('-DCMAKE_SHARED_LINKER_FLAGS="-Wl,/DEBUG:FULL -Wl,/APPCONTAINER -lwindowsapp"');
+    }
   } else if (platform === "arm64" || platform === "arm64ec") {
     genArgs.push("-DHERMES_MSVC_ARM64=ON");
     genArgs.push(
