@@ -44,12 +44,20 @@ using namespace std::string_view_literals;
 // We use macros to report errors.
 // Macros provide more flexibility to show assert and provide failure context.
 
+#if defined(__clang__) || defined(__GNUC__)
+#define CRASH_NOW() __builtin_trap()
+#elif defined(_MSC_VER)
+#define CRASH_NOW() __fastfail(/*FAST_FAIL_FATAL_APP_EXIT*/ 7)
+#else
+#define CRASH_NOW() *((volatile int *)0) = 1
+#endif
+
 // Check condition and crash process if it fails.
 #define CHECK_ELSE_CRASH(condition, message)               \
   do {                                                     \
     if (!(condition)) {                                    \
       assert(false && "Failed: " #condition && (message)); \
-      *((int *)0) = 1;                                     \
+      CRASH_NOW();                                         \
     }                                                      \
   } while (false)
 
@@ -286,7 +294,7 @@ class NodeApiJsiRuntime : public jsi::Runtime {
   jsi::Array createArray(size_t length) override;
 #if JSI_VERSION >= 9
   jsi::ArrayBuffer createArrayBuffer(
-      std::shared_ptr<jsi::MutableBuffer> buffer);
+      std::shared_ptr<jsi::MutableBuffer> buffer) override;
 #endif
   size_t size(const jsi::Array &arr) override;
   size_t size(const jsi::ArrayBuffer &arrBuf) override;
@@ -1628,8 +1636,8 @@ jsi::Object NodeApiJsiRuntime::createObject(
   // access to the hostObject's get, set, and getPropertyNames methods. There is
   // a special symbol property ID, 'hostObjectSymbol', used to access the
   // hostObjectWrapper from the Proxy.
-  napi_value hostObjectHolder =
-      createExternalObject(std::make_unique<std::shared_ptr<jsi::HostObject>>(
+  napi_value hostObjectHolder = createExternalObject(
+      std::make_unique<std::shared_ptr<jsi::HostObject>>(
           std::move(hostObject)));
   napi_value obj = createNodeApiObject();
   setProperty(
@@ -2525,7 +2533,8 @@ void NodeApiJsiRuntime::rewriteErrorMessage(napi_value jsError) const {
   } else if (typeOf(message) == napi_string) {
     // JSI unit tests expect V8- or JSC-like messages for the stack overflow.
     std::string messageStr = stringToStdString(message);
-    if (messageStr == "Out of stack space" ||  messageStr.find("Maximum call stack")  != std::string::npos) {
+    if (messageStr == "Out of stack space" ||
+        messageStr.find("Maximum call stack") != std::string::npos) {
       setProperty(
           jsError,
           getNodeApiValue(propertyId_.message),
@@ -2652,7 +2661,7 @@ napi_value NodeApiJsiRuntime::getBoolean(bool value) const {
 
 // Gets value of the Boolean napi_value.
 bool NodeApiJsiRuntime::getValueBool(napi_value value) const {
-  bool result{nullptr};
+  bool result{false};
   CHECK_NAPI(jsrApi_->napi_get_value_bool(env_, value, &result));
   return result;
 }
@@ -2906,13 +2915,14 @@ void NodeApiJsiRuntime::setElement(
     napi_callback_info info) noexcept {
   HostFunctionWrapper *hostFuncWrapper{};
   size_t argc{};
-  CHECK_NAPI_ELSE_CRASH(JSRuntimeApi::current()->napi_get_cb_info(
-      env,
-      info,
-      &argc,
-      nullptr,
-      nullptr,
-      reinterpret_cast<void **>(&hostFuncWrapper)));
+  CHECK_NAPI_ELSE_CRASH(
+      JSRuntimeApi::current()->napi_get_cb_info(
+          env,
+          info,
+          &argc,
+          nullptr,
+          nullptr,
+          reinterpret_cast<void **>(&hostFuncWrapper)));
   CHECK_ELSE_CRASH(hostFuncWrapper, "Cannot find the host function");
   NodeApiJsiRuntime &runtime = hostFuncWrapper->runtime();
   NodeApiPointerValueScope scope{runtime};
@@ -2921,8 +2931,9 @@ void NodeApiJsiRuntime::setElement(
       [&env, &info, &argc, &runtime, &hostFuncWrapper]() {
         SmallBuffer<napi_value, MaxStackArgCount> napiArgs(argc);
         napi_value thisArg{};
-        CHECK_NAPI_ELSE_CRASH(JSRuntimeApi::current()->napi_get_cb_info(
-            env, info, &argc, napiArgs.data(), &thisArg, nullptr));
+        CHECK_NAPI_ELSE_CRASH(
+            JSRuntimeApi::current()->napi_get_cb_info(
+                env, info, &argc, napiArgs.data(), &thisArg, nullptr));
         CHECK_ELSE_CRASH(napiArgs.size() == argc, "Wrong argument count");
         const JsiValueView jsiThisArg{&runtime, thisArg};
         JsiValueViewArgs jsiArgs(
@@ -3044,13 +3055,14 @@ void NodeApiJsiRuntime::setProxyTrap(
     NodeApiJsiRuntime *runtime{};
     napi_value args[argCount]{};
     size_t actualArgCount{argCount};
-    CHECK_NAPI_ELSE_CRASH(JSRuntimeApi::current()->napi_get_cb_info(
-        env,
-        info,
-        &actualArgCount,
-        args,
-        nullptr,
-        reinterpret_cast<void **>(&runtime)));
+    CHECK_NAPI_ELSE_CRASH(
+        JSRuntimeApi::current()->napi_get_cb_info(
+            env,
+            info,
+            &actualArgCount,
+            args,
+            nullptr,
+            reinterpret_cast<void **>(&runtime)));
     CHECK_ELSE_CRASH(
         actualArgCount == argCount, "proxy trap requires argCount arguments.");
     NodeApiPointerValueScope scope{*runtime};

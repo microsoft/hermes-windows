@@ -58,6 +58,12 @@ project(Hermes
         VERSION 0.12.0
         LANGUAGES C CXX)
 
+# Handle HERMES_FORCE_NATIVE_BUILD option to override cross-compilation detection
+option(HERMES_FORCE_NATIVE_BUILD "Force CMake to treat this as a native build (not cross-compilation)" OFF)
+if(HERMES_FORCE_NATIVE_BUILD)
+  set(CMAKE_CROSSCOMPILING FALSE)
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
 
 set(LLVH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/llvh)

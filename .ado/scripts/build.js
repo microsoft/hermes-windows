@@ -35,6 +35,7 @@ const options = {
   "clean-tools": { type: "boolean", default: false },
   "clean-pkg": { type: "boolean", default: false },
   uwp: { type: "boolean", default: false },
+  msvc: { type: "boolean", default: false },
   platform: {
     type: "string",
     multiple: true,
@@ -96,6 +97,9 @@ Options:
   --uwp                   Should we build for UWP or Win32? (default: ${
     options.uwp.default
   })
+  --msvc                  Use MSVC compiler instead of Clang (default: ${
+    options.msvc.default
+  }) [Note: ARM64EC temporarily uses MSVC due to Clang 19.x issue]
   --platform              Target platform(s) (default: ${options.platform.default.join(
     ", "
   )}) [valid values: ${options.platform.validSet.join(", ")}]
@@ -165,6 +169,7 @@ function main() {
   console.log(`          clean-tools: ${args["clean-tools"]}`);
   console.log(`            clean-pkg: ${args["clean-pkg"]}`);
   console.log(`                  uwp: ${args.uwp}`);
+  console.log(`                 msvc: ${args.msvc}`);
   console.log(`             platform: ${args.platform}`);
   console.log(`        configuration: ${args.configuration}`);
   console.log(`          output-path: ${args["output-path"]}`);
@@ -299,6 +304,15 @@ function getAppPlatformName(isUwp) {
   return isUwp ? "uwp" : "win32";
 }
 
+function getCMakePreset({ msvc, configuration, platform }) {
+  // Force MSVC for ARM64EC due to Clang 19.x linker issues (LLVM #113658)
+  // This will be reverted when Clang 20 is available
+  const usemsvc = msvc || platform === "arm64ec";
+  const compiler = usemsvc ? "msvc" : "clang";
+  const configType = configuration === "release" ? "release" : "debug";
+  return `ninja-${compiler}-${configType}`;
+}
+
 function cleanAll() {
   deleteDir(args["output-path"]);
 }
@@ -317,21 +331,50 @@ function cleanPkg(runParams) {
 }
 
 function cmakeConfigure(buildParams) {
-  const { isUwp, platform, configuration, toolsPath } = buildParams;
+  const { isUwp, platform, configuration, toolsPath, forceNativeBuild } =
+    buildParams;
 
   cmakeBuildHermesCompiler(buildParams);
 
-  const genArgs = ["-G Ninja"];
+  const preset = getCMakePreset({ msvc: args.msvc, configuration, platform });
+  console.log(`Using CMake preset: ${preset}`);
 
-  const cmakeConfiguration =
-    configuration === "release" ? "Release" : "FastDebug";
-  genArgs.push(`-DCMAKE_BUILD_TYPE=${cmakeConfiguration}`);
-  genArgs.push("-DHERMESVM_PLATFORM_LOGGING=ON");
+  const genArgs = [`--preset=${preset}`, `-B\"${buildParams.buildPath}\"`];
+
+  // Add cross-compilation target for non-x64 platforms when using Clang
+  // Note: ARM64EC is temporarily excluded due to Clang 19.x linker issues (LLVM #113658)
+  // This will be re-enabled when Clang 20 is available
+  if (platform !== "x64" && !args.msvc && platform !== "arm64ec") {
+    let targetTriple = "";
+    if (platform === "x86") {
+      targetTriple = "i686-pc-windows-msvc";
+    } else if (platform === "arm64") {
+      targetTriple = "aarch64-pc-windows-msvc";
+    }
+
+    if (targetTriple) {
+      // Append to existing preset flags rather than replacing them.
+      // The entire flag string must be quoted to be treated as a single argument.
+      genArgs.push(
+        `-DCMAKE_C_FLAGS="-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview -target ${targetTriple}"`
+      );
+      genArgs.push(
+        `-DCMAKE_CXX_FLAGS="-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview -target ${targetTriple}"`
+      );
+    }
+  }
+
+  // Force native build to prevent CMAKE_CROSSCOMPILING=TRUE
+  // Apply for tools build (forceNativeBuild=true), x64 native builds, and x86 builds
+  if (forceNativeBuild || platform === "x64" || platform === "x86") {
+    genArgs.push("-DHERMES_FORCE_NATIVE_BUILD=ON");
+  }
 
   if (args["file-version"] && args["file-version"] !== "0.0.0.0") {
     genArgs.push(`-DHERMES_FILE_VERSION=${args["file-version"]}`);
   }
 
+  genArgs.push("-DHERMESVM_PLATFORM_LOGGING=ON");
   genArgs.push("-DHERMES_ENABLE_DEBUGGER=ON");
   genArgs.push("-DHERMES_ENABLE_INTL=ON");
 
@@ -345,6 +388,13 @@ function cmakeConfigure(buildParams) {
     genArgs.push(
       `-DIMPORT_HERMESC=\"${path.join(toolsPath, "ImportHermesc.cmake")}\"`
     );
+    
+    // Add UWP-specific linker flags when using Clang
+    // ARM64EC uses MSVC due to Clang 19.x linker issues (LLVM #113658)
+    if (!args.msvc && platform !== "arm64ec") {
+      genArgs.push('-DCMAKE_EXE_LINKER_FLAGS="-Wl,/DEBUG:FULL -Wl,/APPCONTAINER -lwindowsapp"');
+      genArgs.push('-DCMAKE_SHARED_LINKER_FLAGS="-Wl,/DEBUG:FULL -Wl,/APPCONTAINER -lwindowsapp"');
+    }
   } else if (platform === "arm64" || platform === "arm64ec") {
     genArgs.push("-DHERMES_MSVC_ARM64=ON");
     genArgs.push(
@@ -402,6 +452,7 @@ function cmakeBuildHermesCompiler(buildParams) {
       buildPath: toolsPath,
       targets: "hermesc",
       onBuildCompleted: undefined,
+      forceNativeBuild: true, // Flag to indicate this is a native tools build
     });
   }
 }
@@ -432,8 +483,9 @@ function runCMakeCommand(command, buildParams) {
 }
 
 function isCrossPlatformBuild({ isUwp, platform }) {
-  // Return true if we either build for UWP and ARM64/ARM64EC.
-  // In these cases we must build x64 tools and cannot run unit tests.
+  // Return true if we either build for UWP or ARM64/ARM64EC.
+  // x86 can run natively on x64 machines, so it's not considered cross-platform.
+  // In true cross-platform cases we must build x64 tools and cannot run unit tests.
   return isUwp || platform.startsWith("arm64");
 }
 
