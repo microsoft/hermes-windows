@@ -427,11 +427,13 @@ function cmakeTest(buildParams) {
     return;
   }
 
+  // Ensure build directory exists
   if (!fs.existsSync(buildParams.buildPath)) {
     cmakeBuild(buildParams);
   }
 
-  runCMakeCommand("ctest --output-on-failure", buildParams);
+  // Run tests via check-hermes target
+  runCMakeCommand("cmake --build . --target check-hermes --config Release", buildParams);
 }
 
 function cmakeBuildHermesCompiler(buildParams) {
