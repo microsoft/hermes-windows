@@ -59,7 +59,7 @@ project(Hermes
         LANGUAGES C CXX)
 
 # Handle HERMES_FORCE_NATIVE_BUILD option to override cross-compilation detection
-option(HERMES_FORCE_NATIVE_BUILD "Force CMake to treat this as a native build (not cross-compilation)" OFF)
+option(HERMES_FORCE_NATIVE_BUILD "Force CMake to treat this as a native build (not cross-compilation)" ON)
 if(HERMES_FORCE_NATIVE_BUILD)
   set(CMAKE_CROSSCOMPILING FALSE)
 endif()
@@ -339,11 +339,12 @@ if (HERMES_STATIC_LINK)
   set(BUILD_SHARED_LIBS OFF)
 endif()
 
-if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
+if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC" AND NOT WIN32)
   # Check if the linker supports deleting unused sections and ICF.
   # We can't simply CHECK_CXX_COMPILER_FLAG("-Wl,--gc-sections" ..) because CMake
   # will compile and link separately and only passes the flag during compilation.
   # TODO: Use check_linker_flag once we have CMake 3.18.
+  # Note: Skip this on Windows even with Clang, as lld-link expects MSVC-style flags
   set(OLD_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
   set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
   CHECK_CXX_COMPILER_FLAG("" HAVE_GC_SECTIONS)
@@ -371,6 +372,29 @@ if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   if(HAVE_ICF)
     add_flag_if_supported("-faddrsig" ADDRSIG)
     list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--icf=safe")
+  endif()
+elseif(WIN32 AND "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+  # For Clang on Windows, use MSVC-style linker flags with lld-link
+  # Test for Microsoft-style optimization flags
+  set(OLD_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+  
+  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,/OPT:REF")
+  CHECK_CXX_COMPILER_FLAG("" HAVE_OPT_REF)
+  
+  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,/OPT:ICF")
+  CHECK_CXX_COMPILER_FLAG("" HAVE_OPT_ICF)
+  
+  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS}")
+
+  if(HAVE_OPT_REF)
+    add_flag_if_supported("-ffunction-sections" FUNCTION_SECTIONS)
+    add_flag_if_supported("-fdata-sections" DATA_SECTIONS)
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/OPT:REF")
+  endif()
+
+  if(HAVE_OPT_ICF)
+    add_flag_if_supported("-faddrsig" ADDRSIG)
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/OPT:ICF")
   endif()
 endif()
 
@@ -674,6 +698,7 @@ if (HERMES_MSVC_CHECKED_ITERATORS)
   add_definitions(-D_ITERATOR_DEBUG_LEVEL=1)
 endif()
 
+option(HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB "Use platform Unicode WINGLOB" ON)
 if (HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB)
   add_definitions(-DUSE_PLATFORM_UNICODE_WINGLOB)
 endif()
