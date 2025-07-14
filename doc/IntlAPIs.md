@@ -3,7 +3,7 @@ id: intl
 title: Internationalization APIs
 ---
 
-This document describes the current state of the Android and iOS implementation of the [ECMAScript Internationalization API Specification](https://tc39.es/ecma402/) (ECMA-402, or `Intl`). ECMA-402 is still evolving and the latest iteration that was taken into account is [7th edition](https://402.ecma-international.org/7.0/) which was published in June 2020. Each new edition is built on top of the last one and adds new capabilities typically as,
+This document describes the current state of the Android, iOS, and Windows implementation of the [ECMAScript Internationalization API Specification](https://tc39.es/ecma402/) (ECMA-402, or `Intl`). ECMA-402 is still evolving and the latest iteration that was taken into account is [7th edition](https://402.ecma-international.org/7.0/) which was published in June 2020. Each new edition is built on top of the last one and adds new capabilities typically as,
 - New `Intl` service constructors (e.g. `Intl.Collator`, `Intl.NumberFormat` etc.) or extending existing ones by accepting more parameters
 - New functions or properties in `Intl` objects (e.g. `Intl.Collator.prototype.compare`)
 - New locale aware functions in standard Javascript object prototypes (e.g. `String.prototype.localeCompare`)
@@ -27,6 +27,7 @@ One popular implementation strategy followed by other engines, is to bundle an i
 - `Intl.DateTimeFormat`*
   - `Intl.DateTimeFormat.supportedLocalesOf`
   - `Intl.DateTimeFormat.prototype.format`
+  - `Intl.DateTimeFormat.prototype.formatToParts`
   - `Intl.DateTimeFormat.prototype.resolvedOptions`
 
 - `Intl.getCanonicalLocales`
@@ -194,3 +195,65 @@ And finally, this is the increase in the final npm package,
 | **NPM Package** | **NOINTL** | **INTL** | **DIFF** | **PERC** |
 | --- | --- | --- | --- | --- |
 | hermes | 214447973 | 219291220 | 4,843,247 | 2.26% |
+
+# Windows
+
+The Windows Intl API's are a work in progress and currently very limited in support. We'll keep track of the status of API's here as we work through them.
+
+## ECMA-402 Compliance
+### Supported
+- `Intl.DateTimeFormat`
+  - `Intl.DateTimeFormat.supportedLocalesOf`
+  - `Intl.DateTimeFormat.prototype.format`
+  - `Intl.DateTimeFormat.prototype.resolvedOptions`
+
+- `Intl.getCanonicalLocales`
+
+### Not yet supported
+
+- `Intl.DateTimeFormat`
+  - `Intl.DateTimeFormat.prototype.formatToParts`
+
+- `Intl.DateTimeFormat` properties
+   - [`dayPeriod`]
+   - [`fractionalSecondDigits`]
+   - [`formatMatcher`]
+
+- `Intl.Collator`
+  - `Intl.Collator.supportedLocalesOf`
+  - `Intl.Collator.prototype.compare`
+  - `Intl.Collator.prototype.resolvedOptions`
+
+- `Intl.NumberFormat`
+  - `Intl.NumberFormat.supportedLocalesOf`
+  - `Intl.NumberFormat.prototype.format`
+  - `Intl.NumberFormat.prototype.formatToParts`
+  - `Intl.NumberFormat.prototype.resolvedOptions`
+
+- `String.prototype`
+  - `localeCompare`
+  - `toLocaleLowerCase`
+  - `toLocaleUpperCase`
+
+- `Array.prototype`
+  - `toLocaleString`
+
+- `Number.prototype`
+  - `toLocaleString`
+
+- `Date.prototype`
+  - `toLocaleString`
+  - `toLocaleDateString`
+  - `toLocaleTimeString`
+
+- [`Intl.PluralRules`](https://tc39.es/ecma402/#pluralrules-objects)
+
+- [`Intl.RelativeTimeFormat`](https://tc39.es/ecma402/#relativetimeformat-objects)
+
+- [`Intl.DisplayNames`](https://tc39.es/proposal-intl-displaynames/#sec-intl-displaynames-constructor)
+
+- [`Intl.ListFormat`](https://tc39.es/proposal-intl-list-format/#sec-intl-listformat-constructor)
+
+- [`Intl.Locale`](https://tc39.es/ecma402/#sec-intl-locale-constructor)
+
+- [`BigInt.prototype.toLocaleString`](https://tc39.es/ecma402/#sup-bigint.prototype.tolocalestring)

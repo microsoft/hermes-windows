@@ -3,6 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+include (ctest)
+
 set(HERMES_LIT_PATH "${HERMES_TOOLS_OUTPUT_DIR}/hermes-lit")
 if (CMAKE_HOST_WIN32 AND NOT CYGWIN)
   # llvm-lit needs suffix.py for multiprocess to find a main module.
@@ -96,4 +98,6 @@ function(add_unittest test_suite test_name)
   if (NOT ${test_suite_folder} STREQUAL "NOTFOUND")
     set_property(TARGET ${test_name} PROPERTY FOLDER "${test_suite_folder}")
   endif ()
+
+  add_test(NAME ${test_name} COMMAND ${test_name})
 endfunction()

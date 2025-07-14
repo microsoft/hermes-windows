@@ -5,37 +5,89 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// This file includes shared code between Apple and ICU implementation of
-// Intl APIs
-#include "hermes/Platform/Intl/PlatformIntlShared.h"
+// This file includes shared code between Apple and Windows implementation of Intl APIs
 #include "hermes/Platform/Intl/PlatformIntl.h"
-#include "impl_icu/LocaleBCP47Object.h"
 
 using namespace ::hermes;
 
 namespace hermes {
 namespace platform_intl {
 
-// https://tc39.es/ecma402/#sec-intl.getcanonicallocales
-vm::CallResult<std::vector<std::u16string>> getCanonicalLocales(
+// https://402.ecma-international.org/8.0/#sec-bestavailablelocale
+std::optional<std::u16string> bestAvailableLocale(
+    const std::vector<std::u16string> &availableLocales,
+    const std::u16string &locale) {
+  // 1. Let candidate be locale
+  std::u16string candidate = locale;
+
+  // 2. Repeat
+  while (true) {
+    // a. If availableLocales contains an element equal to candidate, return
+    // candidate.
+    if (llvh::find(availableLocales, candidate) != availableLocales.end())
+      return candidate;
+    // b. Let pos be the character index of the last occurrence of "-" (U+002D)
+    // within candidate.
+    size_t pos = candidate.rfind(u'-');
+
+    // ...If that character does not occur, return undefined.
+    if (pos == std::u16string::npos)
+      return std::nullopt;
+
+    // c. If pos ≥ 2 and the character "-" occurs at index pos-2 of candidate,
+    // decrease pos by 2.
+    if (pos >= 2 && candidate[pos - 2] == '-')
+      pos -= 2;
+
+    // d. Let candidate be the substring of candidate from position 0,
+    // inclusive, to position pos, exclusive.
+    candidate.resize(pos);
+  }
+}
+
+// https://402.ecma-international.org/8.0/#sec-lookupsupportedlocales
+std::vector<std::u16string> lookupSupportedLocales(
+    const std::vector<std::u16string> &availableLocales,
+    const std::vector<std::u16string> &requestedLocales) {
+  // 1. Let subset be a new empty List.
+  std::vector<std::u16string> subset;
+  // 2. For each element locale of requestedLocales in List order, do
+  for (const std::u16string &locale : requestedLocales) {
+    // a. Let noExtensionsLocale be the String value that is locale with all
+    // Unicode locale extension sequences removed.
+    // We can skip this step, see the comment in lookupMatcher.
+    // b. Let availableLocale be BestAvailableLocale(availableLocales,
+    // noExtensionsLocale).
+    std::optional<std::u16string> availableLocale =
+        bestAvailableLocale(availableLocales, locale);
+    // c. If availableLocale is not undefined, append locale to the end of
+    // subset.
+    if (availableLocale) {
+      subset.push_back(locale);
+    }
+  }
+  // 3. Return subset.
+  return subset;
+}
+
+std::optional<bool> getOptionBool(
     vm::Runtime &runtime,
-    const std::vector<std::u16string> &locales) {
-  // 1. Let ll be ? CanonicalizeLocaleList(locales).
-  auto localeBcp47ObjectsRes =
-      impl_icu::LocaleBCP47Object::canonicalizeLocaleList(runtime, locales);
-  if (LLVM_UNLIKELY(localeBcp47ObjectsRes == vm::ExecutionStatus::EXCEPTION)) {
-    return vm::ExecutionStatus::EXCEPTION;
+    const Options &options,
+    const std::u16string &property,
+    std::optional<bool> fallback) {
+  //  1. Assert: Type(options) is Object.
+  //  2. Let value be ? Get(options, property).
+  auto value = options.find(property);
+  //  3. If value is undefined, return fallback.
+  if (value == options.end()) {
+    return fallback;
   }
-  // 2. Return CreateArrayFromList(ll).
-  std::vector<std::u16string> canonicalLocales;
-  for (const auto &localeBcp47Object : *localeBcp47ObjectsRes) {
-    canonicalLocales.push_back(localeBcp47Object.getCanonicalizedLocaleId());
-  }
-  return canonicalLocales;
+  //  8. Return value.
+  return value->second.getBool();
 }
 
 // Implementation of
-/// https://402.ecma-international.org/8.0/#sec-todatetimeoptions
+// https://402.ecma-international.org/8.0/#sec-todatetimeoptions
 vm::CallResult<Options> toDateTimeOptions(
     vm::Runtime &runtime,
     Options options,
@@ -118,20 +170,6 @@ vm::CallResult<Options> toDateTimeOptions(
   }
   // 13. return options
   return options;
-}
-
-/// https://402.ecma-international.org/8.0/#sec-case-sensitivity-and-case-mapping
-std::u16string toASCIIUppercase(std::u16string_view tz) {
-  std::u16string result;
-  std::uint8_t offset = 'a' - 'A';
-  for (char16_t c16 : tz) {
-    if (c16 >= 'a' && c16 <= 'z') {
-      result.push_back((char)c16 - offset);
-    } else {
-      result.push_back(c16);
-    }
-  }
-  return result;
 }
 
 } // namespace platform_intl

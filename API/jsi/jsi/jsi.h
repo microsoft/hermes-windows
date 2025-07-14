@@ -15,6 +15,40 @@
 #include <string>
 #include <vector>
 
+// JSI version defines set of features available in the API.
+// Each significant API change must be under a new version.
+// The JSI_VERSION can be provided as a parameter to compiler
+// or in the optional "jsi_version.h" file.
+
+#ifndef JSI_VERSION
+#if defined(__has_include) && __has_include(<jsi/jsi-version.h>)
+#include <jsi/jsi-version.h>
+#endif
+#endif
+
+#ifndef JSI_VERSION
+// Use the latest version by default
+#define JSI_VERSION 19
+#endif
+
+#if JSI_VERSION >= 3
+#define JSI_NO_CONST_3
+#else
+#define JSI_NO_CONST_3 const
+#endif
+
+#if JSI_VERSION >= 10
+#define JSI_CONST_10 const
+#else
+#define JSI_CONST_10
+#endif
+
+#if JSI_VERSION >= 15
+#define JSI_NOEXCEPT_15 noexcept
+#else
+#define JSI_NOEXCEPT_15
+#endif
+
 #ifndef JSI_EXPORT
 #ifdef _MSC_VER
 #ifdef CREATE_SHARED_LIBRARY
@@ -56,6 +90,7 @@ class JSI_EXPORT StringBuffer : public Buffer {
   std::string s_;
 };
 
+#if JSI_VERSION >= 9
 /// Base class for buffers of data that need to be passed to the runtime. The
 /// result of size() and data() must not change after construction. However, the
 /// region pointed to by data() may be modified by the user or the runtime. The
@@ -67,6 +102,7 @@ class JSI_EXPORT MutableBuffer {
   virtual size_t size() const = 0;
   virtual uint8_t* data() = 0;
 };
+#endif
 
 /// PreparedJavaScript is a base class representing JavaScript which is in a
 /// form optimized for execution, in a runtime-specific way. Construct one via
@@ -84,7 +120,9 @@ class Runtime;
 class Pointer;
 class PropNameID;
 class Symbol;
+#if JSI_VERSION >= 6
 class BigInt;
+#endif
 class String;
 class Object;
 class WeakObject;
@@ -144,12 +182,14 @@ class JSI_EXPORT HostObject {
   virtual std::vector<PropNameID> getPropertyNames(Runtime& rt);
 };
 
+#if JSI_VERSION >= 7
 /// Native state (and destructor) that can be attached to any JS object
 /// using setNativeState.
 class JSI_EXPORT NativeState {
  public:
   virtual ~NativeState();
 };
+#endif
 
 /// Represents a JS runtime.  Movable, but not copyable.  Note that
 /// this object may not be thread-aware, but cannot be used safely from
@@ -209,13 +249,16 @@ class JSI_EXPORT Runtime {
   virtual Value evaluatePreparedJavaScript(
       const std::shared_ptr<const PreparedJavaScript>& js) = 0;
 
+#if JSI_VERSION >= 12
   /// Queues a microtask in the JavaScript VM internal Microtask (a.k.a. Job in
   /// ECMA262) queue, to be executed when the host drains microtasks in
   /// its event loop implementation.
   ///
   /// \param callback a function to be executed as a microtask.
   virtual void queueMicrotask(const jsi::Function& callback) = 0;
+#endif
 
+#if JSI_VERSION >= 4
   /// Drain the JavaScript VM internal Microtask (a.k.a. Job in ECMA262) queue.
   ///
   /// \param maxMicrotasksHint a hint to tell an implementation that it should
@@ -244,6 +287,7 @@ class JSI_EXPORT Runtime {
   /// the time this is written, An implementation may swallow exceptions (JSC),
   /// may not pause (V8), and may not support bounded executions.
   virtual bool drainMicrotasks(int maxMicrotasksHint = -1) = 0;
+#endif
 
   /// \return the global object
   virtual Object global() = 0;
@@ -271,7 +315,9 @@ class JSI_EXPORT Runtime {
   friend class Pointer;
   friend class PropNameID;
   friend class Symbol;
+#if JSI_VERSION >= 6
   friend class BigInt;
+#endif
   friend class String;
   friend class Object;
   friend class WeakObject;
@@ -288,14 +334,16 @@ class JSI_EXPORT Runtime {
   // rvalue arguments/methods would also reduce the number of clones.
 
   struct PointerValue {
-    virtual void invalidate() noexcept = 0;
+    virtual void invalidate() JSI_NOEXCEPT_15 = 0;
 
    protected:
     virtual ~PointerValue() = default;
   };
 
   virtual PointerValue* cloneSymbol(const Runtime::PointerValue* pv) = 0;
+#if JSI_VERSION >= 6
   virtual PointerValue* cloneBigInt(const Runtime::PointerValue* pv) = 0;
+#endif
   virtual PointerValue* cloneString(const Runtime::PointerValue* pv) = 0;
   virtual PointerValue* cloneObject(const Runtime::PointerValue* pv) = 0;
   virtual PointerValue* clonePropNameID(const Runtime::PointerValue* pv) = 0;
@@ -306,59 +354,77 @@ class JSI_EXPORT Runtime {
   virtual PropNameID createPropNameIDFromUtf8(
       const uint8_t* utf8,
       size_t length) = 0;
+#if JSI_VERSION >= 19
   virtual PropNameID createPropNameIDFromUtf16(
       const char16_t* utf16,
       size_t length);
+#endif
   virtual PropNameID createPropNameIDFromString(const String& str) = 0;
+#if JSI_VERSION >= 5
   virtual PropNameID createPropNameIDFromSymbol(const Symbol& sym) = 0;
+#endif
   virtual std::string utf8(const PropNameID&) = 0;
   virtual bool compare(const PropNameID&, const PropNameID&) = 0;
 
   virtual std::string symbolToString(const Symbol&) = 0;
 
+#if JSI_VERSION >= 8
   virtual BigInt createBigIntFromInt64(int64_t) = 0;
   virtual BigInt createBigIntFromUint64(uint64_t) = 0;
   virtual bool bigintIsInt64(const BigInt&) = 0;
   virtual bool bigintIsUint64(const BigInt&) = 0;
   virtual uint64_t truncate(const BigInt&) = 0;
   virtual String bigintToString(const BigInt&, int) = 0;
+#endif
 
   virtual String createStringFromAscii(const char* str, size_t length) = 0;
   virtual String createStringFromUtf8(const uint8_t* utf8, size_t length) = 0;
+#if JSI_VERSION >= 19
   virtual String createStringFromUtf16(const char16_t* utf16, size_t length);
+#endif
   virtual std::string utf8(const String&) = 0;
 
   // \return a \c Value created from a utf8-encoded JSON string. The default
   // implementation creates a \c String and invokes JSON.parse.
+#if JSI_VERSION >= 2
   virtual Value createValueFromJsonUtf8(const uint8_t* json, size_t length);
+#endif
 
   virtual Object createObject() = 0;
   virtual Object createObject(std::shared_ptr<HostObject> ho) = 0;
   virtual std::shared_ptr<HostObject> getHostObject(const jsi::Object&) = 0;
   virtual HostFunctionType& getHostFunction(const jsi::Function&) = 0;
 
+#if JSI_VERSION >= 18
   // Creates a new Object with the custom prototype
   virtual Object createObjectWithPrototype(const Value& prototype);
+#endif
 
+#if JSI_VERSION >= 7
   virtual bool hasNativeState(const jsi::Object&) = 0;
   virtual std::shared_ptr<NativeState> getNativeState(const jsi::Object&) = 0;
   virtual void setNativeState(
       const jsi::Object&,
       std::shared_ptr<NativeState> state) = 0;
+#endif
 
+#if JSI_VERSION >= 17
   virtual void setPrototypeOf(const Object& object, const Value& prototype);
   virtual Value getPrototypeOf(const Object& object);
+#endif
 
   virtual Value getProperty(const Object&, const PropNameID& name) = 0;
   virtual Value getProperty(const Object&, const String& name) = 0;
   virtual bool hasProperty(const Object&, const PropNameID& name) = 0;
   virtual bool hasProperty(const Object&, const String& name) = 0;
   virtual void setPropertyValue(
-      const Object&,
+      JSI_CONST_10 Object&,
       const PropNameID& name,
       const Value& value) = 0;
-  virtual void
-  setPropertyValue(const Object&, const String& name, const Value& value) = 0;
+  virtual void setPropertyValue(
+      JSI_CONST_10 Object&,
+      const String& name,
+      const Value& value) = 0;
 
   virtual bool isArray(const Object&) const = 0;
   virtual bool isArrayBuffer(const Object&) const = 0;
@@ -368,17 +434,19 @@ class JSI_EXPORT Runtime {
   virtual Array getPropertyNames(const Object&) = 0;
 
   virtual WeakObject createWeakObject(const Object&) = 0;
-  virtual Value lockWeakObject(const WeakObject&) = 0;
+  virtual Value lockWeakObject(JSI_NO_CONST_3 JSI_CONST_10 WeakObject&) = 0;
 
   virtual Array createArray(size_t length) = 0;
+#if JSI_VERSION >= 9
   virtual ArrayBuffer createArrayBuffer(
       std::shared_ptr<MutableBuffer> buffer) = 0;
+#endif
   virtual size_t size(const Array&) = 0;
   virtual size_t size(const ArrayBuffer&) = 0;
   virtual uint8_t* data(const ArrayBuffer&) = 0;
   virtual Value getValueAtIndex(const Array&, size_t i) = 0;
   virtual void
-  setValueAtIndexImpl(const Array&, size_t i, const Value& value) = 0;
+  setValueAtIndexImpl(JSI_CONST_10 Array&, size_t i, const Value& value) = 0;
 
   virtual Function createFunctionFromHostFunction(
       const PropNameID& name,
@@ -398,20 +466,27 @@ class JSI_EXPORT Runtime {
   virtual void popScope(ScopeState*);
 
   virtual bool strictEquals(const Symbol& a, const Symbol& b) const = 0;
+#if JSI_VERSION >= 6
   virtual bool strictEquals(const BigInt& a, const BigInt& b) const = 0;
+#endif
   virtual bool strictEquals(const String& a, const String& b) const = 0;
   virtual bool strictEquals(const Object& a, const Object& b) const = 0;
 
   virtual bool instanceOf(const Object& o, const Function& f) = 0;
 
+#if JSI_VERSION >= 11
   /// See Object::setExternalMemoryPressure.
   virtual void setExternalMemoryPressure(
       const jsi::Object& obj,
       size_t amount) = 0;
+#endif
 
+#if JSI_VERSION >= 14
   virtual std::u16string utf16(const String& str);
   virtual std::u16string utf16(const PropNameID& sym);
+#endif
 
+#if JSI_VERSION >= 16
   /// Invokes the provided callback \p cb with the String content in \p str.
   /// The callback must take in three arguments: bool ascii, const void* data,
   /// and size_t num, respectively. \p ascii indicates whether the \p data
@@ -439,12 +514,15 @@ class JSI_EXPORT Runtime {
       const jsi::PropNameID& sym,
       void* ctx,
       void (*cb)(void* ctx, bool ascii, const void* data, size_t num));
+#endif
 
   // These exist so derived classes can access the private parts of
   // Value, Symbol, String, and Object, which are all friends of Runtime.
   template <typename T>
   static T make(PointerValue* pv);
+#if JSI_VERSION >= 3
   static PointerValue* getPointerValue(Pointer& pointer);
+#endif
   static const PointerValue* getPointerValue(const Pointer& pointer);
   static const PointerValue* getPointerValue(const Value& value);
 
@@ -456,7 +534,7 @@ class JSI_EXPORT Runtime {
 // Base class for pointer-storing types.
 class JSI_EXPORT Pointer {
  protected:
-  explicit Pointer(Pointer&& other) noexcept : ptr_(other.ptr_) {
+  explicit Pointer(Pointer&& other) JSI_NOEXCEPT_15 : ptr_(other.ptr_) {
     other.ptr_ = nullptr;
   }
 
@@ -466,7 +544,7 @@ class JSI_EXPORT Pointer {
     }
   }
 
-  Pointer& operator=(Pointer&& other) noexcept;
+  Pointer& operator=(Pointer&& other) JSI_NOEXCEPT_15;
 
   friend class Runtime;
   friend class Value;
@@ -519,6 +597,7 @@ class JSI_EXPORT PropNameID : public Pointer {
         reinterpret_cast<const uint8_t*>(utf8.data()), utf8.size());
   }
 
+#if JSI_VERSION >= 19
   /// Given a series of UTF-16 encoded code units, create a PropNameId. The
   /// input may contain unpaired surrogates, which will be interpreted as a code
   /// point of the same value.
@@ -533,16 +612,19 @@ class JSI_EXPORT PropNameID : public Pointer {
   static PropNameID forUtf16(Runtime& runtime, const std::u16string& str) {
     return runtime.createPropNameIDFromUtf16(str.data(), str.size());
   }
+#endif
 
   /// Create a PropNameID from a JS string.
   static PropNameID forString(Runtime& runtime, const jsi::String& str) {
     return runtime.createPropNameIDFromString(str);
   }
 
+#if JSI_VERSION >= 5
   /// Create a PropNameID from a JS symbol.
   static PropNameID forSymbol(Runtime& runtime, const jsi::Symbol& sym) {
     return runtime.createPropNameIDFromSymbol(sym);
   }
+#endif
 
   // Creates a vector of PropNameIDs constructed from given arguments.
   template <typename... Args>
@@ -557,11 +639,14 @@ class JSI_EXPORT PropNameID : public Pointer {
     return runtime.utf8(*this);
   }
 
+#if JSI_VERSION >= 14
   /// Copies the data in a PropNameID as utf16 into a C++ string.
   std::u16string utf16(Runtime& runtime) const {
     return runtime.utf16(*this);
   }
+#endif
 
+#if JSI_VERSION >= 16
   /// Invokes the user provided callback to process the content in PropNameId.
   /// The callback must take in three arguments: bool ascii, const void* data,
   /// and size_t num, respectively. \p ascii indicates whether the \p data
@@ -577,6 +662,7 @@ class JSI_EXPORT PropNameID : public Pointer {
           (*((CB*)ctx))(ascii, data, num);
         });
   }
+#endif
 
   static bool compare(
       Runtime& runtime,
@@ -616,6 +702,7 @@ class JSI_EXPORT Symbol : public Pointer {
   friend class Value;
 };
 
+#if JSI_VERSION >= 6
 /// Represents a JS BigInt.  Movable, not copyable.
 class JSI_EXPORT BigInt : public Pointer {
  public:
@@ -624,6 +711,7 @@ class JSI_EXPORT BigInt : public Pointer {
   BigInt(BigInt&& other) = default;
   BigInt& operator=(BigInt&& other) = default;
 
+#if JSI_VERSION >= 8
   /// Create a BigInt representing the signed 64-bit \p value.
   static BigInt fromInt64(Runtime& runtime, int64_t value) {
     return runtime.createBigIntFromInt64(value);
@@ -670,10 +758,12 @@ class JSI_EXPORT BigInt : public Pointer {
   /// \returns this BigInt converted to a String in base \p radix. Throws a
   /// JSIException if radix is not in the [2, 36] range.
   inline String toString(Runtime& runtime, int radix = 10) const;
+#endif
 
   friend class Runtime;
   friend class Value;
 };
+#endif
 
 /// Represents a JS String.  Movable, not copyable.
 class JSI_EXPORT String : public Pointer {
@@ -718,6 +808,7 @@ class JSI_EXPORT String : public Pointer {
         reinterpret_cast<const uint8_t*>(utf8.data()), utf8.length());
   }
 
+#if JSI_VERSION >= 19
   /// Given a series of UTF-16 encoded code units, create a JS String. The input
   /// may contain unpaired surrogates, which will be interpreted as a code point
   /// of the same value.
@@ -732,6 +823,7 @@ class JSI_EXPORT String : public Pointer {
   static String createFromUtf16(Runtime& runtime, const std::u16string& utf16) {
     return runtime.createStringFromUtf16(utf16.data(), utf16.length());
   }
+#endif
 
   /// \return whether a and b contain the same characters.
   static bool strictEquals(Runtime& runtime, const String& a, const String& b) {
@@ -743,11 +835,14 @@ class JSI_EXPORT String : public Pointer {
     return runtime.utf8(*this);
   }
 
+#if JSI_VERSION >= 14
   /// Copies the data in a JS string as utf16 into a C++ string.
   std::u16string utf16(Runtime& runtime) const {
     return runtime.utf16(*this);
   }
+#endif
 
+#if JSI_VERSION >= 16
   /// Invokes the user provided callback to process content in String. The
   /// callback must take in three arguments: bool ascii, const void* data, and
   /// size_t num, respectively. \p ascii indicates whether the \p data passed to
@@ -763,6 +858,7 @@ class JSI_EXPORT String : public Pointer {
           (*((CB*)ctx))(ascii, data, num);
         });
   }
+#endif
 
   friend class Runtime;
   friend class Value;
@@ -788,10 +884,12 @@ class JSI_EXPORT Object : public Pointer {
     return runtime.createObject(ho);
   }
 
+#if JSI_VERSION >= 18
   /// Creates a new Object with the custom prototype
   static Object create(Runtime& runtime, const Value& prototype) {
     return runtime.createObjectWithPrototype(prototype);
   }
+#endif
 
   /// \return whether this and \c obj are the same JSObject or not.
   static bool strictEquals(Runtime& runtime, const Object& a, const Object& b) {
@@ -799,10 +897,11 @@ class JSI_EXPORT Object : public Pointer {
   }
 
   /// \return the result of `this instanceOf ctor` in JS.
-  bool instanceOf(Runtime& rt, const Function& ctor) const {
+  bool instanceOf(Runtime& rt, const Function& ctor) JSI_CONST_10 {
     return rt.instanceOf(*this, ctor);
   }
 
+#if JSI_VERSION >= 17
   /// Sets \p prototype as the prototype of the object. The prototype must be
   /// either an Object or null. If the prototype was not set successfully, this
   /// method will throw.
@@ -812,6 +911,7 @@ class JSI_EXPORT Object : public Pointer {
 
   /// \return the prototype of the object
   inline Value getPrototype(Runtime& runtime) const;
+#endif
 
   /// \return the property of the object with the given ascii name.
   /// If the name isn't a property on the object, returns the
@@ -844,19 +944,21 @@ class JSI_EXPORT Object : public Pointer {
   /// used to make one: nullptr_t, bool, double, int, const char*,
   /// String, or Object.
   template <typename T>
-  void setProperty(Runtime& runtime, const char* name, T&& value) const;
+  void setProperty(Runtime& runtime, const char* name, T&& value) JSI_CONST_10;
 
   /// Sets the property value from a Value or anything which can be
   /// used to make one: nullptr_t, bool, double, int, const char*,
   /// String, or Object.
   template <typename T>
-  void setProperty(Runtime& runtime, const String& name, T&& value) const;
+  void setProperty(Runtime& runtime, const String& name, T&& value)
+      JSI_CONST_10;
 
   /// Sets the property value from a Value or anything which can be
   /// used to make one: nullptr_t, bool, double, int, const char*,
   /// String, or Object.
   template <typename T>
-  void setProperty(Runtime& runtime, const PropNameID& name, T&& value) const;
+  void setProperty(Runtime& runtime, const PropNameID& name, T&& value)
+      JSI_CONST_10;
 
   /// \return true iff JS \c Array.isArray() would return \c true.  If
   /// so, then \c getArray() will succeed.
@@ -939,6 +1041,7 @@ class JSI_EXPORT Object : public Pointer {
   template <typename T = HostObject>
   std::shared_ptr<T> asHostObject(Runtime& runtime) const;
 
+#if JSI_VERSION >= 7
   /// \return whether this object has native state of type T previously set by
   /// \c setNativeState.
   template <typename T = NativeState>
@@ -957,6 +1060,7 @@ class JSI_EXPORT Object : public Pointer {
   /// Throws a type error if this object is a proxy or host object.
   void setNativeState(Runtime& runtime, std::shared_ptr<NativeState> state)
       const;
+#endif
 
   /// \return same as \c getProperty(name).asObject(), except with
   /// a better exception message.
@@ -974,6 +1078,7 @@ class JSI_EXPORT Object : public Pointer {
   /// works.  I only need it in one place.)
   Array getPropertyNames(Runtime& runtime) const;
 
+#if JSI_VERSION >= 11
   /// Inform the runtime that there is additional memory associated with a given
   /// JavaScript object that is not visible to the GC. This can be used if an
   /// object is known to retain some native memory, and may be used to guide
@@ -983,19 +1088,20 @@ class JSI_EXPORT Object : public Pointer {
   /// collected, the associated external memory will be considered freed and may
   /// no longer factor into GC decisions.
   void setExternalMemoryPressure(Runtime& runtime, size_t amt) const;
+#endif
 
  protected:
   void setPropertyValue(
       Runtime& runtime,
       const String& name,
-      const Value& value) const {
+      const Value& value) JSI_CONST_10 {
     return runtime.setPropertyValue(*this, name, value);
   }
 
   void setPropertyValue(
       Runtime& runtime,
       const PropNameID& name,
-      const Value& value) const {
+      const Value& value) JSI_CONST_10 {
     return runtime.setPropertyValue(*this, name, value);
   }
 
@@ -1021,7 +1127,7 @@ class JSI_EXPORT WeakObject : public Pointer {
   /// otherwise returns \c undefined.  Note that this method has nothing to do
   /// with threads or concurrency.  The name is based on std::weak_ptr::lock()
   /// which serves a similar purpose.
-  Value lock(Runtime& runtime) const;
+  Value lock(Runtime& runtime) JSI_CONST_10;
 
   friend class Runtime;
 };
@@ -1057,7 +1163,7 @@ class JSI_EXPORT Array : public Object {
   /// value behaves as with Object::setProperty().  If \c i is out of
   /// range [ 0..\c length ] throws a JSIException.
   template <typename T>
-  void setValueAtIndex(Runtime& runtime, size_t i, T&& value) const;
+  void setValueAtIndex(Runtime& runtime, size_t i, T&& value) JSI_CONST_10;
 
   /// There is no current API for changing the size of an array once
   /// created.  We'll probably need that eventually.
@@ -1077,7 +1183,7 @@ class JSI_EXPORT Array : public Object {
   friend class Runtime;
 
   void setValueAtIndexImpl(Runtime& runtime, size_t i, const Value& value)
-      const {
+      JSI_CONST_10 {
     return runtime.setValueAtIndexImpl(*this, i, value);
   }
 
@@ -1090,8 +1196,10 @@ class JSI_EXPORT ArrayBuffer : public Object {
   ArrayBuffer(ArrayBuffer&&) = default;
   ArrayBuffer& operator=(ArrayBuffer&&) = default;
 
+#if JSI_VERSION >= 9
   ArrayBuffer(Runtime& runtime, std::shared_ptr<MutableBuffer> buffer)
       : ArrayBuffer(runtime.createArrayBuffer(std::move(buffer))) {}
+#endif
 
   /// \return the size of the ArrayBuffer storage. This is not affected by
   /// overriding the byteLength property.
@@ -1104,7 +1212,7 @@ class JSI_EXPORT ArrayBuffer : public Object {
     return runtime.size(*this);
   }
 
-  uint8_t* data(Runtime& runtime) const {
+  uint8_t* data(Runtime& runtime) JSI_CONST_10 {
     return runtime.data(*this);
   }
 
@@ -1236,7 +1344,7 @@ class JSI_EXPORT Function : public Object {
 class JSI_EXPORT Value {
  public:
   /// Default ctor creates an \c undefined JS value.
-  Value() noexcept : Value(UndefinedKind) {}
+  Value() JSI_NOEXCEPT_15 : Value(UndefinedKind) {}
 
   /// Creates a \c null JS value.
   /* implicit */ Value(std::nullptr_t) : kind_(NullKind) {}
@@ -1261,7 +1369,9 @@ class JSI_EXPORT Value {
       typename T,
       typename = std::enable_if_t<
           std::is_base_of<Symbol, T>::value ||
+#if JSI_VERSION >= 6
           std::is_base_of<BigInt, T>::value ||
+#endif
           std::is_base_of<String, T>::value ||
           std::is_base_of<Object, T>::value>>
   /* implicit */ Value(T&& other) : Value(kindOf(other)) {
@@ -1277,17 +1387,19 @@ class JSI_EXPORT Value {
         "Value cannot be constructed directly from const char*");
   }
 
-  Value(Value&& other) noexcept;
+  Value(Value&& other) JSI_NOEXCEPT_15;
 
   /// Copies a Symbol lvalue into a new JS value.
   Value(Runtime& runtime, const Symbol& sym) : Value(SymbolKind) {
     new (&data_.pointer) Symbol(runtime.cloneSymbol(sym.ptr_));
   }
 
+#if JSI_VERSION >= 6
   /// Copies a BigInt lvalue into a new JS value.
   Value(Runtime& runtime, const BigInt& bigint) : Value(BigIntKind) {
     new (&data_.pointer) BigInt(runtime.cloneBigInt(bigint.ptr_));
   }
+#endif
 
   /// Copies a String lvalue into a new JS value.
   Value(Runtime& runtime, const String& str) : Value(StringKind) {
@@ -1324,15 +1436,20 @@ class JSI_EXPORT Value {
 
   // \return a \c Value created from a utf8-encoded JSON string.
   static Value
-  createFromJsonUtf8(Runtime& runtime, const uint8_t* json, size_t length) {
+  createFromJsonUtf8(Runtime& runtime, const uint8_t* json, size_t length)
+#if JSI_VERSION >= 2
+  {
     return runtime.createValueFromJsonUtf8(json, length);
   }
+#else
+      ;
+#endif
 
   /// \return according to the Strict Equality Comparison algorithm, see:
   /// https://262.ecma-international.org/11.0/#sec-strict-equality-comparison
   static bool strictEquals(Runtime& runtime, const Value& a, const Value& b);
 
-  Value& operator=(Value&& other) noexcept {
+  Value& operator=(Value&& other) JSI_NOEXCEPT_15 {
     this->~Value();
     new (this) Value(std::move(other));
     return *this;
@@ -1358,9 +1475,11 @@ class JSI_EXPORT Value {
     return kind_ == StringKind;
   }
 
+#if JSI_VERSION >= 6
   bool isBigInt() const {
     return kind_ == BigIntKind;
   }
+#endif
 
   bool isSymbol() const {
     return kind_ == SymbolKind;
@@ -1410,6 +1529,7 @@ class JSI_EXPORT Value {
   Symbol asSymbol(Runtime& runtime) const&;
   Symbol asSymbol(Runtime& runtime) &&;
 
+#if JSI_VERSION >= 6
   /// \return the BigInt value, or asserts if not a bigint.
   BigInt getBigInt(Runtime& runtime) const& {
     assert(isBigInt());
@@ -1429,6 +1549,7 @@ class JSI_EXPORT Value {
   /// bigint
   BigInt asBigInt(Runtime& runtime) const&;
   BigInt asBigInt(Runtime& runtime) &&;
+#endif
 
   /// \return the String value, or asserts if not a string.
   String getString(Runtime& runtime) const& {
@@ -1482,7 +1603,9 @@ class JSI_EXPORT Value {
     BooleanKind,
     NumberKind,
     SymbolKind,
+#if JSI_VERSION >= 6
     BigIntKind,
+#endif
     StringKind,
     ObjectKind,
     PointerKind = SymbolKind,
@@ -1509,9 +1632,11 @@ class JSI_EXPORT Value {
   constexpr static ValueKind kindOf(const Symbol&) {
     return SymbolKind;
   }
+#if JSI_VERSION >= 6
   constexpr static ValueKind kindOf(const BigInt&) {
     return BigIntKind;
   }
+#endif
   constexpr static ValueKind kindOf(const String&) {
     return StringKind;
   }
@@ -1643,6 +1768,16 @@ class JSI_EXPORT JSError : public JSIException {
   const jsi::Value& value() const {
     assert(value_);
     return *value_;
+  }
+
+  // TODO: (vmoroz) Can we remove it considering that we have the new JSError
+  // constructor?
+  // In V8's case, creating an Error object in JS doesn't record the callstack.
+  // To preserve it, we need a way to manually add the stack here and on the JS
+  // side.
+  void setStack(std::string stack) {
+    stack_ = std::move(stack);
+    what_ = message_ + "\n\n" + stack_;
   }
 
  private:

@@ -1,0 +1,15 @@
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <HermesPlatform Condition="'$(HermesPlatform)' == ''">$(Platform)</HermesPlatform>
+    <!-- Fix platform name (win32 should be x86) -->
+    <HermesPlatform Condition="'$(HermesPlatform)' == 'Win32'">x86</HermesPlatform>
+
+    <HermesAppPlatform Condition="'$(HermesAppPlatform)' == '' and '$(AppContainerApplication)' == 'true'">uwp</HermesAppPlatform>
+    <HermesAppPlatform Condition="'$(HermesAppPlatform)' == ''">win32</HermesAppPlatform>
+
+    <NugetRoot>$(MSBuildThisFileDirectory)..\..\</NugetRoot>
+
+    <PackageRoot>$(NugetRoot)</PackageRoot>
+    <PackageRoot Condition="'$(NugetRootOverride)' != ''">$(NugetRootOverride)</PackageRoot>
+  </PropertyGroup>
+</Project>

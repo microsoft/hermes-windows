@@ -86,7 +86,12 @@ class TestingConfig:
         cfg_globals['lit_config'] = litConfig
         cfg_globals['__file__'] = path
         try:
-            exec(compile(data, path, 'exec'), cfg_globals, None)
+            # Exec is generally unsafe. See B102 (exec_used). https://bandit.readthedocs.io/en/latest/plugins/b102_exec_used.html
+            # This is not shipping code, but test code that is part of lit which is part of LLVM, and LLVH is an old fork of LLVM
+            # Original is here: https://github.com/llvm/llvm-project-staging/blob/cc926dc3a87af7023aa9b6c392347a0a8ed6949b/llvm/utils/lit/lit/TestingConfig.py
+            # After reviewing the code in tis repo, this is only called with lit config files that are part of this repo, 
+            # so no 3rd party code is evaluated.
+            exec(compile(data, path, 'exec'), cfg_globals, None) # nosec
             if litConfig.debug:
                 litConfig.note('... loaded config %r' % path)
         except SystemExit:

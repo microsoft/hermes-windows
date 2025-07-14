@@ -19,6 +19,7 @@ The instructions here very briefly cover steps to build the Hermes CLI. They ass
 * [Using a custom Hermes build in a React Native app](doc/ReactNativeIntegration.md#using-a-custom-hermes-build-in-a-react-native-app)
 
 To build a local debug version of the Hermes CLI tools the following steps should get you started on macOS/Linux:
+The following commands should get you going in a Windows Command Prompt:
 
 ```shell
 mkdir hermes_workingdir
@@ -41,20 +42,22 @@ cmake --build ./build
 You will now be in a directory with the output of building Hermes into CLI tools. From here you can run a piece of JavaScript as follows:
 
 ```shell
-echo "'use strict'; function hello() { print('Hello World'); } hello();" | ./bin/hermes
+echo 'use strict'; function hello() { print('Hello World'); } hello(); | .\bin\Release\hermes.exe
 ```
+
+For more details on Hermes for Android, see [here](https://github.com/facebook/hermes/blob/master/README.md).
 
 ## Contributing
 
-The main purpose of this repository is to continue to evolve Hermes, making it faster and more efficient. We are grateful to the community for contributing bugfixes and improvements. Read below to learn how you can take part in improving Hermes.
+The main purpose of this repository is to brings Hermes support to [React Native Windows](https://github.com/microsoft/react-native-windows). We are grateful to the community for contributing bugfixes and improvements. Read below to learn how you can participate.
 
 ### Code of Conduct
 
-Facebook has adopted a [Code of Conduct](./CODE_OF_CONDUCT.md) that we expect project participants to adhere to. Please read [the full text](https://code.fb.com/codeofconduct) so that you can understand what actions will and will not be tolerated.
+Both Microsoft and Facebook have adopted [Codes of Conduct](./CODE_OF_CONDUCT.md) that we expect project participants to adhere to. Microsoft's Code of Conduct can be found [here](https://opensource.microsoft.com/codeofconduct)  and Facebook's [here](https://code.fb.com/codeofconduct). Please read through them so that you can understand what actions will and will not be tolerated.
 
 ### Contributing Guide
 
-Read our [contributing guide](CONTRIBUTING.md) to learn about our development process, how to propose bugfixes and improvements, and how to build and test your changes to Hermes.
+Read our [contributing guide](CONTRIBUTING.md) to learn about our development process as well as how to propose bugfixes and improvements.
 
 ### License
 

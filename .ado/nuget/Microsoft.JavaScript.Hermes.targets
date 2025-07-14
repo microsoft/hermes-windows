@@ -1,0 +1,11 @@
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(PackageRoot)\build\native\include</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(HermesNoDLLCopy)' == ''">
+    <ReferenceCopyLocalPaths Include="$(PackageRoot)build\native\$(HermesAppPlatform)\$(HermesPlatform)\hermes.dll" />
+    <None Include="$(PackageRoot)build\native\$(HermesAppPlatform)\$(HermesPlatform)\hermes.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

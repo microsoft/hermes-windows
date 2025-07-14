@@ -1,0 +1,29 @@
+#
+# The CI pipeline entry point.
+#
+
+# The name is parsed by setVersionNumber.js script which then updates the name of the run.
+#
+# The release branch versions "rnw/*" start with the release number
+# such as "0.69." or "0.70." and follow the revision number.
+# name: 0.70.$(Rev:r)
+#
+# The main branch pre-release versions start with "0.0."
+# and follow the date and revision number.
+name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
+
+# The triggers are overridden by the ADO pipeline definitions.
+trigger: none
+pr: none
+
+variables:
+  - name: tags
+    value: production,externalfacing
+
+extends:
+  template: build-template.yml@self
+  parameters:
+    # CI builds must publish the binaries and packages.
+    MustPublish: true
+    # It must be false for real builds. Use true only for debugging.
+    FakeBuild: false

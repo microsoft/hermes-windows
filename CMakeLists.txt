@@ -58,6 +58,12 @@ project(Hermes
         VERSION 0.12.0
         LANGUAGES C CXX)
 
+# Handle HERMES_FORCE_NATIVE_BUILD option to override cross-compilation detection
+option(HERMES_FORCE_NATIVE_BUILD "Force CMake to treat this as a native build (not cross-compilation)" OFF)
+if(HERMES_FORCE_NATIVE_BUILD)
+  set(CMAKE_CROSSCOMPILING FALSE)
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
 
 set(LLVH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/llvh)
@@ -70,6 +76,15 @@ include(Lit)
 if(NOT DEFINED HERMES_RELEASE_VERSION)
   set(HERMES_RELEASE_VERSION ${PROJECT_VERSION})
 endif()
+
+# The version that we put inside of DLL files
+if(NOT DEFINED HERMES_FILE_VERSION)
+  set(HERMES_FILE_VERSION "${PROJECT_VERSION}.0")
+endif()
+
+# The file version convertible to number representation.
+# We must replace dots with commas.
+string(REPLACE "." "," HERMES_FILE_VERSION_BIN ${HERMES_FILE_VERSION})
 
 find_package(Python COMPONENTS Interpreter)
 if (NOT Python_Interpreter_FOUND)
@@ -326,42 +341,54 @@ if (HERMES_STATIC_LINK)
   set(BUILD_SHARED_LIBS OFF)
 endif()
 
-# Check if the linker supports deleting unused sections and ICF.
-# We can't simply CHECK_CXX_COMPILER_FLAG("-Wl,--gc-sections" ..) because CMake
-# will compile and link separately and only passes the flag during compilation.
-# TODO: Use check_linker_flag once we have CMake 3.18.
-set(OLD_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
-set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
-CHECK_CXX_COMPILER_FLAG("" HAVE_GC_SECTIONS)
+if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
+  # Check if the linker supports deleting unused sections and ICF.
+  # We can't simply CHECK_CXX_COMPILER_FLAG("-Wl,--gc-sections" ..) because CMake
+  # will compile and link separately and only passes the flag during compilation.
+  # TODO: Use check_linker_flag once we have CMake 3.18.
+  set(OLD_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
+  CHECK_CXX_COMPILER_FLAG("" HAVE_GC_SECTIONS)
 
-# Only check for -dead_strip on Apple because some linkers may interpret it
-# as "-d -e ad_strip".
-if(APPLE)
-  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,-dead_strip")
-  CHECK_CXX_COMPILER_FLAG("" HAVE_DEAD_STRIP)
-endif()
+  # Only check for -dead_strip on Apple because some linkers may interpret it
+  # as "-d -e ad_strip".
+  if(APPLE)
+    set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,-dead_strip")
+    CHECK_CXX_COMPILER_FLAG("" HAVE_DEAD_STRIP)
+  endif()
 
-set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--icf=safe")
-CHECK_CXX_COMPILER_FLAG("" HAVE_ICF)
-set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS}")
+  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--icf=safe")
+  CHECK_CXX_COMPILER_FLAG("" HAVE_ICF)
+  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS}")
 
-if(HAVE_GC_SECTIONS)
-  add_flag_if_supported("-ffunction-sections" FUNCTION_SECTIONS)
-  add_flag_if_supported("-fdata-sections" DATA_SECTIONS)
-  list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--gc-sections")
-elseif(HAVE_DEAD_STRIP)
-  # This is similar to the above, but for macOS.
-  list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:-dead_strip")
-endif()
+  if(HAVE_GC_SECTIONS)
+    add_flag_if_supported("-ffunction-sections" FUNCTION_SECTIONS)
+    add_flag_if_supported("-fdata-sections" DATA_SECTIONS)
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--gc-sections")
+  elseif(HAVE_DEAD_STRIP)
+    # This is similar to the above, but for macOS.
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:-dead_strip")
+  endif()
 
-if(HAVE_ICF)
-  add_flag_if_supported("-faddrsig" ADDRSIG)
-  list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--icf=safe")
+  if(HAVE_ICF)
+    add_flag_if_supported("-faddrsig" ADDRSIG)
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--icf=safe")
+  endif()
 endif()
 
 # Make the HERMES_RELEASE_VERSION accessible for version printing in C++.
 if(HERMES_RELEASE_VERSION)
     add_definitions(-DHERMES_RELEASE_VERSION="${HERMES_RELEASE_VERSION}")
+endif()
+
+# Make the HERMES_FILE_VERSION accessible for version printing in C++.
+if(HERMES_FILE_VERSION)
+    add_definitions(-DHERMES_FILE_VERSION="${HERMES_FILE_VERSION}")
+endif()
+
+# Make the HERMES_FILE_VERSION_BIN accessible for converting to a number.
+if(HERMES_FILE_VERSION_BIN)
+    add_definitions(-DHERMES_FILE_VERSION_BIN=${HERMES_FILE_VERSION_BIN})
 endif()
 
 if(HERMES_ENABLE_IR_INSTRUMENTATION)
@@ -495,9 +522,33 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4201")
   # C4530 C++ exception handler used, but unwind semantics are not enabled
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4530")
+  # C4251 class X needs to have dll-interface to be used by clients of class Y
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4251")
+  # C4275: non dll-interface class X used as base for dll-interface class Y
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4275")
+  # C4646: function declared with 'noreturn' has non-void return type
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4646")
+  # C4312: 'reinterpret_cast': conversion from 'X' to 'hermes::vm::GCCell *' of greater size
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4312")
   # Parallelize build
   if (HERMES_MSVC_MP)
-    add_definitions( /MP )
+    add_compile_options( /MP )
+  endif()
+endif()
+
+if ("${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
+  # Enable source linking
+  # NOTE: Dependencies are not properly setup here.
+  #       Currently, CMake does not know to re-link if SOURCE_LINK_JSON changes
+  #       Currently, CMake does not re-generate SOURCE_LINK_JSON if git's HEAD changes
+  if ("${CMAKE_C_COMPILER_VERSION}" VERSION_GREATER_EQUAL "19.20")
+    include(SourceLink)
+    file(TO_NATIVE_PATH "${PROJECT_BINARY_DIR}/source_link.json" SOURCE_LINK_JSON)
+    source_link(${PROJECT_SOURCE_DIR} ${SOURCE_LINK_JSON})
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SOURCELINK:${SOURCE_LINK_JSON}")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SOURCELINK:${SOURCE_LINK_JSON}")
+  else()
+    message(WARNING "Disabling SourceLink due to old version of MSVC. Please update to VS2019!")
   endif()
 endif()
 
@@ -547,9 +598,12 @@ endif()
 # ICU is available on Windows, but only since Windows 10 v1703.
 # Therefore, use it only as fallback.
 if (NOT ICU_FOUND AND HERMES_ENABLE_WIN10_ICU_FALLBACK AND
-    WIN32 AND # Windows 32 or 64 bit
-    # At least Windows 10 version 1703 (aka Creators Update)
-    NOT ${CMAKE_SYSTEM_VERSION} VERSION_LESS "10.0.15063")
+    WIN32 # Windows 32 or 64 bit
+    # We used to check for at least Windows 10 version 1703 (aka Creators Update)
+    # but the new compliant images return 6.2. Everybody should be running
+    # the right version of windows now.
+    # NOT ${CMAKE_SYSTEM_VERSION} VERSION_LESS "10.0.15063"
+    )
   add_definitions(-DUSE_WIN10_ICU)
   set(ICU_FOUND 1)
   set(ICU_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/icu_decls)
@@ -562,14 +616,14 @@ endif()
 
 # If we have no ICU, then error out.
 if (NOT ICU_FOUND)
-  message(FATAL_ERROR "Unable to find ICU.")
+  message(FATAL_ERROR "Unable to find ICU for ${CMAKE_SYSTEM_VERSION}.")
 endif()
 
 # Declare a function that links ICU for the given target.
 # This adds the correct -rpath link flag as necessary.
 function(hermes_link_icu target_name)
   get_target_property(target_type ${target_name} TYPE)
-  target_link_libraries(${target_name} ${ICU_LIBRARIES})
+  # target_link_libraries(${target_name} ${ICU_LIBRARIES})
 
   if (HERMES_USE_STATIC_ICU)
     if ((NOT EMSCRIPTEN) AND target_type MATCHES "EXECUTABLE|STATIC_LIBRARY")
@@ -616,6 +670,14 @@ endif()
 
 if (HERMES_MEMORY_INSTRUMENTATION)
   add_definitions(-DHERMES_MEMORY_INSTRUMENTATION)
+endif()
+
+if (HERMES_MSVC_CHECKED_ITERATORS)
+  add_definitions(-D_ITERATOR_DEBUG_LEVEL=1)
+endif()
+
+if (HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB)
+  add_definitions(-DUSE_PLATFORM_UNICODE_WINGLOB)
 endif()
 
 # Disables the GCC 64-to-32 bit truncation diagnostic if the compiler supports

@@ -12,6 +12,13 @@ function(add_hermes_unittest test_dirname)
   # the link line.
   target_link_libraries(${test_dirname} LLVHSupport)
   target_compile_definitions(${test_dirname} PUBLIC UNIT_TEST)
+  if(MSVC)
+    # Use the same linker settings as hermes.dll
+    set(link_flags_debug "/DEBUG")
+    set(link_flags_release "/DEBUG;/DEBUGTYPE:CV$<COMMA>FIXUP;/OPT:REF;/OPT:NOICF;/INCREMENTAL:NO")
+    set_target_properties(${test_dirname} PROPERTIES
+      LINK_OPTIONS "$<IF:$<CONFIG:Debug>,${link_flags_debug},${link_flags_release}>")
+  endif()
 endfunction()
 
 if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" OR
@@ -36,3 +43,4 @@ add_subdirectory(PlatformUnicode)
 add_subdirectory(API)
 add_subdirectory(ADT)
 add_subdirectory(Optimizer)
+add_subdirectory(node-api)

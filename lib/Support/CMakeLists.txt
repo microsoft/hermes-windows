@@ -5,6 +5,7 @@
 
 set(link_libs
     dtoa
+    hermesPlatform
     hermesPlatformUnicode)
 
 if (ANDROID)

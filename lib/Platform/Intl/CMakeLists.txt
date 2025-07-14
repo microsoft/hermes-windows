@@ -22,19 +22,6 @@ if(HERMES_ENABLE_INTL)
     set_target_properties(hermesPlatformIntl PROPERTIES UNITY_BUILD false)
     target_compile_options(hermesPlatformIntl PRIVATE -fobjc-arc)
   else()
-    add_hermes_library(hermesPlatformIntl STATIC
-        PlatformIntlICU.cpp
-        PlatformIntlShared.cpp
-        impl_icu/Collator.cpp
-        impl_icu/IntlUtils.cpp
-        impl_icu/LocaleConverter.cpp
-        impl_icu/LocaleBCP47Object.cpp
-        impl_icu/LocaleResolver.cpp
-        impl_icu/OptionHelpers.cpp
-        LINK_LIBS
-        hermesBCP47Parser
-        hermesPublic
-    )
-    hermes_link_icu(hermesPlatformIntl)
+    add_hermes_library(hermesPlatformIntl STATIC PlatformIntlWindows.cpp LINK_LIBS hermesPublic)
   endif()
 endif()

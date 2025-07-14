@@ -8,6 +8,9 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" OR
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
         set(CMAKE_C_FLAGS
                 "${CMAKE_C_FLAGS} -Wno-parentheses -Wno-unused-label -Wno-sign-compare -Wno-implicit-fallthrough")
+elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
+    # hermes_update_compile_flags sets these for CPP files only
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Zi")
 endif()
 
 add_hermes_library(dtoa STATIC

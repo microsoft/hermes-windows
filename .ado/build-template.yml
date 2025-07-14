@@ -1,0 +1,327 @@
+#
+# The build and pack template used by the CI publish and PR validation scripts.
+# The template sets the version number, builds all binaries, and then packs them as NuGet packages.
+#
+
+parameters:
+  # MustPublish is `true` for CI builds and `false` for PR validation.
+- name: MustPublish
+  type: boolean
+  default: false
+  # To fake building hermes for faster debugging.
+- name: FakeBuild
+  type: boolean
+  default: false
+
+  # Matrix with target platforms for Hermes binaries.
+- name: BuildMatrix
+  type: object
+  default:
+  - Name: uwp_x64
+    TargetCPU: x64
+    BuildUWP: --uwp
+  - Name: uwp_x86
+    TargetCPU: x86
+    BuildUWP: --uwp
+  - Name: uwp_arm64
+    TargetCPU: arm64
+    BuildUWP: --uwp
+  - Name: win32_x64
+    TargetCPU: x64
+    BuildUWP: --no-uwp
+    CanRunTest: true
+  - Name: win32_x86
+    TargetCPU: x86
+    BuildUWP: --no-uwp
+    CanRunTest: true
+  - Name: win32_arm64
+    TargetCPU: arm64
+    BuildUWP: --no-uwp
+    # ARM64 "Emulation Compatible" is to run ARM64 Hermes DLL in a x64 app
+    # on Windows ARM64 in emulation mode.
+    # See: https://learn.microsoft.com/en-us/windows/arm/arm64ec
+  - Name: win32_arm64ec
+    TargetCPU: arm64ec
+    BuildUWP: --no-uwp
+
+resources:
+  repositories:
+    # The repo for the Office compliant build pipeline templates.
+  - repository: OfficePipelineTemplates
+    type: git
+    name: 1ESPipelineTemplates/OfficePipelineTemplates
+    ref: refs/tags/release
+
+extends:
+  # Extend the Office compliant build pipeline template.
+  ${{ if eq(parameters.MustPublish, true) }}:
+    template: v1/Office.Official.PipelineTemplate.yml@OfficePipelineTemplates
+  ${{ else }}:
+    template: v1/Office.Unofficial.PipelineTemplate.yml@OfficePipelineTemplates
+  parameters:
+    settings:
+      ${{ if eq(parameters.MustPublish, false) }}:
+        skipBuildTagsForGitHubPullRequests: true
+    pool:
+      name: Azure-Pipelines-1ESPT-ExDShared
+      image: windows-latest
+      os: windows
+    sdl:
+      binskim:
+        analyzeTarget: |
+          $(Build.StagingDirectory)\out\pkg-staging\**\*.dll
+          $(Build.StagingDirectory)\out\pkg-staging\**\*.exe
+      componentgovernance:
+        ignoreDirectories: $(Build.SourcesDirectory)\website
+      eslint:
+        enableExclusions: true
+        # This repo does not ship any JavaScript code. But it has many test cases for
+        # the Hermes JS engine that fail parsing, have code considered insecure and crash eslint.
+        exclusionPatterns: |
+          '**/*.*'
+      suppression:
+        suppressionFile: $(Build.SourcesDirectory)\.ado\guardian\SDL\.gdnsuppress
+      codeql:
+        compiled:
+          enabled: true
+        runSourceLanguagesInSourceAnalysis: true
+
+    stages:
+    - stage: main
+      jobs:
+
+        #=============================================================================
+        # Set version numbers.
+        #=============================================================================
+      - job: Set_Versions
+        displayName: Set semantic and file versions
+
+        variables:
+          # Component Governance is ran as part of the Build Job.
+        - name: skipComponentGovernanceDetection
+          value: true
+          # Convert MustPublish parameter to a variable to access it in the script.
+        - name: mustPublish
+          value: ${{ parameters.MustPublish }}
+
+        steps:
+          # Node.js version >= 22.x is required to handle args in JS scripts.
+        - task: UseNode@1
+          displayName: Use Node.js 22.x
+          inputs:
+            version: 22.x
+
+          # Compute the semanticVersion and fileVersion, and then update the build title.
+        - script: node .ado\scripts\setVersionNumber.js
+          name: setVersions # For output variable prefix
+          displayName: Compute version numbers
+
+        #=============================================================================
+        # Build hermes binaries.
+        #=============================================================================
+      - ${{ each MatrixEntry in parameters.BuildMatrix }}:
+        - job: Build_Hermes_${{ MatrixEntry.Name }}
+          displayName: Build Hermes ${{ MatrixEntry.Name }}
+
+          dependsOn:
+          - Set_Versions
+
+          timeoutInMinutes: 300
+
+          variables:
+          - name: semanticVersion
+            value: $[ dependencies.Set_Versions.outputs['setVersions.semanticVersion'] ]
+          - name: fileVersion
+            value: $[ dependencies.Set_Versions.outputs['setVersions.fileVersion'] ]
+            # To be used in the build script
+          - name: fakeBuildArg
+            ${{ if eq(parameters.FakeBuild, true) }}:
+              value: --fake-build
+            ${{ else }}:
+              value: --no-fake-build
+
+          templateContext:
+            outputs:
+              # The base template takes care of publishing the artifacts.
+            - output: pipelineArtifact
+              artifactName: ${{ MatrixEntry.Name }}
+              targetPath: $(Build.StagingDirectory)\out\pkg-staging
+
+          steps:
+            # Node.js version >= 22.x is required to handle args in JS scripts.
+          - task: UseNode@1
+            displayName: Use Node.js 22.x
+            inputs:
+              version: 22.x
+
+            # Invoke the build specific for the target platform.
+          - script: >
+              node .ado\scripts\build.js
+              --output-path $(Build.StagingDirectory)\out
+              --platform ${{ MatrixEntry.TargetCPU }}
+              --configuration release
+              ${{ MatrixEntry.BuildUWP }}
+              --semantic-version "$(semanticVersion)"
+              --file-version "$(fileVersion)"
+              $(fakeBuildArg)
+            displayName: Build binaries
+
+            # Show all built files to help debug issues.
+          - script: |
+              ls -R $(Build.StagingDirectory)\out
+            displayName: Show all files in the $$(Build.StagingDirectory)\out directory
+
+            # Run unit tests after the build is finished.
+          - ${{ if eq(MatrixEntry.CanRunTest, true) }}:
+            - script: >
+                node .ado\scripts\build.js
+                --no-build
+                --test
+                --output-path $(Build.StagingDirectory)\out
+                --platform ${{ MatrixEntry.TargetCPU }}
+                --configuration release
+                ${{ MatrixEntry.BuildUWP }}
+                --semantic-version "$(semanticVersion)"
+                --file-version "$(fileVersion)"
+                $(fakeBuildArg)
+              displayName: Run unit tests
+
+            # Sign and publish symbols only for the CI builds and real builds.
+          - ${{ if and(eq(parameters.MustPublish, true), eq(parameters.FakeBuild, false)) }}:
+            - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@5
+              displayName: CodeSign Binaries
+              inputs:
+                connectedServiceName: 'ESRP-JSHost3'
+                appRegistrationClientId: '0a35e01f-eadf-420a-a2bf-def002ba898d'
+                appRegistrationTenantId: 'cdc5aeea-15c5-4db6-b079-fcadd2505dc2'
+                authAKVName: 'OGX-JSHost-KV'
+                authCertName: 'OGX-JSHost-Auth4'
+                authSignCertName: 'OGX-JSHost-Sign3'
+                folderPath: $(Build.StagingDirectory)\out\pkg-staging
+                # Recursively finds files matching these patterns:
+                pattern: |
+                  **\hermes.dll
+                  **\hermes.exe
+                  **\hermesc.exe
+                useMinimatch: true
+                signConfigType: inlineSignParams
+                inlineOperation: |
+                  [
+                    {
+                      "KeyCode" : "CP-230012",
+                      "OperationCode" : "SigntoolSign",
+                      "Parameters" : {
+                        "OpusName" : "Microsoft",
+                        "OpusInfo" : "http://www.microsoft.com",
+                        "FileDigest" : "/fd \"SHA256\"",
+                        "PageHash" : "/NPH",
+                        "TimeStamp" : "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+                      },
+                      "ToolName" : "sign",
+                      "ToolVersion" : "1.0"
+                    },
+                    {
+                      "KeyCode" : "CP-230012",
+                      "OperationCode" : "SigntoolVerify",
+                      "Parameters" : {},
+                      "ToolName" : "sign",
+                      "ToolVersion" : "1.0"
+                    }
+                  ]
+
+            # Make symbols available through http://symweb.
+            - task: PublishSymbols@2
+              displayName: Publish symbols
+              inputs:
+                SearchPattern: $(Build.StagingDirectory)\out\pkg-staging\**\*.pdb
+                SymbolServerType: TeamServices
+                UseNetCoreClientTool: true
+
+      #=============================================================================
+      # Create NuGet packages
+      #=============================================================================
+      - job: Create_Hermes_NuGet
+        displayName: Create Nuget packages
+
+        dependsOn:
+        - Set_Versions
+        - ${{ each MatrixEntry in parameters.BuildMatrix }}:
+          - Build_Hermes_${{ MatrixEntry.Name }}
+
+        variables:
+        - name: semanticVersion
+          value: $[ dependencies.Set_Versions.outputs['setVersions.semanticVersion'] ]
+        - name: fileVersion
+          value: $[ dependencies.Set_Versions.outputs['setVersions.fileVersion'] ]
+
+        templateContext:
+          outputs:
+            # The base template takes care of publishing the artifacts.
+          - output: pipelineArtifact
+            targetPath: $(Build.StagingDirectory)\out\pkg
+            artifactName: published-packages
+
+        steps:
+          # Node.js version >= 22.x is required to handle args in JS scripts.
+        - task: UseNode@1
+          displayName: Use Node.js 22.x
+          inputs:
+            version: 22.x
+
+          # The substitution tags in the nuspec require that we use at least NuGet 4.6.
+        - task: NuGetToolInstaller@0
+          displayName: Install NuGet tools
+          inputs:
+            versionSpec: ">=4.6.0"
+
+          # Download hermes binaries built in previous jobs.
+        - ${{ each MatrixEntry in parameters.BuildMatrix }}:
+          - task: DownloadPipelineArtifact@2
+            displayName: Download ${{ MatrixEntry.Name }} hermes artifacts
+            inputs:
+              artifact: ${{ MatrixEntry.Name }}
+              path: $(Build.StagingDirectory)\out\pkg-staging
+
+          # Create NuGet packages.
+        - script: >
+            node .ado\scripts\build.js
+            --output-path $(Build.StagingDirectory)\out
+            --no-build
+            --pack
+            --semantic-version "$(semanticVersion)"
+            --file-version "$(fileVersion)"
+          displayName: Create NuGet packages
+
+          # Sign the NuGet packages only for CI builds.
+        - ${{ if parameters.MustPublish }}:
+          - task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@5
+            displayName: CodeSign NuGets
+            inputs:
+              connectedServiceName: 'ESRP-JSHost3'
+              appRegistrationClientId: '0a35e01f-eadf-420a-a2bf-def002ba898d'
+              appRegistrationTenantId: 'cdc5aeea-15c5-4db6-b079-fcadd2505dc2'
+              authAKVName: 'OGX-JSHost-KV'
+              authCertName: 'OGX-JSHost-Auth4'
+              authSignCertName: 'OGX-JSHost-Sign3'
+              folderPath: $(Build.StagingDirectory)\out\pkg
+              pattern: |
+                Microsoft.JavaScript.Hermes.*.nupkg
+              useMinimatch: true
+              signConfigType: inlineSignParams
+              inlineOperation: |
+                [
+                  {
+                    "KeyCode" : "CP-401405",
+                    "OperationCode" : "NuGetSign",
+                    "Parameters" : {},
+                    "ToolName" : "sign",
+                    "ToolVersion" : "1.0"
+                  },
+                  {
+                    "KeyCode" : "CP-401405",
+                    "OperationCode" : "NuGetVerify",
+                    "Parameters" : {},
+                    "ToolName" : "sign",
+                    "ToolVersion" : "1.0"
+                  }
+                ]

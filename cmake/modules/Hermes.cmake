@@ -28,15 +28,41 @@ if (EMSCRIPTEN AND EMSCRIPTEN_FASTCOMP)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s BINARYEN_TRAP_MODE=clamp")
 endif()
 
-# set stack reserved size to ~10MB
+# For compatibility, CMake adds /EHsc, /GR and /DUNICODE by default for MSVC. We want to set those
+# flags per target, so remove them.
 if (MSVC)
+#  string(REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+#  string(REPLACE "/GR" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+#  string(REPLACE "/DUNICODE" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+endif (MSVC)
+
+if(WIN32)
+  # set stack reserved size to ~10MB
   # CMake previously automatically set this value for MSVC builds, but the
   # behavior was changed in CMake 2.8.11 (Issue 12437) to use the MSVC default
   # value (1 MB) which is not enough for some of our stack overflow tests.
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10000000")
-elseif (MINGW) # FIXME: Also cygwin?
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,16777216")
-endif ()
+  if(MSVC)
+    # MSVC or clang-cl (MSVC-compatible)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")
+  elseif(CLANG)
+    # Plain Clang with lld-link
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,/STACK:10485760")
+  elseif(MINGW) # FIXME: Also cygwin?
+    # MinGW (GNU ld)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
+  endif()
+endif()
+
+if (MSVC)
+  # FastDebug Flavor
+  # 1. Optimize for speed.
+  # 2. Enable full Inlining
+  # 3. Link against debug flavored VCRT
+  # Note: /O2 and RTC1 are incompatible
+  # TODO: /Ox is more debug friendly ?
+  string(APPEND CMAKE_CXX_FLAGS_FASTDEBUG "/MDd /O2 /Ob2")
+  string(APPEND CMAKE_C_FLAGS_FASTDEBUG "/MDd /O2 /Ob2")
+endif()
 
 if (WIN32)
   set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
@@ -69,6 +95,14 @@ function(hermes_update_compile_flags name)
 
   set(flags "")
 
+  if (MSVC)
+    # enable function-level linking
+    set(flags "${flags} /Gy")
+    
+    # Ensure debug symbols are generated for all sources.
+    set(flags "${flags} /Zi")
+  endif ()
+
   if (NOT HERMES_ENABLE_EH_RTTI)
     if (GCC_COMPATIBLE)
       set(flags "${flags} -fno-exceptions -fno-rtti")
@@ -80,7 +114,7 @@ function(hermes_update_compile_flags name)
   if (update_src_props)
     foreach (fn ${sources})
       get_filename_component(suf ${fn} EXT)
-      if ("${suf}" STREQUAL ".cpp")
+      if ("${suf}" STREQUAL ".cpp" OR "${suf}" STREQUAL ".c")
         set_property(SOURCE ${fn} APPEND_STRING PROPERTY
           COMPILE_FLAGS "${flags}")
       endif ()
@@ -89,6 +123,12 @@ function(hermes_update_compile_flags name)
     # Update target props, since all sources are C++.
     set_property(TARGET ${name} APPEND_STRING PROPERTY
       COMPILE_FLAGS "${flags}")
+  endif ()
+
+  if (MSVC)
+    # Temporary avoid the auto-vectorization optimization since VS 17.14.0 produces incorrect code.
+    # Set /O1 only for Release configs using modern CMake target_compile_options.
+    target_compile_options(${name} PRIVATE $<$<CONFIG:Release>:/O1>)
   endif ()
 endfunction()
 
@@ -230,6 +270,13 @@ if (MSVC)
     -D_SCL_SECURE_NO_WARNINGS
   )
 
+  # Security flags.
+  # Note: Security warnings need to be fixed / baselined to be sdl clean - 4146, 4244 and 4267 (currently disabled)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DYNAMICBASE /guard:cf")
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DYNAMICBASE /guard:cf")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /guard:cf /Qspectre /sdl /ZH:SHA_256")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /guard:cf /Qspectre /sdl /ZH:SHA_256")
+
   # Tell MSVC to use the Unicode version of the Win32 APIs instead of ANSI.
   #    add_definitions(
   #      -DUNICODE
@@ -251,13 +298,17 @@ if (MSVC)
 
   if (NOT CLANG_CL)
     set(msvc_warning_flags
+      # SDL requires these 3 checks enabled.
+      # We downgrade 4149 to level 3 to keep this as a warning because the default level 2 is bumped to error
+      -w34146 # Suppress 'unary minus operator applied to unsigned type, result still unsigned'
+      # We don't disable the other two
+      #-wd4244 # Suppress ''argument' : conversion from 'type1' to 'type2', possible loss of data'
+      #-wd4267 # Suppress ''var' : conversion from 'size_t' to 'type', possible loss of data'
+
       # Disabled warnings.
       -wd4141 # Suppress ''modifier' : used more than once' (because of __forceinline combined with inline)
-      -wd4146 # Suppress 'unary minus operator applied to unsigned type, result still unsigned'
       -wd4180 # Suppress 'qualifier applied to function type has no meaning; ignored'
-      -wd4244 # Suppress ''argument' : conversion from 'type1' to 'type2', possible loss of data'
       -wd4258 # Suppress ''var' : definition from the for loop is ignored; the definition from the enclosing scope is used'
-      -wd4267 # Suppress ''var' : conversion from 'size_t' to 'type', possible loss of data'
       -wd4291 # Suppress ''declaration' : no matching operator delete found; memory will not be freed if initialization throws an exception'
       -wd4345 # Suppress 'behavior change: an object of POD type constructed with an initializer of the form () will be default-initialized'
       -wd4351 # Suppress 'new behavior: elements of array 'array' will be default initialized'
