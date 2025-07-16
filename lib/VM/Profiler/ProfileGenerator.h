@@ -20,15 +20,9 @@ namespace vm {
 /// Generate format-agnostic data structure, which should contain relevant
 /// information about the recorded Sampling Profile and may be used by third
 /// parties.
-class ProfileGenerator {
-  ProfileGenerator() = delete;
-
- public:
-  /// Emit Profile in a single struct.
-  static facebook::hermes::sampling_profiler::Profile generate(
-      const SamplingProfiler &sp,
-      const std::vector<SamplingProfiler::StackTrace> &sampledStacks);
-};
+facebook::hermes::sampling_profiler::Profile generateProfile(
+    const SamplingProfiler &samplingProfiler,
+    const std::vector<SamplingProfiler::StackTrace> &sampledStacks);
 
 } // namespace vm
 } // namespace hermes
