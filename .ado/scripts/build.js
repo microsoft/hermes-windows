@@ -56,6 +56,7 @@ const options = {
   "file-version": { type: "string", default: "0.0.0.0" },
   "windows-sdk-version": { type: "string", default: "" },
   "fake-build": { type: "boolean", default: false },
+  jstest: { type: "boolean", default: false },
 };
 
 // To access parsed args values, use args.<option-name>.
@@ -246,6 +247,9 @@ function main() {
       if (args.test) {
         cmakeTest(buildParams);
       }
+      if (args.jstest) {
+        cmakeJsTest(buildParams);
+      }
     });
   });
 
@@ -432,6 +436,15 @@ function cmakeTest(buildParams) {
   }
 
   runCMakeCommand("ctest --output-on-failure", buildParams);
+}
+
+// Run JS tests via check-hermes target using buildParams
+function cmakeJsTest(buildParams) {
+  if (!fs.existsSync(buildParams.buildPath)) {
+    cmakeBuild(buildParams);
+  }
+
+  runCMakeCommand("cmake --build . --target check-hermes", buildParams);
 }
 
 function cmakeBuildHermesCompiler(buildParams) {
