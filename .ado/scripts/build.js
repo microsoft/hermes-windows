@@ -80,6 +80,7 @@ Options:
   })
   --build                 Build binaries (default: ${options.build.default})
   --test                  Run tests (default: ${options.test.default})
+  --jstest                Run JS regression tests (default: ${options.jstest.default})
   --pack                  Create NuGet packages (default: ${
     options.pack.default
   })
