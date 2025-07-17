@@ -191,7 +191,7 @@ extends:
                 node .ado\scripts\build.js
                 --no-build
                 --jstest
-                --output-path $(Build.StagingDirectory)\jstest
+                --output-path $(Build.StagingDirectory)\out
                 --platform ${{ MatrixEntry.TargetCPU }}
                 --configuration release
                 ${{ MatrixEntry.BuildUWP }}
