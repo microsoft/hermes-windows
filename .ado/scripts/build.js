@@ -29,6 +29,7 @@ const options = {
   configure: { type: "boolean", default: false },
   build: { type: "boolean", default: true },
   test: { type: "boolean", default: false },
+  jstest: { type: "boolean", default: false },
   pack: { type: "boolean", default: false },
   "clean-all": { type: "boolean", default: false },
   "clean-build": { type: "boolean", default: false },
@@ -79,6 +80,7 @@ Options:
   })
   --build                 Build binaries (default: ${options.build.default})
   --test                  Run tests (default: ${options.test.default})
+  --jstest                Run JS regression tests (default: ${options.jstest.default})
   --pack                  Create NuGet packages (default: ${
     options.pack.default
   })
@@ -245,6 +247,9 @@ function main() {
       }
       if (args.test) {
         cmakeTest(buildParams);
+      }
+      if (args.jstest) {
+        cmakeJSTest(buildParams);
       }
     });
   });
@@ -432,6 +437,11 @@ function cmakeTest(buildParams) {
   }
 
   runCMakeCommand("ctest --output-on-failure", buildParams);
+}
+
+// Run JS tests via check-hermes target using buildParams
+function cmakeJSTest(buildParams) {
+  runCMakeCommand("cmake --build . --target check-hermes", buildParams);
 }
 
 function cmakeBuildHermesCompiler(buildParams) {
