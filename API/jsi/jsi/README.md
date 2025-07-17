@@ -11,6 +11,9 @@ https://github.com/facebook/hermes repo.
 
 | Version | Commit Hash                                | Commit Description
 |--------:|:-------------------------------------------|------------------------------------------------------
+|      20 | `3eeb01121b52dbe6f9fd67c623a87e08ae9d5197` | Add UUID struct to JSI
+|         | `8d1641f1918ed97b2f69e02ec9f420aa70701331` | Add JSI castInterface API  
+|         | `34b807b919c5dacafdf23cd8f855d8f78acf810f` | Adds setRuntimeData and getRuntimeData JSI APIs
 |      19 | `00a84e7bae9b8569e7b3f4118f4238544c67fe1b` | Add createFromUtf16 JSI method
 |      18 | `d0328097291aade7269b2879910e11c48c8fbeb1` | Add default implementation for Object.create(prototype)
 |      17 | `1012f891165e7dda3b51939b75bbc52e16e48a75` | Add default implementation for Object.getPrototypeOf and Object.setPrototypeOf

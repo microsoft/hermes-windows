@@ -86,6 +86,7 @@ inline const Runtime::PointerValue* Runtime::getPointerValue(
   return value.data_.pointer.ptr_;
 }
 
+#if JSI_VERSION >= 20
 inline void Runtime::setRuntimeData(
     const UUID& uuid,
     const std::shared_ptr<void>& data) {
@@ -99,6 +100,7 @@ inline std::shared_ptr<void> Runtime::getRuntimeData(const UUID& uuid) {
   auto* data = (const std::shared_ptr<void>*)getRuntimeDataImpl(uuid);
   return data ? *data : nullptr;
 }
+#endif
 
 #if JSI_VERSION >= 17
 Value Object::getPrototype(Runtime& runtime) const {
