@@ -28,7 +28,7 @@
 
 #ifndef JSI_VERSION
 // Use the latest version by default
-#define JSI_VERSION 19
+#define JSI_VERSION 20
 #endif
 
 #if JSI_VERSION >= 3
@@ -65,6 +65,7 @@ class FBJSRuntime;
 namespace facebook {
 namespace jsi {
 
+#if JSI_VERSION >= 20
 /// UUID version 1 implementation. This should be constructed with constant
 /// arguments to identify fixed UUIDs.
 class JSI_EXPORT UUID {
@@ -165,6 +166,7 @@ struct JSI_EXPORT ICast {
   /// complexity from inheritance.
   ~ICast() = default;
 };
+#endif
 
 /// Base class for buffers of data or bytecode that need to be passed to the
 /// runtime. The buffer is expected to be fully immutable, so the result of
@@ -310,11 +312,17 @@ class JSI_EXPORT NativeState {
 /// in a non-Runtime-managed object, and not clean it up before the Runtime
 /// is shut down.  If your lifecycle is such that avoiding this is hard,
 /// you will probably need to do use your own locks.
+#if JSI_VERSION >= 20
 class JSI_EXPORT Runtime : public ICast {
+#else
+class JSI_EXPORT Runtime {
+#endif
  public:
   virtual ~Runtime();
 
+  #if JSI_VERSION >= 20
   ICast* castInterface(const UUID& interfaceUUID) override;
+  #endif
 
   /// Evaluates the given JavaScript \c buffer.  \c sourceURL is used
   /// to annotate the stack trace if there is an exception.  The
@@ -413,7 +421,8 @@ class JSI_EXPORT Runtime : public ICast {
   /// implementation of this function returns an \c Instrumentation instance
   /// which returns no metrics.
   virtual Instrumentation& instrumentation();
-
+  
+  #if JSI_VERSION >= 20
   /// Stores the pointer \p data with the \p uuid in the runtime. This can be
   /// used to store some custom data within the runtime. When the runtime is
   /// destroyed, or if an entry at an existing key is overwritten, the runtime
@@ -423,6 +432,7 @@ class JSI_EXPORT Runtime : public ICast {
   /// Returns the data associated with the \p uuid in the runtime. If there's no
   /// data associated with the uuid, return a null pointer.
   std::shared_ptr<void> getRuntimeData(const UUID& uuid);
+  #endif
 
  protected:
   friend class Pointer;
@@ -440,7 +450,8 @@ class JSI_EXPORT Runtime : public ICast {
   friend class Value;
   friend class Scope;
   friend class JSError;
-
+  
+  #if JSI_VERSION >= 20
   /// Stores the pointer \p data with the \p uuid in the runtime. This can be
   /// used to store some custom data within the runtime. When the runtime is
   /// destroyed, or if an entry at an existing key is overwritten, the runtime
@@ -453,6 +464,7 @@ class JSI_EXPORT Runtime : public ICast {
   /// Returns the data associated with the \p uuid in the runtime. If there's no
   /// data associated with the uuid, return a null pointer.
   virtual const void* getRuntimeDataImpl(const UUID& uuid);
+  #endif
 
   // Potential optimization: avoid the cloneFoo() virtual dispatch,
   // and instead just fix the number of fields, and copy them, since
@@ -1923,6 +1935,7 @@ class JSI_EXPORT JSError : public JSIException {
 /// specified by \c U. If cast is successful, return a pointer to the object
 /// as a raw pointer of \c U. Otherwise, return nullptr.
 /// The returned interface same lifetime as the object referenced by \p ptr.
+#if JSI_VERSION >= 20
 template <typename U, typename T>
 U* castInterface(T* ptr) {
   if (ptr) {
@@ -1944,6 +1957,7 @@ std::shared_ptr<U> dynamicInterfaceCast(T&& ptr) {
   }
   return nullptr;
 }
+#endif
 
 } // namespace jsi
 } // namespace facebook

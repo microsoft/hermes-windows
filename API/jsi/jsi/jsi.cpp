@@ -20,6 +20,7 @@ namespace jsi {
 
 namespace {
 
+#if JSI_VERSION >= 20
 /// A global map used to store custom runtime data for VMs that do not provide
 /// their own default implementation of setRuntimeData and getRuntimeData.
 struct RuntimeDataGlobal {
@@ -76,6 +77,7 @@ class RemoveRuntimeDataHostObject : public jsi::HostObject {
  private:
   Runtime* runtime_;
 };
+#endif
 
 // This is used for generating short exception strings.
 std::string kindToString(const Value& v, Runtime* rt = nullptr) {
@@ -296,9 +298,11 @@ NativeState::~NativeState() {}
 
 Runtime::~Runtime() {}
 
+#if JSI_VERSION >= 20
 ICast* Runtime::castInterface(const UUID& /*interfaceUUID*/) {
   return nullptr;
 }
+#endif
 
 Instrumentation& Runtime::instrumentation() {
   class NoInstrumentation : public Instrumentation {
@@ -461,6 +465,7 @@ Object Runtime::createObjectWithPrototype(const Value& prototype) {
 }
 #endif
 
+#if JSI_VERSION >= 20
 void Runtime::setRuntimeDataImpl(
     const UUID& uuid,
     const void* data,
@@ -516,6 +521,7 @@ const void* Runtime::getRuntimeDataImpl(const UUID& uuid) {
   }
   return nullptr;
 }
+#endif
 
 Pointer& Pointer::operator=(Pointer&& other) JSI_NOEXCEPT_15 {
   if (ptr_) {
