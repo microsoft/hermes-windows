@@ -1914,7 +1914,8 @@ TEST_P(JSITest, CastInterface) {
   auto randomUuid = UUID{0xf2cd96cf, 0x455e, 0x42d9, 0x850a, 0x13e2cde59b8b};
   auto ptr = rd.castInterface(randomUuid);
 
-  EXPECT_EQ(ptr, nullptr);
+  // ptr is of type facebook::jsi::ICast* , requires force the correct overload
+  EXPECT_EQ(static_cast<void*>(ptr), static_cast<void*>(nullptr));
 }
 
 INSTANTIATE_TEST_CASE_P(
