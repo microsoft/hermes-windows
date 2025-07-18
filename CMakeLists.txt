@@ -58,13 +58,12 @@ project(Hermes
         VERSION 0.12.0
         LANGUAGES C CXX)
 
-# Handle HERMES_FORCE_NATIVE_BUILD option to override cross-compilation detection
-option(HERMES_FORCE_NATIVE_BUILD "Force CMake to treat this as a native build (not cross-compilation)" ON)
-if(HERMES_FORCE_NATIVE_BUILD)
-  set(CMAKE_CROSSCOMPILING FALSE)
-endif()
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/")
+
+# Include Windows-specific build configuration
+if(WIN32)
+  include(HermesWindows)
+endif()
 
 set(LLVH_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/llvh)
 
@@ -76,15 +75,6 @@ include(Lit)
 if(NOT DEFINED HERMES_RELEASE_VERSION)
   set(HERMES_RELEASE_VERSION ${PROJECT_VERSION})
 endif()
-
-# The version that we put inside of DLL files
-if(NOT DEFINED HERMES_FILE_VERSION)
-  set(HERMES_FILE_VERSION "${PROJECT_VERSION}.0")
-endif()
-
-# The file version convertible to number representation.
-# We must replace dots with commas.
-string(REPLACE "." "," HERMES_FILE_VERSION_BIN ${HERMES_FILE_VERSION})
 
 find_package(Python COMPONENTS Interpreter)
 if (NOT Python_Interpreter_FOUND)
@@ -312,6 +302,11 @@ if (HERMES_IS_ANDROID)
   add_definitions(-DHERMES_PLATFORM_UNICODE=HERMES_PLATFORM_UNICODE_JAVA)
 endif()
 
+# Configure Windows-specific build settings
+if(WIN32)
+  hermes_windows_configure_build()
+endif()
+
 if(HERMES_CHECK_NATIVE_STACK)
   if (WIN32)
     message(
@@ -339,79 +334,42 @@ if (HERMES_STATIC_LINK)
   set(BUILD_SHARED_LIBS OFF)
 endif()
 
-if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC" AND NOT WIN32)
-  # Check if the linker supports deleting unused sections and ICF.
-  # We can't simply CHECK_CXX_COMPILER_FLAG("-Wl,--gc-sections" ..) because CMake
-  # will compile and link separately and only passes the flag during compilation.
-  # TODO: Use check_linker_flag once we have CMake 3.18.
-  # Note: Skip this on Windows even with Clang, as lld-link expects MSVC-style flags
-  set(OLD_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
-  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
-  CHECK_CXX_COMPILER_FLAG("" HAVE_GC_SECTIONS)
+# Check if the linker supports deleting unused sections and ICF.
+# We can't simply CHECK_CXX_COMPILER_FLAG("-Wl,--gc-sections" ..) because CMake
+# will compile and link separately and only passes the flag during compilation.
+# TODO: Use check_linker_flag once we have CMake 3.18.
+set(OLD_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
+CHECK_CXX_COMPILER_FLAG("" HAVE_GC_SECTIONS)
 
-  # Only check for -dead_strip on Apple because some linkers may interpret it
-  # as "-d -e ad_strip".
-  if(APPLE)
-    set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,-dead_strip")
-    CHECK_CXX_COMPILER_FLAG("" HAVE_DEAD_STRIP)
-  endif()
+# Only check for -dead_strip on Apple because some linkers may interpret it
+# as "-d -e ad_strip".
+if(APPLE)
+  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,-dead_strip")
+  CHECK_CXX_COMPILER_FLAG("" HAVE_DEAD_STRIP)
+endif()
 
-  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--icf=safe")
-  CHECK_CXX_COMPILER_FLAG("" HAVE_ICF)
-  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,--icf=safe")
+CHECK_CXX_COMPILER_FLAG("" HAVE_ICF)
+set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS}")
 
-  if(HAVE_GC_SECTIONS)
-    add_flag_if_supported("-ffunction-sections" FUNCTION_SECTIONS)
-    add_flag_if_supported("-fdata-sections" DATA_SECTIONS)
-    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--gc-sections")
-  elseif(HAVE_DEAD_STRIP)
-    # This is similar to the above, but for macOS.
-    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:-dead_strip")
-  endif()
+if(HAVE_GC_SECTIONS)
+  add_flag_if_supported("-ffunction-sections" FUNCTION_SECTIONS)
+  add_flag_if_supported("-fdata-sections" DATA_SECTIONS)
+  list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--gc-sections")
+elseif(HAVE_DEAD_STRIP)
+  # This is similar to the above, but for macOS.
+  list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:-dead_strip")
+endif()
 
-  if(HAVE_ICF)
-    add_flag_if_supported("-faddrsig" ADDRSIG)
-    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--icf=safe")
-  endif()
-elseif(WIN32 AND "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-  # For Clang on Windows, use MSVC-style linker flags with lld-link
-  # Test for Microsoft-style optimization flags
-  set(OLD_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
-  
-  set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,/OPT:REF")
-  CHECK_CXX_COMPILER_FLAG("" HAVE_OPT_REF)
-  
-  # set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS} -Wl,/OPT:ICF")
-  # CHECK_CXX_COMPILER_FLAG("" HAVE_OPT_ICF)
-  
-  # set(CMAKE_EXE_LINKER_FLAGS "${OLD_CMAKE_EXE_LINKER_FLAGS}")
-
-  if(HAVE_OPT_REF)
-    add_flag_if_supported("-ffunction-sections" FUNCTION_SECTIONS)
-    add_flag_if_supported("-fdata-sections" DATA_SECTIONS)
-    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/OPT:REF")
-  endif()
-
-  # if(HAVE_OPT_ICF)
-  #   add_flag_if_supported("-faddrsig" ADDRSIG)
-  #   list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/OPT:ICF")
-  # endif()
-  list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/OPT:NOICF")
+if(HAVE_ICF)
+  add_flag_if_supported("-faddrsig" ADDRSIG)
+  list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--icf=safe")
 endif()
 
 # Make the HERMES_RELEASE_VERSION accessible for version printing in C++.
 if(HERMES_RELEASE_VERSION)
     add_definitions(-DHERMES_RELEASE_VERSION="${HERMES_RELEASE_VERSION}")
-endif()
-
-# Make the HERMES_FILE_VERSION accessible for version printing in C++.
-if(HERMES_FILE_VERSION)
-    add_definitions(-DHERMES_FILE_VERSION="${HERMES_FILE_VERSION}")
-endif()
-
-# Make the HERMES_FILE_VERSION_BIN accessible for converting to a number.
-if(HERMES_FILE_VERSION_BIN)
-    add_definitions(-DHERMES_FILE_VERSION_BIN=${HERMES_FILE_VERSION_BIN})
 endif()
 
 if(HERMES_ENABLE_IR_INSTRUMENTATION)
@@ -559,22 +517,6 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   endif()
 endif()
 
-if ("${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
-  # Enable source linking
-  # NOTE: Dependencies are not properly setup here.
-  #       Currently, CMake does not know to re-link if SOURCE_LINK_JSON changes
-  #       Currently, CMake does not re-generate SOURCE_LINK_JSON if git's HEAD changes
-  if ("${CMAKE_C_COMPILER_VERSION}" VERSION_GREATER_EQUAL "19.20")
-    include(SourceLink)
-    file(TO_NATIVE_PATH "${PROJECT_BINARY_DIR}/source_link.json" SOURCE_LINK_JSON)
-    source_link(${PROJECT_SOURCE_DIR} ${SOURCE_LINK_JSON})
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SOURCELINK:${SOURCE_LINK_JSON}")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /SOURCELINK:${SOURCE_LINK_JSON}")
-  else()
-    message(WARNING "Disabling SourceLink due to old version of MSVC. Please update to VS2019!")
-  endif()
-endif()
-
 # Export a JSON file with the compilation commands that external tools can use
 # to analyze the source code of the project.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -620,6 +562,7 @@ endif()
 
 # ICU is available on Windows, but only since Windows 10 v1703.
 # Therefore, use it only as fallback.
+# TODO: (vmoroz) Review it as a part of Intl work.
 if (NOT ICU_FOUND AND HERMES_ENABLE_WIN10_ICU_FALLBACK AND
     WIN32 # Windows 32 or 64 bit
     # We used to check for at least Windows 10 version 1703 (aka Creators Update)
@@ -639,13 +582,14 @@ endif()
 
 # If we have no ICU, then error out.
 if (NOT ICU_FOUND)
-  message(FATAL_ERROR "Unable to find ICU for ${CMAKE_SYSTEM_VERSION}.")
+  message(FATAL_ERROR "Unable to find ICU.")
 endif()
 
 # Declare a function that links ICU for the given target.
 # This adds the correct -rpath link flag as necessary.
 function(hermes_link_icu target_name)
   get_target_property(target_type ${target_name} TYPE)
+  # TODO: (vmoroz) Fix as a part of Intl work.
   # target_link_libraries(${target_name} ${ICU_LIBRARIES})
 
   if (HERMES_USE_STATIC_ICU)
@@ -693,15 +637,6 @@ endif()
 
 if (HERMES_MEMORY_INSTRUMENTATION)
   add_definitions(-DHERMES_MEMORY_INSTRUMENTATION)
-endif()
-
-if (HERMES_MSVC_CHECKED_ITERATORS)
-  add_definitions(-D_ITERATOR_DEBUG_LEVEL=1)
-endif()
-
-option(HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB "Use platform Unicode WINGLOB" ON)
-if (HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB)
-  add_definitions(-DUSE_PLATFORM_UNICODE_WINGLOB)
 endif()
 
 # Disables the GCC 64-to-32 bit truncation diagnostic if the compiler supports

@@ -15,9 +15,9 @@
 // 5. Create NuGet packages.
 //
 
-const { execSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
+const { execSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 const { parseArgs } = require("node:util");
 
 // The root of the local Hermes repository.
@@ -97,23 +97,19 @@ Options:
   --clean-build           Delete the build folder for the targeted configurations (default: ${
     options["clean-build"].default
   })
-  --clean-tools           Delete the tools folder used for UWP and ARM64 builds (default: ${
+  --clean-tools           Delete the tools folder used for cross-platform builds (default: ${
     options["clean-tools"].default
   })
   --clean-pkg             Delete NuGet pkg and pkg-staging folders (default: ${
     options["clean-pkg"].default
   })
-  --uwp                   Build for UWP instead of Win32 (default: ${
-    options.uwp.default
-  })
   --msvc                  Use MSVC compiler instead of Clang (default: ${
     options.msvc.default
   })
                           [Note: ARM64EC temporarily uses MSVC due to Clang 19.x issue]
-  --fake-build            Replace binaries with fake files for script debugging (default: ${
-    options["fake-build"].default
+  --uwp                   Build for UWP instead of Win32 (default: ${
+    options.uwp.default
   })
-                          [Note: This skips actual building and cannot be used to test builds]
   --platform              Target platform(s) (default: ${options.platform.default.join(
     ", "
   )}) [valid values: ${options.platform.validSet.join(", ")}]
@@ -132,6 +128,10 @@ Options:
   --windows-sdk-version   Windows SDK version (e.g., "10.0.19041.0") (default: ${
     options["windows-sdk-version"].default
   })
+  --fake-build            Replace binaries with fake files for script debugging (default: ${
+    options["fake-build"].default
+  })
+                          [Note: This skips actual building and cannot be used to test builds]
 
 Examples:
   node ${scriptRelativePath} --configure --no-build        # Configure only, don't build
@@ -176,6 +176,12 @@ function main() {
   ensureDir(args["output-path"]);
   args["output-path"] = path.resolve(args["output-path"]);
 
+  // Force MSVC for ARM64EC due to Clang 19.x linker issues (LLVM #113658)
+  // This must be removed when Clang 20 is available
+  args.msvc = args.msvc || args.platform === "arm64ec";
+
+  args.hostCpuArch = getHostCpuArch();
+
   console.log();
   console.log(`The ${scriptRelativePath} is invoked with parameters:`);
   console.log(`            clean-pkg: ${args["clean-pkg"]}`);
@@ -188,10 +194,11 @@ function main() {
   console.log(`          clean-build: ${args["clean-build"]}`);
   console.log(`          clean-tools: ${args["clean-tools"]}`);
   console.log(`            clean-pkg: ${args["clean-pkg"]}`);
-  console.log(`                  uwp: ${args.uwp}`);
   console.log(`                 msvc: ${args.msvc}`);
+  console.log(`                  uwp: ${args.uwp}`);
   console.log(`             platform: ${args.platform}`);
   console.log(`        configuration: ${args.configuration}`);
+  console.log(`    host architecture: ${args.hostCpuArch}`);
   console.log(`          output-path: ${args["output-path"]}`);
   console.log(`     semantic-version: ${args["semantic-version"]}`);
   console.log(`         file-version: ${args["file-version"]}`);
@@ -238,6 +245,7 @@ function main() {
       };
       const buildParams = {
         ...configParams,
+        hostCpuArch: args.hostCpuArch,
         buildPath: getBuildPath(configParams),
         hasCustomTargets: args.targets.length > 0,
         targets: getTargets(args.targets, configParams),
@@ -281,6 +289,14 @@ function main() {
   const totalTime = new Date(elapsedTime).toISOString().substring(11, 19);
   console.log(`Build took ${totalTime} to run`);
   console.log();
+}
+
+function getHostCpuArch() {
+  const arch = process.arch;
+  if (arch === "x64" || arch === "arm64") {
+    return arch;
+  }
+  throw new Error(`Unsupported host CPU architecture: ${arch}`);
 }
 
 function removeUnusedFilesForComponentGovernance() {
@@ -352,11 +368,8 @@ function getAppPlatformName(isUwp) {
   return isUwp ? "uwp" : "win32";
 }
 
-function getCMakePreset({ msvc, configuration, platform }) {
-  // Force MSVC for ARM64EC due to Clang 19.x linker issues (LLVM #113658)
-  // This will be reverted when Clang 20 is available
-  const usemsvc = msvc || platform === "arm64ec";
-  const compiler = usemsvc ? "msvc" : "clang";
+function getCMakePreset({ msvc, configuration }) {
+  const compiler = msvc ? "msvc" : "clang";
   const configType = configuration === "release" ? "release" : "debug";
   return `ninja-${compiler}-${configType}`;
 }
@@ -379,89 +392,41 @@ function cleanPkg(runParams) {
 }
 
 function cmakeConfigure(buildParams) {
-  const { isUwp, platform, configuration, toolsPath, forceNativeBuild } =
-    buildParams;
+  const { isUwp, platform, toolsPath } = buildParams;
 
   cmakeBuildHermesCompiler(buildParams);
 
-  // Create environment variables for configuration-specific settings
-  const configEnv = {};
-
-  const preset = getCMakePreset({ msvc: args.msvc, configuration, platform });
+  const preset = getCMakePreset(buildParams);
   console.log(`Using CMake preset: ${preset}`);
 
   const genArgs = [`--preset=${preset}`, `-B\"${buildParams.buildPath}\"`];
-
-  // Add cross-compilation target for non-x64 platforms when using Clang
-  // Note: ARM64EC is temporarily excluded due to Clang 19.x linker issues (LLVM #113658)
-  // This will be re-enabled when Clang 20 is available
-  if (platform !== "x64" && !args.msvc && platform !== "arm64ec") {
-    let targetTriple = "";
-    if (platform === "x86") {
-      targetTriple = "i686-pc-windows-msvc";
-    } else if (platform === "arm64") {
-      targetTriple = "aarch64-pc-windows-msvc";
-    }
-
-    if (targetTriple) {
-      configEnv.HERMES_ADDITIONAL_C_FLAGS = `-target ${targetTriple}`;
-      configEnv.HERMES_ADDITIONAL_CXX_FLAGS = `-target ${targetTriple}`;
-    }
-  }
 
   if (args["file-version"] && args["file-version"] !== "0.0.0.0") {
     genArgs.push(`-DHERMES_FILE_VERSION=${args["file-version"]}`);
   }
 
+  genArgs.push(`-DHERMES_WINDOWS_TARGET_PLATFORM=${platform}`);
+
   if (isUwp) {
     genArgs.push("-DCMAKE_SYSTEM_NAME=WindowsStore");
     genArgs.push(`-DCMAKE_SYSTEM_VERSION="${args["windows-sdk-version"]}"`);
-    genArgs.push(
-      `-DIMPORT_HERMESC=\"${path.join(toolsPath, "ImportHermesc.cmake")}\"`
-    );
+  }
 
-    // Add UWP-specific linker flags when using Clang
-    // ARM64EC uses MSVC due to Clang 19.x linker issues (LLVM #113658)
-    if (!args.msvc && platform !== "arm64ec") {
-      configEnv.HERMES_ADDITIONAL_EXE_LINKER_FLAGS =
-        "-Wl,/APPCONTAINER -lwindowsapp";
-      configEnv.HERMES_ADDITIONAL_SHARED_LINKER_FLAGS =
-        "-Wl,/APPCONTAINER -lwindowsapp";
-    }
-  } else if (platform === "arm64" || platform === "arm64ec") {
-    genArgs.push("-DHERMES_MSVC_ARM64=ON");
+  // Use prebuilt Hermes compiler for cross-platform builds
+  if (isCrossPlatformBuild(buildParams)) {
     genArgs.push(
       `-DIMPORT_HERMESC=\"${path.join(toolsPath, "ImportHermesc.cmake")}\"`
     );
   }
 
-  // Always set environment variables with computed values
-  configEnv.HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB = isUwp ? "OFF" : "ON";
-  configEnv.HERMES_FORCE_NATIVE_BUILD = isCrossPlatformBuild(buildParams)
-    ? "OFF"
-    : "ON";
-
-  // Set ARM64EC-specific compiler flags
-  if (platform === "arm64ec") { 
-    configEnv.CFLAGS = "-arm64EC";
-    configEnv.CXXFLAGS = "-arm64EC";
-    configEnv.HERMES_ADDITIONAL_EXE_LINKER_FLAGS = "/MACHINE:ARM64EC";
-    configEnv.HERMES_ADDITIONAL_SHARED_LINKER_FLAGS = "/MACHINE:ARM64EC";
-  } else if (args.msvc) {
-    configEnv.HERMES_ADDITIONAL_EXE_LINKER_FLAGS = "/CETCOMPAT";
-    configEnv.HERMES_ADDITIONAL_SHARED_LINKER_FLAGS = "/CETCOMPAT";
-  }
-
-  // Create modified buildParams with configuration environment
-  const configBuildParams = {
-    ...buildParams,
-    configEnv,
-  };
-
-  runCMakeCommand(
-    `cmake ${genArgs.join(" ")} \"${sourcesPath}\"`,
-    configBuildParams
+  // We must force the native build mostly for the Clang compiler.
+  genArgs.push(
+    `-DHERMES_WINDOWS_FORCE_NATIVE_BUILD=${
+      isCrossPlatformBuild(buildParams) ? "OFF" : "ON"
+    }`
   );
+
+  runCMakeCommand(`cmake ${genArgs.join(" ")} \"${sourcesPath}\"`, buildParams);
 }
 
 function cmakeBuild(buildParams) {
@@ -482,7 +447,7 @@ function cmakeBuild(buildParams) {
 
 function cmakeTest(buildParams) {
   if (isCrossPlatformBuild(buildParams)) {
-    console.log("Skip testing for UWP and ARM64/ARM64EC builds");
+    console.log("Skip testing for cross-platform builds");
     return;
   }
 
@@ -501,7 +466,7 @@ function cmakeJSTest(buildParams) {
 function cmakeBuildHermesCompiler(buildParams) {
   const { toolsPath } = buildParams;
 
-  // Only build hermesc explicitly for UWP and ARM64/ARM64EC.
+  // Only build Hermes compiler for cross-platform builds.
   if (!isCrossPlatformBuild(buildParams)) {
     return;
   }
@@ -511,12 +476,12 @@ function cmakeBuildHermesCompiler(buildParams) {
     cmakeBuild({
       ...buildParams,
       isUwp: false,
-      platform: "x64",
+      platform: args.hostCpuArch,
+      hostCpuArch: args.hostCpuArch,
       configuration: "release",
       buildPath: toolsPath,
       targets: "hermesc",
       onBuildCompleted: undefined,
-      forceNativeBuild: true, // Flag to indicate this is a native tools build
     });
   }
 }
@@ -525,10 +490,9 @@ function runCMakeCommand(command, buildParams) {
   const { platform, buildPath } = buildParams;
 
   const env = { ...process.env };
-
-  // Add configuration-specific environment variables if provided
-  if (buildParams.configEnv) {
-    Object.assign(env, buildParams.configEnv);
+  if (platform === "arm64ec") {
+    env.CFLAGS = "-arm64EC";
+    env.CXXFLAGS = "-arm64EC";
   }
 
   ensureDir(buildPath);
@@ -554,11 +518,16 @@ function runCMakeCommand(command, buildParams) {
   }
 }
 
-function isCrossPlatformBuild({ isUwp, platform }) {
-  // Return true if we either build for UWP or ARM64/ARM64EC.
+function isCrossPlatformBuild({ isUwp, hostCpuArch, platform }) {
+  // Return true if we either build for UWP or the host architecture does
+  // not match the target architecture.
   // x86 can run natively on x64 machines, so it's not considered cross-platform.
-  // In true cross-platform cases we must build x64 tools and cannot run unit tests.
-  return isUwp || platform.startsWith("arm64");
+  // In true cross-platform cases we must build host specific tools and cannot run unit tests.
+  return (
+    isUwp ||
+    (hostCpuArch === "x64" && platform.startsWith("arm64")) ||
+    (hostCpuArch === "arm64" && platform !== "arm64")
+  );
 }
 
 function copyBuiltFilesToPkgStaging(buildParams) {
@@ -774,21 +743,35 @@ function getVCVarsAllBat() {
 }
 
 function getVCVarsAllBatArgs(buildParams) {
-  const { platform, isUwp } = buildParams;
+  const { platform, isUwp, hostCpuArch } = buildParams;
   let vcArgs = "";
-  switch (platform) {
-    case "x64":
-      vcArgs += "x64";
-      break;
-    case "x86":
-      vcArgs += "x64_x86";
-      break;
-    case "arm64":
-    case "arm64ec":
-      vcArgs += "x64_arm64";
-      break;
-    default:
-      vcArgs += "x64";
+  if (hostCpuArch === "x64") {
+    switch (platform) {
+      case "x86":
+        vcArgs += "x64_x86";
+        break;
+      case "arm64":
+      case "arm64ec":
+        vcArgs += "x64_arm64";
+        break;
+      case "x64":
+      default:
+        vcArgs += "x64";
+        break;
+    }
+  } else if (hostCpuArch === "arm64") {
+    switch (platform) {
+      case "x86":
+        vcArgs += "arm64_x86";
+        break;
+      case "x64":
+        vcArgs += "arm64_x64";
+        break;
+      case "arm64":
+      default:
+        vcArgs += "arm64";
+        break;
+    }
   }
 
   if (isUwp) {
