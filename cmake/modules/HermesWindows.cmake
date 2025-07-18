@@ -22,6 +22,9 @@ if(HERMES_FILE_VERSION_BIN)
   add_definitions(-DHERMES_FILE_VERSION_BIN=${HERMES_FILE_VERSION_BIN})
 endif()
 
+# Set the default target platform.
+set(HERMES_WINDOWS_TARGET_PLATFORM "x64" CACHE STRING "Target compilation platform")
+
 # Handle HERMES_WINDOWS_FORCE_NATIVE_BUILD option to override cross-compilation detection
 option(HERMES_WINDOWS_FORCE_NATIVE_BUILD "Force CMake to treat this as a native build (not cross-compilation)" ON)
 if(HERMES_WINDOWS_FORCE_NATIVE_BUILD)
@@ -206,27 +209,29 @@ function(hermes_windows_configure_build)
   message(STATUS "  Target platform: ${HERMES_WINDOWS_TARGET_PLATFORM}")
   
   # Configure cross-compilation if needed
-  if(NOT HERMES_WINDOWS_TARGET_PLATFORM)
-    set(HERMES_WINDOWS_TARGET_PLATFORM "x64")
-  endif()
   if(NOT HERMES_WINDOWS_TARGET_PLATFORM STREQUAL "x64")
     hermes_windows_configure_cross_compilation(${HERMES_WINDOWS_TARGET_PLATFORM})
   endif()
   
   # Configure compiler flags
-  if(Clang)
+  if("${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
     hermes_windows_configure_clang_flags()
   else()
     hermes_windows_configure_msvc_flags()
   endif()
   
   # Configure linker flags
-  if(Clang)
+  if("${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
     hermes_windows_configure_lld_flags()
   else()
     hermes_windows_configure_msvc_linker_flags()
   endif()
   
+  set(CMAKE_C_COMPILER_TARGET "${CMAKE_C_COMPILER_TARGET}" PARENT_SCOPE)
+  set(CMAKE_CXX_COMPILER_TARGET "${CMAKE_CXX_COMPILER_TARGET}" PARENT_SCOPE)
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}" PARENT_SCOPE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" PARENT_SCOPE)
+  set(HERMES_EXTRA_LINKER_FLAGS "${HERMES_EXTRA_LINKER_FLAGS}" PARENT_SCOPE)
   hermes_windows_show_configuration()
 
   message(STATUS "Hermes Windows build configuration complete")
