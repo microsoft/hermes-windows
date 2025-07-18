@@ -10,11 +10,15 @@
       "name": "base-common",
       "hidden": true,
       "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "Windows",
         "HERMESVM_PLATFORM_LOGGING": "ON",
         "HERMES_ENABLE_DEBUGGER": "ON",
         "HERMES_ENABLE_INTL": "ON",
-        "HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB": "$env{HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB}",
-        "HERMES_FORCE_NATIVE_BUILD": "$env{HERMES_FORCE_NATIVE_BUILD}"
+        "HERMES_WINDOWS_FORCE_NATIVE_BUILD": "ON"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
       }
     },
     {
@@ -25,18 +29,6 @@
       "environment": {
         "CC": "clang.exe",
         "CXX": "clang++.exe"
-      },
-      "cacheVariables": {
-        "CMAKE_SYSTEM_NAME": "Windows",
-        "CMAKE_SYSTEM_PROCESSOR": "AMD64",
-        "CMAKE_CXX_FLAGS": "-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview -fstack-protector-all $env{HERMES_ADDITIONAL_CXX_FLAGS}",
-        "CMAKE_C_FLAGS": "-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview -fstack-protector-all $env{HERMES_ADDITIONAL_C_FLAGS}",
-        "CMAKE_EXE_LINKER_FLAGS": "-Wl,/DEBUG:FULL -Wl,/guard:cf -Wl,/CETCOMPAT $env{HERMES_ADDITIONAL_EXE_LINKER_FLAGS}",
-        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,/DEBUG:FULL -Wl,/guard:cf -Wl,/CETCOMPAT $env{HERMES_ADDITIONAL_SHARED_LINKER_FLAGS}"
-      },
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
       },
       "vendor": {
         "microsoft.com/VisualStudioSettings/CMake/1.0": {
@@ -53,16 +45,6 @@
       "environment": {
         "CC": "cl.exe",
         "CXX": "cl.exe"
-      },
-      "cacheVariables": {
-        "CMAKE_SYSTEM_NAME": "Windows",
-        "CMAKE_SYSTEM_PROCESSOR": "AMD64",
-        "CMAKE_EXE_LINKER_FLAGS": "/DEBUG:FULL /guard:cf $env{HERMES_ADDITIONAL_EXE_LINKER_FLAGS}",
-        "CMAKE_SHARED_LINKER_FLAGS": "/DEBUG:FULL /guard:cf $env{HERMES_ADDITIONAL_SHARED_LINKER_FLAGS}"
-      },
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
       },
       "vendor": {
         "microsoft.com/VisualStudioSettings/CMake/1.0": {
@@ -84,7 +66,7 @@
       "description": "Ninja generator with clang.exe/clang++.exe (Debug, environment-determined architecture)",
       "binaryDir": "${sourceDir}/build/ninja-clang-debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "FastDebug"
+        "CMAKE_BUILD_TYPE": "Debug"
       }
     },
     {
@@ -104,7 +86,7 @@
       "description": "Ninja generator with MSVC cl.exe (Debug, environment-determined architecture)",
       "binaryDir": "${sourceDir}/build/ninja-msvc-debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "FastDebug"
+        "CMAKE_BUILD_TYPE": "Debug"
       }
     },
     {

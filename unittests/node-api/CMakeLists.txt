@@ -69,7 +69,6 @@ add_dependencies(NodeApiTests transformJSFiles copyBabelFiles)
 
 # copy hermes.dll next to the NodeApiTests.exe
 add_custom_command(TARGET NodeApiTests POST_BUILD
-  DEPENDS libshared
   VERBATIM
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
   $<TARGET_FILE:libshared>
