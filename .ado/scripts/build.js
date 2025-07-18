@@ -748,28 +748,28 @@ function getVCVarsAllBatArgs(buildParams) {
   if (hostCpuArch === "x64") {
     switch (platform) {
       case "x86":
-        vcArgs += "x64_x86";
+        vcArgs += " amd64_x86";
         break;
       case "arm64":
       case "arm64ec":
-        vcArgs += "x64_arm64";
+        vcArgs += " amd64_arm64";
         break;
       case "x64":
       default:
-        vcArgs += "x64";
+        vcArgs += " amd64";
         break;
     }
   } else if (hostCpuArch === "arm64") {
     switch (platform) {
       case "x86":
-        vcArgs += "arm64_x86";
+        vcArgs += " arm64_x86";
         break;
       case "x64":
-        vcArgs += "arm64_x64";
+        vcArgs += " arm64_amd64";
         break;
       case "arm64":
       default:
-        vcArgs += "arm64";
+        vcArgs += " arm64";
         break;
     }
   }
