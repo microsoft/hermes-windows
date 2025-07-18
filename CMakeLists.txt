@@ -305,6 +305,7 @@ endif()
 # Configure Windows-specific build settings
 if(WIN32)
   hermes_windows_configure_build()
+  hermes_windows_show_configuration()
 endif()
 
 if(HERMES_CHECK_NATIVE_STACK)
