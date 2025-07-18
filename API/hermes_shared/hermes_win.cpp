@@ -567,12 +567,16 @@ JSR_API hermes_dump_crash_data(jsr_runtime runtime, int32_t fd) {
 }
 
 JSR_API hermes_sampling_profiler_enable() {
-  facebook::hermes::HermesRuntime::enableSamplingProfiler();
+  auto *hermesRootAPI = facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
+      facebook::hermes::makeHermesRootAPI());
+  hermesRootAPI->enableSamplingProfiler();
   return napi_ok;
 }
 
 JSR_API hermes_sampling_profiler_disable() {
-  facebook::hermes::HermesRuntime::disableSamplingProfiler();
+  auto *hermesRootAPI = facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
+      facebook::hermes::makeHermesRootAPI());
+  hermesRootAPI->disableSamplingProfiler();
   return napi_ok;
 }
 
@@ -585,7 +589,9 @@ JSR_API hermes_sampling_profiler_remove(jsr_runtime runtime) {
 }
 
 JSR_API hermes_sampling_profiler_dump_to_file(const char *filename) {
-  facebook::hermes::HermesRuntime::dumpSampledTraceToFile(filename);
+  auto *hermesRootAPI = facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
+      facebook::hermes::makeHermesRootAPI());
+  hermesRootAPI->dumpSampledTraceToFile(filename);
   return napi_ok;
 }
 
