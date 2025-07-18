@@ -3,6 +3,12 @@
 
 # This file centralizes all Windows-specific build configuration logic.
 
+# Detect if lld-link is being used as the linker
+set(HERMES_USING_LLD_LINK OFF)
+if(DEFINED CMAKE_LINKER AND CMAKE_LINKER MATCHES "lld-link")
+  set(HERMES_USING_LLD_LINK ON)
+endif()
+
 # The version that we put inside of DLL files
 if(NOT DEFINED HERMES_FILE_VERSION)
   set(HERMES_FILE_VERSION "${PROJECT_VERSION}.0")
@@ -66,20 +72,13 @@ if ("${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
   endif()
 endif()
 
-# Security flags.
-# Note: Security warnings need to be fixed / baselined to be sdl clean - 4146, 4244 and 4267 (currently disabled)
-# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DYNAMICBASE /guard:cf")
-# set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DYNAMICBASE /guard:cf")
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /guard:cf /Qspectre /sdl /ZH:SHA_256")
-# set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /guard:cf /Qspectre /sdl /ZH:SHA_256")
-
 # Configure Clang compiler flags
 function(hermes_windows_configure_clang_flags)
     # Basic Windows definitions
     set(CLANG_CXX_FLAGS "-DWIN32 -D_WINDOWS -D_CRT_RAND_S")
     
     # Debug information
-    set(CLANG_CXX_FLAGS "${CLANG_CXX_FLAGS} -g -gcodeview")
+    set(CLANG_CXX_FLAGS "${CLANG_CXX_FLAGS} -g")
     
     # Optimization flags for function/data sections (enables /OPT:REF)
     set(CLANG_CXX_FLAGS "${CLANG_CXX_FLAGS} -ffunction-sections -fdata-sections")
@@ -97,7 +96,7 @@ function(hermes_windows_configure_msvc_flags)
     set(MSVC_CXX_FLAGS "/Zi")
     
     # Security flags
-    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /GS /guard:cf /Qspectre /sdl /ZH:SHA_256")
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /GS /DYNAMICBASE /guard:cf /Qspectre /sdl /ZH:SHA_256")
     
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${MSVC_CXX_FLAGS}" PARENT_SCOPE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MSVC_CXX_FLAGS}" PARENT_SCOPE)
@@ -107,10 +106,10 @@ endfunction()
 function(hermes_windows_configure_lld_flags)
   # Debug information
   list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/DEBUG:FULL")
-  list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/DEBUGTYPE:CV,FIXUP")
 
   if(CMAKE_BUILD_TYPE STREQUAL "Release")
     # Security flags
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER://DYNAMICBASE")
     list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/guard:cf")
     if(NOT HERMES_MSVC_ARM64)
       list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/CETCOMPAT")
@@ -137,7 +136,6 @@ endfunction()
 function(hermes_windows_configure_msvc_linker_flags)
   # Debug information
   list(APPEND MSVC_DEBUG_LINKER_FLAGS "LINKER:/DEBUG:FULL")
-  list(APPEND MSVC_DEBUG_LINKER_FLAGS "LINKER:/DEBUGTYPE:CV$<COMMA>FIXUP")
 
   # UWP-specific flags
   if(HERMES_WINDOWS_TARGET_UWP)
@@ -147,7 +145,7 @@ function(hermes_windows_configure_msvc_linker_flags)
   list(APPEND MSVC_RELEASE_LINKER_FLAGS "${MSVC_DEBUG_LINKER_FLAGS}")
 
   # Security flags
-  list(APPEND MSVC_RELEASE_LINKER_FLAGS "/ZH:SHA_256")
+  list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/ZH:SHA_256")
   list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/guard:cf")
   if(NOT HERMES_MSVC_ARM64)
     list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/CETCOMPAT")
@@ -232,7 +230,6 @@ function(hermes_windows_configure_build)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}" PARENT_SCOPE)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" PARENT_SCOPE)
   set(HERMES_EXTRA_LINKER_FLAGS "${HERMES_EXTRA_LINKER_FLAGS}" PARENT_SCOPE)
-  hermes_windows_show_configuration()
 
   message(STATUS "Hermes Windows build configuration complete")
 endfunction()
