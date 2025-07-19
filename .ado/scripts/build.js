@@ -392,7 +392,7 @@ function cleanPkg(runParams) {
 }
 
 function cmakeConfigure(buildParams) {
-  const { isUwp, platform, toolsPath } = buildParams;
+  const { isUwp, platform, hostCpuArch, toolsPath } = buildParams;
 
   cmakeBuildHermesCompiler(buildParams);
 
@@ -403,6 +403,25 @@ function cmakeConfigure(buildParams) {
 
   if (args["file-version"] && args["file-version"] !== "0.0.0.0") {
     genArgs.push(`-DHERMES_FILE_VERSION=${args["file-version"]}`);
+  }
+
+  // Add cross-compilation target for non-host platforms when using Clang
+  if (platform !== hostCpuArch && !args.msvc) {
+    let targetTriple = "";
+    if (platform === "x86") {
+      targetTriple = "i686-pc-windows-msvc";
+    } else if (platform === "x64") {
+      targetTriple = "x64-pc-windows-msvc";
+    } else if (platform === "arm64") {
+      targetTriple = "aarch64-pc-windows-msvc";
+    } else if (platform === "arm64ec") {
+      targetTriple = "arm64ec-pc-windows-msvc";
+    }
+
+    if (targetTriple) {
+      genArgs.push(`-DCMAKE_C_FLAGS="-target ${targetTriple}"`);
+      genArgs.push(`-DCMAKE_CXX_FLAGS="-target ${targetTriple}"`);
+    }
   }
 
   genArgs.push(`-DHERMES_WINDOWS_TARGET_PLATFORM=${platform}`);
