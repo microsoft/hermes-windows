@@ -109,7 +109,7 @@ function(hermes_windows_configure_lld_flags)
 
   if(CMAKE_BUILD_TYPE STREQUAL "Release")
     # Security flags
-    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER://DYNAMICBASE")
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/DYNAMICBASE")
     list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/guard:cf")
     if(NOT HERMES_MSVC_ARM64)
       list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/CETCOMPAT")
@@ -162,55 +162,17 @@ function(hermes_windows_configure_msvc_linker_flags)
   set(HERMES_EXTRA_LINKER_FLAGS "$<IF:$<CONFIG:Release>,${MSVC_RELEASE_LINKER_FLAGS},${MSVC_DEBUG_LINKER_FLAGS}>" PARENT_SCOPE)
 endfunction()
 
-# Configure cross-compilation settings
-function(hermes_windows_configure_cross_compilation target_platform)
-  if(NOT target_platform)
-    message(FATAL_ERROR "Target platform must be specified for cross-compilation")
-  endif()
-  
-  if(Clang)
-    # Map platform names to target triples
-    set(target_triple "")
-    if(target_platform STREQUAL "x86")
-      set(target_triple "i686-pc-windows-msvc")
-    elseif(target_platform STREQUAL "arm64")
-      set(target_triple "aarch64-pc-windows-msvc")
-    elseif(target_platform STREQUAL "arm64ec")
-      set(target_triple "arm64ec-pc-windows-msvc")
-    else()
-      message(FATAL_ERROR "Unsupported target platform: ${target_platform}")
-    endif()
-    
-    message(STATUS "Cross-compiling for ${target_platform} (${target_triple})")
-    
-    # Set the target triple for cross-compilation
-    set(CMAKE_C_COMPILER_TARGET ${target_triple} PARENT_SCOPE)
-    set(CMAKE_CXX_COMPILER_TARGET ${target_triple} PARENT_SCOPE)
-  endif()
-
-  # Configure additional cross-compilation settings
-  if(target_platform STREQUAL "arm64" OR target_platform STREQUAL "arm64ec")
-      set(HERMES_MSVC_ARM64 ON PARENT_SCOPE)
-  endif()
-  
-  # ARM64EC-specific compiler flags
-  if(target_platform STREQUAL "arm64ec")
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -arm64EC" PARENT_SCOPE)
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -arm64EC" PARENT_SCOPE)
-  endif()
-endfunction()
-
 # Main configuration function
 function(hermes_windows_configure_build)
   message(STATUS "Configuring Hermes Windows build...")
   message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER_ID}")
   message(STATUS "  Target platform: ${HERMES_WINDOWS_TARGET_PLATFORM}")
-  
-  # Configure cross-compilation if needed
-  if(NOT HERMES_WINDOWS_TARGET_PLATFORM STREQUAL "x64")
-    hermes_windows_configure_cross_compilation(${HERMES_WINDOWS_TARGET_PLATFORM})
+
+  if(${HERMES_WINDOWS_TARGET_PLATFORM} STREQUAL "arm64" OR ${HERMES_WINDOWS_TARGET_PLATFORM} STREQUAL "arm64ec")
+    set(HERMES_MSVC_ARM64 ON PARENT_SCOPE)
   endif()
-  
+
+
   # Configure compiler flags
   if("${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
     hermes_windows_configure_clang_flags()
@@ -225,8 +187,6 @@ function(hermes_windows_configure_build)
     hermes_windows_configure_msvc_linker_flags()
   endif()
   
-  set(CMAKE_C_COMPILER_TARGET "${CMAKE_C_COMPILER_TARGET}" PARENT_SCOPE)
-  set(CMAKE_CXX_COMPILER_TARGET "${CMAKE_CXX_COMPILER_TARGET}" PARENT_SCOPE)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}" PARENT_SCOPE)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" PARENT_SCOPE)
   set(HERMES_EXTRA_LINKER_FLAGS "${HERMES_EXTRA_LINKER_FLAGS}" PARENT_SCOPE)
@@ -237,8 +197,6 @@ endfunction()
 # Utility function to display current configuration
 function(hermes_windows_show_configuration)
   message(STATUS "=== Hermes Windows Configuration ===")
-  message(STATUS "C compiler target: ${CMAKE_C_COMPILER_TARGET}")
-  message(STATUS "CXX compiler target: ${CMAKE_CXX_COMPILER_TARGET}")
   message(STATUS "C Flags: ${CMAKE_C_FLAGS}")
   message(STATUS "CXX Flags: ${CMAKE_CXX_FLAGS}")
   message(STATUS "Extra Linker Flags: ${HERMES_EXTRA_LINKER_FLAGS}")
