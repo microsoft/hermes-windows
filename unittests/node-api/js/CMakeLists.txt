@@ -46,8 +46,8 @@ set(testJSFiles
 
 if(WIN32)
   # "npx" interrupts current shell script execution without the "call"
-  set(npx "call" "npx")
-  set(yarn "call" "yarn")
+  set(npx cmd /c npx)
+  set(yarn cmd /c yarn)
 else()
   set(npx "npx")
   set(yarn "yarn")
