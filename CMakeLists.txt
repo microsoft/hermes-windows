@@ -498,6 +498,8 @@ if (GCC_COMPATIBLE)
   # Don't export symbols unless we explicitly say so
   append("-fvisibility=hidden" CMAKE_CXX_FLAGS CMAKE_C_FLAGS)
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
+  # We downgrade 4149 to level 3 to keep this as a warning because the default level 2 is bumped to error
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w34146")
   # C4068 unknown pragma
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4068")
   # C4200 nonstandard extension used: zero-sized array in struct/union

@@ -1436,7 +1436,7 @@ ExecutionStatus Runtime::raiseURIError(const TwineChar16 &msg) {
 }
 
 ExecutionStatus Runtime::raiseStackOverflow(StackOverflowKind kind) {
-  const char *msg;
+  const char *msg = nullptr;
   switch (kind) {
     case StackOverflowKind::JSRegisterStack:
       msg = "Maximum call stack size exceeded";

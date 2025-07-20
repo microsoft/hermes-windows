@@ -15,10 +15,15 @@
 // 5. Create NuGet packages.
 //
 
-const { execSync } = require("node:child_process");
-const fs = require("node:fs");
-const path = require("node:path");
-const { parseArgs } = require("node:util");
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
+
+// ES modules don't have __dirname, so we need to create it
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // The root of the local Hermes repository.
 const sourcesPath = path.resolve(__dirname, path.join("..", ".."));
@@ -111,10 +116,10 @@ Options:
     options.uwp.default
   })
   --platform              Target platform(s) (default: ${options.platform.default.join(
-    ", "
+    ", ",
   )}) [valid values: ${options.platform.validSet.join(", ")}]
   --configuration         Build configuration(s) (default: ${options.configuration.default.join(
-    ", "
+    ", ",
   )}) [valid values: ${options.configuration.validSet.join(", ")}]
   --output-path           Path to the output directory (default: ${
     options["output-path"].default
@@ -178,7 +183,7 @@ function main() {
 
   // Force MSVC for ARM64EC due to Clang 19.x linker issues (LLVM #113658)
   // This must be removed when Clang 20 is available
-  args.msvc = args.msvc || args.platform === "arm64ec";
+  const useMsvc = args.msvc || args.platform.includes("arm64ec");
 
   args.hostCpuArch = getHostCpuArch();
 
@@ -195,6 +200,7 @@ function main() {
   console.log(`          clean-tools: ${args["clean-tools"]}`);
   console.log(`            clean-pkg: ${args["clean-pkg"]}`);
   console.log(`                 msvc: ${args.msvc}`);
+  console.log(`              useMsvc: ${useMsvc}`);
   console.log(`                  uwp: ${args.uwp}`);
   console.log(`             platform: ${args.platform}`);
   console.log(`        configuration: ${args.configuration}`);
@@ -241,23 +247,19 @@ function main() {
       const configParams = {
         ...runParams,
         platform,
+        hostCpuArch: args.hostCpuArch,
         configuration,
       };
       const buildParams = {
         ...configParams,
-        hostCpuArch: args.hostCpuArch,
+        msvc: useMsvc,
         buildPath: getBuildPath(configParams),
         hasCustomTargets: args.targets.length > 0,
         targets: getTargets(args.targets, configParams),
         onBuildCompleted: copyBuiltFilesToPkgStaging,
       };
-      console.log(
-        "Build for " +
-          `IsUWP: ${buildParams.isUwp}, ` +
-          `Platform: ${buildParams.platform}, ` +
-          `Configuration: ${buildParams.configuration}, ` +
-          `Build path: ${buildParams.buildPath}`
-      );
+
+      console.log('buildParams: ', buildParams);
 
       if (args["fake-build"]) {
         copyFakeFilesToPkgStaging(buildParams);
@@ -343,7 +345,7 @@ function getBuildPath({ isUwp, buildPath, platform, configuration }) {
 function getTargets(userTargets, configParams) {
   // If user specified targets, use those
   if (userTargets.length > 0) {
-    let targetList = [];
+    const targetList = [];
 
     for (const target of userTargets) {
       if (typeof target === "string") {
@@ -352,7 +354,7 @@ function getTargets(userTargets, configParams) {
           ...target
             .split(",")
             .map((t) => t.trim())
-            .filter((t) => t)
+            .filter((t) => t),
         );
       }
     }
@@ -392,21 +394,22 @@ function cleanPkg(runParams) {
 }
 
 function cmakeConfigure(buildParams) {
-  const { isUwp, platform, hostCpuArch, toolsPath } = buildParams;
+  const { msvc, isUwp, platform, hostCpuArch, toolsPath } = buildParams;
 
+  console.log('buildParams: ', buildParams);
   cmakeBuildHermesCompiler(buildParams);
 
   const preset = getCMakePreset(buildParams);
   console.log(`Using CMake preset: ${preset}`);
 
-  const genArgs = [`--preset=${preset}`, `-B\"${buildParams.buildPath}\"`];
+  const genArgs = [`--preset=${preset}`, `-B"${buildParams.buildPath}"`];
 
   if (args["file-version"] && args["file-version"] !== "0.0.0.0") {
     genArgs.push(`-DHERMES_FILE_VERSION=${args["file-version"]}`);
   }
 
   // Add cross-compilation target for non-host platforms when using Clang
-  if (platform !== hostCpuArch && !args.msvc) {
+  if (platform !== hostCpuArch && !msvc) {
     let targetTriple = "";
     if (platform === "x86") {
       targetTriple = "i686-pc-windows-msvc";
@@ -429,12 +432,19 @@ function cmakeConfigure(buildParams) {
   if (isUwp) {
     genArgs.push("-DCMAKE_SYSTEM_NAME=WindowsStore");
     genArgs.push(`-DCMAKE_SYSTEM_VERSION="${args["windows-sdk-version"]}"`);
+
+    if (!msvc) {
+      genArgs.push('-DCMAKE_EXE_LINKER_FLAGS="-Wl,/APPCONTAINER -lwindowsapp"');
+      genArgs.push(
+        '-DCMAKE_SHARED_LINKER_FLAGS="-Wl,/APPCONTAINER -lwindowsapp"',
+      );
+    }
   }
 
   // Use prebuilt Hermes compiler for cross-platform builds
   if (isCrossPlatformBuild(buildParams)) {
     genArgs.push(
-      `-DIMPORT_HERMESC=\"${path.join(toolsPath, "ImportHermesc.cmake")}\"`
+      `-DIMPORT_HERMESC="${path.join(toolsPath, "ImportHermesc.cmake")}"`,
     );
   }
 
@@ -442,10 +452,10 @@ function cmakeConfigure(buildParams) {
   genArgs.push(
     `-DHERMES_WINDOWS_FORCE_NATIVE_BUILD=${
       isCrossPlatformBuild(buildParams) ? "OFF" : "ON"
-    }`
+    }`,
   );
 
-  runCMakeCommand(`cmake ${genArgs.join(" ")} \"${sourcesPath}\"`, buildParams);
+  runCMakeCommand(`cmake ${genArgs.join(" ")} "${sourcesPath}"`, buildParams);
 }
 
 function cmakeBuild(buildParams) {
@@ -498,6 +508,7 @@ function cmakeBuildHermesCompiler(buildParams) {
       platform: args.hostCpuArch,
       hostCpuArch: args.hostCpuArch,
       configuration: "release",
+      msvc: args.msvc,
       buildPath: toolsPath,
       targets: "hermesc",
       onBuildCompleted: undefined,
@@ -528,7 +539,7 @@ function runCMakeCommand(command, buildParams) {
     // Don't show JavaScript stack trace for build tool errors
     // The actual error output has already been displayed via stdio: "inherit"
     console.error(
-      `\nBuild command failed with exit code: ${error.status || "unknown"}`
+      `\nBuild command failed with exit code: ${error.status || "unknown"}`,
     );
     process.exit(error.status || 1);
   } finally {
@@ -569,13 +580,13 @@ function copyBuiltFilesToPkgStaging(buildParams) {
       "hermes.exe",
       toolsSourcePath,
       toolsStagingPath,
-      copyFileIsOptional
+      copyFileIsOptional,
     );
     copyFile(
       "hermesc.exe",
       toolsSourcePath,
       toolsStagingPath,
-      copyFileIsOptional
+      copyFileIsOptional,
     );
   }
 }
@@ -609,7 +620,7 @@ function copyFile(fileName, sourcePath, targetPath, optional = false) {
 function createFakeBinFile(targetPath, fileName) {
   fs.copyFileSync(
     path.join(process.env.SystemRoot, "system32", "kernel32.dll"),
-    path.join(targetPath, fileName)
+    path.join(targetPath, fileName),
   );
 }
 
@@ -622,7 +633,7 @@ function ensureStagingPaths(buildParams) {
     "native",
     getAppPlatformName(isUwp),
     configuration,
-    platform
+    platform,
   );
   ensureDir(dllStagingPath);
 
@@ -631,7 +642,7 @@ function ensureStagingPaths(buildParams) {
     "tools",
     "native",
     configuration,
-    platform
+    platform,
   );
   ensureDir(toolsStagingPath);
 
@@ -676,17 +687,17 @@ function packNuGet(runParams) {
   copyFile(
     "Microsoft.JavaScript.Hermes.props",
     nugetSourcePath,
-    stagingBuildNativePath
+    stagingBuildNativePath,
   );
   copyFile(
     "Microsoft.JavaScript.Hermes.targets",
     nugetSourcePath,
-    stagingBuildNativePath
+    stagingBuildNativePath,
   );
   copyFile(
     "Microsoft.JavaScript.Hermes.nuspec",
     nugetSourcePath,
-    pkgStagingPath
+    pkgStagingPath,
   );
 
   // Copy UAP tag file
@@ -715,7 +726,7 @@ function packNuGet(runParams) {
 
   const nugetPackBaseCmd = `nuget pack "${path.join(
     pkgStagingPath,
-    "Microsoft.JavaScript.Hermes.nuspec"
+    "Microsoft.JavaScript.Hermes.nuspec",
   )}" -OutputDirectory "${pkgPath}" -NoDefaultExcludes`;
   const nugetPackCmd = `${nugetPackBaseCmd} -Properties "${packageProperties}"`;
   console.log(`Run command: ${nugetPackCmd}`);
@@ -731,14 +742,14 @@ function getVCVarsAllBat() {
     process.env["ProgramFiles(x86)"] || process.env["ProgramFiles"],
     "Microsoft Visual Studio",
     "Installer",
-    "vswhere.exe"
+    "vswhere.exe",
   );
   if (!fs.existsSync(vsWhere)) {
     throw new Error("Could not find vswhere.exe");
   }
 
   const versionJson = JSON.parse(
-    execSync(`"${vsWhere}" -format json -version 17`).toString()
+    execSync(`"${vsWhere}" -format json -version 17`).toString(),
   );
   if (versionJson.length > 1) {
     console.warn("More than one VS install detected, picking the first one");
@@ -750,11 +761,11 @@ function getVCVarsAllBat() {
     "VC",
     "Auxiliary",
     "Build",
-    "vcvarsall.bat"
+    "vcvarsall.bat",
   );
   if (!fs.existsSync(vcVarsAllBat)) {
     throw new Error(
-      `Could not find vcvarsall.bat at expected Visual Studio installation path: ${vcVarsAllBat}`
+      `Could not find vcvarsall.bat at expected Visual Studio installation path: ${vcVarsAllBat}`,
     );
   }
 

@@ -1,0 +1,4 @@
+# Ignore files for Prettier
+node_modules/
+*.min.js
+*.bundle.js
