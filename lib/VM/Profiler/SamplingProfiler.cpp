@@ -213,7 +213,7 @@ facebook::hermes::sampling_profiler::Profile SamplingProfiler::dumpAsProfile() {
   std::lock_guard<std::mutex> lk(runtimeDataLock_);
 
   facebook::hermes::sampling_profiler::Profile profile =
-      ProfileGenerator::generate(*this, sampledStacks_);
+      generateProfile(*this, sampledStacks_);
 
   clear();
   return profile;
