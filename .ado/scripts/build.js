@@ -15,10 +15,15 @@
 // 5. Create NuGet packages.
 //
 
-const { execSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const { parseArgs } = require("node:util");
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
+
+// ES modules don't have __dirname, so we need to create it
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // The root of the local Hermes repository.
 const sourcesPath = path.resolve(__dirname, path.join("..", ".."));
@@ -28,6 +33,7 @@ const options = {
   help: { type: "boolean", default: false },
   configure: { type: "boolean", default: false },
   build: { type: "boolean", default: true },
+  targets: { type: "string", multiple: true, default: [] },
   test: { type: "boolean", default: false },
   jstest: { type: "boolean", default: false },
   pack: { type: "boolean", default: false },
@@ -73,12 +79,18 @@ if (args.help) {
 function printHelp() {
   console.log(`Usage: node ${scriptRelativePath} [options]
 
+Note: All boolean flags support negation (e.g., --no-build, --no-test)
+      CMake will be configured automatically if build folder is empty and --build is used
+
 Options:
   --help                  Show this help message and exit
   --configure             Configure CMake before the build (default: ${
     options.configure.default
   })
   --build                 Build binaries (default: ${options.build.default})
+  --no-build              Skip building binaries
+  --targets               CMake build target(s) (default: all targets)
+                          Common targets: hermesc, libshared, hermes, APITests
   --test                  Run tests (default: ${options.test.default})
   --jstest                Run JS regression tests (default: ${options.jstest.default})
   --pack                  Create NuGet packages (default: ${
@@ -90,23 +102,24 @@ Options:
   --clean-build           Delete the build folder for the targeted configurations (default: ${
     options["clean-build"].default
   })
-  --clean-tools           Delete the tools folder used for UWP and ARM64 builds (default: ${
+  --clean-tools           Delete the tools folder used for cross-platform builds (default: ${
     options["clean-tools"].default
   })
   --clean-pkg             Delete NuGet pkg and pkg-staging folders (default: ${
     options["clean-pkg"].default
   })
-  --uwp                   Should we build for UWP or Win32? (default: ${
-    options.uwp.default
-  })
   --msvc                  Use MSVC compiler instead of Clang (default: ${
     options.msvc.default
-  }) [Note: ARM64EC temporarily uses MSVC due to Clang 19.x issue]
+  })
+                          [Note: ARM64EC temporarily uses MSVC due to Clang 19.x issue]
+  --uwp                   Build for UWP instead of Win32 (default: ${
+    options.uwp.default
+  })
   --platform              Target platform(s) (default: ${options.platform.default.join(
-    ", "
+    ", ",
   )}) [valid values: ${options.platform.validSet.join(", ")}]
   --configuration         Build configuration(s) (default: ${options.configuration.default.join(
-    ", "
+    ", ",
   )}) [valid values: ${options.configuration.validSet.join(", ")}]
   --output-path           Path to the output directory (default: ${
     options["output-path"].default
@@ -123,6 +136,15 @@ Options:
   --fake-build            Replace binaries with fake files for script debugging (default: ${
     options["fake-build"].default
   })
+                          [Note: This skips actual building and cannot be used to test builds]
+
+Examples:
+  node ${scriptRelativePath} --configure --no-build        # Configure only, don't build
+  node ${scriptRelativePath}                               # Build (will configure if needed)
+  node ${scriptRelativePath} --platform arm64 --uwp        # Build ARM64 UWP
+  node ${scriptRelativePath} --clean-build --msvc          # Clean and build with MSVC
+  node ${scriptRelativePath} --targets hermesc             # Build only hermesc target
+  node ${scriptRelativePath} --targets hermesc,libshared   # Build multiple targets
 `);
 }
 
@@ -159,21 +181,31 @@ function main() {
   ensureDir(args["output-path"]);
   args["output-path"] = path.resolve(args["output-path"]);
 
+  // Force MSVC for ARM64EC due to Clang 19.x linker issues (LLVM #113658)
+  // This must be removed when Clang 20 is available
+  const useMsvc = args.msvc || args.platform.includes("arm64ec");
+
+  args.hostCpuArch = getHostCpuArch();
+
   console.log();
   console.log(`The ${scriptRelativePath} is invoked with parameters:`);
   console.log(`            clean-pkg: ${args["clean-pkg"]}`);
   console.log(`            configure: ${args.configure}`);
   console.log(`                build: ${args.build}`);
+  console.log(`              targets: ${args.targets}`);
   console.log(`                 test: ${args.test}`);
+  console.log(`               jstest: ${args.jstest}`);
   console.log(`                 pack: ${args.pack}`);
   console.log(`            clean-all: ${args["clean-all"]}`);
   console.log(`          clean-build: ${args["clean-build"]}`);
   console.log(`          clean-tools: ${args["clean-tools"]}`);
   console.log(`            clean-pkg: ${args["clean-pkg"]}`);
-  console.log(`                  uwp: ${args.uwp}`);
   console.log(`                 msvc: ${args.msvc}`);
+  console.log(`              useMsvc: ${useMsvc}`);
+  console.log(`                  uwp: ${args.uwp}`);
   console.log(`             platform: ${args.platform}`);
   console.log(`        configuration: ${args.configuration}`);
+  console.log(`    host architecture: ${args.hostCpuArch}`);
   console.log(`          output-path: ${args["output-path"]}`);
   console.log(`     semantic-version: ${args["semantic-version"]}`);
   console.log(`         file-version: ${args["file-version"]}`);
@@ -216,21 +248,19 @@ function main() {
       const configParams = {
         ...runParams,
         platform,
+        hostCpuArch: args.hostCpuArch,
         configuration,
       };
       const buildParams = {
         ...configParams,
+        msvc: useMsvc,
         buildPath: getBuildPath(configParams),
-        targets: isCrossPlatformBuild(configParams) ? "libshared" : "",
+        hasCustomTargets: args.targets.length > 0,
+        targets: getTargets(args.targets, configParams),
         onBuildCompleted: copyBuiltFilesToPkgStaging,
       };
-      console.log(
-        "Build for " +
-          `IsUWP: ${buildParams.isUwp}, ` +
-          `Platform: ${buildParams.platform}, ` +
-          `Configuration: ${buildParams.configuration}, ` +
-          `Build path: ${buildParams.buildPath}`
-      );
+
+      console.log("buildParams: ", buildParams);
 
       if (args["fake-build"]) {
         copyFakeFilesToPkgStaging(buildParams);
@@ -262,6 +292,14 @@ function main() {
   const totalTime = new Date(elapsedTime).toISOString().substring(11, 19);
   console.log(`Build took ${totalTime} to run`);
   console.log();
+}
+
+function getHostCpuArch() {
+  const arch = process.arch;
+  if (arch === "x64" || arch === "arm64") {
+    return arch;
+  }
+  throw new Error(`Unsupported host CPU architecture: ${arch}`);
 }
 
 function removeUnusedFilesForComponentGovernance() {
@@ -305,15 +343,36 @@ function getBuildPath({ isUwp, buildPath, platform, configuration }) {
   return path.join(buildPath, triplet);
 }
 
+function getTargets(userTargets, configParams) {
+  // If user specified targets, use those
+  if (userTargets.length > 0) {
+    const targetList = [];
+
+    for (const target of userTargets) {
+      if (typeof target === "string") {
+        // Split comma-separated values and add to list
+        targetList.push(
+          ...target
+            .split(",")
+            .map((t) => t.trim())
+            .filter((t) => t),
+        );
+      }
+    }
+    // Remove duplicates and join with spaces
+    return [...new Set(targetList)].join(" ");
+  }
+
+  // If no user targets are specified, fall back to the existing logic
+  return isCrossPlatformBuild(configParams) ? "libshared" : "";
+}
+
 function getAppPlatformName(isUwp) {
   return isUwp ? "uwp" : "win32";
 }
 
-function getCMakePreset({ msvc, configuration, platform }) {
-  // Force MSVC for ARM64EC due to Clang 19.x linker issues (LLVM #113658)
-  // This will be reverted when Clang 20 is available
-  const usemsvc = msvc || platform === "arm64ec";
-  const compiler = usemsvc ? "msvc" : "clang";
+function getCMakePreset({ msvc, configuration }) {
+  const compiler = msvc ? "msvc" : "clang";
   const configType = configuration === "release" ? "release" : "debug";
   return `ninja-${compiler}-${configType}`;
 }
@@ -336,78 +395,68 @@ function cleanPkg(runParams) {
 }
 
 function cmakeConfigure(buildParams) {
-  const { isUwp, platform, configuration, toolsPath, forceNativeBuild } =
-    buildParams;
+  const { msvc, isUwp, platform, hostCpuArch, toolsPath } = buildParams;
 
+  console.log("buildParams: ", buildParams);
   cmakeBuildHermesCompiler(buildParams);
 
-  const preset = getCMakePreset({ msvc: args.msvc, configuration, platform });
+  const preset = getCMakePreset(buildParams);
   console.log(`Using CMake preset: ${preset}`);
 
-  const genArgs = [`--preset=${preset}`, `-B\"${buildParams.buildPath}\"`];
-
-  // Add cross-compilation target for non-x64 platforms when using Clang
-  // Note: ARM64EC is temporarily excluded due to Clang 19.x linker issues (LLVM #113658)
-  // This will be re-enabled when Clang 20 is available
-  if (platform !== "x64" && !args.msvc && platform !== "arm64ec") {
-    let targetTriple = "";
-    if (platform === "x86") {
-      targetTriple = "i686-pc-windows-msvc";
-    } else if (platform === "arm64") {
-      targetTriple = "aarch64-pc-windows-msvc";
-    }
-
-    if (targetTriple) {
-      // Append to existing preset flags rather than replacing them.
-      // The entire flag string must be quoted to be treated as a single argument.
-      genArgs.push(
-        `-DCMAKE_C_FLAGS="-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview -target ${targetTriple}"`
-      );
-      genArgs.push(
-        `-DCMAKE_CXX_FLAGS="-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview -target ${targetTriple}"`
-      );
-    }
-  }
-
-  // Force native build to prevent CMAKE_CROSSCOMPILING=TRUE
-  // Apply for tools build (forceNativeBuild=true), x64 native builds, and x86 builds
-  if (forceNativeBuild || platform === "x64" || platform === "x86") {
-    genArgs.push("-DHERMES_FORCE_NATIVE_BUILD=ON");
-  }
+  const genArgs = [`--preset=${preset}`, `-B"${buildParams.buildPath}"`];
 
   if (args["file-version"] && args["file-version"] !== "0.0.0.0") {
     genArgs.push(`-DHERMES_FILE_VERSION=${args["file-version"]}`);
   }
 
-  genArgs.push("-DHERMESVM_PLATFORM_LOGGING=ON");
-  genArgs.push("-DHERMES_ENABLE_DEBUGGER=ON");
-  genArgs.push("-DHERMES_ENABLE_INTL=ON");
+  // Add cross-compilation target for non-host platforms when using Clang
+  if (platform !== hostCpuArch && !msvc) {
+    let targetTriple = "";
+    if (platform === "x86") {
+      targetTriple = "i686-pc-windows-msvc";
+    } else if (platform === "x64") {
+      targetTriple = "x64-pc-windows-msvc";
+    } else if (platform === "arm64") {
+      targetTriple = "aarch64-pc-windows-msvc";
+    } else if (platform === "arm64ec") {
+      targetTriple = "arm64ec-pc-windows-msvc";
+    }
 
-  genArgs.push(
-    `-DHERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB=${isUwp ? "OFF" : "ON"}`
-  );
+    if (targetTriple) {
+      genArgs.push(`-DCMAKE_C_FLAGS="-target ${targetTriple}"`);
+      genArgs.push(`-DCMAKE_CXX_FLAGS="-target ${targetTriple}"`);
+    }
+  }
+
+  genArgs.push(`-DHERMES_WINDOWS_TARGET_PLATFORM=${platform}`);
 
   if (isUwp) {
     genArgs.push("-DCMAKE_SYSTEM_NAME=WindowsStore");
     genArgs.push(`-DCMAKE_SYSTEM_VERSION="${args["windows-sdk-version"]}"`);
-    genArgs.push(
-      `-DIMPORT_HERMESC=\"${path.join(toolsPath, "ImportHermesc.cmake")}\"`
-    );
-    
-    // Add UWP-specific linker flags when using Clang
-    // ARM64EC uses MSVC due to Clang 19.x linker issues (LLVM #113658)
-    if (!args.msvc && platform !== "arm64ec") {
-      genArgs.push('-DCMAKE_EXE_LINKER_FLAGS="-Wl,/DEBUG:FULL -Wl,/APPCONTAINER -lwindowsapp"');
-      genArgs.push('-DCMAKE_SHARED_LINKER_FLAGS="-Wl,/DEBUG:FULL -Wl,/APPCONTAINER -lwindowsapp"');
+
+    if (!msvc) {
+      genArgs.push('-DCMAKE_EXE_LINKER_FLAGS="-Wl,/APPCONTAINER -lwindowsapp"');
+      genArgs.push(
+        '-DCMAKE_SHARED_LINKER_FLAGS="-Wl,/APPCONTAINER -lwindowsapp"',
+      );
     }
-  } else if (platform === "arm64" || platform === "arm64ec") {
-    genArgs.push("-DHERMES_MSVC_ARM64=ON");
+  }
+
+  // Use prebuilt Hermes compiler for cross-platform builds
+  if (isCrossPlatformBuild(buildParams)) {
     genArgs.push(
-      `-DIMPORT_HERMESC=\"${path.join(toolsPath, "ImportHermesc.cmake")}\"`
+      `-DIMPORT_HERMESC="${path.join(toolsPath, "ImportHermesc.cmake")}"`,
     );
   }
 
-  runCMakeCommand(`cmake ${genArgs.join(" ")} \"${sourcesPath}\"`, buildParams);
+  // We must force the native build mostly for the Clang compiler.
+  genArgs.push(
+    `-DHERMES_WINDOWS_FORCE_NATIVE_BUILD=${
+      isCrossPlatformBuild(buildParams) ? "OFF" : "ON"
+    }`,
+  );
+
+  runCMakeCommand(`cmake ${genArgs.join(" ")} "${sourcesPath}"`, buildParams);
 }
 
 function cmakeBuild(buildParams) {
@@ -428,7 +477,7 @@ function cmakeBuild(buildParams) {
 
 function cmakeTest(buildParams) {
   if (isCrossPlatformBuild(buildParams)) {
-    console.log("Skip testing for UWP and ARM64/ARM64EC builds");
+    console.log("Skip testing for cross-platform builds");
     return;
   }
 
@@ -447,7 +496,7 @@ function cmakeJSTest(buildParams) {
 function cmakeBuildHermesCompiler(buildParams) {
   const { toolsPath } = buildParams;
 
-  // Only build hermesc explicitly for UWP and ARM64/ARM64EC.
+  // Only build Hermes compiler for cross-platform builds.
   if (!isCrossPlatformBuild(buildParams)) {
     return;
   }
@@ -457,12 +506,13 @@ function cmakeBuildHermesCompiler(buildParams) {
     cmakeBuild({
       ...buildParams,
       isUwp: false,
-      platform: "x64",
+      platform: args.hostCpuArch,
+      hostCpuArch: args.hostCpuArch,
       configuration: "release",
+      msvc: args.msvc,
       buildPath: toolsPath,
       targets: "hermesc",
       onBuildCompleted: undefined,
-      forceNativeBuild: true, // Flag to indicate this is a native tools build
     });
   }
 }
@@ -486,32 +536,59 @@ function runCMakeCommand(command, buildParams) {
       ` && ${command} 2>&1`;
     console.log(`Run command: ${vsCommand}`);
     execSync(vsCommand, { stdio: "inherit", env });
+  } catch (error) {
+    // Don't show JavaScript stack trace for build tool errors
+    // The actual error output has already been displayed via stdio: "inherit"
+    console.error(
+      `\nBuild command failed with exit code: ${error.status || "unknown"}`,
+    );
+    process.exit(error.status || 1);
   } finally {
     process.chdir(originalCwd);
     console.log(`Changed CWD back to: ${originalCwd}`);
   }
 }
 
-function isCrossPlatformBuild({ isUwp, platform }) {
-  // Return true if we either build for UWP or ARM64/ARM64EC.
+function isCrossPlatformBuild({ isUwp, hostCpuArch, platform }) {
+  // Return true if we either build for UWP or the host architecture does
+  // not match the target architecture.
   // x86 can run natively on x64 machines, so it's not considered cross-platform.
-  // In true cross-platform cases we must build x64 tools and cannot run unit tests.
-  return isUwp || platform.startsWith("arm64");
+  // In true cross-platform cases we must build host specific tools and cannot run unit tests.
+  return (
+    isUwp ||
+    (hostCpuArch === "x64" && platform.startsWith("arm64")) ||
+    (hostCpuArch === "arm64" && platform !== "arm64")
+  );
 }
 
 function copyBuiltFilesToPkgStaging(buildParams) {
-  const { buildPath } = buildParams;
+  const { buildPath, hasCustomTargets } = buildParams;
   const { dllStagingPath, toolsStagingPath } = ensureStagingPaths(buildParams);
 
+  const copyFileIsOptional = hasCustomTargets;
+  if (copyFileIsOptional) {
+    console.log("Optional file copying mode enabled");
+  }
+
   const dllSourcePath = path.join(buildPath, "API", "hermes_shared");
-  copyFile("hermes.dll", dllSourcePath, dllStagingPath);
-  copyFile("hermes.lib", dllSourcePath, dllStagingPath);
-  copyFile("hermes.pdb", dllSourcePath, dllStagingPath);
+  copyFile("hermes.dll", dllSourcePath, dllStagingPath, copyFileIsOptional);
+  copyFile("hermes.lib", dllSourcePath, dllStagingPath, copyFileIsOptional);
+  copyFile("hermes.pdb", dllSourcePath, dllStagingPath, copyFileIsOptional);
 
   if (!isCrossPlatformBuild(buildParams)) {
     const toolsSourcePath = path.join(buildPath, "bin");
-    copyFile("hermes.exe", toolsSourcePath, toolsStagingPath);
-    copyFile("hermesc.exe", toolsSourcePath, toolsStagingPath);
+    copyFile(
+      "hermes.exe",
+      toolsSourcePath,
+      toolsStagingPath,
+      copyFileIsOptional,
+    );
+    copyFile(
+      "hermesc.exe",
+      toolsSourcePath,
+      toolsStagingPath,
+      copyFileIsOptional,
+    );
   }
 }
 
@@ -528,18 +605,23 @@ function copyFakeFilesToPkgStaging(buildParams) {
   }
 }
 
-function copyFile(fileName, sourcePath, targetPath) {
+function copyFile(fileName, sourcePath, targetPath, optional = false) {
   ensureDir(targetPath);
-  fs.copyFileSync(
-    path.join(sourcePath, fileName),
-    path.join(targetPath, fileName)
-  );
+  const sourceFile = path.join(sourcePath, fileName);
+  const targetFile = path.join(targetPath, fileName);
+
+  if (optional && !fs.existsSync(sourceFile)) {
+    console.log(`Skipping copy of ${fileName} (file not found, optional copy)`);
+    return;
+  }
+
+  fs.copyFileSync(sourceFile, targetFile);
 }
 
 function createFakeBinFile(targetPath, fileName) {
   fs.copyFileSync(
     path.join(process.env.SystemRoot, "system32", "kernel32.dll"),
-    path.join(targetPath, fileName)
+    path.join(targetPath, fileName),
   );
 }
 
@@ -552,7 +634,7 @@ function ensureStagingPaths(buildParams) {
     "native",
     getAppPlatformName(isUwp),
     configuration,
-    platform
+    platform,
   );
   ensureDir(dllStagingPath);
 
@@ -561,7 +643,7 @@ function ensureStagingPaths(buildParams) {
     "tools",
     "native",
     configuration,
-    platform
+    platform,
   );
   ensureDir(toolsStagingPath);
 
@@ -606,17 +688,17 @@ function packNuGet(runParams) {
   copyFile(
     "Microsoft.JavaScript.Hermes.props",
     nugetSourcePath,
-    stagingBuildNativePath
+    stagingBuildNativePath,
   );
   copyFile(
     "Microsoft.JavaScript.Hermes.targets",
     nugetSourcePath,
-    stagingBuildNativePath
+    stagingBuildNativePath,
   );
   copyFile(
     "Microsoft.JavaScript.Hermes.nuspec",
     nugetSourcePath,
-    pkgStagingPath
+    pkgStagingPath,
   );
 
   // Copy UAP tag file
@@ -645,7 +727,7 @@ function packNuGet(runParams) {
 
   const nugetPackBaseCmd = `nuget pack "${path.join(
     pkgStagingPath,
-    "Microsoft.JavaScript.Hermes.nuspec"
+    "Microsoft.JavaScript.Hermes.nuspec",
   )}" -OutputDirectory "${pkgPath}" -NoDefaultExcludes`;
   const nugetPackCmd = `${nugetPackBaseCmd} -Properties "${packageProperties}"`;
   console.log(`Run command: ${nugetPackCmd}`);
@@ -661,14 +743,14 @@ function getVCVarsAllBat() {
     process.env["ProgramFiles(x86)"] || process.env["ProgramFiles"],
     "Microsoft Visual Studio",
     "Installer",
-    "vswhere.exe"
+    "vswhere.exe",
   );
   if (!fs.existsSync(vsWhere)) {
     throw new Error("Could not find vswhere.exe");
   }
 
   const versionJson = JSON.parse(
-    execSync(`"${vsWhere}" -format json -version 17`).toString()
+    execSync(`"${vsWhere}" -format json -version 17`).toString(),
   );
   if (versionJson.length > 1) {
     console.warn("More than one VS install detected, picking the first one");
@@ -680,11 +762,11 @@ function getVCVarsAllBat() {
     "VC",
     "Auxiliary",
     "Build",
-    "vcvarsall.bat"
+    "vcvarsall.bat",
   );
   if (!fs.existsSync(vcVarsAllBat)) {
     throw new Error(
-      `Could not find vcvarsall.bat at expected Visual Studio installation path: ${vcVarsAllBat}`
+      `Could not find vcvarsall.bat at expected Visual Studio installation path: ${vcVarsAllBat}`,
     );
   }
 
@@ -692,21 +774,35 @@ function getVCVarsAllBat() {
 }
 
 function getVCVarsAllBatArgs(buildParams) {
-  const { platform, isUwp } = buildParams;
+  const { platform, isUwp, hostCpuArch } = buildParams;
   let vcArgs = "";
-  switch (platform) {
-    case "x64":
-      vcArgs += "x64";
-      break;
-    case "x86":
-      vcArgs += "x64_x86";
-      break;
-    case "arm64":
-    case "arm64ec":
-      vcArgs += "x64_arm64";
-      break;
-    default:
-      vcArgs += "x64";
+  if (hostCpuArch === "x64") {
+    switch (platform) {
+      case "x86":
+        vcArgs += " amd64_x86";
+        break;
+      case "arm64":
+      case "arm64ec":
+        vcArgs += " amd64_arm64";
+        break;
+      case "x64":
+      default:
+        vcArgs += " amd64";
+        break;
+    }
+  } else if (hostCpuArch === "arm64") {
+    switch (platform) {
+      case "x86":
+        vcArgs += " arm64_x86";
+        break;
+      case "x64":
+        vcArgs += " arm64_amd64";
+        break;
+      case "arm64":
+      default:
+        vcArgs += " arm64";
+        break;
+    }
   }
 
   if (isUwp) {

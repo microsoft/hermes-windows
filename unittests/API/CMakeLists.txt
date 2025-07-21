@@ -61,9 +61,9 @@ target_link_libraries(APITests libhermes compileJS SegmentTestCompile traceInter
 add_hermes_unittest(APILeanTests APILeanTest.cpp)
 target_link_libraries(APILeanTests libhermes_lean jsi)
 
-# copy hermes.dll next to the NodeApiTests.exe
+# copy hermes.dll next to the APITests.exe
+add_dependencies(APITests libshared)
 add_custom_command(TARGET APITests POST_BUILD
-  DEPENDS libshared
   VERBATIM
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
   $<TARGET_FILE:libshared>
