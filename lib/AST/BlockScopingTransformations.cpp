@@ -123,7 +123,7 @@ class BlockScopingTransformations {
 
     Node **left{};
     VariableDeclarationNode *decl;
-    Node **body;
+    Node **body{};
 
     if (auto *forIn = llvh::dyn_cast<ForInStatementNode>(forInOfStmt)) {
       left = &forIn->_left;

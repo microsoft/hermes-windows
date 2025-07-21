@@ -980,7 +980,7 @@ OptValue<TokenKind> JSLexer::lookahead1(OptValue<TokenKind> expectedToken) {
       (token_.getKind() == TokenKind::identifier || token_.isResWord() ||
        token_.getKind() == TokenKind::question) &&
       "unsupported current token");
-  UniqueString *savedIdent;
+  UniqueString *savedIdent = nullptr;
   if (token_.getKind() == TokenKind::identifier || token_.isResWord()) {
     savedIdent = token_.getResWordOrIdentifier();
   }

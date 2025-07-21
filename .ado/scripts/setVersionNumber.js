@@ -22,16 +22,16 @@ function main() {
     // Update the pipeline build number to correlate it with the semantic version.
     console.log(
       "##vso[build.updateBuildNumber]" +
-        `${testPrefix}${publishPrefix}${fileVersion} -- ${semanticVersion}`
+        `${testPrefix}${publishPrefix}${fileVersion} -- ${semanticVersion}`,
     );
   }
 
   // Set the variables (as output) so that other jobs can use them.
   console.log(
-    `##vso[task.setVariable variable=semanticVersion;isOutput=true]${semanticVersion}`
+    `##vso[task.setVariable variable=semanticVersion;isOutput=true]${semanticVersion}`,
   );
   console.log(
-    `##vso[task.setVariable variable=fileVersion;isOutput=true]${fileVersion}`
+    `##vso[task.setVariable variable=fileVersion;isOutput=true]${fileVersion}`,
   );
 }
 
@@ -67,7 +67,7 @@ function computeCanaryVersion(isTest) {
     buildNumberParts[3].length > 5
   ) {
     fatalError(
-      `Unexpected pre-release build number format encountered: ${buildNumber}`
+      `Unexpected pre-release build number format encountered: ${buildNumber}`,
     );
   }
 
@@ -87,13 +87,13 @@ function computeReleaseVersion() {
   const buildNumberParts = buildNumber.split(".");
   if (buildNumberParts.length !== 3) {
     fatalError(
-      `Unexpected release build number format encountered: ${buildNumber}`
+      `Unexpected release build number format encountered: ${buildNumber}`,
     );
   }
 
   return {
     semanticVersion: buildNumber,
-    fileVersion: buildNumber + ".0",
+    fileVersion: `${buildNumber}.0`,
     isTest: false,
   };
 }

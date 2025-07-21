@@ -44,7 +44,7 @@ if(MSVC)
   # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
   set(compile_flags "")
 
-  # Enable exeption
+  # Enable exception
   set(compile_flags "${compile_flags} /EHsc")
 
   # Enable RTTI
@@ -52,29 +52,18 @@ if(MSVC)
 
   # Generate PDBs
   set(compile_flags "${compile_flags} /Zi")
-
-  set(link_flags_debug "/DEBUG")
-
-  # Use /OPT:NOICF because hermes associates function pointer with its name.
-  # The optimization that merges functions with the same body breaks that code.
-  # See getFunctionNameImpl in lib\VM\JSNativeFunctions.cpp.
-  set(link_flags_release "/DEBUG;/DEBUGTYPE:CV$<COMMA>FIXUP;/OPT:REF;/OPT:NOICF;/INCREMENTAL:NO")
-
-  if(CMAKE_VS_PLATFORM_NAME MATCHES "^(x64|x86|Win32)$")
-    # CETCOMPAT is not supported by ARM or ARM64
-    list(APPEND link_flags_release "/CETCOMPAT")
-  endif()
 endif()
+
+target_link_options(libshared PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 
 set_target_properties(libshared PROPERTIES
   COMPILE_FLAGS "${compile_flags}"
-  LINK_OPTIONS "$<IF:$<CONFIG:Debug>,${link_flags_debug},${link_flags_release}>"
 
   # To make sure that the resulting DLL name is hermes.dll
   OUTPUT_NAME hermes
 )
 
-if (MSVC)
+if(MSVC)
   # Temporary avoid the auto-vectorization optimization since VS 17.14.0 produces incorrect code.
   # Set /O1 only for Release configs using modern CMake target_compile_options.
   target_compile_options(libshared PRIVATE $<$<CONFIG:Release>:/O1>)

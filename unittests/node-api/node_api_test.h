@@ -21,13 +21,20 @@ extern "C" {
 #include "js-native-api/common.h"
 }
 
+#if defined(__clang__) || defined(__GNUC__)
+#define CRASH_NOW() __builtin_trap()
+#elif defined(_MSC_VER)
+#define CRASH_NOW() __fastfail(/*FAST_FAIL_FATAL_APP_EXIT*/ 7)
+#else
+#define CRASH_NOW() *((volatile int *)0) = 1
+#endif
+
 // Crash if the condition is false.
 #define CRASH_IF_FALSE(condition)  \
   do {                             \
     if (!(condition)) {            \
       assert(false && #condition); \
-      *((int *)nullptr) = 1;       \
-      std::terminate();            \
+      CRASH_NOW();                 \
     }                              \
   } while (false)
 

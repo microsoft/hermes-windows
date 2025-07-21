@@ -7,26 +7,56 @@
   },
   "configurePresets": [
     {
+      "name": "base-common",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "Windows",
+        "HERMESVM_PLATFORM_LOGGING": "ON",
+        "HERMES_ENABLE_DEBUGGER": "ON",
+        "HERMES_ENABLE_INTL": "ON",
+        "HERMES_WINDOWS_FORCE_NATIVE_BUILD": "ON"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
       "name": "base-ninja-clang",
       "hidden": true,
+      "inherits": "base-common",
       "generator": "Ninja",
       "environment": {
         "CC": "clang.exe",
         "CXX": "clang++.exe"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": ["Windows"],
+          "intelliSenseMode": "windows-clang-x64"
+        }
       }
     },
     {
       "name": "base-ninja-msvc",
       "hidden": true,
+      "inherits": "base-common",
       "generator": "Ninja",
       "environment": {
         "CC": "cl.exe",
         "CXX": "cl.exe"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": ["Windows"],
+          "intelliSenseMode": "windows-msvc-x64"
+        }
       }
     },
     {
       "name": "base-vs2022-msvc",
       "hidden": true,
+      "inherits": "base-common",
       "generator": "Visual Studio 17 2022"
     },
     {
@@ -35,24 +65,8 @@
       "displayName": "Ninja + Clang (Debug)",
       "description": "Ninja generator with clang.exe/clang++.exe (Debug, environment-determined architecture)",
       "binaryDir": "${sourceDir}/build/ninja-clang-debug",
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
-      },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "FastDebug",
-        "CMAKE_SYSTEM_NAME": "Windows",
-        "CMAKE_SYSTEM_PROCESSOR": "AMD64",
-        "CMAKE_CXX_FLAGS": "-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview",
-        "CMAKE_C_FLAGS": "-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview",
-        "CMAKE_EXE_LINKER_FLAGS": "-Wl,/DEBUG:FULL",
-        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,/DEBUG:FULL"
-      },
-      "vendor": {
-        "microsoft.com/VisualStudioSettings/CMake/1.0": {
-          "hostOS": ["Windows"],
-          "intelliSenseMode": "windows-clang-x64"
-        }
+        "CMAKE_BUILD_TYPE": "Debug"
       }
     },
     {
@@ -62,19 +76,7 @@
       "description": "Ninja generator with clang.exe/clang++.exe (Release, environment-determined architecture)",
       "binaryDir": "${sourceDir}/build/ninja-clang-release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_SYSTEM_NAME": "Windows",
-        "CMAKE_SYSTEM_PROCESSOR": "AMD64",
-        "CMAKE_CXX_FLAGS": "-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview",
-        "CMAKE_C_FLAGS": "-DWIN32 -D_WINDOWS -D_CRT_RAND_S -g -gcodeview",
-        "CMAKE_EXE_LINKER_FLAGS": "-Wl,/DEBUG:FULL",
-        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,/DEBUG:FULL"
-      },
-      "vendor": {
-        "microsoft.com/VisualStudioSettings/CMake/1.0": {
-          "hostOS": ["Windows"],
-          "intelliSenseMode": "windows-clang-x64"
-        }
+        "CMAKE_BUILD_TYPE": "Release"
       }
     },
     {
@@ -83,20 +85,8 @@
       "displayName": "Ninja + MSVC (Debug)",
       "description": "Ninja generator with MSVC cl.exe (Debug, environment-determined architecture)",
       "binaryDir": "${sourceDir}/build/ninja-msvc-debug",
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
-      },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "FastDebug",
-        "CMAKE_SYSTEM_NAME": "Windows",
-        "CMAKE_SYSTEM_PROCESSOR": "AMD64"
-      },
-      "vendor": {
-        "microsoft.com/VisualStudioSettings/CMake/1.0": {
-          "hostOS": ["Windows"],
-          "intelliSenseMode": "windows-msvc-x64"
-        }
+        "CMAKE_BUILD_TYPE": "Debug"
       }
     },
     {
@@ -105,20 +95,8 @@
       "displayName": "Ninja + MSVC (Release)",
       "description": "Ninja generator with MSVC cl.exe (Release, environment-determined architecture)",
       "binaryDir": "${sourceDir}/build/ninja-msvc-release",
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
-      },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_SYSTEM_NAME": "Windows",
-        "CMAKE_SYSTEM_PROCESSOR": "AMD64"
-      },
-      "vendor": {
-        "microsoft.com/VisualStudioSettings/CMake/1.0": {
-          "hostOS": ["Windows"],
-          "intelliSenseMode": "windows-msvc-x64"
-        }
+        "CMAKE_BUILD_TYPE": "Release"
       }
     },
     {

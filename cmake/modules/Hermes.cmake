@@ -28,15 +28,7 @@ if (EMSCRIPTEN AND EMSCRIPTEN_FASTCOMP)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s BINARYEN_TRAP_MODE=clamp")
 endif()
 
-# For compatibility, CMake adds /EHsc, /GR and /DUNICODE by default for MSVC. We want to set those
-# flags per target, so remove them.
-if (MSVC)
-#  string(REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-#  string(REPLACE "/GR" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-#  string(REPLACE "/DUNICODE" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-endif (MSVC)
-
-if(WIN32)
+if (WIN32)
   # set stack reserved size to ~10MB
   # CMake previously automatically set this value for MSVC builds, but the
   # behavior was changed in CMake 2.8.11 (Issue 12437) to use the MSVC default
@@ -51,17 +43,6 @@ if(WIN32)
     # MinGW (GNU ld)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
   endif()
-endif()
-
-if (MSVC)
-  # FastDebug Flavor
-  # 1. Optimize for speed.
-  # 2. Enable full Inlining
-  # 3. Link against debug flavored VCRT
-  # Note: /O2 and RTC1 are incompatible
-  # TODO: /Ox is more debug friendly ?
-  string(APPEND CMAKE_CXX_FLAGS_FASTDEBUG "/MDd /O2 /Ob2")
-  string(APPEND CMAKE_C_FLAGS_FASTDEBUG "/MDd /O2 /Ob2")
 endif()
 
 if (WIN32)
@@ -114,6 +95,7 @@ function(hermes_update_compile_flags name)
   if (update_src_props)
     foreach (fn ${sources})
       get_filename_component(suf ${fn} EXT)
+      # TODO: (vmoroz) It seems that we must remove the ".c" extension from here.
       if ("${suf}" STREQUAL ".cpp" OR "${suf}" STREQUAL ".c")
         set_property(SOURCE ${fn} APPEND_STRING PROPERTY
           COMPILE_FLAGS "${flags}")
@@ -269,13 +251,6 @@ if (MSVC)
     -D_SCL_SECURE_NO_DEPRECATE
     -D_SCL_SECURE_NO_WARNINGS
   )
-
-  # Security flags.
-  # Note: Security warnings need to be fixed / baselined to be sdl clean - 4146, 4244 and 4267 (currently disabled)
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DYNAMICBASE /guard:cf")
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DYNAMICBASE /guard:cf")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /guard:cf /Qspectre /sdl /ZH:SHA_256")
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /guard:cf /Qspectre /sdl /ZH:SHA_256")
 
   # Tell MSVC to use the Unicode version of the Win32 APIs instead of ANSI.
   #    add_definitions(
