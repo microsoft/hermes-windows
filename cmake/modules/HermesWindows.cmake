@@ -152,9 +152,8 @@ function(hermes_windows_configure_build)
   message(STATUS "  Target platform: ${HERMES_WINDOWS_TARGET_PLATFORM}")
 
   if(${HERMES_WINDOWS_TARGET_PLATFORM} STREQUAL "arm64" OR ${HERMES_WINDOWS_TARGET_PLATFORM} STREQUAL "arm64ec")
-    set(HERMES_MSVC_ARM64 ON PARENT_SCOPE)
+    set(HERMES_MSVC_ARM64 ON)
   endif()
-
 
   # Configure compiler flags
   if("${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
