@@ -259,7 +259,7 @@ function main() {
         onBuildCompleted: copyBuiltFilesToPkgStaging,
       };
 
-      console.log('buildParams: ', buildParams);
+      console.log("buildParams: ", buildParams);
 
       if (args["fake-build"]) {
         copyFakeFilesToPkgStaging(buildParams);
@@ -396,7 +396,7 @@ function cleanPkg(runParams) {
 function cmakeConfigure(buildParams) {
   const { msvc, isUwp, platform, hostCpuArch, toolsPath } = buildParams;
 
-  console.log('buildParams: ', buildParams);
+  console.log("buildParams: ", buildParams);
   cmakeBuildHermesCompiler(buildParams);
 
   const preset = getCMakePreset(buildParams);
