@@ -44,8 +44,9 @@ napi_status jsr_env_unref(napi_env env);
 
 namespace facebook::hermes {
 
-// Forward declaration
-extern ::hermes::vm::Runtime &getVMRuntime(HermesRuntime &runtime) noexcept;
+static ::hermes::vm::Runtime &getVMRuntime(HermesRuntime &runtime) noexcept {
+  return *static_cast<::hermes::vm::Runtime*>(runtime.getVMRuntimeUnsafe());
+}
 
 class CrashManagerImpl : public ::hermes::vm::CrashManager {
  public:
@@ -63,7 +64,7 @@ class CrashManagerImpl : public ::hermes::vm::CrashManager {
 
       WerRegisterMemoryBlock(
           (char *)mem + pieceCount * WER_MAX_MEM_BLOCK_SIZE,
-          length - pieceCount * WER_MAX_MEM_BLOCK_SIZE);
+          static_cast<uint32_t>(length - pieceCount * WER_MAX_MEM_BLOCK_SIZE));
     } else {
       WerRegisterMemoryBlock(mem, static_cast<DWORD>(length));
     }
@@ -566,17 +567,19 @@ JSR_API hermes_dump_crash_data(jsr_runtime runtime, int32_t fd) {
   return CHECKED_RUNTIME(runtime)->dumpCrashData(fd);
 }
 
-JSR_API hermes_sampling_profiler_enable() {
-  auto *hermesRootAPI = facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
+static facebook::hermes::IHermesRootAPI* getHermesRootAPI() {
+  // The makeHermesRootAPI returns a singleton.
+  return facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
       facebook::hermes::makeHermesRootAPI());
-  hermesRootAPI->enableSamplingProfiler();
+}
+
+JSR_API hermes_sampling_profiler_enable() {
+  getHermesRootAPI()->enableSamplingProfiler();
   return napi_ok;
 }
 
 JSR_API hermes_sampling_profiler_disable() {
-  auto *hermesRootAPI = facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
-      facebook::hermes::makeHermesRootAPI());
-  hermesRootAPI->disableSamplingProfiler();
+  getHermesRootAPI()->disableSamplingProfiler();
   return napi_ok;
 }
 
@@ -589,9 +592,7 @@ JSR_API hermes_sampling_profiler_remove(jsr_runtime runtime) {
 }
 
 JSR_API hermes_sampling_profiler_dump_to_file(const char *filename) {
-  auto *hermesRootAPI = facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
-      facebook::hermes::makeHermesRootAPI());
-  hermesRootAPI->dumpSampledTraceToFile(filename);
+  getHermesRootAPI()->dumpSampledTraceToFile(filename);
   return napi_ok;
 }
 
