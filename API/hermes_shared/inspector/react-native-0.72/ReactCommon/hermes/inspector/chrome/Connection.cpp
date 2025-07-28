@@ -735,11 +735,15 @@ void Connection::Impl::handle(
       .thenError<std::exception>(sendErrorToClient(req.id));
 }
 
+static facebook::hermes::IHermesRootAPI* getHermesRootAPI() {
+  // The makeHermesRootAPI returns a singleton.
+  return facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
+      facebook::hermes::makeHermesRootAPI());
+}
+
 void Connection::Impl::handle(const m::profiler::StartRequest &req) {
   runInExecutor(req.id, [this, id = req.id]() {
-    auto *hermesRootAPI = facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
-        facebook::hermes::makeHermesRootAPI());
-    hermesRootAPI->enableSamplingProfiler();
+    getHermesRootAPI()->enableSamplingProfiler();
     sendResponseToClient(m::makeOkResponse(id));
   });
 }
@@ -748,9 +752,7 @@ void Connection::Impl::handle(const m::profiler::StopRequest &req) {
   HermesRuntime *hermesRT = &getRuntime();
 
   runInExecutor(req.id, [this, id = req.id, hermesRT]() {
-    auto *hermesRootAPI = facebook::jsi::castInterface<facebook::hermes::IHermesRootAPI>(
-        facebook::hermes::makeHermesRootAPI());
-    hermesRootAPI->disableSamplingProfiler();
+    getHermesRootAPI()->disableSamplingProfiler();
 
     std::ostringstream profileStream;
     // HermesRuntime instance methods are usually unsafe to be called with a

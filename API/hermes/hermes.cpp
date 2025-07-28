@@ -689,25 +689,23 @@ class HermesRuntimeImpl final : public HermesRuntime,
   std::shared_ptr<jsi::HostObject> getHostObject(const jsi::Object &) override;
   jsi::Object createObjectWithPrototype(const jsi::Value &prototype) override;
   jsi::HostFunctionType &getHostFunction(const jsi::Function &) override;
-
   bool hasNativeState(const jsi::Object &) override;
   std::shared_ptr<jsi::NativeState> getNativeState(
       const jsi::Object &) override;
   void setNativeState(const jsi::Object &, std::shared_ptr<jsi::NativeState>)
       override;
   void setExternalMemoryPressure(const jsi::Object &, size_t) override;
-
   jsi::Value getProperty(const jsi::Object &, const jsi::PropNameID &name)
       override;
   jsi::Value getProperty(const jsi::Object &, const jsi::String &name) override;
   bool hasProperty(const jsi::Object &, const jsi::PropNameID &name) override;
   bool hasProperty(const jsi::Object &, const jsi::String &name) override;
   void setPropertyValue(
-      JSI_CONST_10 jsi::Object &,
+      const jsi::Object &,
       const jsi::PropNameID &name,
       const jsi::Value &value) override;
   void setPropertyValue(
-      JSI_CONST_10 jsi::Object &,
+      const jsi::Object &,
       const jsi::String &name,
       const jsi::Value &value) override;
   bool isArray(const jsi::Object &) const override;
@@ -722,8 +720,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
   jsi::Value getPrototypeOf(const jsi::Object &object) override;
 
   jsi::WeakObject createWeakObject(const jsi::Object &) override;
-  jsi::Value lockWeakObject(
-      JSI_NO_CONST_3 JSI_CONST_10 jsi::WeakObject &wo) override;
+  jsi::Value lockWeakObject(const jsi::WeakObject &) override;
 
   jsi::Array createArray(size_t length) override;
   jsi::ArrayBuffer createArrayBuffer(
@@ -733,7 +730,7 @@ class HermesRuntimeImpl final : public HermesRuntime,
   uint8_t *data(const jsi::ArrayBuffer &) override;
   jsi::Value getValueAtIndex(const jsi::Array &, size_t i) override;
   void setValueAtIndexImpl(
-      JSI_CONST_10 jsi::Array &,
+      const jsi::Array &,
       size_t i,
       const jsi::Value &value) override;
 
@@ -876,9 +873,8 @@ class HermesRuntimeImpl final : public HermesRuntime,
             vm::TwineChar16{"Exception in HostObject::getPropertyNames: "} +
             rt_.utf16FromErrorWhat(ex, buf));
       } catch (...) {
-        return rt_.runtime_.raiseError(
-            vm::TwineChar16{
-                "Exception in HostObject::getPropertyNames: <unknown>"});
+        return rt_.runtime_.raiseError(vm::TwineChar16{
+            "Exception in HostObject::getPropertyNames: <unknown>"});
       }
     };
   };
@@ -1172,11 +1168,6 @@ class HermesRuntimeImpl final : public HermesRuntime,
   ::hermes::hbc::CompileFlags compileFlags_{};
 };
 } // namespace
-
-
-::hermes::vm::Runtime &getVMRuntime(HermesRuntime &runtime) noexcept {
-  return static_cast<HermesRuntimeImpl &>(runtime).runtime_;
-}
 
 jsi::ICast *HermesRootAPI::castInterface(const jsi::UUID &interfaceUUID) {
   if (interfaceUUID == IHermesRootAPI::uuid) {
@@ -2176,9 +2167,8 @@ void HermesRuntimeImpl::setExternalMemoryPressure(
     // This is the first time adding external memory to this object. Create a
     // new NativeState. We use the context pointer to store the external memory
     // amount.
-    auto nsHnd = runtime_.makeHandle(
-        vm::NativeState::create(
-            runtime_, reinterpret_cast<void *>(0), debitMem));
+    auto nsHnd = runtime_.makeHandle(vm::NativeState::create(
+        runtime_, reinterpret_cast<void *>(0), debitMem));
 
     // Use defineNewOwnProperty to create the new property since we know it
     // doesn't exist. Note that this also bypasses the extensibility check on
@@ -2284,7 +2274,7 @@ bool HermesRuntimeImpl::hasProperty(
 }
 
 void HermesRuntimeImpl::setPropertyValue(
-    JSI_CONST_10 jsi::Object &obj,
+    const jsi::Object &obj,
     const jsi::String &name,
     const jsi::Value &value) {
   vm::GCScope gcScope(runtime_);
@@ -2299,7 +2289,7 @@ void HermesRuntimeImpl::setPropertyValue(
 }
 
 void HermesRuntimeImpl::setPropertyValue(
-    JSI_CONST_10 jsi::Object &obj,
+    const jsi::Object &obj,
     const jsi::PropNameID &name,
     const jsi::Value &value) {
   vm::GCScope gcScope(runtime_);
@@ -2364,13 +2354,11 @@ jsi::Array HermesRuntimeImpl::getPropertyNames(const jsi::Object &obj) {
 }
 
 jsi::WeakObject HermesRuntimeImpl::createWeakObject(const jsi::Object &obj) {
-  return addWeak(
-      vm::WeakRoot<vm::JSObject>(
-          static_cast<vm::JSObject *>(phv(obj).getObject()), runtime_));
+  return addWeak(vm::WeakRoot<vm::JSObject>(
+      static_cast<vm::JSObject *>(phv(obj).getObject()), runtime_));
 }
 
-jsi::Value HermesRuntimeImpl::lockWeakObject(
-    JSI_NO_CONST_3 JSI_CONST_10 jsi::WeakObject &wo) {
+jsi::Value HermesRuntimeImpl::lockWeakObject(const jsi::WeakObject &wo) {
   const vm::WeakRoot<vm::JSObject> &wr = weakRoot(wo);
 
   if (const auto ptr = wr.get(runtime_, runtime_.getHeap()))
@@ -2389,10 +2377,9 @@ jsi::Array HermesRuntimeImpl::createArray(size_t length) {
 jsi::ArrayBuffer HermesRuntimeImpl::createArrayBuffer(
     std::shared_ptr<jsi::MutableBuffer> buffer) {
   vm::GCScope gcScope(runtime_);
-  auto buf = runtime_.makeHandle(
-      vm::JSArrayBuffer::create(
-          runtime_,
-          vm::Handle<vm::JSObject>::vmcast(&runtime_.arrayBufferPrototype)));
+  auto buf = runtime_.makeHandle(vm::JSArrayBuffer::create(
+      runtime_,
+      vm::Handle<vm::JSObject>::vmcast(&runtime_.arrayBufferPrototype)));
   auto size = buffer->size();
   auto *data = buffer->data();
   auto *ctx = new std::shared_ptr<jsi::MutableBuffer>(std::move(buffer));
@@ -2440,7 +2427,7 @@ jsi::Value HermesRuntimeImpl::getValueAtIndex(const jsi::Array &arr, size_t i) {
 }
 
 void HermesRuntimeImpl::setValueAtIndexImpl(
-    JSI_CONST_10 jsi::Array &arr,
+    const jsi::Array &arr,
     size_t i,
     const jsi::Value &value) {
   vm::GCScope gcScope(runtime_);
@@ -2804,9 +2791,8 @@ std::unique_ptr<jsi::ThreadSafeRuntime> makeThreadSafeHermesRuntime(
   // Only HermesRuntime can create a debugger instance.  This requires
   // the setter and not using make_unique, so the call to new is here
   // in this function, which is a friend of debugger::Debugger.
-  hermesRt.setDebugger(
-      std::unique_ptr<debugger::Debugger>(
-          new debugger::Debugger(&hermesRt, hermesRt.runtime_)));
+  hermesRt.setDebugger(std::unique_ptr<debugger::Debugger>(
+      new debugger::Debugger(&hermesRt, hermesRt.runtime_)));
 #else
   hermesRt.setDebugger(std::make_unique<debugger::Debugger>());
 #endif
