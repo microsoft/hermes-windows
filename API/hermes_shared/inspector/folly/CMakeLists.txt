@@ -1,27 +1,38 @@
-include(FetchContent)
-
-FetchContent_Declare(
-  folly
-  URL      https://github.com/facebook/folly/archive/v2020.01.13.00.tar.gz
-  URL_HASH SHA256=b851e02310536cefbbc1e7bbcc2dfedb277bf9f4f87c1bed1dc4d7a22f574fa4
-  DOWNLOAD_EXTRACT_TIMESTAMP true
-)
-
-FetchContent_GetProperties(folly)
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 
 include(CMakePrintHelpers)
 
-if(NOT folly_POPULATED)
-  FetchContent_Populate(folly)
+# Set the folly source directory to the external folder
+set(FOLLY_SOURCE_DIR ${CMAKE_SOURCE_DIR}/external/folly/src)
 
-  file(READ ${folly_SOURCE_DIR}/folly/portability/Builtins.h file_text)
-  string(REPLACE
-    "#if !defined(_MSC_VER) || (_MSC_VER < 1923)"
-    "#if !defined(_MSC_VER) || _MSC_VER < 1923 || _MSC_VER >= 1928"
-    file_text
-    "${file_text}"
-  )
-  file(WRITE ${folly_SOURCE_DIR}/folly/portability/Builtins.h "${file_text}")
+# Check if folly exists in external directory
+if(NOT EXISTS ${FOLLY_SOURCE_DIR}/folly)
+  message(FATAL_ERROR
+    "Folly source not found at ${FOLLY_SOURCE_DIR}/folly. "
+    "Please ensure folly v2020.01.13.00 is extracted to external/folly/")
 endif()
 
-set(FOLLY_SOURCE ${folly_SOURCE_DIR} PARENT_SCOPE)
+# Apply the MSVC compatibility patch
+set(BUILTINS_FILE ${FOLLY_SOURCE_DIR}/folly/portability/Builtins.h)
+if(EXISTS ${BUILTINS_FILE})
+  file(READ ${BUILTINS_FILE} file_text)
+
+  # Check if patch is already applied
+  string(FIND "${file_text}" "_MSC_VER >= 1928" patch_applied)
+  if(patch_applied EQUAL -1)
+    message(STATUS "Applying MSVC compatibility patch to folly/portability/Builtins.h")
+    string(REPLACE
+        "#if !defined(_MSC_VER) || (_MSC_VER < 1923)"
+        "#if !defined(_MSC_VER) || _MSC_VER < 1923 || _MSC_VER >= 1928"
+        file_text
+        "${file_text}"
+    )
+    file(WRITE ${BUILTINS_FILE} "${file_text}")
+  else()
+    message(STATUS "MSVC compatibility patch already applied to folly")
+  endif()
+endif()
+
+# Set the folly source directory for parent scope
+set(FOLLY_SOURCE ${FOLLY_SOURCE_DIR} PARENT_SCOPE)

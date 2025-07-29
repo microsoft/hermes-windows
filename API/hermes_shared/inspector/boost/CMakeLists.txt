@@ -1,4 +1,10 @@
-include(FetchContent)
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+
+include(CMakePrintHelpers)
+
+# Set the boost source directory to the external folder
+set(BOOST_SOURCE_DIR ${CMAKE_SOURCE_DIR}/external/boost)
 
 set(boostComponents
   algorithm
@@ -25,22 +31,15 @@ set(boostComponents
   variant
 )
 
+# Check if all boost components exist in external directory
 foreach(component ${boostComponents})
-  FetchContent_Declare(
-    boost_${component}
-    GIT_REPOSITORY https://github.com/boostorg/${component}.git
-    GIT_TAG        boost-1.76.0
-    GIT_SHALLOW    1
-    GIT_PROGRESS   1
-  )
-
-  FetchContent_GetProperties(boost_${component})
-
-  if(NOT boost_${component}_POPULATED)
-    FetchContent_Populate(boost_${component})
+  if(NOT EXISTS ${BOOST_SOURCE_DIR}/${component})
+    message(FATAL_ERROR 
+      "Boost ${component} source not found at ${BOOST_SOURCE_DIR}/${component}. "
+      "Please ensure boost 1.76.0 components are extracted to external/boost/")
   endif()
-
-  list(APPEND boostIncludes ${boost_${component}_SOURCE_DIR}/include)
+  
+  list(APPEND boostIncludes ${BOOST_SOURCE_DIR}/${component}/include)
 endforeach()
 
 set(BOOST_INCLUDES ${boostIncludes} PARENT_SCOPE)
