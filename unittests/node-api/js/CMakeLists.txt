@@ -81,7 +81,6 @@ add_custom_target(installNodeApiTestJsTools
 )
 add_dependencies(installNodeApiTestJsTools copyNodeApiJSToolsFiles)
 
-# TODO: replace "metro-react-native-babel-preset" with a modern alternative.
 # add the Babel transform commands for each test JS file
 foreach(testJSFile ${testJSFiles})
   # create target directory
