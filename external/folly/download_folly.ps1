@@ -105,15 +105,23 @@ $RequiredHeaders = @(
     "folly\container\detail\*.h",
     "folly\detail\*.h", 
     "folly\executors\*.h",
+    "folly\experimental\*.h",
     "folly\functional\*.h",
+    "folly\futures\*.h",
+    "folly\futures\detail\*.h",
     "folly\hash\*.h",
     "folly\io\*.h",
     "folly\io\async\*.h",
     "folly\lang\*.h",
     "folly\memory\*.h",
     "folly\memory\detail\*.h",
+    "folly\net\*.h",
+    "folly\net\detail\*.h",
     "folly\portability\*.h",
-    "folly\synchronization\*.h"
+    "folly\synchronization\*.h",
+    "folly\synchronization\detail\*.h",
+    "folly\system\*.h",
+    "folly\tracing\*.h"
 )
 
 Write-Host "Copying required source files..." -ForegroundColor Yellow
