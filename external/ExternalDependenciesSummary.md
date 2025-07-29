@@ -14,7 +14,7 @@ We have successfully converted **3 major external dependencies** from FetchConte
 - **Status**: ✅ **Complete**
 - **CMake Integration**: `API/hermes_shared/inspector/folly/CMakeLists.txt`
 - **Key Features**:
-  - MSVC 1928+ compatibility patches automatically applied
+  - MSVC version 1928+ compatibility patches automatically applied
   - External directory validation
   - No FetchContent warnings
 - **Performance Improvement**: 87% faster CMake configuration (6.2s vs 48.5s)
