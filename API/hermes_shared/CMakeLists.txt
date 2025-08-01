@@ -11,9 +11,15 @@ add_subdirectory(inspector)
 # List the files that define exported functions explicitly, and they can link
 # against the internal functionality they need.
 set(api_sources
+  hermes_api.h
   hermes_napi.cpp
+  hermes_node_api.h
+  hermes_win.cpp
+  hermes_win.h
   MurmurHash.cpp
-  hermes_win.cpp)
+  MurmurHash.h
+  ScriptStore.h
+)
 
 add_library(libshared SHARED ${api_sources})
 target_link_libraries(libshared PRIVATE

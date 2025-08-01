@@ -68,9 +68,8 @@
 #define NAPI_VERSION 8
 #define NAPI_EXPERIMENTAL
 
-#include "MurmurHash.h"
-#include "ScriptStore.h"
 #include "hermes_api.h"
+#include "hermes_node_api.h"
 
 #include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
 #include "hermes/DebuggerAPI.h"
@@ -117,9 +116,9 @@
   } while (false)
 
 // Return error status with message.
-#define ERROR_STATUS(status, ...) \
-  env.setLastNativeError(         \
-      (status), (__FILE__), (uint32_t)(__LINE__), __VA_ARGS__)
+#define ERROR_STATUS(status, ...)         \
+  ::hermes::node_api::setLastNativeError( \
+      env, (status), (__FILE__), (uint32_t)(__LINE__), __VA_ARGS__)
 
 // Return napi_generic_failure with message.
 #define GENERIC_FAILURE(...) ERROR_STATUS(napi_generic_failure, __VA_ARGS__)
@@ -131,24 +130,23 @@
       : reinterpret_cast<hermes::node_api::NodeApiEnvironment *>(env)
 
 // Check env and return error status with message.
-#define CHECKED_ENV_ERROR_STATUS(env, status, ...)                    \
-  ((env) == nullptr)                                                  \
-      ? napi_invalid_arg                                              \
-      : reinterpret_cast<hermes::node_api::NodeApiEnvironment *>(env) \
-            ->setLastNativeError(                                     \
-                (status), (__FILE__), (uint32_t)(__LINE__), __VA_ARGS__)
+#define CHECKED_ENV_ERROR_STATUS(env, status, ...) \
+  ((env) == nullptr)                               \
+      ? napi_invalid_arg                           \
+      : ::hermes::node_api::setLastNativeError(    \
+            env, (status), (__FILE__), (uint32_t)(__LINE__), __VA_ARGS__)
 
 // Check env and return napi_generic_failure with message.
 #define CHECKED_ENV_GENERIC_FAILURE(env, ...) \
   CHECKED_ENV_ERROR_STATUS(env, napi_generic_failure, __VA_ARGS__)
 
 // Check conditions and return error status with message if it is false.
-#define RETURN_STATUS_IF_FALSE_WITH_MESSAGE(condition, status, ...) \
-  do {                                                              \
-    if (!(condition)) {                                             \
-      return env.setLastNativeError(                                \
-          (status), (__FILE__), (uint32_t)(__LINE__), __VA_ARGS__); \
-    }                                                               \
+#define RETURN_STATUS_IF_FALSE_WITH_MESSAGE(condition, status, ...)      \
+  do {                                                                   \
+    if (!(condition)) {                                                  \
+      return ::hermes::node_api::setLastNativeError(                     \
+          env, (status), (__FILE__), (uint32_t)(__LINE__), __VA_ARGS__); \
+    }                                                                    \
   } while (false)
 
 // Check conditions and return error status if it is false.
@@ -165,6 +163,13 @@
 #define CHECK_ARG(arg)                 \
   RETURN_STATUS_IF_FALSE_WITH_MESSAGE( \
       (arg) != nullptr, napi_invalid_arg, "Argument is null: " #arg)
+
+#define CHECK_ENV(env)         \
+  do {                         \
+    if (env == nullptr) {      \
+      return napi_invalid_arg; \
+    }                          \
+  } while (false)
 
 // Check that the argument is of Object or Function type.
 #define CHECK_OBJECT_ARG(arg)                \
@@ -197,20 +202,23 @@
 extern "C" __declspec(dllimport) void __stdcall DebugBreak();
 #endif
 
-namespace hermes {
-namespace node_api {
+bool operator==(const napi_type_tag &lhs, const napi_type_tag &rhs) {
+  return lhs.lower == rhs.lower && lhs.upper == rhs.upper;
+}
 
-union HermesBuildVersionInfo {
-  struct {
-    uint16_t major;
-    uint16_t minor;
-    uint16_t patch;
-    uint16_t revision;
-  };
-  uint64_t version;
+namespace std {
+template <>
+struct hash<napi_type_tag> {
+  std::size_t operator()(const napi_type_tag &tag) const {
+    // Combine the hash of individual members
+    std::size_t h1 = std::hash<uint64_t>()(tag.lower);
+    std::size_t h2 = std::hash<uint64_t>()(tag.upper);
+    return h1 ^ (h2 << 1); // Combine hashes with XOR and bit-shifting
+  }
 };
+} // namespace std
 
-constexpr HermesBuildVersionInfo HermesBuildVersion = {HERMES_FILE_VERSION_BIN};
+namespace hermes::node_api {
 
 //=============================================================================
 // Forward declaration of all classes.
@@ -228,7 +236,6 @@ class NodeApiOrderedSet;
 class NodeApiPendingFinalizers;
 template <class T>
 class NodeApiRefCountedPtr;
-class NodeApiScriptModel;
 template <class T>
 class NodeApiStableAddressStack;
 class NodeApiStringBuilder;
@@ -609,9 +616,7 @@ class NodeApiEnvironment final {
   // Initializes a new instance of NodeApiEnvironment.
   explicit NodeApiEnvironment(
       vm::Runtime &runtime,
-      bool isInspectable,
-      std::shared_ptr<facebook::jsi::PreparedScriptStore> preparedScript,
-      const vm::RuntimeConfig &runtimeConfig = {}) noexcept;
+      hbc::CompileFlags compileFlags) noexcept;
 
  private:
   // Only the internal ref count can call the destructor.
@@ -639,12 +644,11 @@ class NodeApiEnvironment final {
   napi_status getLastNativeError(const NodeApiNativeError **result) noexcept;
 
   // Internal function to se the last native error.
-  template <class... TArgs>
   napi_status setLastNativeError(
       napi_status status,
       const char *fileName,
       uint32_t line,
-      TArgs &&...args) noexcept;
+      const std::string &message) noexcept;
 
   // Internal function to clear the last error function.
   napi_status clearLastNativeError() noexcept;
@@ -1489,14 +1493,6 @@ class NodeApiEnvironment final {
       size_t *byteOffset) noexcept;
 
   //-----------------------------------------------------------------------------
-  // Runtime info
-  //-----------------------------------------------------------------------------
- public:
-  napi_status getDescription(const char **result) noexcept;
-
-  napi_status isInspectable(bool *result) noexcept;
-
-  //-----------------------------------------------------------------------------
   // Version management
   //-----------------------------------------------------------------------------
  public:
@@ -1550,20 +1546,12 @@ class NodeApiEnvironment final {
           int32_t id,
           vm::HermesValue error)) noexcept;
 
-  napi_status openEnvScope(jsr_napi_env_scope *scope) noexcept;
-
-  napi_status closeEnvScope(jsr_napi_env_scope scope) noexcept;
-
   // Exported function to check if there is an unhandled Promise rejection.
   napi_status hasUnhandledPromiseRejection(bool *result) noexcept;
 
   // Exported function to get an clear last unhandled Promise rejection.
   napi_status getAndClearLastUnhandledPromiseRejection(
       napi_value *result) noexcept;
-
-  napi_status queueMicrotask(napi_value callback) noexcept;
-
-  napi_status drainMicrotasks(int32_t maxCountHint, bool *result) noexcept;
 
   //-----------------------------------------------------------------------------
   // Memory management
@@ -1574,10 +1562,6 @@ class NodeApiEnvironment final {
   napi_status adjustExternalMemory(
       int64_t change_in_bytes,
       int64_t *adjusted_value) noexcept;
-
-  // Exported function to run garbage collection. It must be used only in unit
-  // tests.
-  napi_status collectGarbage() noexcept;
 
   //-----------------------------------------------------------------------------
   // Methods to work with Dates
@@ -1607,34 +1591,6 @@ class NodeApiEnvironment final {
 
   // Exported function to get external data associated with the environment.
   napi_status getInstanceData(void **nativeData) noexcept;
-
-  //---------------------------------------------------------------------------
-  // Script running
-  //---------------------------------------------------------------------------
-
-  // Exported function to run script from a string value.
-  // The sourceURL is used only for error reporting.
-  napi_status runScript(
-      napi_value source,
-      const char *sourceURL,
-      napi_value *result) noexcept;
-
-  napi_status createPreparedScript(
-      const uint8_t *scriptData,
-      size_t scriptLength,
-      jsr_data_delete_cb scriptDeleteCallback,
-      void *deleterData,
-      const char *sourceURL,
-      jsr_prepared_script *result) noexcept;
-
-  napi_status deletePreparedScript(jsr_prepared_script preparedScript) noexcept;
-
-  napi_status runPreparedScript(
-      jsr_prepared_script preparedScript,
-      napi_value *result) noexcept;
-
-  // Internal function to check if buffer contains Hermes VM bytecode.
-  static bool isHermesBytecode(const uint8_t *data, size_t length) noexcept;
 
   //---------------------------------------------------------------------------
   // Methods to create Hermes GC handles for stack-based variables.
@@ -1731,9 +1687,12 @@ class NodeApiEnvironment final {
   template <class T>
   napi_status checkCallResult(const T & /*value*/) noexcept;
 
- private:
+ public:
   // Controls the lifetime of this class instances.
   std::atomic<int> refCount_{1};
+
+  // Custom data associated with the environment.
+  std::unordered_map<napi_type_tag, void *> taggedData_;
 
   // Used for safe update of finalizer queue.
   NodeApiRefCountedPtr<NodeApiPendingFinalizers> pendingFinalizers_;
@@ -1744,14 +1703,10 @@ class NodeApiEnvironment final {
   // Reference to itself for convenient use in macros.
   NodeApiEnvironment &env{*this};
 
+  NodeApiEnvironment *envPtr{this};
+
   // Flags used by byte code compiler.
   hbc::CompileFlags compileFlags_{};
-
-  // Optional prepared script store.
-  std::shared_ptr<facebook::jsi::PreparedScriptStore> scriptCache_{};
-
-  // Can we run a debugger?
-  bool isInspectable_{};
 
   // Collection of all predefined values.
   std::array<
@@ -1781,7 +1736,7 @@ class NodeApiEnvironment final {
   // place at a time.
   bool isRunningFinalizers_{false};
 
-  // Helps to change the behaviour of finalizers when the environment is
+  // Helps to change the behavior of finalizers when the environment is
   // shutting down.
   bool isShuttingDown_{false};
 
@@ -2938,94 +2893,6 @@ class NodeApiExternalBuffer final : public hermes::Buffer {
   NodeApiExternalBufferCore *core_;
 };
 
-// Wraps script data as hermes::Buffer
-class ScriptDataBuffer final : public hermes::Buffer {
- public:
-  ScriptDataBuffer(
-      const uint8_t *scriptData,
-      size_t scriptLength,
-      jsr_data_delete_cb scriptDeleteCallback,
-      void *deleterData) noexcept
-      : Buffer(scriptData, scriptLength),
-        scriptDeleteCallback_(scriptDeleteCallback),
-        deleterData_(deleterData) {}
-
-  ~ScriptDataBuffer() noexcept override {
-    if (scriptDeleteCallback_ != nullptr) {
-      scriptDeleteCallback_(const_cast<uint8_t *>(data()), deleterData_);
-    }
-  }
-
-  ScriptDataBuffer(const ScriptDataBuffer &) = delete;
-  ScriptDataBuffer &operator=(const ScriptDataBuffer &) = delete;
-
- private:
-  jsr_data_delete_cb scriptDeleteCallback_{};
-  void *deleterData_{};
-};
-
-class JsiBuffer final : public hermes::Buffer {
- public:
-  JsiBuffer(std::shared_ptr<const facebook::jsi::Buffer> buffer) noexcept
-      : Buffer(buffer->data(), buffer->size()), buffer_(std::move(buffer)) {}
-
- private:
-  std::shared_ptr<const facebook::jsi::Buffer> buffer_;
-};
-
-class JsiSmallVectorBuffer final : public facebook::jsi::Buffer {
- public:
-  JsiSmallVectorBuffer(llvh::SmallVector<char, 0> data) noexcept
-      : data_(std::move(data)) {}
-
-  size_t size() const override {
-    return data_.size();
-  }
-
-  const uint8_t *data() const override {
-    return reinterpret_cast<const uint8_t *>(data_.data());
-  }
-
- private:
-  llvh::SmallVector<char, 0> data_;
-};
-
-// An implementation of PreparedJavaScript that wraps a BytecodeProvider.
-class NodeApiScriptModel final {
- public:
-  explicit NodeApiScriptModel(
-      std::unique_ptr<hbc::BCProvider> bcProvider,
-      vm::RuntimeModuleFlags runtimeFlags,
-      std::string sourceURL,
-      bool isBytecode)
-      : bcProvider_(std::move(bcProvider)),
-        runtimeFlags_(runtimeFlags),
-        sourceURL_(std::move(sourceURL)),
-        isBytecode_(isBytecode) {}
-
-  std::shared_ptr<hbc::BCProvider> bytecodeProvider() const {
-    return bcProvider_;
-  }
-
-  vm::RuntimeModuleFlags runtimeFlags() const {
-    return runtimeFlags_;
-  }
-
-  const std::string &sourceURL() const {
-    return sourceURL_;
-  }
-
-  bool isBytecode() const {
-    return isBytecode_;
-  }
-
- private:
-  std::shared_ptr<hbc::BCProvider> bcProvider_;
-  vm::RuntimeModuleFlags runtimeFlags_;
-  std::string sourceURL_;
-  bool isBytecode_{false};
-};
-
 // Conversion routines from double to int32, uin32 and int64.
 // The code is adapted from V8 source code to match the Node-API for V8
 // behavior. https://github.com/v8/v8/blob/main/src/numbers/conversions-inl.h
@@ -3275,34 +3142,10 @@ size_t convertUTF16ToUTF8WithReplacements(
 
 NodeApiEnvironment::NodeApiEnvironment(
     vm::Runtime &runtime,
-    bool isInspectable,
-    std::shared_ptr<facebook::jsi::PreparedScriptStore> scriptCache,
-    const vm::RuntimeConfig &runtimeConfig) noexcept
+    hbc::CompileFlags compileFlags) noexcept
     : runtime_(runtime),
-      isInspectable_(isInspectable),
-      scriptCache_(std::move(scriptCache)),
-      pendingFinalizers_(NodeApiPendingFinalizers::create()) {
-  if (isInspectable) {
-    compileFlags_.debug = true;
-  }
-  switch (runtimeConfig.getCompilationMode()) {
-    case vm::SmartCompilation:
-      compileFlags_.lazy = true;
-      // (Leaves thresholds at default values)
-      break;
-    case vm::ForceEagerCompilation:
-      compileFlags_.lazy = false;
-      break;
-    case vm::ForceLazyCompilation:
-      compileFlags_.lazy = true;
-      compileFlags_.preemptiveFileCompilationThreshold = 0;
-      compileFlags_.preemptiveFunctionCompilationThreshold = 0;
-      break;
-  }
-
-  compileFlags_.enableGenerator = runtimeConfig.getEnableGenerator();
-  compileFlags_.emitAsyncBreakCheck = runtimeConfig.getAsyncBreakCheckInEval();
-
+      pendingFinalizers_(NodeApiPendingFinalizers::create()),
+      compileFlags_(compileFlags) {
   runtime_.addCustomRootsFunction([this](vm::GC *, vm::RootAcceptor &acceptor) {
     napiValueStack_.forEach([&](const vm::PinnedHermesValue &value) {
       acceptor.accept(const_cast<vm::PinnedHermesValue &>(value));
@@ -3455,12 +3298,11 @@ napi_status NodeApiEnvironment::getLastNativeError(
   return napi_ok;
 }
 
-template <class... TArgs>
 napi_status NodeApiEnvironment::setLastNativeError(
     napi_status status,
     const char *fileName,
     uint32_t line,
-    TArgs &&...args) noexcept {
+    const std::string &message) noexcept {
   // Warning: Keep in-sync with napi_status enum
   static constexpr const char *errorMessages[] = {
       "",
@@ -3504,8 +3346,8 @@ napi_status NodeApiEnvironment::setLastNativeError(
   NodeApiStringBuilder sb{
       NodeApiStringBuilder::AdoptString, std::move(lastErrorMessage_)};
   sb.append(errorMessages[status]);
-  if (sizeof...(args) > 0) {
-    sb.append(": ", std::forward<TArgs>(args)...);
+  if (!message.empty()) {
+    sb.append(": ", std::move(message));
   }
   sb.append("\nFile: ", fileName);
   sb.append("\nLine: ", line);
@@ -6201,22 +6043,6 @@ napi_status NodeApiEnvironment::getDataViewInfo(
 }
 
 //-----------------------------------------------------------------------------
-// Runtime info
-//-----------------------------------------------------------------------------
-
-napi_status NodeApiEnvironment::getDescription(const char **result) noexcept {
-  CHECK_ARG(result);
-  *result = "Hermes";
-  return napi_ok;
-}
-
-napi_status NodeApiEnvironment::isInspectable(bool *result) noexcept {
-  CHECK_ARG(result);
-  *result = isInspectable_;
-  return napi_ok;
-}
-
-//-----------------------------------------------------------------------------
 // Version management
 //-----------------------------------------------------------------------------
 
@@ -6422,20 +6248,6 @@ NodeApiEnvironment::handleRejectionNotification(
   return env->getUndefined();
 }
 
-napi_status NodeApiEnvironment::openEnvScope(
-    jsr_napi_env_scope *scope) noexcept {
-  CHECK_ARG(scope);
-  *scope = reinterpret_cast<jsr_napi_env_scope>(new int(0));
-  return napi_ok;
-}
-
-napi_status NodeApiEnvironment::closeEnvScope(
-    jsr_napi_env_scope scope) noexcept {
-  CHECK_ARG(scope);
-  delete reinterpret_cast<int *>(scope);
-  return napi_ok;
-}
-
 napi_status NodeApiEnvironment::hasUnhandledPromiseRejection(
     bool *result) noexcept {
   return setResult(lastUnhandledRejectionId_ != -1, result);
@@ -6448,35 +6260,6 @@ napi_status NodeApiEnvironment::getAndClearLastUnhandledPromiseRejection(
       std::exchange(lastUnhandledRejection_, EmptyHermesValue), result);
 }
 
-napi_status NodeApiEnvironment::queueMicrotask(napi_value callback) noexcept {
-  if (LLVM_UNLIKELY(!runtime_.hasMicrotaskQueue())) {
-    return GENERIC_FAILURE(
-        "Could not enqueue microtask because they are disabled in this runtime");
-  }
-
-  CHECK_ARG(callback);
-  NodeApiHandleScope scope{*this};
-  RETURN_STATUS_IF_FALSE(
-      vm::vmisa<vm::Callable>(*phv(callback)), napi_invalid_arg);
-  vm::Handle<vm::Callable> callbackHandle = makeHandle<vm::Callable>(callback);
-  runtime_.enqueueJob(callbackHandle.get());
-
-  return clearLastNativeError();
-}
-
-napi_status NodeApiEnvironment::drainMicrotasks(
-    int32_t maxCountHint,
-    bool *result) noexcept {
-  CHECK_ARG(result);
-  if (runtime_.hasMicrotaskQueue()) {
-    CHECK_NAPI(checkJSErrorStatus(runtime_.drainJobs()));
-  }
-
-  runtime_.clearKeptObjects();
-  *result = true;
-  return napi_ok;
-}
-
 //-----------------------------------------------------------------------------
 // Memory management
 //-----------------------------------------------------------------------------
@@ -6485,12 +6268,6 @@ napi_status NodeApiEnvironment::adjustExternalMemory(
     int64_t change_in_bytes,
     int64_t *adjusted_value) noexcept {
   return GENERIC_FAILURE("Not implemented");
-}
-
-napi_status NodeApiEnvironment::collectGarbage() noexcept {
-  runtime_.collect("test");
-  CHECK_NAPI(processFinalizerQueue());
-  return clearLastNativeError();
 }
 
 //-----------------------------------------------------------------------------
@@ -6544,188 +6321,6 @@ napi_status NodeApiEnvironment::setInstanceData(
 napi_status NodeApiEnvironment::getInstanceData(void **nativeData) noexcept {
   return setResult(
       instanceData_ ? instanceData_->nativeData() : nullptr, nativeData);
-}
-
-//---------------------------------------------------------------------------
-// Script running
-//---------------------------------------------------------------------------
-
-napi_status NodeApiEnvironment::runScript(
-    napi_value source,
-    const char *sourceURL,
-    napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
-  NodeApiHandleScope scope{*this, result};
-
-  size_t sourceSize{};
-  CHECK_NAPI(getStringValueUTF8(source, nullptr, 0, &sourceSize));
-  std::unique_ptr<char[]> buffer =
-      std::unique_ptr<char[]>(new char[sourceSize + 1]);
-  CHECK_NAPI(getStringValueUTF8(source, buffer.get(), sourceSize + 1, nullptr));
-
-  jsr_prepared_script preparedScript{};
-  CHECK_NAPI(createPreparedScript(
-      reinterpret_cast<uint8_t *>(buffer.release()),
-      sourceSize,
-      [](void *data, void * /*deleterData*/) {
-        std::unique_ptr<char[]> buf(reinterpret_cast<char *>(data));
-      },
-      nullptr,
-      sourceURL,
-      &preparedScript));
-  // To delete prepared script after execution.
-  std::unique_ptr<NodeApiScriptModel> scriptModel{
-      reinterpret_cast<NodeApiScriptModel *>(preparedScript)};
-  return scope.setResult(runPreparedScript(preparedScript, result));
-}
-
-napi_status NodeApiEnvironment::createPreparedScript(
-    const uint8_t *scriptData,
-    size_t scriptLength,
-    jsr_data_delete_cb scriptDeleteCallback,
-    void *deleterData,
-    const char *sourceURL,
-    jsr_prepared_script *result) noexcept {
-  std::unique_ptr<ScriptDataBuffer> buffer = std::make_unique<ScriptDataBuffer>(
-      scriptData, scriptLength, scriptDeleteCallback, deleterData);
-
-  CHECK_NAPI(checkPendingJSError());
-  NodeApiHandleScope scope{*this};
-
-  std::pair<std::unique_ptr<hbc::BCProvider>, std::string> bcErr{};
-  vm::RuntimeModuleFlags runtimeFlags{};
-  runtimeFlags.persistent = true;
-
-  bool isBytecode = isHermesBytecode(buffer->data(), buffer->size());
-  // Save the first few bytes of the buffer so that we can later append them
-  // to any error message.
-  uint8_t bufPrefix[16];
-  const size_t bufSize = buffer->size();
-  std::memcpy(bufPrefix, buffer->data(), std::min(sizeof(bufPrefix), bufSize));
-
-  // Construct the BC provider either from buffer or source.
-  if (isBytecode) {
-    bcErr = hbc::BCProviderFromBuffer::createBCProviderFromBuffer(
-        std::move(buffer));
-  } else {
-#if defined(HERMESVM_LEAN)
-    bcErr.second = "prepareJavaScript source compilation not supported";
-#else
-
-    facebook::jsi::ScriptSignature scriptSignature;
-    facebook::jsi::JSRuntimeSignature runtimeSignature;
-    const char *prepareTag = "perf";
-
-    if (scriptCache_) {
-      uint64_t hash{};
-      bool isAscii = murmurhash(buffer->data(), buffer->size(), /*ref*/ hash);
-      facebook::jsi::JSRuntimeVersion_t runtimeVersion =
-          HermesBuildVersion.version;
-      scriptSignature = {std::string(sourceURL ? sourceURL : ""), hash};
-      runtimeSignature = {"Hermes", runtimeVersion};
-    }
-
-    std::shared_ptr<const facebook::jsi::Buffer> cache;
-    if (scriptCache_) {
-      cache = scriptCache_->tryGetPreparedScript(
-          scriptSignature, runtimeSignature, prepareTag);
-      bcErr = hbc::BCProviderFromBuffer::createBCProviderFromBuffer(
-          std::make_unique<JsiBuffer>(move(cache)));
-    }
-
-    hbc::BCProviderFromSrc *bytecodeProviderFromSrc{};
-    if (!bcErr.first) {
-      std::pair<std::unique_ptr<hbc::BCProviderFromSrc>, std::string>
-          bcFromSrcErr = hbc::BCProviderFromSrc::createBCProviderFromSrc(
-              std::move(buffer),
-              std::string(sourceURL ? sourceURL : ""),
-              nullptr,
-              compileFlags_);
-      bytecodeProviderFromSrc = bcFromSrcErr.first.get();
-      bcErr = std::move(bcFromSrcErr);
-    }
-
-    if (scriptCache_ && bytecodeProviderFromSrc) {
-      hbc::BytecodeModule *bcModule =
-          bytecodeProviderFromSrc->getBytecodeModule();
-
-      // Serialize/deserialize can't handle lazy compilation as of now. Do a
-      // check to make sure there is no lazy BytecodeFunction in module_.
-      for (uint32_t i = 0; i < bcModule->getNumFunctions(); i++) {
-        if (bytecodeProviderFromSrc->isFunctionLazy(i)) {
-          goto CannotSerialize;
-        }
-      }
-
-      // Serialize the bytecode. Call BytecodeSerializer to do the heavy
-      // lifting. Write to a SmallVector first, so we can know the total bytes
-      // and write it first and make life easier for Deserializer. This is going
-      // to be slower than writing to Serializer directly but it's OK to slow
-      // down serialization if it speeds up Deserializer.
-      BytecodeGenerationOptions bytecodeGenOpts =
-          BytecodeGenerationOptions::defaults();
-      llvh::SmallVector<char, 0> bytecodeVector;
-      llvh::raw_svector_ostream outStream(bytecodeVector);
-      hbc::BytecodeSerializer bcSerializer{outStream, bytecodeGenOpts};
-      bcSerializer.serialize(
-          *bcModule, bytecodeProviderFromSrc->getSourceHash());
-
-      scriptCache_->persistPreparedScript(
-          std::shared_ptr<const facebook::jsi::Buffer>(
-              new JsiSmallVectorBuffer(std::move(bytecodeVector))),
-          scriptSignature,
-          runtimeSignature,
-          prepareTag);
-    }
-#endif
-  }
-  if (!bcErr.first) {
-    NodeApiStringBuilder sb(" Buffer size: ", bufSize, ", starts with: ");
-    for (size_t i = 0; i < sizeof(bufPrefix) && i < bufSize; ++i) {
-      sb.append(llvh::format_hex_no_prefix(bufPrefix[i], 2));
-    }
-    return GENERIC_FAILURE("Compiling JS failed: ", bcErr.second, sb.str());
-  }
-
-#if !defined(HERMESVM_LEAN)
-CannotSerialize:
-#endif
-  *result = reinterpret_cast<jsr_prepared_script>(new NodeApiScriptModel(
-      std::move(bcErr.first),
-      runtimeFlags,
-      sourceURL ? sourceURL : "",
-      isBytecode));
-  return clearLastNativeError();
-}
-
-napi_status NodeApiEnvironment::deletePreparedScript(
-    jsr_prepared_script preparedScript) noexcept {
-  CHECK_ARG(preparedScript);
-  delete reinterpret_cast<NodeApiScriptModel *>(preparedScript);
-  return napi_ok;
-}
-
-napi_status NodeApiEnvironment::runPreparedScript(
-    jsr_prepared_script preparedScript,
-    napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
-  NodeApiHandleScope scope{*this, result};
-  CHECK_ARG(preparedScript);
-  const NodeApiScriptModel *hermesPrep =
-      reinterpret_cast<NodeApiScriptModel *>(preparedScript);
-  vm::CallResult<vm::HermesValue> res = runtime_.runBytecode(
-      hermesPrep->bytecodeProvider(),
-      hermesPrep->runtimeFlags(),
-      hermesPrep->sourceURL(),
-      vm::Runtime::makeNullHandle<vm::Environment>());
-  return scope.setResult(std::move(res));
-}
-
-/*static*/ bool NodeApiEnvironment::isHermesBytecode(
-    const uint8_t *data,
-    size_t len) noexcept {
-  return hbc::BCProviderFromBuffer::isBytecodeStream(
-      llvh::ArrayRef<uint8_t>(data, len));
 }
 
 //---------------------------------------------------------------------------
@@ -6921,8 +6516,152 @@ napi_status NodeApiEnvironment::checkCallResult(const T & /*value*/) noexcept {
   return clearLastNativeError();
 }
 
-} // namespace node_api
-} // namespace hermes
+//-----------------------------------------------------------------------------
+// non Node-API external APIs
+//-----------------------------------------------------------------------------
+
+napi_status incEnvRefCount(napi_env env) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  return envPtr->incRefCount();
+}
+
+napi_status decEnvRefCount(napi_env env) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  return envPtr->decRefCount();
+}
+
+napi_status setNodeApiEnvironmentData(
+    napi_env env,
+    const napi_type_tag &tag,
+    void *data) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  // TODO: (vmoroz) uncomment when parent environments are implemented.
+  // if (parentEnvironment_ != nullptr) {
+  //   return parentEnvironment_->setData(tag, data);
+  // }
+
+  if (data != nullptr) {
+    envPtr->taggedData_.try_emplace(tag, data);
+  } else {
+    envPtr->taggedData_.erase(tag);
+  }
+  return envPtr->clearLastNativeError();
+}
+
+napi_status getNodeApiEnvironmentData(
+    napi_env env,
+    const napi_type_tag &tag,
+    void **data) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  // TODO: (vmoroz) uncomment when parent environments are implemented.
+  // if (envPtr->parentEnvironment_ != nullptr) {
+  //   return envPtr->parentEnvironment_->getData(tag, data);
+  // }
+  CHECK_ARG(data);
+
+  auto it = envPtr->taggedData_.find(tag);
+  *data = (it != envPtr->taggedData_.end()) ? it->second : nullptr;
+  return envPtr->clearLastNativeError();
+}
+
+napi_status checkJSErrorStatus(
+    napi_env env,
+    vm::ExecutionStatus hermesStatus) noexcept {
+  return CHECKED_ENV(env)->checkJSErrorStatus(
+      hermesStatus, napi_pending_exception);
+}
+
+napi_status queueMicrotask(napi_env env, napi_value callback) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  if (LLVM_UNLIKELY(!envPtr->runtime_.hasMicrotaskQueue())) {
+    return GENERIC_FAILURE("Microtasks are not supported in this runtime");
+  }
+
+  CHECK_ARG(callback);
+  vm::GCScope gcScope{envPtr->runtime_};
+  RETURN_STATUS_IF_FALSE(
+      vm::vmisa<vm::Callable>(*phv(callback)), napi_invalid_arg);
+  vm::Handle<vm::Callable> callbackHandle =
+      envPtr->makeHandle<vm::Callable>(callback);
+  envPtr->runtime_.enqueueJob(callbackHandle.get());
+
+  return envPtr->clearLastNativeError();
+}
+
+napi_status collectGarbage(napi_env env) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  envPtr->runtime_.collect("test");
+  CHECK_NAPI(envPtr->processFinalizerQueue());
+  return envPtr->clearLastNativeError();
+}
+
+napi_status runBytecode(
+    napi_env env,
+    std::shared_ptr<hbc::BCProvider> bytecodeProvider,
+    vm::RuntimeModuleFlags runtimeFlags,
+    const std::string &sourceURL,
+    napi_value *result) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  CHECK_NAPI(envPtr->checkPendingJSError());
+  NodeApiHandleScope scope{*envPtr, result};
+  vm::CallResult<vm::HermesValue> res = envPtr->runtime_.runBytecode(
+      std::move(bytecodeProvider),
+      runtimeFlags,
+      sourceURL,
+      vm::Runtime::makeNullHandle<vm::Environment>());
+  return scope.setResult(std::move(res));
+}
+
+template <>
+napi_status setLastNativeError(
+    napi_env env,
+    napi_status status,
+    const char *fileName,
+    uint32_t line,
+    const std::string &message) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  return envPtr->setLastNativeError(status, fileName, line, message);
+}
+
+template <>
+napi_status setLastNativeError(
+    NodeApiEnvironment &env,
+    napi_status status,
+    const char *fileName,
+    uint32_t line,
+    const std::string& message) noexcept {
+  return env.setLastNativeError(status, fileName, line, message);
+}
+
+napi_status clearLastNativeError(napi_env env) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  return envPtr->clearLastNativeError();
+}
+
+napi_status hasUnhandledPromiseRejection(napi_env env, bool *result) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  return envPtr->hasUnhandledPromiseRejection(result);
+}
+
+napi_status getAndClearLastUnhandledPromiseRejection(
+    napi_env env,
+    napi_value *result) noexcept {
+  CHECK_ENV(env);
+  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
+  return envPtr->getAndClearLastUnhandledPromiseRejection(result);
+}
+
+} // namespace hermes::node_api
 
 //=============================================================================
 // Node-API implementation
@@ -7662,7 +7401,37 @@ napi_is_promise(napi_env env, napi_value value, bool *is_promise) {
 
 napi_status NAPI_CDECL
 napi_run_script(napi_env env, napi_value script, napi_value *result) {
-  return CHECKED_ENV(env)->runScript(script, nullptr, result);
+  CHECK_ENV(env);
+  hermes::node_api::NodeApiEnvironment *envPtr =
+      reinterpret_cast<hermes::node_api::NodeApiEnvironment *>(env);
+  class StringBuffer : public ::hermes::Buffer {
+   public:
+    StringBuffer(std::string buffer) : string_(std::move(buffer)) {
+      data_ = reinterpret_cast<const uint8_t *>(string_.c_str());
+      size_ = string_.size();
+    }
+
+   private:
+    std::string string_;
+  };
+
+  // TODO: CHECK_STATUS(checkPreconditions());
+  hermes::node_api::NodeApiHandleScope scope{*envPtr, result};
+
+  // Convert the code into UTF8.
+  size_t sourceSize{};
+  CHECK_NAPI(envPtr->getStringValueUTF8(script, nullptr, 0, &sourceSize));
+  std::string code(sourceSize, '\0');
+  CHECK_NAPI(
+      envPtr->getStringValueUTF8(script, &code[0], sourceSize + 1, nullptr));
+
+  // Create a buffer for the code.
+  std::unique_ptr<hermes::Buffer> codeBuffer(new StringBuffer(std::move(code)));
+
+  hermes::vm::CallResult<hermes::vm::HermesValue> runResult =
+      envPtr->runtime_.run(
+          std::move(codeBuffer), llvh::StringRef(), envPtr->compileFlags_);
+  return scope.setResult(std::move(runResult));
 }
 
 //-----------------------------------------------------------------------------
@@ -7857,110 +7626,12 @@ napi_status NAPI_CDECL napi_object_seal(napi_env env, napi_value object) {
 
 napi_status hermes_create_napi_env(
     ::hermes::vm::Runtime &runtime,
-    bool isInspectable,
-    std::shared_ptr<facebook::jsi::PreparedScriptStore> preparedScript,
-    const ::hermes::vm::RuntimeConfig &runtimeConfig,
+    ::hermes::hbc::CompileFlags compileFlags,
     napi_env *env) {
   if (!env) {
     return napi_status::napi_invalid_arg;
   }
-  *env = hermes::node_api::napiEnv(new hermes::node_api::NodeApiEnvironment(
-      runtime, isInspectable, std::move(preparedScript), runtimeConfig));
+  *env = hermes::node_api::napiEnv(
+      new hermes::node_api::NodeApiEnvironment(runtime, compileFlags));
   return napi_status::napi_ok;
-}
-
-//=============================================================================
-// Node-API extensions to host JS engine and to implement JSI
-//=============================================================================
-
-napi_status NAPI_CDECL jsr_env_ref(napi_env env) {
-  return CHECKED_ENV(env)->incRefCount();
-}
-
-napi_status NAPI_CDECL jsr_env_unref(napi_env env) {
-  return CHECKED_ENV(env)->decRefCount();
-}
-
-napi_status NAPI_CDECL jsr_collect_garbage(napi_env env) {
-  return CHECKED_ENV(env)->collectGarbage();
-}
-
-napi_status NAPI_CDECL
-jsr_has_unhandled_promise_rejection(napi_env env, bool *result) {
-  return CHECKED_ENV(env)->hasUnhandledPromiseRejection(result);
-}
-
-napi_status NAPI_CDECL jsr_get_and_clear_last_unhandled_promise_rejection(
-    napi_env env,
-    napi_value *result) {
-  return CHECKED_ENV(env)->getAndClearLastUnhandledPromiseRejection(result);
-}
-
-napi_status NAPI_CDECL jsr_get_description(napi_env env, const char **result) {
-  return CHECKED_ENV(env)->getDescription(result);
-}
-
-napi_status NAPI_CDECL jsr_queue_microtask(napi_env env, napi_value callback) {
-  return CHECKED_ENV(env)->queueMicrotask(callback);
-}
-
-napi_status NAPI_CDECL
-jsr_drain_microtasks(napi_env env, int32_t max_count_hint, bool *result) {
-  return CHECKED_ENV(env)->drainMicrotasks(max_count_hint, result);
-}
-
-napi_status NAPI_CDECL jsr_is_inspectable(napi_env env, bool *result) {
-  return CHECKED_ENV(env)->isInspectable(result);
-}
-
-JSR_API jsr_open_napi_env_scope(napi_env env, jsr_napi_env_scope *scope) {
-  return CHECKED_ENV(env)->openEnvScope(scope);
-}
-
-JSR_API jsr_close_napi_env_scope(napi_env env, jsr_napi_env_scope scope) {
-  return CHECKED_ENV(env)->closeEnvScope(scope);
-}
-
-//-----------------------------------------------------------------------------
-// Script preparing and running.
-//
-// Script is usually converted to byte code, or in other words - prepared - for
-// execution. Then, we can run the prepared script.
-//-----------------------------------------------------------------------------
-
-napi_status NAPI_CDECL jsr_run_script(
-    napi_env env,
-    napi_value source,
-    const char *source_url,
-    napi_value *result) {
-  return CHECKED_ENV(env)->runScript(source, source_url, result);
-}
-
-napi_status NAPI_CDECL jsr_create_prepared_script(
-    napi_env env,
-    const uint8_t *script_data,
-    size_t script_length,
-    jsr_data_delete_cb script_delete_cb,
-    void *deleter_data,
-    const char *source_url,
-    jsr_prepared_script *result) {
-  return CHECKED_ENV(env)->createPreparedScript(
-      script_data,
-      script_length,
-      script_delete_cb,
-      deleter_data,
-      source_url,
-      result);
-}
-
-napi_status NAPI_CDECL
-jsr_delete_prepared_script(napi_env env, jsr_prepared_script prepared_script) {
-  return CHECKED_ENV(env)->deletePreparedScript(prepared_script);
-}
-
-napi_status NAPI_CDECL jsr_prepared_script_run(
-    napi_env env,
-    jsr_prepared_script prepared_script,
-    napi_value *result) {
-  return CHECKED_ENV(env)->runPreparedScript(prepared_script, result);
 }
