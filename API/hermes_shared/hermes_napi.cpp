@@ -6624,10 +6624,10 @@ napi_status setLastNativeError(
     napi_status status,
     const char *fileName,
     uint32_t line,
-    std::string message) noexcept {
+    const std::string &message) noexcept {
   CHECK_ENV(env);
   NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
-  return envPtr->setLastNativeError(status, fileName, line, std::move(message));
+  return envPtr->setLastNativeError(status, fileName, line, message);
 }
 
 napi_status setLastNativeError(
@@ -6635,8 +6635,8 @@ napi_status setLastNativeError(
     napi_status status,
     const char *fileName,
     uint32_t line,
-    std::string message) noexcept {
-  return env.setLastNativeError(status, fileName, line, std::move(message));
+    const std::string& message) noexcept {
+  return env.setLastNativeError(status, fileName, line, message);
 }
 
 napi_status clearLastNativeError(napi_env env) noexcept {
