@@ -6523,13 +6523,13 @@ napi_status NodeApiEnvironment::checkCallResult(const T & /*value*/) noexcept {
 napi_status incEnvRefCount(napi_env env) noexcept {
   CHECK_ENV(env);
   NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
-  envPtr->incRefCount();
+  return envPtr->incRefCount();
 }
 
 napi_status decEnvRefCount(napi_env env) noexcept {
   CHECK_ENV(env);
   NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
-  envPtr->decRefCount();
+  return envPtr->decRefCount();
 }
 
 napi_status setNodeApiEnvironmentData(
@@ -6548,7 +6548,7 @@ napi_status setNodeApiEnvironmentData(
   } else {
     envPtr->taggedData_.erase(tag);
   }
-  return napi_ok;
+  return envPtr->clearLastNativeError();
 }
 
 napi_status getNodeApiEnvironmentData(
@@ -6565,7 +6565,7 @@ napi_status getNodeApiEnvironmentData(
 
   auto it = envPtr->taggedData_.find(tag);
   *data = (it != envPtr->taggedData_.end()) ? it->second : nullptr;
-  return napi_ok;
+  return envPtr->clearLastNativeError();
 }
 
 napi_status checkJSErrorStatus(
