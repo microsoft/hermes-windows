@@ -6619,6 +6619,7 @@ napi_status runBytecode(
   return scope.setResult(std::move(res));
 }
 
+template <>
 napi_status setLastNativeError(
     napi_env env,
     napi_status status,
@@ -6630,6 +6631,7 @@ napi_status setLastNativeError(
   return envPtr->setLastNativeError(status, fileName, line, message);
 }
 
+template <>
 napi_status setLastNativeError(
     NodeApiEnvironment &env,
     napi_status status,

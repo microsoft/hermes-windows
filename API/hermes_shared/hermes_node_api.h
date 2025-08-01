@@ -56,20 +56,6 @@ napi_status runBytecode(
     const std::string &sourceURL,
     napi_value *result) noexcept;
 
-napi_status setLastNativeError(
-    napi_env env,
-    napi_status status,
-    const char *fileName,
-    uint32_t line,
-    const std::string &message) noexcept;
-
-napi_status setLastNativeError(
-    NodeApiEnvironment &env,
-    napi_status status,
-    const char *fileName,
-    uint32_t line,
-    const std::string &message) noexcept;
-
 template <class... TArgs>
 napi_status setLastNativeError(
     napi_env env,
@@ -79,7 +65,8 @@ napi_status setLastNativeError(
     TArgs &&...args) noexcept {
   std::ostringstream sb;
   (sb << ... << args);
-  return setLastNativeError(env, status, fileName, line, sb.str());
+  const std::string message = sb.str();
+  return setLastNativeError(env, status, fileName, line, message);
 }
 
 template <class... TArgs>
@@ -91,8 +78,25 @@ napi_status setLastNativeError(
     TArgs &&...args) noexcept {
   std::ostringstream sb;
   (sb << ... << args);
-  return setLastNativeError(env, status, fileName, line, sb.str());
+  const std::string message = sb.str();
+  return setLastNativeError(env, status, fileName, line, message);
 }
+
+template <>
+napi_status setLastNativeError(
+    napi_env env,
+    napi_status status,
+    const char *fileName,
+    uint32_t line,
+    const std::string &message) noexcept;
+
+template <>
+napi_status setLastNativeError(
+    NodeApiEnvironment &env,
+    napi_status status,
+    const char *fileName,
+    uint32_t line,
+    const std::string &message) noexcept;
 
 napi_status clearLastNativeError(napi_env env) noexcept;
 
