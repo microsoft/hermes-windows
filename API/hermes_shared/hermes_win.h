@@ -8,7 +8,7 @@
 #ifndef HERMES_HERMES_WIN_H
 #define HERMES_HERMES_WIN_H
 
-//#include "hermes.h"
+// #include "hermes.h"
 #include "hermes_api.h"
 
 #endif // HERMES_HERMES_WIN_H

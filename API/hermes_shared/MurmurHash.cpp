@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
-// This code was adapted from https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.h
+// This code was adapted from
+// https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.h
 //-----------------------------------------------------------------------------
 // MurmurHash3 was written by Austin Appleby, and is placed in the public
 // domain. The author hereby disclaims copyright to this source code.
@@ -40,7 +41,11 @@ bool isAscii(uint64_t k) {
   return (k & 0x8080808080808080) == 0ull;
 }
 
-bool MurmurHash3_x64_128(const void *key, const int len, const uint32_t seed, void *out) {
+bool MurmurHash3_x64_128(
+    const void *key,
+    const int len,
+    const uint32_t seed,
+    void *out) {
   const uint8_t *data = (const uint8_t *)key;
   const int nblocks = len / 16;
 
