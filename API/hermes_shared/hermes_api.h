@@ -80,6 +80,10 @@ JSR_API hermes_local_connection_send_message(
 JSR_API hermes_local_connection_disconnect(
     hermes_local_connection local_connection);
 
+JSR_API jsr_env_ref(napi_env env);
+
+JSR_API jsr_env_unref(napi_env env);
+
 EXTERN_C_END
 
 #endif // !HERMES_HERMES_API_H

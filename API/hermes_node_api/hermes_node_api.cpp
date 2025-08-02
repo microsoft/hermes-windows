@@ -68,11 +68,8 @@
 #define NAPI_VERSION 8
 #define NAPI_EXPERIMENTAL
 
-#include "hermes_api.h"
 #include "hermes_node_api.h"
 
-#include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
-#include "hermes/DebuggerAPI.h"
 #include "hermes/SourceMap/SourceMapParser.h"
 #include "hermes/Support/SimpleDiagHandler.h"
 #include "hermes/VM/Callable.h"

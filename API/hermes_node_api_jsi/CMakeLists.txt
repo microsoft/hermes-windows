@@ -6,14 +6,17 @@
 set(HERMES_ENABLE_EH_RTTI ON)
 
 add_hermes_library(hermesNodeApiJsiRuntime
-  NodeApiJsiRuntime.cpp
-  ApiLoaders/HermesApi.cpp
-  ApiLoaders/HermesApi.h
-  ApiLoaders/JSRuntimeApi.cpp
-  ApiLoaders/JSRuntimeApi.h
-  ApiLoaders/NodeApi_win.cpp
-  ApiLoaders/NodeApi.cpp
-  ApiLoaders/NodeApi.h
-  LINK_LIBS jsi hermesNodeApi
+    NodeApiJsiRuntime.cpp
+    ApiLoaders/HermesApi.cpp
+    ApiLoaders/HermesApi.h
+    ApiLoaders/JSRuntimeApi.cpp
+    ApiLoaders/JSRuntimeApi.h
+    ApiLoaders/NodeApi_win.cpp
+    ApiLoaders/NodeApi.cpp
+    ApiLoaders/NodeApi.h
+  LINK_LIBS
+    hermesRuntimeApi
+    jsi
+    nodeApi 
   )
 target_include_directories(hermesNodeApiJsiRuntime PUBLIC ..)

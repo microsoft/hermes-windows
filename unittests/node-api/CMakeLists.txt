@@ -60,8 +60,8 @@ if (MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi")
 endif()
 
-add_hermes_unittest(NodeApiTests ${NodeApiTests} LINK_LIBS hermesNodeApi)
-target_link_libraries(NodeApiTests hermesNodeApi libshared)
+add_hermes_unittest(NodeApiTests ${NodeApiTests} LINK_LIBS nodeApi)
+target_link_libraries(NodeApiTests nodeApi libshared)
 target_include_directories(NodeApiTests PUBLIC ../../API/hermes_shared)
 
 # transform test JS files to be Hermes-compatible
