@@ -13,9 +13,9 @@
 
 #include <memory>
 #include <string>
-#include "hermes/BCGen/HBC/BytecodeDataProvider.h"
+#include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
 #include "hermes/VM/RuntimeModule.h"
-#include "node-api/js_native_api_types.h"
+#include "node_api/js_native_api.h"
 
 namespace hermes::node_api {
 

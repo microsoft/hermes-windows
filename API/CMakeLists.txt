@@ -5,6 +5,7 @@
 
 add_subdirectory(hermes)
 add_subdirectory(hermes_abi)
+add_subdirectory(hermes_node_api)
+add_subdirectory(hermes_node_api_jsi)
 add_subdirectory(hermes_sandbox)
 add_subdirectory(hermes_shared)
-add_subdirectory(hermes_node_api_jsi)
