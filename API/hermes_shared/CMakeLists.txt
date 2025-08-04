@@ -5,15 +5,16 @@
 
 set(HERMES_ENABLE_EH_RTTI ON)
 
-add_subdirectory(node-api)
 add_subdirectory(inspector)
 
-# List the files that define exported functions explicitly, and they can link
-# against the internal functionality they need.
-set(api_sources
+add_library(hermesRuntimeApi INTERFACE
   hermes_api.h
-  hermes_napi.cpp
-  hermes_node_api.h
+  js_runtime_api.h
+)
+
+target_include_directories(hermesRuntimeApi INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_library(libshared SHARED
   hermes_win.cpp
   hermes_win.h
   MurmurHash.cpp
@@ -21,14 +22,18 @@ set(api_sources
   ScriptStore.h
 )
 
-add_library(libshared SHARED ${api_sources})
-target_link_libraries(libshared PRIVATE
-  jsi
-  libhermes
-  hermesVMRuntime
-  hermesNodeApi
-  hermesinspector
-  hermesParser)
+target_link_libraries(libshared
+  PUBLIC
+    hermesRuntimeApi
+    jsi
+    nodeApi
+  PRIVATE
+    hermesinspector
+    hermesNodeApi
+    hermesParser
+    hermesVMRuntime
+    libhermes
+)
 target_link_options(libshared PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 
 if(WIN32)
@@ -40,7 +45,7 @@ endif()
 target_include_directories(libshared PUBLIC
   ..
   ../../public
-  node-api
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${HERMES_JSI_DIR}
   ${REACT_NATIVE_SOURCE}/ReactCommon
   ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor

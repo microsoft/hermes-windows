@@ -628,15 +628,28 @@ function createFakeBinFile(targetPath, fileName) {
 function ensureStagingPaths(buildParams) {
   const { isUwp, platform, configuration } = buildParams;
 
-  const dllStagingPath = path.join(
+  // Ensure that both Win32 and UWP staging paths exist to enable Nuget pack
+  // working even if we have a single DLL.
+  const win32DllStagingPath = path.join(
     buildParams.pkgStagingPath,
     "lib",
     "native",
-    getAppPlatformName(isUwp),
+    getAppPlatformName(/*isUwp:*/false),
     configuration,
     platform,
   );
-  ensureDir(dllStagingPath);
+  const uwpDllStagingPath = path.join(
+    buildParams.pkgStagingPath,
+    "lib",
+    "native",
+    getAppPlatformName(/*isUwp:*/true),
+    configuration,
+    platform,
+  );
+  ensureDir(win32DllStagingPath);
+  ensureDir(uwpDllStagingPath);
+
+  const dllStagingPath = isUwp ? uwpDllStagingPath : win32DllStagingPath;
 
   const toolsStagingPath = path.join(
     buildParams.pkgStagingPath,
@@ -664,16 +677,19 @@ function packNuGet(runParams) {
     recursive: true,
   });
 
-  // Copy node-api headers
-  const hermesSharedApiPath = path.join(hermesApiPath, "hermes_shared");
-  const hermesNodeApiPath = path.join(hermesSharedApiPath, "node-api");
+  // Copy Node API headers
+  const hermesNodeApiPath = path.join(hermesApiPath, "hermes_node_api");
+  const nodeApiPath = path.join(hermesNodeApiPath, "node_api");
   const stagingNodeApiPath = path.join(stagingIncludePath, "node-api");
-  const stagingHermesApiPath = path.join(stagingIncludePath, "hermes");
   ensureDir(stagingNodeApiPath);
-  copyFile("js_native_api.h", hermesNodeApiPath, stagingNodeApiPath);
-  copyFile("js_native_api_types.h", hermesNodeApiPath, stagingNodeApiPath);
-  copyFile("js_runtime_api.h", hermesNodeApiPath, stagingNodeApiPath);
+  copyFile("js_native_api.h", nodeApiPath, stagingNodeApiPath);
+  copyFile("js_native_api_types.h", nodeApiPath, stagingNodeApiPath);
+
+  // Copy Hermes API headers
+  const hermesSharedApiPath = path.join(hermesApiPath, "hermes_shared");
+  const stagingHermesApiPath = path.join(stagingIncludePath, "hermes");
   ensureDir(stagingHermesApiPath);
+  copyFile("js_runtime_api.h", hermesSharedApiPath, stagingHermesApiPath);
   copyFile("hermes_api.h", hermesSharedApiPath, stagingHermesApiPath);
 
   // Copy license files
