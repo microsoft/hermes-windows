@@ -684,6 +684,8 @@ function packNuGet(runParams) {
   ensureDir(stagingNodeApiPath);
   copyFile("js_native_api.h", nodeApiPath, stagingNodeApiPath);
   copyFile("js_native_api_types.h", nodeApiPath, stagingNodeApiPath);
+  copyFile("node_api.h", nodeApiPath, stagingNodeApiPath);
+  copyFile("node_api_types.h", nodeApiPath, stagingNodeApiPath);
 
   // Copy Hermes API headers
   const hermesSharedApiPath = path.join(hermesApiPath, "hermes_shared");

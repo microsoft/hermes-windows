@@ -6,7 +6,8 @@
 class MyObject {
  public:
   static void Init(napi_env env, napi_value exports);
-  static void Destructor(napi_env env, void* nativeObject, void* finalize_hint);
+  static void
+  Destructor(node_api_basic_env env, void *nativeObject, void *finalize_hint);
 
  private:
   explicit MyObject(double value_ = 0);
@@ -23,4 +24,4 @@ class MyObject {
   napi_ref wrapper_;
 };
 
-#endif  // TEST_JS_NATIVE_API_6_OBJECT_WRAP_MYOBJECT_H_
+#endif // TEST_JS_NATIVE_API_6_OBJECT_WRAP_MYOBJECT_H_

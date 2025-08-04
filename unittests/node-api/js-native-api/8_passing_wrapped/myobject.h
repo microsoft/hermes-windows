@@ -6,11 +6,13 @@
 class MyObject {
  public:
   static napi_status Init(napi_env env);
-  static void Destructor(napi_env env, void* nativeObject, void* finalize_hint);
-  static napi_status NewInstance(napi_env env,
-                                 napi_value arg,
-                                 napi_value* instance);
-  double Val() const { return val_; }
+  static void
+  Destructor(node_api_basic_env env, void *nativeObject, void *finalize_hint);
+  static napi_status
+  NewInstance(napi_env env, napi_value arg, napi_value *instance);
+  double Val() const {
+    return val_;
+  }
 
  private:
   MyObject();
@@ -23,4 +25,4 @@ class MyObject {
   napi_ref wrapper_;
 };
 
-#endif  // TEST_JS_NATIVE_API_8_PASSING_WRAPPED_MYOBJECT_H_
+#endif // TEST_JS_NATIVE_API_8_PASSING_WRAPPED_MYOBJECT_H_

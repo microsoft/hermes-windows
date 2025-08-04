@@ -1,11 +1,17 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+#
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 
 add_library(nodeApi INTERFACE
+  js_native_api.h
   js_native_api_types.h
-  js_native_api.h)
+  node_api.h
+  node_api_types.h
+)
 
 target_include_directories(nodeApi INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 

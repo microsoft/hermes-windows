@@ -1,13 +1,14 @@
-/*
+﻿/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  *
  * Copyright notices for portions of code adapted from Hermes, Node.js, and V8
  * projects:
- *
- * Copyright (c) Facebook, Inc. and its affiliates.
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
  *
  * Copyright Node.js contributors. All rights reserved.
  * https://github.com/nodejs/node/blob/master/LICENSE
@@ -65,7 +66,6 @@
 // TODO: How to provide detailed error messages without breaking tests?
 // TODO: Why console.log compiles in V8_JSI?
 
-#define NAPI_VERSION 8
 #define NAPI_EXPERIMENTAL
 
 #include "hermes_node_api.h"
@@ -121,10 +121,11 @@
 #define GENERIC_FAILURE(...) ERROR_STATUS(napi_generic_failure, __VA_ARGS__)
 
 // Cast env to NodeApiEnvironment if it is not null.
-#define CHECKED_ENV(env) \
-  ((env) == nullptr)     \
-      ? napi_invalid_arg \
-      : reinterpret_cast<hermes::node_api::NodeApiEnvironment *>(env)
+#define CHECKED_ENV(env)                                          \
+  ((env) == nullptr)                                              \
+      ? napi_invalid_arg                                          \
+      : reinterpret_cast<hermes::node_api::NodeApiEnvironment *>( \
+            const_cast<napi_env>(env))
 
 // Check env and return error status with message.
 #define CHECKED_ENV_ERROR_STATUS(env, status, ...) \
@@ -308,6 +309,9 @@ bool isInEnumRange(
 
 // Reinterpret cast NodeApiEnvironment to napi_env
 napi_env napiEnv(NodeApiEnvironment *env) noexcept;
+
+// Reinterpret cast node_api_basic_finalize to napi_finalize
+napi_finalize basicFinalize(node_api_basic_finalize finalize) noexcept;
 
 // Reinterpret cast vm::PinnedHermesValue pointer to napi_value
 napi_value napiValue(const vm::PinnedHermesValue *value) noexcept;
@@ -1240,7 +1244,7 @@ class NodeApiEnvironment final {
   napi_status wrapObject(
       napi_value object,
       void *nativeData,
-      napi_finalize finalizeCallback,
+      node_api_basic_finalize finalizeCallback,
       void *finalizeHint,
       napi_ref *result) noexcept;
 
@@ -1248,7 +1252,7 @@ class NodeApiEnvironment final {
   napi_status addFinalizer(
       napi_value object,
       void *nativeData,
-      napi_finalize finalizeCallback,
+      node_api_basic_finalize finalizeCallback,
       void *finalizeHint,
       napi_ref *result) noexcept;
 
@@ -1271,7 +1275,7 @@ class NodeApiEnvironment final {
   // Exported function to create external value object.
   napi_status createExternal(
       void *nativeData,
-      napi_finalize finalizeCallback,
+      node_api_basic_finalize finalizeCallback,
       void *finalizeHint,
       napi_value *result) noexcept;
 
@@ -1413,7 +1417,7 @@ class NodeApiEnvironment final {
   napi_status createExternalArrayBuffer(
       void *externalData,
       size_t byteLength,
-      napi_finalize finalizeCallback,
+      node_api_basic_finalize finalizeCallback,
       void *finalizeHint,
       napi_value *result) noexcept;
 
@@ -3003,6 +3007,10 @@ bool isInEnumRange(
 
 napi_env napiEnv(NodeApiEnvironment *env) noexcept {
   return reinterpret_cast<napi_env>(env);
+}
+
+napi_finalize basicFinalize(node_api_basic_finalize finalize) noexcept {
+  return reinterpret_cast<napi_finalize>(reinterpret_cast<void *>(finalize));
 }
 
 napi_value napiValue(const vm::PinnedHermesValue *value) noexcept {
@@ -5175,7 +5183,7 @@ napi_status NodeApiEnvironment::defineClass(
 napi_status NodeApiEnvironment::wrapObject(
     napi_value object,
     void *nativeData,
-    napi_finalize finalizeCallback,
+    node_api_basic_finalize finalizeCallback,
     void *finalizeHint,
     napi_ref *result) noexcept {
   CHECK_NAPI(checkPendingJSError());
@@ -5204,7 +5212,7 @@ napi_status NodeApiEnvironment::wrapObject(
           /*deleteSelf*/ result == nullptr,
           phv(object),
           nativeData,
-          finalizeCallback,
+          basicFinalize(finalizeCallback),
           finalizeHint,
           reinterpret_cast<NodeApiFinalizingComplexReference **>(&reference)));
   externalValue->setNativeData(reference);
@@ -5214,7 +5222,7 @@ napi_status NodeApiEnvironment::wrapObject(
 napi_status NodeApiEnvironment::addFinalizer(
     napi_value object,
     void *nativeData,
-    napi_finalize finalizeCallback,
+    node_api_basic_finalize finalizeCallback,
     void *finalizeHint,
     napi_ref *result) noexcept {
   CHECK_NAPI(checkPendingJSError());
@@ -5229,7 +5237,7 @@ napi_status NodeApiEnvironment::addFinalizer(
         /*deleteSelf:*/ false,
         phv(object),
         nativeData,
-        finalizeCallback,
+        basicFinalize(finalizeCallback),
         finalizeHint,
         reinterpret_cast<NodeApiFinalizingComplexReference **>(result));
   } else {
@@ -5237,7 +5245,7 @@ napi_status NodeApiEnvironment::addFinalizer(
         *this,
         phv(object),
         nativeData,
-        finalizeCallback,
+        basicFinalize(finalizeCallback),
         finalizeHint,
         nullptr);
   }
@@ -5343,7 +5351,7 @@ napi_status NodeApiEnvironment::checkObjectTypeTag(
 
 napi_status NodeApiEnvironment::createExternal(
     void *nativeData,
-    napi_finalize finalizeCallback,
+    node_api_basic_finalize finalizeCallback,
     void *finalizeHint,
     napi_value *result) noexcept {
   CHECK_NAPI(checkPendingJSError());
@@ -5358,7 +5366,7 @@ napi_status NodeApiEnvironment::createExternal(
             *this,
             decoratedObj.unsafeGetPinnedHermesValue(),
             nativeData,
-            finalizeCallback,
+            basicFinalize(finalizeCallback),
             finalizeHint,
             nullptr));
   }
@@ -5702,7 +5710,7 @@ napi_status NodeApiEnvironment::createArrayBuffer(
 napi_status NodeApiEnvironment::createExternalArrayBuffer(
     void *externalData,
     size_t byteLength,
-    napi_finalize finalizeCallback,
+    node_api_basic_finalize finalizeCallback,
     void *finalizeHint,
     napi_value *result) noexcept {
   CHECK_NAPI(checkPendingJSError());
@@ -5713,7 +5721,11 @@ napi_status NodeApiEnvironment::createExternalArrayBuffer(
   if (externalData != nullptr) {
     std::unique_ptr<NodeApiExternalBuffer> externalBuffer =
         std::make_unique<NodeApiExternalBuffer>(
-            env, externalData, byteLength, finalizeCallback, finalizeHint);
+            env,
+            externalData,
+            byteLength,
+            basicFinalize(finalizeCallback),
+            finalizeHint);
     vm::JSArrayBuffer::setExternalDataBlock(
         runtime_,
         buffer,
@@ -6044,7 +6056,8 @@ napi_status NodeApiEnvironment::getDataViewInfo(
 //-----------------------------------------------------------------------------
 
 napi_status NodeApiEnvironment::getVersion(uint32_t *result) noexcept {
-  return setResult(static_cast<uint32_t>(NAPI_VERSION), result);
+  // TODO: (vmoroz) use version passed to constructor
+  return setResult(static_cast<uint32_t>(8), result);
 }
 
 //-----------------------------------------------------------------------------
@@ -6634,7 +6647,7 @@ napi_status setLastNativeError(
     napi_status status,
     const char *fileName,
     uint32_t line,
-    const std::string& message) noexcept {
+    const std::string &message) noexcept {
   return env.setLastNativeError(status, fileName, line, message);
 }
 
@@ -6669,7 +6682,7 @@ napi_status getAndClearLastUnhandledPromiseRejection(
 //-----------------------------------------------------------------------------
 
 napi_status NAPI_CDECL napi_get_last_error_info(
-    napi_env env,
+    node_api_basic_env env,
     const napi_extended_error_info **result) {
   return CHECKED_ENV(env)->getLastNativeError(result);
 }
@@ -6756,9 +6769,63 @@ napi_status NAPI_CDECL napi_create_string_utf16(
   return CHECKED_ENV(env)->createStringUTF16(str, length, result);
 }
 
+napi_status NAPI_CDECL node_api_create_external_string_latin1(
+    napi_env env,
+    char *str,
+    size_t length,
+    node_api_basic_finalize finalize_callback,
+    void *finalize_hint,
+    napi_value *result,
+    bool *copied) {
+  return napi_generic_failure;
+}
+
+napi_status NAPI_CDECL node_api_create_external_string_utf16(
+    napi_env env,
+    char16_t *str,
+    size_t length,
+    node_api_basic_finalize finalize_callback,
+    void *finalize_hint,
+    napi_value *result,
+    bool *copied) {
+  return napi_generic_failure;
+}
+
+napi_status NAPI_CDECL node_api_create_property_key_latin1(
+    napi_env env,
+    const char *str,
+    size_t length,
+    napi_value *result) {
+  return napi_generic_failure;
+}
+
+napi_status NAPI_CDECL node_api_create_property_key_utf8(
+    napi_env env,
+    const char *str,
+    size_t length,
+    napi_value *result) {
+  return napi_generic_failure;
+}
+
+napi_status NAPI_CDECL node_api_create_property_key_utf16(
+    napi_env env,
+    const char16_t *str,
+    size_t length,
+    napi_value *result) {
+  return napi_generic_failure;
+}
+
 napi_status NAPI_CDECL
 napi_create_symbol(napi_env env, napi_value description, napi_value *result) {
   return CHECKED_ENV(env)->createSymbol(description, result);
+}
+
+napi_status NAPI_CDECL node_api_symbol_for(
+    napi_env env,
+    const char *utf8description,
+    size_t length,
+    napi_value *result) {
+  return napi_generic_failure;
 }
 
 napi_status NAPI_CDECL napi_create_function(
@@ -6794,6 +6861,14 @@ napi_status NAPI_CDECL napi_create_range_error(
     napi_value msg,
     napi_value *result) {
   return CHECKED_ENV(env)->createJSRangeError(code, msg, result);
+}
+
+napi_status NAPI_CDECL node_api_create_syntax_error(
+    napi_env env,
+    napi_value code,
+    napi_value msg,
+    napi_value *result) {
+  return napi_generic_failure;
 }
 
 //-----------------------------------------------------------------------------
@@ -7126,7 +7201,7 @@ napi_status NAPI_CDECL napi_wrap(
     napi_env env,
     napi_value js_object,
     void *native_object,
-    napi_finalize finalize_cb,
+    node_api_basic_finalize finalize_cb,
     void *finalize_hint,
     napi_ref *result) {
   return CHECKED_ENV(env)->wrapObject(
@@ -7150,7 +7225,7 @@ napi_remove_wrap(napi_env env, napi_value obj, void **result) {
 napi_status NAPI_CDECL napi_create_external(
     napi_env env,
     void *data,
-    napi_finalize finalize_cb,
+    node_api_basic_finalize finalize_cb,
     void *finalize_hint,
     napi_value *result) {
   return CHECKED_ENV(env)->createExternal(
@@ -7247,6 +7322,11 @@ napi_throw_range_error(napi_env env, const char *code, const char *msg) {
 }
 
 napi_status NAPI_CDECL
+node_api_throw_syntax_error(napi_env env, const char *code, const char *msg) {
+  return napi_generic_failure;
+}
+
+napi_status NAPI_CDECL
 napi_is_error(napi_env env, napi_value value, bool *result) {
   return CHECKED_ENV(env)->isJSError(value, result);
 }
@@ -7285,7 +7365,7 @@ napi_status NAPI_CDECL napi_create_external_arraybuffer(
     napi_env env,
     void *external_data,
     size_t byte_length,
-    napi_finalize finalize_cb,
+    node_api_basic_finalize finalize_cb,
     void *finalize_hint,
     napi_value *result) {
   return CHECKED_ENV(env)->createExternalArrayBuffer(
@@ -7358,7 +7438,8 @@ napi_status NAPI_CDECL napi_get_dataview_info(
 // Version management
 //-----------------------------------------------------------------------------
 
-napi_status NAPI_CDECL napi_get_version(napi_env env, uint32_t *result) {
+napi_status NAPI_CDECL
+napi_get_version(node_api_basic_env env, uint32_t *result) {
   return CHECKED_ENV(env)->getVersion(result);
 }
 
@@ -7436,14 +7517,12 @@ napi_run_script(napi_env env, napi_value script, napi_value *result) {
 //-----------------------------------------------------------------------------
 
 napi_status NAPI_CDECL napi_adjust_external_memory(
-    napi_env env,
+    node_api_basic_env env,
     int64_t change_in_bytes,
     int64_t *adjusted_value) {
   return CHECKED_ENV(env)->adjustExternalMemory(
       change_in_bytes, adjusted_value);
 }
-
-#if NAPI_VERSION >= 5
 
 //-----------------------------------------------------------------------------
 // Dates
@@ -7472,16 +7551,20 @@ napi_status NAPI_CDECL napi_add_finalizer(
     napi_env env,
     napi_value js_object,
     void *native_object,
-    napi_finalize finalize_cb,
+    node_api_basic_finalize finalize_cb,
     void *finalize_hint,
     napi_ref *result) {
   return CHECKED_ENV(env)->addFinalizer(
       js_object, native_object, finalize_cb, finalize_hint, result);
 }
 
-#endif // NAPI_VERSION >= 5
-
-#if NAPI_VERSION >= 6
+napi_status NAPI_CDECL node_api_post_finalizer(
+    node_api_basic_env env,
+    napi_finalize finalize_cb,
+    void *finalize_data,
+    void *finalize_hint) {
+  return napi_generic_failure;
+}
 
 //-----------------------------------------------------------------------------
 // BigInt
@@ -7553,20 +7636,17 @@ napi_status NAPI_CDECL napi_get_all_property_names(
 //-----------------------------------------------------------------------------
 
 napi_status NAPI_CDECL napi_set_instance_data(
-    napi_env env,
+    node_api_basic_env env,
     void *data,
     napi_finalize finalize_cb,
     void *finalize_hint) {
   return CHECKED_ENV(env)->setInstanceData(data, finalize_cb, finalize_hint);
 }
 
-napi_status NAPI_CDECL napi_get_instance_data(napi_env env, void **data) {
+napi_status NAPI_CDECL
+napi_get_instance_data(node_api_basic_env env, void **data) {
   return CHECKED_ENV(env)->getInstanceData(data);
 }
-
-#endif // NAPI_VERSION >= 6
-
-#if NAPI_VERSION >= 7
 
 //-----------------------------------------------------------------------------
 // ArrayBuffer detaching
@@ -7583,10 +7663,6 @@ napi_status NAPI_CDECL napi_is_detached_arraybuffer(
     bool *result) {
   return CHECKED_ENV(env)->isDetachedArrayBuffer(arraybuffer, result);
 }
-
-#endif // NAPI_VERSION >= 7
-
-#if NAPI_VERSION >= 8
 
 //-----------------------------------------------------------------------------
 // Type tagging
@@ -7614,8 +7690,6 @@ napi_status NAPI_CDECL napi_object_freeze(napi_env env, napi_value object) {
 napi_status NAPI_CDECL napi_object_seal(napi_env env, napi_value object) {
   return CHECKED_ENV(env)->objectSeal(object);
 }
-
-#endif // NAPI_VERSION >= 8
 
 //=============================================================================
 // Hermes specific API
