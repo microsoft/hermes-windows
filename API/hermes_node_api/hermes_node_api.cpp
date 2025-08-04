@@ -46,13 +46,17 @@
 //   - napi_ref and napi_ext_ref are pointers to references_ and
 //   finalizingReferences_
 //     items.
-//   - NodeApiReference finalizers are run in JS thread by processFinalizerQueue
-//     method which is called by NodeApiHandleScope::setResult.
+//   - NodeApiReference finalizers are run in JS thread by
+//     processFinalizerQueueFromCode method which is called by
+//     NodeApiHandleScope::setResult.
 // - Each returned error status is backed up by the extended error message
 //   stored in lastError_ that can be retrieved by napi_get_last_error_info.
 // - We use macros to handle error statuses. It is done to reduce extensive use
 //   of "if-return" statements, and to report failing expressions along with the
 //   file name and code line number.
+
+// TODO: Update with the latest Node.js Node-API implementation that uses the
+// version info.
 
 // TODO: Allow DebugBreak in unexpected cases - add functions to indicate
 //       expected errors
@@ -81,34 +85,41 @@
 #include "hermes/VM/JSError.h"
 #include "hermes/VM/JSProxy.h"
 #include "hermes/VM/JSTypedArray.h"
+#include "hermes/VM/PrimitiveBox.h"
 #include "hermes/VM/PropertyAccessor.h"
-#include "hermes/VM/Runtime.h"
 #include "llvh/ADT/SmallVector.h"
 #include "llvh/Support/ConvertUTF.h"
 
 #include <algorithm>
 #include <atomic>
+#include <iostream>
 #include <unordered_map>
+#include <unordered_set>
 
 //=============================================================================
 // Macros
 //=============================================================================
 
 // Check the Node-API status and return it if it is not napi_ok.
-#define CHECK_NAPI(...)                         \
+#define CHECK_STATUS(...)                       \
   do {                                          \
     if (napi_status status__ = (__VA_ARGS__)) { \
       return status__;                          \
     }                                           \
   } while (false)
 
-// Crash if the condition is false.
+// Adopted from Node.js code
+#ifdef _WIN32
+#define ABORT() _exit(134)
+#else
+#define ABORT() abort()
+#endif
+
 #define CRASH_IF_FALSE(condition)  \
   do {                             \
     if (!(condition)) {            \
       assert(false && #condition); \
-      *((int *)nullptr) = 1;       \
-      std::terminate();            \
+      ABORT();                     \
     }                              \
   } while (false)
 
@@ -170,7 +181,7 @@
   } while (false)
 
 // Check that the argument is of Object or Function type.
-#define CHECK_OBJECT_ARG(arg)                \
+#define CHECK_ARG_IS_OBJECT(arg)             \
   do {                                       \
     CHECK_ARG(arg);                          \
     RETURN_STATUS_IF_FALSE_WITH_MESSAGE(     \
@@ -180,7 +191,7 @@
   } while (false)
 
 // Check that the argument is of String type.
-#define CHECK_STRING_ARG(arg)               \
+#define CHECK_ARG_IS_STRING(arg)            \
   do {                                      \
     CHECK_ARG(arg);                         \
     RETURN_STATUS_IF_FALSE_WITH_MESSAGE(    \
@@ -227,7 +238,8 @@ class NodeApiDoubleConversion;
 class NodeApiEnvironment;
 class NodeApiExternalBuffer;
 class NodeApiExternalValue;
-class NodeApiHandleScope;
+template <bool V>
+class NodeApiHandleScopeBase;
 class NodeApiHostFunctionContext;
 template <class T>
 class NodeApiOrderedSet;
@@ -239,28 +251,21 @@ class NodeApiStableAddressStack;
 class NodeApiStringBuilder;
 
 // Forward declaration of NodeApiReference-related classes.
-class NodeApiAtomicRefCountReference;
-class NodeApiComplexReference;
-template <class TBaseReference>
-class NodeApiFinalizeCallbackHolder;
-template <class TBaseReference>
-class NodeApiFinalizeHintHolder;
-class NodeApiFinalizer;
-class NodeApiFinalizingAnonymousReference;
-class NodeApiFinalizingComplexReference;
-template <class TBaseReference>
-class NodeApiFinalizingReference;
-template <class TReference>
-class NodeApiFinalizingReferenceFactory;
-class NodeApiFinalizingStrongReference;
-class NodeApiInstanceData;
 template <class T>
 class NodeApiLinkedList;
-template <class TBaseReference>
-class NodeApiNativeDataHolder;
+class NodeApiRefTracker;
 class NodeApiReference;
-class NodeApiStrongReference;
-class NodeApiWeakReference;
+class NodeApiReferenceWithData;
+class NodeApiReferenceWithFinalizer;
+class NodeApiTrackedFinalizer;
+class NodeApiFinalizer;
+class NodeApiFinalizerHolder;
+
+// Use existing NodeApiLinkedList pattern for ref tracking
+using NodeApiRefList = NodeApiLinkedList<NodeApiRefTracker>;
+
+// Use NodeApiReferenceList for reference management as per design document
+using NodeApiReferenceList = NodeApiLinkedList<NodeApiReference>;
 
 using NodeApiNativeError = napi_extended_error_info;
 
@@ -361,6 +366,25 @@ size_t convertUTF16ToUTF8WithReplacements(
     char *buf,
     size_t bufSize);
 
+template <typename TLambda>
+class LambdaTask : public Task {
+ public:
+  LambdaTask(TLambda &&lambda) : lambda_(std::move(lambda)) {}
+
+  void invoke() noexcept override {
+    lambda_();
+  }
+
+ private:
+  TLambda lambda_;
+};
+
+template <class T>
+std::unique_ptr<Task> makeTask(T &&lambda) noexcept {
+  return std::make_unique<LambdaTask<std::remove_reference_t<T>>>(
+      std::forward<T>(lambda));
+}
+
 //=============================================================================
 // Definitions of classes and structs.
 //=============================================================================
@@ -377,6 +401,13 @@ class NodeApiRefCountedPtr final {
 
   explicit NodeApiRefCountedPtr(T *ptr, NodeApiAttachTag) noexcept
       : ptr_(ptr) {}
+
+  // Constructor that creates a new reference by incrementing ref count
+  explicit NodeApiRefCountedPtr(T *ptr) noexcept : ptr_(ptr) {
+    if (ptr_ != nullptr) {
+      ptr_->incRefCount();
+    }
+  }
 
   NodeApiRefCountedPtr(const NodeApiRefCountedPtr &other) noexcept
       : ptr_(other.ptr_) {
@@ -423,6 +454,26 @@ class NodeApiRefCountedPtr final {
 
   T *operator->() noexcept {
     return ptr_;
+  }
+
+  const T *operator->() const noexcept {
+    return ptr_;
+  }
+
+  T *get() const noexcept {
+    return ptr_;
+  }
+
+  explicit operator bool() const noexcept {
+    return ptr_ != nullptr;
+  }
+
+  bool operator==(std::nullptr_t) const noexcept {
+    return ptr_ == nullptr;
+  }
+
+  bool operator!=(std::nullptr_t) const noexcept {
+    return ptr_ != nullptr;
   }
 
  private:
@@ -520,22 +571,15 @@ class NodeApiStableAddressStack final {
  private:
   // The size of 64 entries per chunk is arbitrary at this point.
   // It can be adjusted depending on perf data.
-  static const size_t ChunkSize = 64;
+  static constexpr size_t ChunkSize = 64;
 
   llvh::SmallVector<std::unique_ptr<T[]>, ChunkSize> storage_;
   size_t size_{0};
 };
 
-// An intrusive double linked list of items.
-// Items in the list must inherit from NodeApiLinkedList<T>::Item.
-// We use it instead of std::list to allow item to delete itself in its
-// destructor and conveniently move items from list to another. The
-// NodeApiLinkedList is used for References - the GC roots that are allocated in
-// heap. The GC roots are the vm::PinnedHermesValue instances.
-template <class T>
-class NodeApiLinkedList final {
+class NodeApiLinkedListBase {
  public:
-  NodeApiLinkedList() noexcept {
+  NodeApiLinkedListBase() noexcept {
     // The list is circular:
     // head.next_ points to the first item
     // head.prev_ points to the last item
@@ -544,17 +588,11 @@ class NodeApiLinkedList final {
   }
 
   class Item {
-   public:
-    void linkNext(T *item) noexcept {
-      if (item->isLinked()) {
-        item->unlink();
-      }
-      item->prev_ = this;
-      item->next_ = next_;
-      item->next_->prev_ = item;
-      next_ = item;
-    }
+    friend NodeApiLinkedListBase;
+    template <typename T>
+    friend class NodeApiLinkedList;
 
+   public:
     void unlink() noexcept {
       if (isLinked()) {
         prev_->next_ = next_;
@@ -568,13 +606,42 @@ class NodeApiLinkedList final {
       return prev_ != nullptr;
     }
 
-    friend NodeApiLinkedList;
+   private:
+    void linkNext(Item *item) noexcept {
+      if (item->isLinked()) {
+        item->unlink();
+      }
+      item->prev_ = this;
+      item->next_ = next_;
+      item->next_->prev_ = item;
+      next_ = item;
+    }
 
    private:
     Item *next_{};
     Item *prev_{};
   };
 
+  bool isEmpty() noexcept {
+    return head_.next_ == head_.prev_;
+  }
+
+ protected:
+  Item head_;
+};
+
+// An intrusive double linked list of items.
+// Items in the list must inherit from NodeApiLinkedList<T>::Item.
+// We use it instead of std::list to allow item to delete itself in its
+// destructor and conveniently move items from list to another. The
+// NodeApiLinkedList is used for References - the GC roots that are allocated in
+// heap. The GC roots are the vm::PinnedHermesValue instances.
+template <class T>
+class NodeApiLinkedList final : public NodeApiLinkedListBase {
+  // static_assert(
+  //     std::is_base_of_v<Item, T>,
+  //     "T must inherit from NodeApiLinkedListBase::Item.");
+ public:
   void pushFront(T *item) noexcept {
     head_.linkNext(item);
   }
@@ -592,10 +659,6 @@ class NodeApiLinkedList final {
     return static_cast<T *>(&head_);
   }
 
-  bool isEmpty() noexcept {
-    return head_.next_ == head_.prev_;
-  }
-
   template <class TLambda>
   void forEach(TLambda lambda) noexcept {
     for (T *item = begin(); item != end();) {
@@ -605,9 +668,123 @@ class NodeApiLinkedList final {
       item = nextItem;
     }
   }
+};
+
+// Specialized container for managing finalizers with O(1) operations
+// CRITICAL: JS thread only - never access from background threads
+class NodeApiFinalizerHolder {
+ public:
+  NodeApiFinalizerHolder() noexcept = default;
+
+  // Add a finalizer reference (O(1) operation)
+  void addFinalizer(NodeApiReference *ref) noexcept {
+    if (ref != nullptr) {
+      finalizers_.insert(ref);
+    }
+  }
+
+  // Remove a finalizer reference (O(1) operation)
+  void removeFinalizer(NodeApiReference *ref) noexcept {
+    if (ref != nullptr) {
+      finalizers_.erase(ref);
+    }
+  }
+
+  // Invoke all finalizers in the holder
+  void invokeAllFinalizers() noexcept; // Implementation after NodeApiReference
+                                       // definition
+
+  // Check if holder is empty
+  bool isEmpty() const noexcept {
+    return finalizers_.empty();
+  }
+
+  // Get number of finalizers
+  size_t size() const noexcept {
+    return finalizers_.size();
+  }
 
  private:
-  Item head_;
+  // O(1) operations via unordered_set
+  std::unordered_set<NodeApiReference *> finalizers_;
+};
+
+// NodeApiPendingFinalizers is used to update the pending finalizer list in a
+// thread safe way when a NodeApiExternalValue is destroyed from a GC background
+// thread.
+class NodeApiPendingFinalizers {
+ public:
+  // Create new instance of NodeApiPendingFinalizers.
+  static NodeApiRefCountedPtr<NodeApiPendingFinalizers> create() noexcept {
+    return NodeApiRefCountedPtr<NodeApiPendingFinalizers>(
+        new NodeApiPendingFinalizers(), attachTag);
+  }
+
+  // Add a NodeApiFinalizerHolder from a NodeApiExternalValue destructor.
+  // It can be called from JS or GC background threads.
+  void addFinalizerHolder(
+      std::unique_ptr<NodeApiFinalizerHolder> &&holder) noexcept {
+    if (holder && !holder->isEmpty()) {
+      std::scoped_lock lock{mutex_};
+      finalizerHolders_.push_back(std::move(holder));
+      hasPendingHolders_.store(true, std::memory_order_release);
+    }
+  }
+
+  // Check if there are pending finalizer holders
+  bool hasPendingFinalizers() const noexcept {
+    return hasPendingHolders_.load(std::memory_order_acquire);
+  }
+
+  // Process all pending finalizer holders (must be called from JS thread)
+  void processPendingFinalizers() noexcept {
+    std::vector<std::unique_ptr<NodeApiFinalizerHolder>> holders;
+    {
+      std::scoped_lock lock{mutex_};
+      if (finalizerHolders_.empty()) {
+        return;
+      }
+      // Move to local variable to unlock mutex earlier
+      holders = std::move(finalizerHolders_);
+      hasPendingHolders_.store(false, std::memory_order_release);
+    }
+
+    // Process all holders outside the lock
+    for (auto &holder : holders) {
+      if (holder && !holder->isEmpty()) {
+        holder->invokeAllFinalizers();
+      }
+    }
+  }
+
+ private:
+  friend class NodeApiRefCountedPtr<NodeApiPendingFinalizers>;
+
+  NodeApiPendingFinalizers() noexcept = default;
+
+  void incRefCount() noexcept {
+    int refCount = refCount_.fetch_add(1, std::memory_order_relaxed) + 1;
+    CRASH_IF_FALSE(refCount > 1 && "The ref count cannot bounce from zero.");
+    CRASH_IF_FALSE(
+        refCount < std::numeric_limits<int>::max() &&
+        "The ref count is too big.");
+  }
+
+  void decRefCount() noexcept {
+    int refCount = refCount_.fetch_sub(1, std::memory_order_release) - 1;
+    CRASH_IF_FALSE(refCount >= 0 && "The ref count must not be negative.");
+    if (refCount == 0) {
+      std::atomic_thread_fence(std::memory_order_acquire);
+      delete this;
+    }
+  }
+
+ private:
+  std::atomic<int> refCount_{1};
+  std::recursive_mutex mutex_;
+
+  std::vector<std::unique_ptr<NodeApiFinalizerHolder>> finalizerHolders_;
+  std::atomic<bool> hasPendingHolders_{false};
 };
 
 // The main class representing the Node-API environment.
@@ -617,13 +794,15 @@ class NodeApiEnvironment final {
   // Initializes a new instance of NodeApiEnvironment.
   explicit NodeApiEnvironment(
       vm::Runtime &runtime,
-      hbc::CompileFlags compileFlags) noexcept;
-
- private:
-  // Only the internal ref count can call the destructor.
-  ~NodeApiEnvironment();
+      hbc::CompileFlags compileFlags,
+      std::shared_ptr<TaskRunner> taskRunner,
+      std::function<void(napi_env, napi_value)> unhandledErrorCallback,
+      int32_t apiVersion,
+      const NodeApiRefCountedPtr<NodeApiPendingFinalizers> &pendingFinalizers =
+          NodeApiPendingFinalizers::create()) noexcept;
 
  public:
+  // TODO: Remove the ref count
   // Exported function to increment the ref count by one.
   napi_status incRefCount() noexcept;
 
@@ -634,8 +813,32 @@ class NodeApiEnvironment final {
   // Internal function to get the Hermes runtime.
   vm::Runtime &runtime() noexcept;
 
+  hbc::CompileFlags compileFlags() noexcept;
+
+  const std::shared_ptr<TaskRunner> &taskRunner() const noexcept;
+
+  const std::function<void(napi_env, napi_value)> &unhandledErrorCallback()
+      const noexcept;
+
+  const NodeApiRefCountedPtr<NodeApiPendingFinalizers> &pendingFinalizers()
+      const noexcept;
+
   // Internal function to get the stack of napi_value.
   NodeApiStableAddressStack<vm::PinnedHermesValue> &napiValueStack() noexcept;
+
+  static NodeApiEnvironment *from(napi_env env) noexcept {
+    return reinterpret_cast<NodeApiEnvironment *>(env);
+  }
+
+  vm::CallResult<vm::HermesValue> callModuleInitializer(
+      napi_addon_register_func registerModule) noexcept;
+
+  napi_status initializeModule(
+      NodeApiEnvironment &moduleEnv,
+      napi_addon_register_func registerModule,
+      napi_value *exports) noexcept;
+
+  void setParentEnvironment(NodeApiEnvironment *parentEnvironment) noexcept;
 
   //---------------------------------------------------------------------------
   // Native error handling methods
@@ -644,7 +847,7 @@ class NodeApiEnvironment final {
   // Exported function to get the last native error.
   napi_status getLastNativeError(const NodeApiNativeError **result) noexcept;
 
-  // Internal function to se the last native error.
+  // Internal function to set the last native error.
   napi_status setLastNativeError(
       napi_status status,
       const char *fileName,
@@ -683,6 +886,11 @@ class NodeApiEnvironment final {
       napi_value message,
       napi_value *result) noexcept;
 
+  napi_status createJSSyntaxError(
+      napi_value code,
+      napi_value message,
+      napi_value *result) noexcept;
+
   // Exported function to check if the object is an instance of Error object.
   napi_status isJSError(napi_value value, bool *result) noexcept;
 
@@ -705,6 +913,11 @@ class NodeApiEnvironment final {
   // Exported function to create and throw JS RangeError object.
   napi_status throwJSRangeError(const char *code, const char *message) noexcept;
 
+  // Exported function to create and throw JS SynatxError object.
+  napi_status throwJSSyntaxError(
+      const char *code,
+      const char *message) noexcept;
+
   // Internal function to set code property for the error object.
   // Node.js has a predefined set of codes for common errors.
   napi_status setJSErrorCode(
@@ -716,12 +929,14 @@ class NodeApiEnvironment final {
   // Methods to support catching JS exceptions
   //-----------------------------------------------------------------------------
  public:
-  // Exported function to check if there is a pending thrown JS error.
-  napi_status isJSErrorPending(bool *result) noexcept;
+  void checkGCAccess() noexcept;
 
   // Internal function to check if there is a pending thrown JS error.
   // It returns napi_ok or napi_pending_exception.
-  napi_status checkPendingJSError() noexcept;
+  napi_status checkPreconditions() noexcept;
+
+  // Exported function to check if there is a pending thrown JS error.
+  napi_status isJSErrorPending(bool *result) noexcept;
 
   // Exported function to get and clear pending thrown JS error.
   napi_status getAndClearPendingJSError(napi_value *result) noexcept;
@@ -737,6 +952,8 @@ class NodeApiEnvironment final {
   napi_status checkJSErrorStatus(
       const vm::CallResult<T> &callResult,
       napi_status status = napi_generic_failure) noexcept;
+
+  void checkRuntimeThrownValue() noexcept;
 
   //-----------------------------------------------------------------------------
   // Getters for common singletons
@@ -823,6 +1040,37 @@ class NodeApiEnvironment final {
       size_t length,
       napi_value *result) noexcept;
 
+  napi_status createExternalStringLatin1(
+      char *str,
+      size_t length,
+      node_api_basic_finalize finalizeCallback,
+      void *finalizeHint,
+      napi_value *result,
+      bool *copied) noexcept;
+
+  napi_status createExternalStringUTF16(
+      char16_t *str,
+      size_t length,
+      node_api_basic_finalize finalizeCallback,
+      void *finalizeHint,
+      napi_value *result,
+      bool *copied) noexcept;
+
+  napi_status createPropertyKeyLatin1(
+      const char *str,
+      size_t length,
+      napi_value *result) noexcept;
+
+  napi_status createPropertyKeyUTF8(
+      const char *str,
+      size_t length,
+      napi_value *result) noexcept;
+
+  napi_status createPropertyKeyUTF16(
+      const char16_t *str,
+      size_t length,
+      napi_value *result) noexcept;
+
   // Exported function to get Latin1 string value from a napi_value string.
   napi_status getStringValueLatin1(
       napi_value value,
@@ -869,6 +1117,11 @@ class NodeApiEnvironment final {
  public:
   // Exported function to create a JS symbol object.
   napi_status createSymbol(napi_value description, napi_value *result) noexcept;
+
+  napi_status symbolFor(
+      const char *utf8description,
+      size_t length,
+      napi_value *result) noexcept;
 
   //-----------------------------------------------------------------------------
   // Methods to work with BigInt
@@ -1100,9 +1353,22 @@ class NodeApiEnvironment final {
       napi_value constructor,
       bool *result) noexcept;
 
-  // Internal function to call into a module.
-  template <class TLambda>
-  vm::ExecutionStatus callIntoModule(TLambda &&call) noexcept;
+  // Enhanced callIntoModule with custom exception handler support
+  // Follows Node.js CallIntoModule pattern from js_native_api_v8.h
+  template <class TLambda, class TExceptionHandler>
+  vm::ExecutionStatus callIntoModule(
+      TLambda &&call,
+      TExceptionHandler &&exceptionHandler) noexcept;
+
+  static void rethrowException(
+      NodeApiEnvironment *env,
+      const vm::PinnedHermesValue *error) noexcept;
+
+  static void triggerUnhandledException(
+      NodeApiEnvironment *env,
+      const vm::PinnedHermesValue *error) noexcept;
+
+  void triggerFatalException(const vm::PinnedHermesValue *error) noexcept;
 
   //-----------------------------------------------------------------------------
   // Methods to work with napi_callbacks
@@ -1248,13 +1514,19 @@ class NodeApiEnvironment final {
       void *finalizeHint,
       napi_ref *result) noexcept;
 
-  // Exported function to associated a finalizer along with with a JS object.
+  // Exported function to associated a finalizer along with a JS object.
   napi_status addFinalizer(
       napi_value object,
       void *nativeData,
       node_api_basic_finalize finalizeCallback,
       void *finalizeHint,
       napi_ref *result) noexcept;
+
+  // Exported function to post finalizer to run asynchronously.
+  napi_status postFinalizer(
+      napi_finalize finalizeCallback,
+      void *finalizeData,
+      void *finalizeHint) noexcept;
 
   // Exported function to get and/or remove native object from JS object.
   template <NodeApiUnwrapAction action>
@@ -1303,7 +1575,8 @@ class NodeApiEnvironment final {
   // Internal function to associate a finalizer with an object.
   napi_status addObjectFinalizer(
       const vm::PinnedHermesValue *value,
-      NodeApiFinalizer *finalizer) noexcept;
+      NodeApiReference *finalizer,
+      NodeApiExternalValue **externalValue) noexcept;
 
   // Internal function to call finalizer callback.
   void callFinalizer(
@@ -1311,11 +1584,20 @@ class NodeApiEnvironment final {
       void *nativeData,
       void *finalizeHint) noexcept;
 
-  // Internal function to add finalizer to the finalizer queue.
-  void addToFinalizerQueue(NodeApiFinalizer *finalizer) noexcept;
+  void enqueueFinalizer(NodeApiRefTracker *finalizer) noexcept;
+  void dequeueFinalizer(NodeApiRefTracker *finalizer) noexcept;
+  void drainFinalizerQueue() noexcept;
 
-  // Internal function to call all finalizers in the finalizer queue.
-  napi_status processFinalizerQueue() noexcept;
+  void invokeFinalizerFromGC(NodeApiRefTracker *finalizer) noexcept;
+
+  bool isTerminatedOrTerminating() const noexcept;
+  void setTerminatedOrTerminating(bool value) noexcept;
+
+  void processPendingFinalizers() noexcept;
+
+  // Internal function to process finalizer queue immediately upon exiting
+  // functions that may affect GC state.
+  napi_status processFinalizerQueueFromCode() noexcept;
 
   //-----------------------------------------------------------------------------
   // Methods to work with references.
@@ -1689,17 +1971,66 @@ class NodeApiEnvironment final {
   napi_status checkCallResult(const T & /*value*/) noexcept;
 
  public:
+  static bool isOnJSThread() noexcept {
+    return tlsCurrentEnvironment_ != nullptr;
+  }
+
+ private:
+  // tlsCurrentEnvironment_ RAII helper class
+  class CurrentEnvironmentScope {
+   public:
+    explicit CurrentEnvironmentScope(NodeApiEnvironment *env) noexcept
+        : previousEnv_(NodeApiEnvironment::tlsCurrentEnvironment_) {
+      tlsCurrentEnvironment_ = env;
+    }
+
+    ~CurrentEnvironmentScope() noexcept {
+      tlsCurrentEnvironment_ = previousEnv_;
+    }
+
+   private:
+    NodeApiEnvironment *previousEnv_;
+  };
+
+  // tlsCurrentEnvironment_ RAII helper class
+  class InGCFinalizerScope {
+   public:
+    explicit InGCFinalizerScope(NodeApiEnvironment *env) noexcept
+        : env_(env), previousInGCFinalizer_(env->inGCFinalizer_) {
+      env->inGCFinalizer_ = true;
+    }
+
+    ~InGCFinalizerScope() noexcept {
+      env_->inGCFinalizer_ = previousInGCFinalizer_;
+    }
+
+   private:
+    NodeApiEnvironment *env_;
+    bool previousInGCFinalizer_;
+  };
+
+ public:
+  // Private destructor - it must be triggered by ref counter.
+  ~NodeApiEnvironment();
+
+  // This method ensures all finalizers are drained before environment
+  // destruction
+  void DeleteMe() noexcept;
+
+  // Thread-local storage for current environment
+  static thread_local NodeApiEnvironment *tlsCurrentEnvironment_;
+
   // Controls the lifetime of this class instances.
   std::atomic<int> refCount_{1};
-
-  // Custom data associated with the environment.
-  std::unordered_map<napi_type_tag, void *> taggedData_;
 
   // Used for safe update of finalizer queue.
   NodeApiRefCountedPtr<NodeApiPendingFinalizers> pendingFinalizers_;
 
   // Reference to the wrapped Hermes runtime.
   vm::Runtime &runtime_;
+
+  // TODO: Use default version 8 if not specified.
+  int32_t apiVersion_{8};
 
   // Reference to itself for convenient use in macros.
   NodeApiEnvironment &env{*this};
@@ -1724,29 +2055,34 @@ class NodeApiEnvironment final {
   // We store references in two different lists, depending on whether they
   // have `napi_finalizer` callbacks, because we must first finalize the
   // ones that have such a callback. See `~NodeApiEnvironment()` for details.
-  NodeApiLinkedList<NodeApiReference> references_{};
-  NodeApiLinkedList<NodeApiReference> finalizingReferences_{};
+  NodeApiReferenceList references_{};
+  NodeApiReferenceList finalizingReferences_{};
 
-  // Finalizers must be run outside of GC pass because they could access GC
-  // objects. Then GC finalizes and object, we put all the associated finalizers
-  // to this queue and then run them as soon as have an opportunity to do that
-  // safely.
-  NodeApiLinkedList<NodeApiFinalizer> finalizerQueue_{};
+  // Task runner finalizer queue for asynchronous finalizer execution
+  // Contains NodeApiRefTracker instances that require JS thread execution via
+  // TaskRunner Used by: node_api_post_finalizer, invokeFinalizerFromGC
+  // (non-pure finalizers)
+  std::unordered_set<NodeApiRefTracker *> taskRunnerFinalizerQueue_{};
 
   // To ensure that the finalizerQueue_ is being processed only from a single
   // place at a time.
   bool isRunningFinalizers_{false};
 
+  bool isScheduledAsyncFinalizers_{false};
+
+  // True if finalizer is run from another function.
+  bool inGCFinalizer_{false};
+
   // Helps to change the behavior of finalizers when the environment is
   // shutting down.
   bool isShuttingDown_{false};
 
+  // Used by handleFinalizerException to determine if environment is in
+  // termination state
+  std::atomic<bool> isTerminatedOrTerminating_{false};
+
   // Temporary GC roots for ordered sets used to collect property names.
   llvh::SmallVector<NodeApiOrderedSet<vm::HermesValue> *, 16> orderedSets_;
-
-  // List of unique string references.
-  std::unordered_map<vm::SymbolID::RawType, NodeApiStrongReference *>
-      uniqueStrings_;
 
   // Storage for the last native error message.
   std::string lastErrorMessage_;
@@ -1764,7 +2100,16 @@ class NodeApiEnvironment final {
   vm::PinnedHermesValue lastUnhandledRejection_{EmptyHermesValue};
 
   // External data associated with the environment instance.
-  NodeApiInstanceData *instanceData_{};
+  NodeApiTrackedFinalizer *instanceData_{};
+
+  // To run asynchronous tasks.
+  std::shared_ptr<TaskRunner> taskRunner_;
+
+  std::function<void(napi_env, napi_value)> unhandledErrorCallback_;
+
+  NodeApiEnvironment *parentEnvironment_{};
+
+  std::unordered_map<napi_type_tag, void *> taggedData_;
 
   // HermesValue used for uninitialized values.
   static constexpr vm::HermesValue EmptyHermesValue{
@@ -1782,92 +2127,30 @@ class NodeApiEnvironment final {
   static constexpr int32_t kExternalTagSlotIndex = 0;
 };
 
-// NodeApiPendingFinalizers is used to update the pending finalizer list in a
-// thread safe way when a NodeApiExternalValue is destroyed from a GC background
-// thread.
-class NodeApiPendingFinalizers {
- public:
-  // Create new instance of NodeApiPendingFinalizers.
-  static NodeApiRefCountedPtr<NodeApiPendingFinalizers> create() noexcept {
-    return NodeApiRefCountedPtr<NodeApiPendingFinalizers>(
-        new NodeApiPendingFinalizers(), attachTag);
-  }
-
-  // Add pending finalizers from a NodeApiExternalValue destructor.
-  // It can be called from JS or GC background threads.
-  void addPendingFinalizers(
-      std::unique_ptr<NodeApiLinkedList<NodeApiFinalizer>>
-          &&finalizers) noexcept {
-    std::scoped_lock lock{mutex_};
-    finalizers_.push_back(std::move(finalizers));
-  }
-
-  // Apply pending finalizers to the finalizer queue.
-  // It must be called from a JS thread.
-  void applyPendingFinalizers(NodeApiEnvironment *env) noexcept {
-    std::vector<std::unique_ptr<NodeApiLinkedList<NodeApiFinalizer>>>
-        finalizers;
-    {
-      std::scoped_lock lock{mutex_};
-      if (finalizers_.empty()) {
-        return;
-      }
-      // Move to a local variable to unlock the mutex earlier.
-      finalizers = std::move(finalizers_);
-    }
-
-    for (auto &finalizerList : finalizers) {
-      finalizerList->forEach([env](NodeApiFinalizer *finalizer) {
-        env->addToFinalizerQueue(finalizer);
-      });
-    }
-  }
-
- private:
-  friend class NodeApiRefCountedPtr<NodeApiPendingFinalizers>;
-
-  NodeApiPendingFinalizers() noexcept = default;
-
-  void incRefCount() noexcept {
-    int refCount = refCount_.fetch_add(1, std::memory_order_relaxed) + 1;
-    CRASH_IF_FALSE(refCount > 1 && "The ref count cannot bounce from zero.");
-    CRASH_IF_FALSE(
-        refCount < std::numeric_limits<int>::max() &&
-        "The ref count is too big.");
-  }
-
-  void decRefCount() noexcept {
-    int refCount = refCount_.fetch_sub(1, std::memory_order_release) - 1;
-    CRASH_IF_FALSE(refCount >= 0 && "The ref count must not be negative.");
-    if (refCount == 0) {
-      std::atomic_thread_fence(std::memory_order_acquire);
-      delete this;
-    }
-  }
-
- private:
-  std::atomic<int> refCount_{1};
-  std::recursive_mutex mutex_;
-  std::vector<std::unique_ptr<NodeApiLinkedList<NodeApiFinalizer>>> finalizers_;
-};
+thread_local NodeApiEnvironment *NodeApiEnvironment::tlsCurrentEnvironment_{};
 
 // RAII class to control scope of napi_value variables and return values.
-class NodeApiHandleScope final {
+template <bool MustCheckThrownValue>
+class NodeApiHandleScopeBase final {
  public:
-  NodeApiHandleScope(
+  NodeApiHandleScopeBase(
       NodeApiEnvironment &env,
-      napi_value *result = nullptr) noexcept
+      napi_value *result = nullptr,
+      bool doNotCheckRuntimeThrownError = false) noexcept
       : env_(env),
         result_(result),
         savedScope_(env.napiValueStack().size()),
         gcScope_(env.runtime()) {}
 
-  ~NodeApiHandleScope() noexcept {
+  ~NodeApiHandleScopeBase() noexcept {
     env_.napiValueStack().resize(savedScope_);
+    if constexpr (MustCheckThrownValue) {
+      env_.checkRuntimeThrownValue();
+    }
   }
 
   napi_status setResult(napi_status status) noexcept {
-    CHECK_NAPI(status);
+    CHECK_STATUS(status);
     if (result_ != nullptr) {
       if (savedScope_ + 1 < env_.napiValueStack().size()) {
         env_.napiValueStack()[savedScope_] = *phv(*result_);
@@ -1879,7 +2162,7 @@ class NodeApiHandleScope final {
       // To make sure that the return value is not removed in the destructor.
       ++savedScope_;
     }
-    return env_.processFinalizerQueue();
+    return env_.processFinalizerQueueFromCode();
   }
 
   template <class T>
@@ -1898,6 +2181,8 @@ class NodeApiHandleScope final {
   size_t savedScope_;
   vm::GCScope gcScope_;
 };
+
+using NodeApiHandleScope = NodeApiHandleScopeBase<true>;
 
 // Keep external data with an object.
 class NodeApiExternalValue final : public vm::DecoratedObject::Decoration {
@@ -1918,15 +2203,32 @@ class NodeApiExternalValue final : public vm::DecoratedObject::Decoration {
   // threads. We move the finalizers to NodeApiPendingFinalizers to be accessed
   // only from JS thread.
   ~NodeApiExternalValue() override {
-    pendingFinalizers_->addPendingFinalizers(std::move(finalizers_));
+    // Transfer finalizer holder to pending finalizers for thread-safe
+    // processing
+    if (finalizerHolder_ && !finalizerHolder_->isEmpty()) {
+      pendingFinalizers_->addFinalizerHolder(std::move(finalizerHolder_));
+      // If we are on JS thread, we can process finalizers immediately.
+      if (NodeApiEnvironment::isOnJSThread()) {
+        pendingFinalizers_->processPendingFinalizers();
+      }
+    }
   }
 
   size_t getMallocSize() const override {
     return sizeof(*this);
   }
 
-  void addFinalizer(NodeApiFinalizer *finalizer) noexcept {
-    finalizers_->pushBack(finalizer);
+  void addFinalizer(NodeApiReference *finalizer) noexcept {
+    if (!finalizerHolder_) {
+      finalizerHolder_ = std::make_unique<NodeApiFinalizerHolder>();
+    }
+    finalizerHolder_->addFinalizer(finalizer);
+  }
+
+  void removeFinalizer(NodeApiReference *finalizer) noexcept {
+    if (finalizerHolder_) {
+      finalizerHolder_->removeFinalizer(finalizer);
+    }
   }
 
   void *nativeData() noexcept {
@@ -1937,11 +2239,14 @@ class NodeApiExternalValue final : public vm::DecoratedObject::Decoration {
     nativeData_ = value;
   }
 
+  NodeApiFinalizerHolder *getFinalizerHolder() noexcept {
+    return finalizerHolder_.get();
+  }
+
  private:
   NodeApiRefCountedPtr<NodeApiPendingFinalizers> pendingFinalizers_;
   void *nativeData_{};
-  std::unique_ptr<NodeApiLinkedList<NodeApiFinalizer>> finalizers_{
-      std::make_unique<NodeApiLinkedList<NodeApiFinalizer>>()};
+  std::unique_ptr<NodeApiFinalizerHolder> finalizerHolder_;
 };
 
 // Keep native data associated with a function.
@@ -1958,10 +2263,12 @@ class NodeApiHostFunctionContext final {
   static vm::CallResult<vm::HermesValue>
   func(void *context, vm::Runtime &runtime, vm::NativeArgs hvArgs);
 
+  // Used to delete the context by function finalizer.
   static void finalize(void *context) {
     delete reinterpret_cast<class NodeApiHostFunctionContext *>(context);
   }
 
+  // Used to delete the context by functions used as class constructors.
   static void finalizeNS(vm::GC & /*gc*/, vm::NativeState *ns) {
     delete reinterpret_cast<class NodeApiHostFunctionContext *>(ns->context());
   }
@@ -2026,13 +2333,15 @@ class NodeApiCallbackInfo final {
   NodeApiEnvironment &env = hfc->env_;
   assert(&runtime == &env.runtime());
 
-  NodeApiHandleScope scope{env};
+  NodeApiHandleScopeBase<false> scope{env};
   NodeApiCallbackInfo callbackInfo{*hfc, hvArgs};
   napi_value result{};
-  vm::ExecutionStatus status = env.callIntoModule([&](NodeApiEnvironment *env) {
-    result = hfc->hostCallback_(
-        napiEnv(env), reinterpret_cast<napi_callback_info>(&callbackInfo));
-  });
+  vm::ExecutionStatus status = env.callIntoModule(
+      [&](NodeApiEnvironment *env) {
+        result = hfc->hostCallback_(
+            napiEnv(env), reinterpret_cast<napi_callback_info>(&callbackInfo));
+      },
+      NodeApiEnvironment::rethrowException);
 
   if (status == vm::ExecutionStatus::EXCEPTION) {
     return vm::ExecutionStatus::EXCEPTION;
@@ -2045,644 +2354,576 @@ class NodeApiCallbackInfo final {
   }
 }
 
-// Different types of references:
-// 1. Strong reference - it can wrap up object of any type
-//   a. Ref count maintains the reference lifetime. When it reaches zero it is
-//   removed.
-// 2. Weak reference - it can wrap up only objects
-//   a. Ref count maintains the lifetime of the reference. When it reaches zero
-//   it is removed.
-// 3. Complex reference - it can wrap up only objects
-//   a. Ref count only for strong references. Zero converts it to a weak ref.
-//   Removal is explicit if external code holds a reference.
+//=============================================================================
+// HermesNodeApi Classes - Node.js RefTracker Pattern Implementation
+//=============================================================================
 
-// A base class for References that wrap native data and must be finalized.
-class NodeApiFinalizer : public NodeApiLinkedList<NodeApiFinalizer>::Item {
+// Enum for tracking reference ownership patterns.
+enum class NodeApiReferenceOwnership : uint8_t {
+  kRuntime, // The reference is owned by the runtime. No userland call is needed
+            // to destruct the reference.
+  kUserland, // The reference is owned by the userland. User code is responsible
+             // to delete the reference with appropriate node-api calls.
+};
+
+// Composition class for finalizer callbacks (replaces inheritance pattern)
+class NodeApiFinalizer {
  public:
-  virtual void finalize(NodeApiEnvironment &env) noexcept = 0;
+  NodeApiFinalizer(
+      void *nativeData,
+      napi_finalize finalizeCallback,
+      void *finalizeHint) noexcept
+      : nativeData_(nativeData),
+        finalizeCallback_(finalizeCallback),
+        finalizeHint_(finalizeHint) {}
 
- protected:
-  NodeApiFinalizer() = default;
+  // Execute the finalizer callback
+  void callFinalizer(NodeApiEnvironment &env) noexcept {
+    if (finalizeCallback_ != nullptr) {
+      env.callIntoModule(
+          [&](NodeApiEnvironment *envPtr) {
+            finalizeCallback_(napiEnv(envPtr), nativeData_, finalizeHint_);
+          },
+          NodeApiEnvironment::triggerUnhandledException);
+    }
+  }
 
-  ~NodeApiFinalizer() noexcept {
-    unlink();
+  // Accessors
+  napi_finalize getFinalizeCallback() const noexcept {
+    return finalizeCallback_;
+  }
+
+  void *getNativeData() const noexcept {
+    return nativeData_;
+  }
+
+  void *getFinalizeHint() const noexcept {
+    return finalizeHint_;
+  }
+
+  // Check if finalizer is set
+  bool hasFinalizer() const noexcept {
+    return finalizeCallback_ != nullptr;
+  }
+
+ private:
+  void *nativeData_{nullptr};
+  napi_finalize finalizeCallback_{nullptr};
+  void *finalizeHint_{nullptr};
+};
+
+// Specialized container for managing finalizers with O(1) operations
+// Base class for all trackable references and finalizers - uses Hermes linked
+// list pattern
+class NodeApiRefTracker : public NodeApiLinkedListBase::Item {
+ public:
+  NodeApiRefTracker() noexcept = default;
+
+  virtual ~NodeApiRefTracker() noexcept {
+    unlink(); // Unlink from the list on destruction
+  }
+
+  // Virtual finalize method for cleanup operations
+  virtual void finalize() noexcept {}
+
+  // Static method to finalize all items in a list
+  template <typename T>
+  static void finalizeAll(NodeApiLinkedList<T> &list) noexcept {
+    list.forEach([](NodeApiRefTracker *item) {
+      item->finalize();
+      // NOTE: Do NOT delete items automatically - that breaks ownership model!
+      // User code must call napi_delete_reference to delete references they
+      // own. Only call finalize() to perform cleanup operations.
+    });
   }
 };
 
-// A base class for all references.
-class NodeApiReference : public NodeApiLinkedList<NodeApiReference>::Item {
+// Matching to Node.js code:
+// [X] static New                  ==> static create
+// [X] ~Reference()                ==> ~NodeApiReference()
+// [X] Ref()                       ==> incRefCount()
+// [X] Unref()                     ==> decRefCount
+// [X] Get()                       ==> value()
+// [X] ResetFinalizer()            ==> resetFinalizer()
+// [X] Data()                      ==> nativeData()
+// [X] refcount()                  ==> refCount()
+// [X] ownership()                 ==> ownership()
+// [X] ctor Reference              ==> ctor NodeApiReference
+// [X] virtual CallUserFinalizer() ==> callUserFinalizer()
+// [X] InvokeFinalizerFromGC()     ==> invokeFinalizerFromGC()
+// [ ] static WeakCallback         ==> // Find a way to associate with JSObject
+//                                     // the callback
+// [ ] SetWeak()                   ==> convertToWeakRootStorage()
+// [X] Finalize()                  ==> finalize()
+
+// Base reference wrapper around Hermes values with GC integration
+class NodeApiReference : public NodeApiRefTracker {
+  friend class NodeApiFinalizerHolder; // Allow access to protected
+                                       // invokeFinalizerFromGC()
  public:
-  enum class ReasonToDelete {
-    ZeroRefCount,
-    FinalizerCall,
-    ExternalCall,
-    EnvironmentShutdown,
-  };
-
-  static napi_status deleteReference(
+  static NodeApiReference *create(
       NodeApiEnvironment &env,
-      NodeApiReference *reference,
-      ReasonToDelete reason) noexcept {
-    if (reference && reference->startDeleting(env, reason)) {
-      delete reference;
+      const vm::PinnedHermesValue *value,
+      uint32_t initialRefCount,
+      NodeApiReferenceOwnership ownership) noexcept {
+    // Make sure GC does not collect the value while we create the reference.
+    vm::GCScope scope(env.runtime());
+    vm::Handle<vm::HermesValue> handleValue = env.runtime().makeHandle(*value);
+
+    NodeApiReference *reference = new (std::nothrow)
+        NodeApiReference(env, value, initialRefCount, ownership);
+    env.addReference(reference);
+    return reference;
+  }
+
+  ~NodeApiReference() noexcept {
+    resetStorage();
+  }
+
+  uint32_t incRefCount(NodeApiEnvironment &env) noexcept {
+    // When the storage is cleared in the WeakCallback, and a second pass
+    // callback is pending, return 0 unconditionally.
+    if (isStorageEmpty()) {
+      return 0;
     }
-    return env.clearLastNativeError();
+    // Convert from weak to strong storage when transitioning from 0 to 1
+    if (++refCount_ == 1 && canBeWeak_) {
+      convertToValueStorage(env);
+    }
+    return refCount_;
   }
 
-  virtual napi_status incRefCount(
-      NodeApiEnvironment &env,
-      uint32_t & /*result*/) noexcept {
-    return GENERIC_FAILURE("This reference does not support ref count.");
+  uint32_t decRefCount(NodeApiEnvironment &env) noexcept {
+    // When the storage is cleared in the WeakCallback, and a second pass
+    // callback is pending, return 0 unconditionally.
+    if (isStorageEmpty() || refCount_ == 0) {
+      return 0;
+    }
+    if (--refCount_ == 0) {
+      convertToWeakRootStorage(env);
+    }
+    return refCount_;
   }
 
-  virtual napi_status decRefCount(
-      NodeApiEnvironment &env,
-      uint32_t & /*result*/) noexcept {
-    return GENERIC_FAILURE("This reference does not support ref count.");
+  uint32_t refCount() const noexcept {
+    return refCount_;
   }
 
-  virtual const vm::PinnedHermesValue &value(NodeApiEnvironment &env) noexcept {
-    return env.getUndefined();
+  NodeApiReferenceOwnership ownership() const noexcept {
+    return ownership_;
   }
 
-  virtual void *nativeData() noexcept {
+  napi_value value(NodeApiEnvironment &env) const noexcept {
+    if (isStorageEmpty()) {
+      return nullptr;
+    } else {
+      return getStorageValue(env);
+    }
+  }
+
+  virtual void *nativeData() const noexcept {
+    // No native data is associated with the base class.
     return nullptr;
   }
 
-  virtual void *finalizeHint() noexcept {
-    return nullptr;
+  virtual void resetFinalizer() noexcept {
+    // No finalizer is set in the base class.
+    // Derived classes should override this method to reset the finalizer.
   }
 
-  virtual vm::PinnedHermesValue *getGCRoot(
-      NodeApiEnvironment & /*env*/) noexcept {
-    return nullptr;
-  }
-
-  virtual vm::WeakRoot<vm::JSObject> *getGCWeakRoot(
-      NodeApiEnvironment & /*env*/) noexcept {
-    return nullptr;
-  }
-
+  // Static GC integration methods for reference scanning
   static void getGCRoots(
       NodeApiEnvironment &env,
-      NodeApiLinkedList<NodeApiReference> &list,
+      NodeApiReferenceList &list,
       vm::RootAcceptor &acceptor) noexcept {
     list.forEach([&](NodeApiReference *ref) {
-      if (vm::PinnedHermesValue *value = ref->getGCRoot(env)) {
-        acceptor.accept(*value);
+      if (!ref->isUsingWeakStorage_ && !ref->value_.isEmpty()) {
+        acceptor.accept(const_cast<vm::PinnedHermesValue &>(ref->value_));
       }
     });
   }
 
   static void getGCWeakRoots(
       NodeApiEnvironment &env,
-      NodeApiLinkedList<NodeApiReference> &list,
+      NodeApiReferenceList &list,
       vm::WeakRootAcceptor &acceptor) noexcept {
     list.forEach([&](NodeApiReference *ref) {
-      if (vm::WeakRoot<vm::JSObject> *weakRoot = ref->getGCWeakRoot(env)) {
-        acceptor.acceptWeak(*weakRoot);
+      if (ref->isUsingWeakStorage_ && ref->weakRoot_) {
+        acceptor.acceptWeak(ref->weakRoot_);
       }
     });
   }
 
-  virtual napi_status callFinalizeCallback(NodeApiEnvironment &env) noexcept {
-    return napi_ok;
-  }
-
-  virtual void finalize(NodeApiEnvironment &env) noexcept {}
-
-  template <class TItem>
-  static void finalizeAll(
-      NodeApiEnvironment &env,
-      NodeApiLinkedList<TItem> &list) noexcept {
-    for (TItem *item = list.begin(); item != list.end(); item = list.begin()) {
-      item->finalize(env);
-    }
-  }
-
-  static void deleteAll(
-      NodeApiEnvironment &env,
-      NodeApiLinkedList<NodeApiReference> &list,
-      ReasonToDelete reason) noexcept {
-    for (NodeApiReference *ref = list.begin(); ref != list.end();
-         ref = list.begin()) {
-      deleteReference(env, ref, reason);
-    }
-  }
-
  protected:
-  // Make protected to avoid using operator delete directly.
-  // Use the deleteReference method instead.
-  virtual ~NodeApiReference() noexcept {
-    unlink();
-  }
-
-  virtual bool startDeleting(
-      NodeApiEnvironment &env,
-      ReasonToDelete /*reason*/) noexcept {
-    return true;
-  }
-};
-
-// A reference with a ref count that can be changed from any thread.
-// The reference deletion is done as a part of GC root detection to avoid
-// deletion in a random thread.
-class NodeApiAtomicRefCountReference : public NodeApiReference {
- public:
-  napi_status incRefCount(NodeApiEnvironment &env, uint32_t &result) noexcept
-      override {
-    result = refCount_.fetch_add(1, std::memory_order_relaxed) + 1;
-    CRASH_IF_FALSE(result > 1 && "The ref count cannot bounce from zero.");
-    CRASH_IF_FALSE(result < MaxRefCount && "The ref count is too big.");
-    return napi_ok;
-  }
-
-  napi_status decRefCount(NodeApiEnvironment &env, uint32_t &result) noexcept
-      override {
-    result = refCount_.fetch_sub(1, std::memory_order_release) - 1;
-    if (result == 0) {
-      std::atomic_thread_fence(std::memory_order_acquire);
-    } else if (result > MaxRefCount) {
-      // Decrement of an unsigned value below zero is getting to a very big
-      // number.
-      CRASH_IF_FALSE(
-          result < MaxRefCount && "The ref count must not be negative.");
-    }
-    return napi_ok;
-  }
-
- protected:
-  uint32_t refCount() const noexcept {
-    return refCount_;
-  }
-
-  bool startDeleting(NodeApiEnvironment &env, ReasonToDelete reason) noexcept
-      override {
-    return reason != ReasonToDelete::ExternalCall;
-  }
-
- private:
-  std::atomic<uint32_t> refCount_{1};
-
-  static constexpr uint32_t MaxRefCount =
-      std::numeric_limits<uint32_t>::max() / 2;
-};
-
-// Atomic ref counting for vm::PinnedHermesValue.
-class NodeApiStrongReference : public NodeApiAtomicRefCountReference {
- public:
-  static napi_status create(
-      NodeApiEnvironment &env,
-      vm::HermesValue value,
-      NodeApiStrongReference **result) noexcept {
-    CHECK_ARG(result);
-    *result = new NodeApiStrongReference(value);
-    env.addReference(*result);
-    return env.clearLastNativeError();
-  }
-
-  const vm::PinnedHermesValue &value(
-      NodeApiEnvironment &env) noexcept override {
-    return value_;
-  }
-
-  vm::PinnedHermesValue *getGCRoot(NodeApiEnvironment &env) noexcept override {
-    if (refCount() > 0) {
-      return &value_;
-    } else {
-      deleteReference(env, this, ReasonToDelete::ZeroRefCount);
-      return nullptr;
-    }
-  }
-
- protected:
-  NodeApiStrongReference(vm::HermesValue value) noexcept : value_(value) {}
-
- private:
-  vm::PinnedHermesValue value_;
-};
-
-// Atomic ref counting for a vm::WeakRef<vm::HermesValue>.
-class NodeApiWeakReference final : public NodeApiAtomicRefCountReference {
- public:
-  static napi_status create(
-      NodeApiEnvironment &env,
-      const vm::PinnedHermesValue *value,
-      NodeApiWeakReference **result) noexcept {
-    CHECK_OBJECT_ARG(value);
-    CHECK_ARG(result);
-    *result =
-        new NodeApiWeakReference(env.createWeakRoot(getObjectUnsafe(*value)));
-    env.addReference(*result);
-    return env.clearLastNativeError();
-  }
-
-  const vm::PinnedHermesValue &value(
-      NodeApiEnvironment &env) noexcept override {
-    return env.lockWeakRoot(weakRoot_);
-  }
-
-  vm::WeakRoot<vm::JSObject> *getGCWeakRoot(
-      NodeApiEnvironment &env) noexcept override {
-    if (refCount() > 0) {
-      return &weakRoot_;
-    } else {
-      deleteReference(env, this, ReasonToDelete::ZeroRefCount);
-      return nullptr;
-    }
-  }
-
- protected:
-  NodeApiWeakReference(vm::WeakRoot<vm::JSObject> weakRoot) noexcept
-      : weakRoot_(weakRoot) {}
-
- private:
-  vm::WeakRoot<vm::JSObject> weakRoot_;
-};
-
-// Keep vm::PinnedHermesValue when ref count > 0 or vm::WeakRoot<vm::JSObject>
-// when ref count == 0. The ref count is not atomic and must be changed only
-// from the JS thread.
-class NodeApiComplexReference : public NodeApiReference {
- public:
-  static napi_status create(
+  NodeApiReference(
       NodeApiEnvironment &env,
       const vm::PinnedHermesValue *value,
       uint32_t initialRefCount,
-      NodeApiComplexReference **result) noexcept {
-    CHECK_OBJECT_ARG(value);
-    CHECK_ARG(result);
-    *result = new NodeApiComplexReference(
-        initialRefCount,
-        *value,
-        initialRefCount == 0 ? env.createWeakRoot(getObjectUnsafe(*value))
-                             : vm::WeakRoot<vm::JSObject>{});
-    env.addReference(*result);
-    return env.clearLastNativeError();
+      NodeApiReferenceOwnership ownership) noexcept
+      : NodeApiRefTracker(),
+        value_(*value),
+        refCount_(initialRefCount),
+        ownership_(ownership),
+        canBeWeak_(сanBeHeldWeakly(value)) {
+    if (refCount_ == 0) {
+      convertToWeakRootStorage(env);
+    }
   }
 
-  napi_status incRefCount(NodeApiEnvironment &env, uint32_t &result) noexcept
-      override {
-    if (refCount_ == 0) {
-      value_ = env.lockWeakRoot(weakRoot_);
-    }
-    CRASH_IF_FALSE(++refCount_ < MaxRefCount && "The ref count is too big.");
-    result = refCount_;
-    return env.clearLastNativeError();
+  virtual void callUserFinalizer() noexcept {
+    // Do nothing because the finalizer is not set in this class.
   }
 
-  napi_status decRefCount(NodeApiEnvironment &env, uint32_t &result) noexcept
-      override {
-    if (refCount_ == 0) {
-      // Ignore this error situation to match Node-API for V8 implementation.
-      result = 0;
-      return napi_ok;
+  virtual void invokeFinalizerFromGC() noexcept {
+    // Call resetStorage to clean up finalizerHolder_ backlink
+    resetStorage();
+
+    // Run the finalizer immediately because there is no finalizerCallback.
+    finalize();
+  }
+
+  void setFinalizerHolder(NodeApiFinalizerHolder *holder) noexcept {
+    finalizerHolder_ = holder;
+  }
+
+  void clearFinalizerHolder() noexcept {
+    finalizerHolder_ = nullptr;
+  }
+
+  void resetStorage() noexcept {
+    isUsingWeakStorage_ = false;
+    new (&value_) vm::PinnedHermesValue(vm::HermesValue::encodeEmptyValue());
+
+    // Remove from finalizerHolder_ before setting to null
+    if (finalizerHolder_ != nullptr) {
+      finalizerHolder_->removeFinalizer(this);
+      finalizerHolder_ = nullptr;
     }
-    if (--refCount_ == 0) {
-      if (value_.isObject()) {
-        weakRoot_ = env.createWeakRoot(getObjectUnsafe(value_));
-      } else {
-        weakRoot_ = vm::WeakRoot<vm::JSObject>{};
+  }
+
+ private:
+  void finalize() noexcept override final {
+    // Unconditionally reset the persistent handle so that no weak callback
+    // will be invoked again.
+    resetStorage();
+
+    // If the Reference is not NodeApiReferenceOwnership::kRuntime, userland
+    // code should delete it. Delete it if it is
+    // NodeApiReferenceOwnership::kRuntime.
+    bool deleteMe = ownership_ == NodeApiReferenceOwnership::kRuntime;
+
+    // Whether the Reference is going to be deleted in the finalizeCallback
+    // or not, it should be removed from the tracked list.
+    unlink();
+
+    // If the finalizeCallback is present, it should either delete the
+    // derived NodeApiReference, or the NodeApiReference ownership was set to
+    // NodeApiReferenceOwnership::kRuntime and the deleteMe parameter is true.
+    callUserFinalizer();
+
+    if (deleteMe) {
+      delete this;
+    }
+  }
+
+  static bool сanBeHeldWeakly(const vm::PinnedHermesValue *value) {
+    // Note that Hermes does not support weak symbols yet.
+    return value != nullptr && value->isObject();
+  }
+
+  // Functions that simulate the V8 Persistent storage used in Node-API for
+  // Node.js. Note that the current implementation uses a union of
+  // vm::PinnedHermesValue and vm::WeakRoot<vm::JSObject> to store the value.
+  // The vm::PinnedHermesValue is used for strong references, and
+  // vm::WeakRoot<vm::JSObject> is used for weak references.
+  // The isUsingWeakStorage_ flag indicates which storage is currently active.
+ private:
+  // To ensure that we do not have to call destructors for the storage.
+  static_assert(std::is_trivially_destructible_v<vm::PinnedHermesValue>);
+  static_assert(std::is_trivially_destructible_v<vm::WeakRoot<vm::JSObject>>);
+
+  bool isStorageEmpty() const noexcept {
+    return !isUsingWeakStorage_ && value_.isEmpty();
+  }
+
+  void convertToValueStorage(NodeApiEnvironment &env) noexcept {
+    if (!isUsingWeakStorage_) {
+      return; // It is already a value storage.
+    }
+    CRASH_IF_FALSE(canBeWeak_ && "This value cannot use the weak storage.");
+
+    // Remove from finalizerHolder_ when becoming strong (O(1) removal)
+    if (finalizerHolder_ != nullptr) {
+      finalizerHolder_->removeFinalizer(this);
+      // Keep the finalizerHolder_ cached in case if we need it again.
+    }
+
+    // Lock the weak root to get the current value before destroying it
+    vm::JSObject *lockedObject =
+        weakRoot_.get(env.runtime(), env.runtime().getHeap());
+
+    // Create strong storage in the same memory location
+    if (lockedObject != nullptr) {
+      new (&value_) vm::PinnedHermesValue(
+          vm::HermesValue::encodeObjectValue(lockedObject));
+    } else {
+      // The object was already collected.
+      new (&value_) vm::PinnedHermesValue(vm::HermesValue::encodeEmptyValue());
+    }
+    isUsingWeakStorage_ = false;
+  }
+
+  void convertToWeakRootStorage(NodeApiEnvironment &env) noexcept {
+    if (isUsingWeakStorage_) {
+      return; // It is already a weak storage.
+    }
+
+    if (isStorageEmpty()) {
+      // If the storage is empty, we cannot convert it to weak storage.
+      // This can happen if the value was already collected or reset.
+      return;
+    }
+
+    if (!canBeWeak_) {
+      // Cannot use weak storage for this value type. Reset it instead.
+      resetStorage();
+      return;
+    }
+
+    CRASH_IF_FALSE(value_.isObject() && "Expected an Object");
+
+    // Check if finalizerHolder_ is not null and add directly if possible
+    if (finalizerHolder_ != nullptr) {
+      // Reuse existing finalizer holder - add this reference directly
+      finalizerHolder_->addFinalizer(this);
+    } else {
+      // Call addObjectFinalizer to get the NodeApiFinalizerHolder and set
+      // backlink
+      NodeApiExternalValue *externalValue = nullptr;
+      if (env.addObjectFinalizer(&value_, this, &externalValue) == napi_ok &&
+          externalValue) {
+        finalizerHolder_ = externalValue->getFinalizerHolder();
       }
     }
-    result = refCount_;
-    return env.clearLastNativeError();
+
+    // The simple case: the value is an object, just create a weak root for it
+    new (&weakRoot_) vm::WeakRoot<vm::JSObject>(
+        vm::vmcast<vm::JSObject>(value_), env.runtime());
+    isUsingWeakStorage_ = true;
   }
 
-  const vm::PinnedHermesValue &value(
-      NodeApiEnvironment &env) noexcept override {
-    if (refCount_ > 0) {
-      return value_;
+  napi_value getStorageValue(NodeApiEnvironment &env) const noexcept {
+    vm::PinnedHermesValue rawValue;
+
+    if (isUsingWeakStorage_) {
+      vm::JSObject *lockedObject =
+          weakRoot_.get(env.runtime(), env.runtime().getHeap());
+      if (lockedObject == nullptr) {
+        // TODO: (vmoroz)(refs) Should we return an empty value here?
+        // The weakly referenced object has been collected; return undefined.
+        return napiValue(&env.getUndefined());
+      }
+      rawValue = vm::HermesValue::encodeObjectValue(lockedObject);
     } else {
-      return env.lockWeakRoot(weakRoot_);
+      rawValue = value_;
     }
+
+    return env.pushNewNodeApiValue(rawValue);
   }
 
-  vm::PinnedHermesValue *getGCRoot(
-      NodeApiEnvironment & /*env*/) noexcept override {
-    return (refCount_ > 0) ? &value_ : nullptr;
-  }
-
-  vm::WeakRoot<vm::JSObject> *getGCWeakRoot(
-      NodeApiEnvironment & /*env*/) noexcept override {
-    return (refCount_ == 0 && weakRoot_) ? &weakRoot_ : nullptr;
-  }
-
- protected:
-  NodeApiComplexReference(
-      uint32_t initialRefCount,
-      const vm::PinnedHermesValue &value,
-      vm::WeakRoot<vm::JSObject> weakRoot) noexcept
-      : refCount_(initialRefCount), value_(value), weakRoot_(weakRoot) {}
-
-  uint32_t refCount() const noexcept {
-    return refCount_;
-  }
-
+  // This field order enables more compact class layout and better
+  // memory alignment.
  private:
+  // Keep either strong or weak value root in the union to optimize storage
+  union {
+    vm::PinnedHermesValue value_; // Strong reference storage
+    vm::WeakRoot<vm::JSObject> weakRoot_; // Weak reference storage
+  };
+
+  // Backlink pointer to finalizer holder for efficient removal during
+  // strong/weak transitions
+  NodeApiFinalizerHolder *finalizerHolder_{nullptr};
+
   uint32_t refCount_{0};
-  vm::PinnedHermesValue value_;
-  vm::WeakRoot<vm::JSObject> weakRoot_;
-
-  static constexpr uint32_t MaxRefCount =
-      std::numeric_limits<uint32_t>::max() / 2;
+  // Track which union member is currently active
+  bool isUsingWeakStorage_{false};
+  // Who is responsible for deleting the reference
+  const NodeApiReferenceOwnership ownership_{
+      NodeApiReferenceOwnership::kRuntime};
+  // Whether this value can be stored as a weak reference
+  const bool canBeWeak_{false};
 };
 
-// Store finalizeHint if it is not null.
-template <class TBaseReference>
-class NodeApiFinalizeHintHolder : public TBaseReference {
+// Final class for references that store additional native data
+class NodeApiReferenceWithData final : public NodeApiReference {
  public:
-  template <class... TArgs>
-  NodeApiFinalizeHintHolder(void *finalizeHint, TArgs &&...args) noexcept
-      : TBaseReference(std::forward<TArgs>(args)...),
-        finalizeHint_(finalizeHint) {}
-
-  void *finalizeHint() noexcept override {
-    return finalizeHint_;
+  static NodeApiReferenceWithData *create(
+      NodeApiEnvironment &env,
+      const vm::PinnedHermesValue *value,
+      uint32_t initialRefCount,
+      NodeApiReferenceOwnership ownership,
+      void *nativeData) noexcept {
+    NodeApiReferenceWithData *reference =
+        new (std::nothrow) NodeApiReferenceWithData(
+            env, value, initialRefCount, ownership, nativeData);
+    env.addReference(reference);
+    return reference;
   }
 
- private:
-  void *finalizeHint_;
-};
-
-// Store and call finalizeCallback if it is not null.
-template <class TBaseReference>
-class NodeApiFinalizeCallbackHolder : public TBaseReference {
- public:
-  template <class... TArgs>
-  NodeApiFinalizeCallbackHolder(
-      napi_finalize finalizeCallback,
-      TArgs &&...args) noexcept
-      : TBaseReference(std::forward<TArgs>(args)...),
-        finalizeCallback_(finalizeCallback) {}
-
-  napi_status callFinalizeCallback(NodeApiEnvironment &env) noexcept override {
-    if (finalizeCallback_) {
-      napi_finalize finalizeCallback =
-          std::exchange(finalizeCallback_, nullptr);
-      env.callFinalizer(finalizeCallback, nativeData(), finalizeHint());
-    }
-    return napi_ok;
-  }
-
- private:
-  napi_finalize finalizeCallback_{};
-};
-
-// Store nativeData if it is not null.
-template <class TBaseReference>
-class NodeApiNativeDataHolder : public TBaseReference {
- public:
-  template <class... TArgs>
-  NodeApiNativeDataHolder(void *nativeData, TArgs &&...args) noexcept
-      : TBaseReference(std::forward<TArgs>(args)...), nativeData_(nativeData) {}
-
-  void *nativeData() noexcept override {
+  // Get the stored native data
+  void *nativeData() const noexcept override {
     return nativeData_;
   }
 
- private:
-  void *nativeData_;
-};
-
-// Common code for references inherited from NodeApiFinalizer.
-template <class TBaseReference>
-class NodeApiFinalizingReference final : public TBaseReference {
- public:
-  template <class... TArgs>
-  NodeApiFinalizingReference(TArgs &&...args) noexcept
-      : TBaseReference(std::forward<TArgs>(args)...) {}
-
-  void finalize(NodeApiEnvironment &env) noexcept override {
-    callFinalizeCallback(env);
-    NodeApiReference::deleteReference(
-        env, this, NodeApiReference::ReasonToDelete::FinalizerCall);
+  // Set native data
+  void setNativeData(void *data) noexcept {
+    nativeData_ = data;
   }
+
+ private:
+  NodeApiReferenceWithData(
+      NodeApiEnvironment &env,
+      const vm::PinnedHermesValue *value,
+      uint32_t initialRefCount,
+      NodeApiReferenceOwnership ownership,
+      void *nativeData) noexcept
+      : NodeApiReference(env, value, initialRefCount, ownership),
+        nativeData_(nativeData) {}
+
+ private:
+  void *nativeData_{nullptr};
 };
 
-// Create NodeApiFinalizingReference with the optimized storage.
-template <class TReference>
-class NodeApiFinalizingReferenceFactory final {
+// Final class for references with finalizer callbacks
+class NodeApiReferenceWithFinalizer final : public NodeApiReference {
  public:
-  template <class... TArgs>
-  static TReference *create(
+  static NodeApiReferenceWithFinalizer *create(
+      NodeApiEnvironment &env,
+      const vm::PinnedHermesValue *value,
+      uint32_t initialRefCount,
+      NodeApiReferenceOwnership ownership,
       void *nativeData,
       napi_finalize finalizeCallback,
-      void *finalizeHint,
-      TArgs &&...args) noexcept {
-    int selector = (nativeData ? 0b100 : 0) | (finalizeCallback ? 0b010 : 0) |
-        (finalizeHint ? 0b001 : 0);
-    switch (selector) {
-      default:
-      case 0b000:
-      case 0b001:
-        return new NodeApiFinalizingReference<TReference>(
-            std::forward<TArgs>(args)...);
-      case 0b010:
-        return new NodeApiFinalizingReference<
-            NodeApiFinalizeCallbackHolder<TReference>>(
-            finalizeCallback, std::forward<TArgs>(args)...);
-      case 0b011:
-        return new NodeApiFinalizingReference<NodeApiFinalizeCallbackHolder<
-            NodeApiFinalizeHintHolder<TReference>>>(
-            finalizeCallback, finalizeHint, std::forward<TArgs>(args)...);
-      case 0b100:
-      case 0b101:
-        return new NodeApiFinalizingReference<
-            NodeApiNativeDataHolder<TReference>>(
-            nativeData, std::forward<TArgs>(args)...);
-      case 0b110:
-        return new NodeApiFinalizingReference<
-            NodeApiNativeDataHolder<NodeApiFinalizeCallbackHolder<TReference>>>(
-            nativeData, finalizeCallback, std::forward<TArgs>(args)...);
-      case 0b111:
-        return new NodeApiFinalizingReference<
-            NodeApiNativeDataHolder<NodeApiFinalizeCallbackHolder<
-                NodeApiFinalizeHintHolder<TReference>>>>(
+      void *finalizeHint) noexcept {
+    NodeApiReferenceWithFinalizer *reference =
+        new (std::nothrow) NodeApiReferenceWithFinalizer(
+            env,
+            value,
+            initialRefCount,
+            ownership,
             nativeData,
             finalizeCallback,
-            finalizeHint,
-            std::forward<TArgs>(args)...);
-    }
-  }
-};
-
-// The reference that is never returned to the user code and only used to hold
-// the native data and its finalizer callback.
-// It is either deleted from the finalizer queue, on environment shutdown, or
-// directly when deleting the object wrap.
-class NodeApiFinalizingAnonymousReference : public NodeApiReference,
-                                            public NodeApiFinalizer {
- public:
-  static napi_status create(
-      NodeApiEnvironment &env,
-      const vm::PinnedHermesValue *value,
-      void *nativeData,
-      napi_finalize finalizeCallback,
-      void *finalizeHint,
-      /*optional*/ NodeApiFinalizingAnonymousReference **result) noexcept {
-    NodeApiFinalizingAnonymousReference *ref =
-        NodeApiFinalizingReferenceFactory<NodeApiFinalizingAnonymousReference>::
-            create(nativeData, finalizeCallback, finalizeHint);
-    if (value != nullptr) {
-      CHECK_OBJECT_ARG(value);
-      env.addObjectFinalizer(value, ref);
-    }
-    env.addFinalizingReference(ref);
-    return env.setOptionalResult(std::move(ref), result);
-  }
-};
-
-// Associates data with NodeApiStrongReference.
-class NodeApiFinalizingStrongReference : public NodeApiStrongReference,
-                                         public NodeApiFinalizer {
- public:
-  static napi_status create(
-      NodeApiEnvironment &env,
-      const vm::PinnedHermesValue *value,
-      void *nativeData,
-      napi_finalize finalizeCallback,
-      void *finalizeHint,
-      NodeApiFinalizingStrongReference **result) noexcept {
-    CHECK_ARG(value);
-    CHECK_ARG(*result);
-    *result =
-        NodeApiFinalizingReferenceFactory<NodeApiFinalizingStrongReference>::
-            create(nativeData, finalizeCallback, finalizeHint, *value);
-    env.addFinalizingReference(*result);
-    return env.clearLastNativeError();
+            finalizeHint);
+    env.addFinalizingReference(reference);
+    return reference;
   }
 
- protected:
-  NodeApiFinalizingStrongReference(const vm::PinnedHermesValue &value) noexcept
-      : NodeApiStrongReference(value) {}
-
-  bool startDeleting(NodeApiEnvironment &env, ReasonToDelete reason) noexcept
-      override {
-    if (reason == ReasonToDelete::ZeroRefCount) {
-      // Let the finalizer to run first.
-      env.addToFinalizerQueue(this);
-      return false;
-    } else if (reason == ReasonToDelete::FinalizerCall) {
-      if (refCount() != 0) {
-        // On shutdown the finalizer is called when the ref count is not zero
-        // yet. Postpone the deletion until all finalizers are finished to run.
-        NodeApiFinalizer::unlink();
-        env.addReference(this);
-        return false;
-      }
-    }
-    return true;
-  }
-};
-
-// A reference that can be either strong or weak and that holds a finalizer
-// callback.
-class NodeApiFinalizingComplexReference : public NodeApiComplexReference,
-                                          public NodeApiFinalizer {
- public:
-  static napi_status create(
-      NodeApiEnvironment &env,
-      uint32_t initialRefCount,
-      bool deleteSelf,
-      const vm::PinnedHermesValue *value,
-      void *nativeData,
-      napi_finalize finalizeCallback,
-      void *finalizeHint,
-      NodeApiFinalizingComplexReference **result) noexcept {
-    CHECK_OBJECT_ARG(value);
-    CHECK_ARG(result);
-    *result =
-        NodeApiFinalizingReferenceFactory<NodeApiFinalizingComplexReference>::
-            create(
-                nativeData,
-                finalizeCallback,
-                finalizeHint,
-                initialRefCount,
-                deleteSelf,
-                *value,
-                initialRefCount == 0
-                    ? env.createWeakRoot(getObjectUnsafe(*value))
-                    : vm::WeakRoot<vm::JSObject>{});
-    if (initialRefCount == 0) {
-      env.addObjectFinalizer(value, *result);
-    }
-    env.addFinalizingReference(*result);
-    return env.clearLastNativeError();
+  ~NodeApiReferenceWithFinalizer() override {
+    // Try to remove the finalizer from the task runner finalizer queue.
+    env_.dequeueFinalizer(this);
   }
 
-  napi_status incRefCount(NodeApiEnvironment &env, uint32_t &result) noexcept
-      override {
-    CHECK_NAPI(NodeApiComplexReference::incRefCount(env, result));
-    if (result == 1) {
-      NodeApiLinkedList<NodeApiFinalizer>::Item::unlink();
-    }
-    return env.clearLastNativeError();
+  // Override to call user finalizer
+  void callUserFinalizer() noexcept override {
+    finalizer_.callFinalizer(env_);
   }
 
-  napi_status decRefCount(NodeApiEnvironment &env, uint32_t &result) noexcept
-      override {
-    vm::PinnedHermesValue hv;
-    bool shouldConvertToWeakRef = refCount() == 1;
-    if (shouldConvertToWeakRef) {
-      hv = value(env);
-    }
-    CHECK_NAPI(NodeApiComplexReference::decRefCount(env, result));
-    if (shouldConvertToWeakRef && hv.isObject()) {
-      return env.addObjectFinalizer(&hv, this);
-    }
-    return env.clearLastNativeError();
+  void invokeFinalizerFromGC() noexcept override {
+    // Call resetStorage to clean up finalizerHolder_ backlink
+    resetStorage();
+
+    // Delegate to environment's method which has proper access to apiVersion_
+    env_.invokeFinalizerFromGC(this);
   }
 
- protected:
-  NodeApiFinalizingComplexReference(
-      uint32_t initialRefCount,
-      bool deleteSelf,
-      const vm::PinnedHermesValue &value,
-      vm::WeakRoot<vm::JSObject> weakRoot) noexcept
-      : NodeApiComplexReference{initialRefCount, value, weakRoot},
-        deleteSelf_{deleteSelf} {}
+  // Get the composed finalizer object
+  const NodeApiFinalizer &getFinalizer() const noexcept {
+    return finalizer_;
+  }
 
-  bool startDeleting(NodeApiEnvironment &env, ReasonToDelete reason) noexcept
-      override {
-    if (reason == ReasonToDelete::ExternalCall &&
-        NodeApiLinkedList<NodeApiFinalizer>::Item::isLinked()) {
-      // Let the finalizer or the environment shutdown to delete the reference.
-      deleteSelf_ = true;
-      return false;
-    }
-    if (reason == ReasonToDelete::FinalizerCall && !deleteSelf_) {
-      // Let the external call or the environment shutdown to delete the
-      // reference.
-      NodeApiFinalizer::unlink();
-      env.addReference(this);
-      return false;
-    }
-    return true;
+  // Get the stored native data
+  void *nativeData() const noexcept override {
+    return finalizer_.getNativeData();
   }
 
  private:
-  bool deleteSelf_{false};
+  NodeApiReferenceWithFinalizer(
+      NodeApiEnvironment &env,
+      const vm::PinnedHermesValue *value,
+      uint32_t initialRefCount,
+      NodeApiReferenceOwnership ownership,
+      void *nativeData,
+      napi_finalize finalizeCallback,
+      void *finalizeHint) noexcept
+      : NodeApiReference(env, value, initialRefCount, ownership),
+        env_(env),
+        finalizer_(nativeData, finalizeCallback, finalizeHint) {}
+
+ private:
+  NodeApiEnvironment &env_;
+  NodeApiFinalizer finalizer_;
 };
 
-// Hold custom data associated with the NodeApiEnvironment.
-class NodeApiInstanceData : public NodeApiReference {
+// Final class for standalone finalizer tracking (not tied to a specific
+// reference)
+class NodeApiTrackedFinalizer final : public NodeApiRefTracker {
  public:
-  static napi_status create(
+  static NodeApiTrackedFinalizer *create(
       NodeApiEnvironment &env,
       void *nativeData,
       napi_finalize finalizeCallback,
-      void *finalizeHint,
-      /*optional*/ NodeApiInstanceData **result) noexcept {
-    NodeApiInstanceData *ref =
-        NodeApiFinalizingReferenceFactory<NodeApiInstanceData>::create(
-            nativeData, finalizeCallback, finalizeHint);
-    if (result) {
-      *result = ref;
-    }
-    return env.clearLastNativeError();
+      void *finalizeHint) noexcept {
+    NodeApiTrackedFinalizer *finalizer =
+        new (std::nothrow) NodeApiTrackedFinalizer(
+            env, nativeData, finalizeCallback, finalizeHint);
+    return finalizer;
   }
+
+  void *nativeData() const noexcept {
+    return finalizer_.getNativeData();
+  }
+
+  // When a TrackedFinalizer is being deleted, it may have been queued to call
+  // its finalizer.
+  ~NodeApiTrackedFinalizer() override {
+    // Remove from the env's tracked list.
+    unlink();
+    // Try to remove the finalizer from the scheduled second pass callback.
+    env_.dequeueFinalizer(this);
+  }
+
+  void finalize() noexcept override {
+    unlink();
+    finalizer_.callFinalizer(env_);
+    delete this;
+  }
+
+ private:
+  NodeApiTrackedFinalizer(
+      NodeApiEnvironment &env,
+      void *nativeData,
+      napi_finalize finalizeCallback,
+      void *finalizeHint) noexcept
+      : NodeApiRefTracker(),
+        env_(env),
+        finalizer_(nativeData, finalizeCallback, finalizeHint) {}
+
+ private:
+  NodeApiEnvironment &env_;
+  NodeApiFinalizer finalizer_;
 };
+
+//=============================================================================
+// NodeApiFinalizerHolder Implementation (after NodeApiReference is complete)
+//=============================================================================
+
+void NodeApiFinalizerHolder::invokeAllFinalizers() noexcept {
+  while (!finalizers_.empty()) {
+    const auto &ref = finalizers_.begin();
+    (*ref)->invokeFinalizerFromGC(); // Delegates to NodeApiEnvironment for API
+                                     // version-dependent handling
+  }
+}
 
 // Sorted list of unique HermesValues.
 template <>
@@ -2736,7 +2977,7 @@ class NodeApiOrderedSet<uint32_t> final {
  public:
   bool insert(uint32_t value) noexcept {
     auto it = llvh::lower_bound(items_, value);
-    if (it == items_.end() || *it == value) {
+    if (it != items_.end() && *it == value) {
       return false;
     }
     items_.insert(it, value);
@@ -2795,75 +3036,12 @@ class NodeApiStringBuilder final {
   llvh::raw_string_ostream stream_;
 };
 
-class NodeApiExternalBufferCore {
- public:
-  NodeApiExternalBufferCore(
-      NodeApiEnvironment &env,
-      void *data,
-      napi_finalize finalizeCallback,
-      void *finalizeHint)
-      : env_(&env),
-        finalizeCallback_(finalizeCallback),
-        data_(data),
-        finalizeHint_(finalizeHint) {}
-
-  void setFinalizer(NodeApiFinalizer *finalizer) {
-    finalizer_ = finalizer;
-  }
-
-  void onBufferDeleted() {
-    if (finalizer_ != nullptr) {
-      env_->addToFinalizerQueue(finalizer_);
-      env_ = nullptr;
-    } else {
-      delete this;
-    }
-  }
-
-  static void
-  finalize(napi_env env, void * /*finalizeData*/, void *finalizeHint) {
-    NodeApiExternalBufferCore *core =
-        reinterpret_cast<NodeApiExternalBufferCore *>(finalizeHint);
-    if (core->finalizeCallback_ != nullptr) {
-      core->finalizeCallback_(env, core->data_, core->finalizeHint_);
-    }
-
-    core->finalizer_ = nullptr;
-    if (core->env_ == nullptr) {
-      delete core;
-    }
-  }
-
-  NodeApiExternalBufferCore(const NodeApiExternalBufferCore &) = delete;
-  NodeApiExternalBufferCore &operator=(const NodeApiExternalBufferCore &) =
-      delete;
-
- private:
-  NodeApiFinalizer *finalizer_{};
-  NodeApiEnvironment *env_;
-  napi_finalize finalizeCallback_;
-  void *data_;
-  void *finalizeHint_;
-};
-
 // The external buffer that implements hermes::Buffer
+// This class integrates with the Node-API finalizer infrastructure to ensure
+// user finalizers are called on the JS thread when the buffer is garbage
+// collected.
 class NodeApiExternalBuffer final : public hermes::Buffer {
  public:
-  static std::unique_ptr<NodeApiExternalBuffer> make(
-      napi_env env,
-      void *bufferData,
-      size_t bufferSize,
-      napi_finalize finalizeCallback,
-      void *finalizeHint) noexcept {
-    return bufferData ? std::make_unique<NodeApiExternalBuffer>(
-                            *reinterpret_cast<NodeApiEnvironment *>(env),
-                            bufferData,
-                            bufferSize,
-                            finalizeCallback,
-                            finalizeHint)
-                      : nullptr;
-  }
-
   NodeApiExternalBuffer(
       NodeApiEnvironment &env,
       void *bufferData,
@@ -2871,27 +3049,44 @@ class NodeApiExternalBuffer final : public hermes::Buffer {
       napi_finalize finalizeCallback,
       void *finalizeHint) noexcept
       : Buffer(reinterpret_cast<uint8_t *>(bufferData), bufferSize),
-        core_(new NodeApiExternalBufferCore(
-            env,
-            bufferData,
-            finalizeCallback,
-            finalizeHint)) {
-    NodeApiFinalizingAnonymousReference *ref =
-        NodeApiFinalizingReferenceFactory<NodeApiFinalizingAnonymousReference>::
-            create(nullptr, &NodeApiExternalBufferCore::finalize, core_);
-    core_->setFinalizer(ref);
-    env.addFinalizingReference(ref);
+        pendingFinalizers_(env.pendingFinalizers()),
+        finalizer_(nullptr) {
+    // Only create finalizer if callback is provided
+    if (finalizeCallback != nullptr) {
+      vm::PinnedHermesValue empty(vm::HermesValue::encodeEmptyValue());
+      finalizer_ = NodeApiReferenceWithFinalizer::create(
+          env,
+          &empty, // No JS value for external buffers
+          0, // Initial ref count (no strong reference needed)
+          NodeApiReferenceOwnership::kRuntime, // Runtime-owned
+          bufferData, // Native data
+          finalizeCallback, // User finalizer
+          finalizeHint);
+    }
   }
 
   ~NodeApiExternalBuffer() noexcept override {
-    core_->onBufferDeleted();
+    // Called from GC thread via Hermes lambda - must be thread-safe
+    // Follow the same pattern as NodeApiExternalValue destructor
+    if (finalizer_) {
+      // Create a temporary finalizer holder to transfer the single finalizer
+      auto finalizerHolder = std::make_unique<NodeApiFinalizerHolder>();
+      finalizerHolder->addFinalizer(finalizer_);
+
+      // Transfer finalizer holder to pending finalizers for thread-safe
+      // processing
+      pendingFinalizers_->addFinalizerHolder(std::move(finalizerHolder));
+
+      finalizer_ = nullptr;
+    }
   }
 
   NodeApiExternalBuffer(const NodeApiExternalBuffer &) = delete;
   NodeApiExternalBuffer &operator=(const NodeApiExternalBuffer &) = delete;
 
  private:
-  NodeApiExternalBufferCore *core_;
+  NodeApiRefCountedPtr<NodeApiPendingFinalizers> pendingFinalizers_;
+  NodeApiReferenceWithFinalizer *finalizer_;
 };
 
 // Conversion routines from double to int32, uin32 and int64.
@@ -2983,6 +3178,163 @@ class NodeApiDoubleConversion final {
   static constexpr int kExponentBias = 0x3FF + kPhysicalSignificandSize;
 };
 
+class NodeApiEnvironmentHolder {
+ public:
+  NodeApiEnvironment *getOrCreateEnvironment(
+      vm::Runtime &runtime,
+      hbc::CompileFlags compileFlags,
+      std::shared_ptr<TaskRunner> taskRunner,
+      const std::function<void(napi_env, napi_value)> &unhandledErrorCallback,
+      int32_t apiVersion) noexcept {
+    if (rootEnv_ == nullptr) {
+      rootEnv_ = NodeApiRefCountedPtr<NodeApiEnvironment>{
+          new NodeApiEnvironment(
+              runtime,
+              compileFlags,
+              std::move(taskRunner),
+              unhandledErrorCallback,
+              apiVersion),
+          attachTag};
+    }
+    return rootEnv_.get();
+  }
+
+  NodeApiEnvironment *rootEnv() const noexcept {
+    return rootEnv_.get();
+  }
+
+  NodeApiEnvironment *createModuleEnvironment(int32_t apiVersion) noexcept {
+    CRASH_IF_FALSE(rootEnv_ != nullptr);
+    NodeApiRefCountedPtr<NodeApiEnvironment> moduleEnv{
+        new NodeApiEnvironment(
+            rootEnv_->runtime(),
+            rootEnv_->compileFlags(),
+            rootEnv_->taskRunner(),
+            rootEnv_->unhandledErrorCallback(),
+            apiVersion,
+            rootEnv_->pendingFinalizers()),
+        attachTag};
+    NodeApiEnvironment *result = moduleEnv.get();
+    result->setParentEnvironment(rootEnv_.get());
+    moduleEnvs_.push_back(std::move(moduleEnv));
+    return result;
+  }
+
+  static vm::CallResult<NodeApiEnvironmentHolder *> fromRuntime(
+      vm::Runtime &runtime) {
+    vm::GCScope gcScope(runtime);
+    vm::HermesValue globalObjectHV = runtime.getGlobal().getHermesValue();
+    vm::Handle<vm::JSObject> globalObjectHandle =
+        vm::Handle<vm::JSObject>::vmcast(runtime, globalObjectHV);
+    vm::SymbolID propSymbol = vm::Predefined::getSymbolID(
+        vm::Predefined::InternalPropertyArrayBufferExternalFinalizer);
+    vm::NamedPropertyDescriptor desc;
+    bool exists = vm::JSObject::getOwnNamedDescriptor(
+        globalObjectHandle, runtime, propSymbol, desc);
+    if (exists) {
+      // Raw pointers below.
+      vm::NoAllocScope scope(runtime);
+      vm::NativeState *ns =
+          vm::vmcast<vm::NativeState>(vm::JSObject::getNamedSlotValueUnsafe(
+                                          *globalObjectHandle, runtime, desc)
+                                          .getObject(runtime));
+      return reinterpret_cast<NodeApiEnvironmentHolder *>(ns->context());
+    }
+
+    NodeApiEnvironmentHolder *holder = new NodeApiEnvironmentHolder();
+    vm::Handle<vm::NativeState> ns = runtime.makeHandle(
+        vm::NativeState::create(runtime, holder, deleteHolder));
+    vm::CallResult<bool> res = vm::JSObject::defineOwnProperty(
+        globalObjectHandle,
+        runtime,
+        propSymbol,
+        vm::DefinePropertyFlags::getDefaultNewPropertyFlags(),
+        ns,
+        vm::PropOpFlags().plusThrowOnError());
+    if (res.getStatus() == vm::ExecutionStatus::EXCEPTION) {
+      return vm::ExecutionStatus::EXCEPTION;
+    }
+    return holder;
+  }
+
+ private:
+  static void deleteHolder(vm::GC &, vm::NativeState *ns) {
+    // Set termination flag before deleting environments
+    NodeApiEnvironmentHolder *holder =
+        reinterpret_cast<NodeApiEnvironmentHolder *>(ns->context());
+
+    // Notify all environments of runtime termination
+    if (holder->rootEnv_) {
+      holder->rootEnv_->setTerminatedOrTerminating(true);
+    }
+    for (auto &moduleEnv : holder->moduleEnvs_) {
+      if (moduleEnv) {
+        moduleEnv->setTerminatedOrTerminating(true);
+      }
+    }
+
+    delete holder;
+  }
+
+ private:
+  NodeApiRefCountedPtr<NodeApiEnvironment> rootEnv_;
+  std::vector<NodeApiRefCountedPtr<NodeApiEnvironment>> moduleEnvs_;
+};
+
+vm::CallResult<napi_env> getOrCreateNodeApiEnvironment(
+    vm::Runtime &runtime,
+    hbc::CompileFlags compileFlags,
+    std::shared_ptr<TaskRunner> taskRunner,
+    const std::function<void(napi_env, napi_value)> &unhandledErrorCallback,
+    int32_t apiVersion) noexcept {
+  vm::CallResult<NodeApiEnvironmentHolder *> holderRes =
+      NodeApiEnvironmentHolder::fromRuntime(runtime);
+  if (holderRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+  return napiEnv((*holderRes)
+                     ->getOrCreateEnvironment(
+                         runtime,
+                         compileFlags,
+                         std::move(taskRunner),
+                         unhandledErrorCallback,
+                         apiVersion));
+}
+
+napi_status initializeNodeApiModule(
+    vm::Runtime &runtime,
+    napi_addon_register_func registerModule,
+    int32_t apiVersion,
+    napi_value *exports) noexcept {
+  vm::CallResult<NodeApiEnvironmentHolder *> holderRes =
+      NodeApiEnvironmentHolder::fromRuntime(runtime);
+  if (holderRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
+    return napi_pending_exception;
+  }
+  NodeApiEnvironmentHolder *holder = *holderRes;
+  NodeApiEnvironment *moduleEnv = holder->createModuleEnvironment(apiVersion);
+  return holder->rootEnv()->initializeModule(
+      *moduleEnv, registerModule, exports);
+}
+
+napi_status checkNodeApiPreconditions(napi_env env) noexcept {
+  return CHECKED_ENV(env)->checkPreconditions();
+}
+
+napi_status setNodeApiValue(
+    napi_env env,
+    ::hermes::vm::CallResult<::hermes::vm::HermesValue> hvResult,
+    napi_value *result) {
+  return CHECKED_ENV(env)->setResult(std::move(hvResult), result);
+}
+
+napi_status checkJSErrorStatus(
+    napi_env env,
+    vm::ExecutionStatus hermesStatus) noexcept {
+  return CHECKED_ENV(env)->checkJSErrorStatus(
+      hermesStatus, napi_pending_exception);
+}
+
 // Max size of the runtime's register stack.
 // The runtime register stack needs to be small enough to be allocated on the
 // native thread stack in Android (1MiB) and on MacOS's thread stack (512 KiB)
@@ -3044,11 +3396,11 @@ NodeApiCallbackInfo *asCallbackInfo(napi_callback_info callbackInfo) noexcept {
 }
 
 vm::JSObject *getObjectUnsafe(const vm::HermesValue &value) noexcept {
-  return reinterpret_cast<vm::JSObject *>(value.getObject());
+  return vm::vmcast<vm::JSObject>(value);
 }
 
 vm::JSObject *getObjectUnsafe(napi_value value) noexcept {
-  return getObjectUnsafe(*phv(value));
+  return vm::vmcast<vm::JSObject>(*phv(value));
 }
 
 size_t copyASCIIToUTF8(
@@ -3147,14 +3499,23 @@ size_t convertUTF16ToUTF8WithReplacements(
 
 NodeApiEnvironment::NodeApiEnvironment(
     vm::Runtime &runtime,
-    hbc::CompileFlags compileFlags) noexcept
+    hbc::CompileFlags compileFlags,
+    std::shared_ptr<TaskRunner> taskRunner,
+    std::function<void(napi_env, napi_value)> unhandledErrorCallback,
+    int32_t apiVersion,
+    const NodeApiRefCountedPtr<NodeApiPendingFinalizers>
+        &pendingFinalizers) noexcept
     : runtime_(runtime),
-      pendingFinalizers_(NodeApiPendingFinalizers::create()),
-      compileFlags_(compileFlags) {
+      compileFlags_(compileFlags),
+      taskRunner_(std::move(taskRunner)),
+      unhandledErrorCallback_(unhandledErrorCallback),
+      apiVersion_(apiVersion),
+      pendingFinalizers_(pendingFinalizers) {
   runtime_.addCustomRootsFunction([this](vm::GC *, vm::RootAcceptor &acceptor) {
     napiValueStack_.forEach([&](const vm::PinnedHermesValue &value) {
       acceptor.accept(const_cast<vm::PinnedHermesValue &>(value));
     });
+    // Enable GC integration for Node-API references
     NodeApiReference::getGCRoots(*this, references_, acceptor);
     NodeApiReference::getGCRoots(*this, finalizingReferences_, acceptor);
     if (!thrownJSError_.isEmpty()) {
@@ -3167,12 +3528,8 @@ NodeApiEnvironment::NodeApiEnvironment(
       acceptor.accept(value);
     }
     NodeApiOrderedSet<vm::HermesValue>::getGCRoots(orderedSets_, acceptor);
-    for (auto &entry : uniqueStrings_) {
-      if (vm::PinnedHermesValue *root = entry.second->getGCRoot(*this)) {
-        acceptor.accept(*root);
-      }
-    }
   });
+  // Enable weak GC integration for Node-API references
   runtime_.addCustomWeakRootsFunction(
       [this](vm::GC *, vm::WeakRootAcceptor &acceptor) {
         NodeApiReference::getGCWeakRoots(*this, references_, acceptor);
@@ -3241,32 +3598,11 @@ NodeApiEnvironment::NodeApiEnvironment(
   CRASH_IF_FALSE(enablePromiseRejectionTracker() == napi_ok);
 }
 
-NodeApiEnvironment::~NodeApiEnvironment() {
-  pendingFinalizers_->applyPendingFinalizers(this);
-  pendingFinalizers_ = nullptr;
-
-  isShuttingDown_ = true;
-  if (instanceData_) {
-    instanceData_->finalize(*this);
-    instanceData_ = nullptr;
-  }
-
-  // First we must finalize those references that have `napi_finalizer`
-  // callbacks. The reason is that addons might store other references which
-  // they delete during their `napi_finalizer` callbacks. If we deleted such
-  // references here first, they would be doubly deleted when the
-  // `napi_finalizer` deleted them subsequently.
-  NodeApiReference::finalizeAll(*this, finalizerQueue_);
-  NodeApiReference::finalizeAll(*this, finalizingReferences_);
-  NodeApiReference::deleteAll(
-      *this,
-      references_,
-      NodeApiReference::ReasonToDelete::EnvironmentShutdown);
-
-  CRASH_IF_FALSE(finalizerQueue_.isEmpty());
-  CRASH_IF_FALSE(finalizingReferences_.isEmpty());
-  CRASH_IF_FALSE(references_.isEmpty());
-}
+// Task 007 Fix: Destructor made default to prevent crashes from accessing
+// deleted members All proper cleanup logic has been moved to DeleteMe() method
+// which must be called before destruction. The destructor should only handle
+// default destruction of members.
+NodeApiEnvironment::~NodeApiEnvironment() = default;
 
 napi_status NodeApiEnvironment::incRefCount() noexcept {
   refCount_++;
@@ -3275,18 +3611,126 @@ napi_status NodeApiEnvironment::incRefCount() noexcept {
 
 napi_status NodeApiEnvironment::decRefCount() noexcept {
   if (--refCount_ == 0) {
-    delete this;
+    DeleteMe();
   }
   return napi_status::napi_ok;
+}
+
+// Node.js-style controlled shutdown with finalizer drainage
+void NodeApiEnvironment::DeleteMe() noexcept {
+  // Set shutdown flag to prevent task runner scheduling BEFORE processing
+  // finalizers
+  isShuttingDown_ = true;
+
+  // Drain all pending finalizers immediately - we cannot rely on task runner
+  // during shutdown as the environment is being destroyed
+
+  // 1. Process any pending GC-triggered finalizers
+  processPendingFinalizers();
+
+  // 2. Drain task runner finalizer queue immediately (no async processing)
+  drainFinalizerQueue();
+
+  // 3. Clean up instance data if present
+  if (instanceData_ != nullptr) {
+    instanceData_->unlink();
+  }
+
+  // 4. Restore proper cleanup sequence from destructor (lines 3667-3690)
+  // First we must finalize those references that have `napi_finalizer`
+  // callbacks. The reason is that addons might store other references which
+  // they delete during their `napi_finalizer` callbacks. If we deleted such
+  // references here first, they would be doubly deleted when the
+  // `napi_finalizer` deleted them subsequently.
+
+  // Finalize all tracked finalizers in the task runner queue
+  NodeApiRefTracker::finalizeAll(finalizingReferences_);
+  if (instanceData_ != nullptr) {
+    instanceData_->finalize();
+    instanceData_ = nullptr;
+  }
+  NodeApiRefTracker::finalizeAll(references_);
+
+  CRASH_IF_FALSE(taskRunnerFinalizerQueue_.empty());
+  CRASH_IF_FALSE(finalizingReferences_.isEmpty());
+  CRASH_IF_FALSE(references_.isEmpty());
+
+  // 5. Now safe to delete - all finalizers have been executed
+  delete this;
 }
 
 vm::Runtime &NodeApiEnvironment::runtime() noexcept {
   return runtime_;
 }
 
+hbc::CompileFlags NodeApiEnvironment::compileFlags() noexcept {
+  return compileFlags_;
+}
+
+const std::shared_ptr<TaskRunner> &NodeApiEnvironment::taskRunner()
+    const noexcept {
+  return taskRunner_;
+}
+
+const std::function<void(napi_env, napi_value)> &
+NodeApiEnvironment::unhandledErrorCallback() const noexcept {
+  return unhandledErrorCallback_;
+}
+
+const NodeApiRefCountedPtr<NodeApiPendingFinalizers> &
+NodeApiEnvironment::pendingFinalizers() const noexcept {
+  return pendingFinalizers_;
+}
+
 NodeApiStableAddressStack<vm::PinnedHermesValue> &
 NodeApiEnvironment::napiValueStack() noexcept {
   return napiValueStack_;
+}
+
+vm::CallResult<vm::HermesValue> NodeApiEnvironment::callModuleInitializer(
+    napi_addon_register_func registerModule) noexcept {
+  NodeApiHandleScopeBase<false> scope{env};
+  napi_value exports{};
+  CRASH_IF_FALSE(createObject(&exports) == napi_ok);
+  vm::ExecutionStatus status = callIntoModule(
+      [&](NodeApiEnvironment *env) {
+        napi_value returned_exports = registerModule(napiEnv(env), exports);
+        if (returned_exports != nullptr && returned_exports != exports) {
+          exports = returned_exports;
+        }
+      },
+      rethrowException);
+
+  if (status == vm::ExecutionStatus::EXCEPTION) {
+    return vm::ExecutionStatus::EXCEPTION;
+  }
+
+  if (exports != nullptr) {
+    return *phv(exports);
+  } else {
+    return getUndefined();
+  }
+}
+
+napi_status NodeApiEnvironment::initializeModule(
+    NodeApiEnvironment &moduleEnv,
+    napi_addon_register_func registerModule,
+    napi_value *exports) noexcept {
+  // Each native module must have its own napi_env.
+  // The tricky part is that we must call the registerModule in the
+  // module specific Node-API environment, not the current one.
+  // Then, we must translate the exports object or the error to the current
+  // environment.
+  CHECK_STATUS(checkPreconditions());
+  NodeApiHandleScope scope{*this, exports};
+  napi_status status =
+      scope.setResult(moduleEnv.callModuleInitializer(registerModule));
+  return status == napi_ok ? napi_ok : napi_pending_exception;
+}
+
+void NodeApiEnvironment::setParentEnvironment(
+    NodeApiEnvironment *parentEnvironment) noexcept {
+  parentEnvironment_ = parentEnvironment;
 }
 
 //---------------------------------------------------------------------------
@@ -3332,18 +3776,20 @@ napi_status NodeApiEnvironment::setLastNativeError(
       "An arraybuffer was expected",
       "A detachable arraybuffer was expected",
       "Main thread would deadlock",
+      "External buffers are not allowed",
+      "Cannot run JavaScript",
   };
 
   // The value of the constant below must be updated to reference the last
   // message in the `napi_status` enum each time a new error message is added.
   // We don't have a napi_status_last as this would result in an ABI
   // change each time a message was added.
-  const int lastStatus = napi_would_deadlock;
+  const int lastStatus = napi_cannot_run_js;
   static_assert(
       size(errorMessages) == lastStatus + 1,
       "Count of error messages must match count of error values");
 
-  if (status < napi_ok || status >= lastStatus) {
+  if (status < napi_ok || status > lastStatus) {
     status = napi_generic_failure;
   }
 
@@ -3361,6 +3807,7 @@ napi_status NodeApiEnvironment::setLastNativeError(
   lastError_ = {errorMessages[status], 0, 0, status};
 
 #if defined(_WIN32) && !defined(NDEBUG)
+// TODO: Enable this.
 //  DebugBreak();
 #endif
 
@@ -3368,7 +3815,8 @@ napi_status NodeApiEnvironment::setLastNativeError(
 }
 
 napi_status NodeApiEnvironment::clearLastNativeError() noexcept {
-  return lastError_.error_code = napi_ok;
+  lastError_.error_code = napi_ok;
+  return napi_ok;
 }
 
 //-----------------------------------------------------------------------------
@@ -3380,13 +3828,14 @@ napi_status NodeApiEnvironment::createJSError(
     napi_value code,
     napi_value message,
     napi_value *result) noexcept {
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
-  CHECK_STRING_ARG(message);
+  CHECK_ARG_IS_STRING(message);
   vm::Handle<vm::JSError> errorHandle = makeHandle(
       vm::JSError::create(runtime_, makeHandle<vm::JSObject>(&errorPrototype)));
-  CHECK_NAPI(checkJSErrorStatus(
+  CHECK_STATUS(checkJSErrorStatus(
       vm::JSError::setMessage(errorHandle, runtime_, makeHandle(message))));
-  CHECK_NAPI(setJSErrorCode(errorHandle, code, nullptr));
+  CHECK_STATUS(setJSErrorCode(errorHandle, code, nullptr));
   return scope.setResult(std::move(errorHandle));
 }
 
@@ -3411,6 +3860,13 @@ napi_status NodeApiEnvironment::createJSRangeError(
   return createJSError(runtime_.RangeErrorPrototype, code, message, result);
 }
 
+napi_status NodeApiEnvironment::createJSSyntaxError(
+    napi_value code,
+    napi_value message,
+    napi_value *result) noexcept {
+  return createJSError(runtime_.SyntaxErrorPrototype, code, message, result);
+}
+
 napi_status NodeApiEnvironment::isJSError(
     napi_value value,
     bool *result) noexcept {
@@ -3430,20 +3886,20 @@ napi_status NodeApiEnvironment::throwJSError(
     const vm::PinnedHermesValue &prototype,
     const char *code,
     const char *message) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
 
   napi_value messageValue;
-  CHECK_NAPI(createStringUTF8(message, &messageValue));
+  CHECK_STATUS(createStringUTF8(message, &messageValue));
 
   vm::Handle<vm::JSError> errorHandle = makeHandle(
       vm::JSError::create(runtime_, makeHandle<vm::JSObject>(&prototype)));
-  CHECK_NAPI(
+  CHECK_STATUS(
       checkJSErrorStatus(vm::JSError::recordStackTrace(errorHandle, runtime_)));
-  CHECK_NAPI(checkJSErrorStatus(
+  CHECK_STATUS(checkJSErrorStatus(
       vm::JSError::setMessage(
           errorHandle, runtime_, makeHandle(messageValue))));
-  CHECK_NAPI(setJSErrorCode(errorHandle, nullptr, code));
+  CHECK_STATUS(setJSErrorCode(errorHandle, nullptr, code));
 
   runtime_.setThrownValue(errorHandle.getHermesValue());
 
@@ -3470,15 +3926,21 @@ napi_status NodeApiEnvironment::throwJSRangeError(
   return throwJSError(runtime_.RangeErrorPrototype, code, message);
 }
 
+napi_status NodeApiEnvironment::throwJSSyntaxError(
+    const char *code,
+    const char *message) noexcept {
+  return throwJSError(runtime_.SyntaxErrorPrototype, code, message);
+}
+
 napi_status NodeApiEnvironment::setJSErrorCode(
     vm::Handle<vm::JSError> error,
     napi_value code,
     const char *codeCString) noexcept {
   if (code || codeCString) {
     if (code) {
-      CHECK_STRING_ARG(code);
+      CHECK_ARG_IS_STRING(code);
     } else {
-      CHECK_NAPI(createStringUTF8(codeCString, &code));
+      CHECK_STATUS(createStringUTF8(codeCString, &code));
     }
     return setPredefinedProperty(error, NodeApiPredefined::code, code, nullptr);
   }
@@ -3489,13 +3951,30 @@ napi_status NodeApiEnvironment::setJSErrorCode(
 // Methods to support catching JS exceptions
 //-----------------------------------------------------------------------------
 
-napi_status NodeApiEnvironment::isJSErrorPending(bool *result) noexcept {
-  return setResult(!thrownJSError_.isEmpty(), result);
+void NodeApiEnvironment::checkGCAccess() noexcept {
+  if (apiVersion_ == NAPI_VERSION_EXPERIMENTAL && inGCFinalizer_) {
+    std::cerr
+        << "Finalizer is calling a function that may affect GC state.\n"
+        << "The finalizers are run directly from GC and must not affect "
+           "GC state.\n"
+        << "Use `node_api_post_finalizer` from inside of the finalizer to "
+           "work around this issue.\n"
+        << "It schedules the call as a new task in the event loop.";
+    ABORT();
+  }
 }
 
-napi_status NodeApiEnvironment::checkPendingJSError() noexcept {
+napi_status NodeApiEnvironment::checkPreconditions() noexcept {
+  checkGCAccess();
   RETURN_STATUS_IF_FALSE(thrownJSError_.isEmpty(), napi_pending_exception);
+  RETURN_STATUS_IF_FALSE(
+      !isShuttingDown_ && !isTerminatedOrTerminating(),
+      apiVersion_ >= 10 ? napi_cannot_run_js : napi_pending_exception);
   return clearLastNativeError();
+}
+
+napi_status NodeApiEnvironment::isJSErrorPending(bool *result) noexcept {
+  return setResult(!thrownJSError_.isEmpty(), result);
 }
 
 napi_status NodeApiEnvironment::getAndClearPendingJSError(
@@ -3515,6 +3994,9 @@ napi_status NodeApiEnvironment::checkJSErrorStatus(
 
   thrownJSError_ = runtime_.getThrownValue();
   runtime_.clearThrownValue();
+  if (!thrownJSError_.isEmpty()) {
+    return napi_pending_exception;
+  }
   return status;
 }
 
@@ -3523,6 +4005,14 @@ napi_status NodeApiEnvironment::checkJSErrorStatus(
     const vm::CallResult<T> &callResult,
     napi_status status) noexcept {
   return checkJSErrorStatus(callResult.getStatus(), status);
+}
+
+void NodeApiEnvironment::checkRuntimeThrownValue() noexcept {
+  vm::HermesValue thrownValue = runtime_.getThrownValue();
+  if (!thrownValue.isEmpty()) {
+    thrownJSError_ = thrownValue;
+    runtime_.clearThrownValue();
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -3597,6 +4087,7 @@ napi_status NodeApiEnvironment::typeOf(
 napi_status NodeApiEnvironment::getBoolean(
     bool value,
     napi_value *result) noexcept {
+  checkGCAccess();
   return setPredefinedResult(
       runtime_.getBoolValue(value).unsafeGetPinnedHermesValue(), result);
 }
@@ -3604,6 +4095,7 @@ napi_status NodeApiEnvironment::getBoolean(
 napi_status NodeApiEnvironment::getBooleanValue(
     napi_value value,
     bool *result) noexcept {
+  checkGCAccess();
   CHECK_ARG(value);
   CHECK_ARG(result);
   RETURN_STATUS_IF_FALSE(phv(value)->isBool(), napi_boolean_expected);
@@ -3618,6 +4110,7 @@ template <class T, std::enable_if_t<std::is_arithmetic_v<T>, bool>>
 napi_status NodeApiEnvironment::createNumber(
     T value,
     napi_value *result) noexcept {
+  checkGCAccess();
   return setResult(
       vm::HermesValue::encodeUntrustedNumberValue(static_cast<double>(value)),
       result);
@@ -3680,8 +4173,11 @@ napi_status NodeApiEnvironment::createStringLatin1(
     const char *str,
     size_t length,
     napi_value *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
-  CHECK_ARG(str);
+  if (length > 0) {
+    CHECK_ARG(str);
+  }
   if (length == NAPI_AUTO_LENGTH) {
     length = std::char_traits<char>::length(str);
   }
@@ -3708,8 +4204,11 @@ napi_status NodeApiEnvironment::createStringUTF8(
     const char *str,
     size_t length,
     napi_value *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
-  CHECK_ARG(str);
+  if (length > 0) {
+    CHECK_ARG(str);
+  }
   if (length == NAPI_AUTO_LENGTH) {
     length = std::char_traits<char>::length(str);
   }
@@ -3722,7 +4221,7 @@ napi_status NodeApiEnvironment::createStringUTF8(
   }
 
   std::u16string u16str;
-  CHECK_NAPI(convertUTF8ToUTF16(str, length, u16str));
+  CHECK_STATUS(convertUTF8ToUTF16(str, length, u16str));
   return scope.setResult(
       vm::StringPrimitive::createEfficient(runtime_, std::move(u16str)));
 }
@@ -3737,8 +4236,11 @@ napi_status NodeApiEnvironment::createStringUTF16(
     const char16_t *str,
     size_t length,
     napi_value *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
-  CHECK_ARG(str);
+  if (length > 0) {
+    CHECK_ARG(str);
+  }
   if (length == NAPI_AUTO_LENGTH) {
     length = std::char_traits<char16_t>::length(str);
   }
@@ -3749,6 +4251,70 @@ napi_status NodeApiEnvironment::createStringUTF16(
   return scope.setResult(
       vm::StringPrimitive::createEfficient(
           runtime_, llvh::makeArrayRef(str, length)));
+}
+
+napi_status NodeApiEnvironment::createExternalStringLatin1(
+    char *str,
+    size_t length,
+    node_api_basic_finalize finalizeCallback,
+    void *finalizeHint,
+    napi_value *result,
+    bool *copied) noexcept {
+  // TODO: (vmoroz) Add support to Hermes for external strings.
+  CHECK_STATUS(createStringLatin1(str, length, result));
+  if (finalizeCallback != nullptr) {
+    finalizeCallback(
+        reinterpret_cast<node_api_nogc_env>(this), str, finalizeHint);
+  }
+  if (copied != nullptr) {
+    // TODO: (vmoroz) we report here false to pass the Node-API tests.
+    *copied = false;
+  }
+  return napi_ok;
+}
+
+napi_status NodeApiEnvironment::createExternalStringUTF16(
+    char16_t *str,
+    size_t length,
+    node_api_basic_finalize finalizeCallback,
+    void *finalizeHint,
+    napi_value *result,
+    bool *copied) noexcept {
+  // TODO: (vmoroz) Add support to Hermes for external strings.
+  CHECK_STATUS(createStringUTF16(str, length, result));
+  if (finalizeCallback != nullptr) {
+    finalizeCallback(
+        reinterpret_cast<node_api_nogc_env>(this), str, finalizeHint);
+  }
+  if (copied != nullptr) {
+    // TODO: (vmoroz) we report here false to pass the Node-API tests.
+    *copied = false;
+  }
+  return napi_ok;
+}
+
+napi_status NodeApiEnvironment::createPropertyKeyLatin1(
+    const char *str,
+    size_t length,
+    napi_value *result) noexcept {
+  // TODO: (vmoroz) Use unique strings
+  return createStringLatin1(str, length, result);
+}
+
+napi_status NodeApiEnvironment::createPropertyKeyUTF8(
+    const char *str,
+    size_t length,
+    napi_value *result) noexcept {
+  // TODO: (vmoroz) Use unique strings
+  return createStringUTF8(str, length, result);
+}
+
+napi_status NodeApiEnvironment::createPropertyKeyUTF16(
+    const char16_t *str,
+    size_t length,
+    napi_value *result) noexcept {
+  // TODO: (vmoroz) Use unique strings
+  return createStringUTF16(str, length, result);
 }
 
 // Copies a JavaScript string into a LATIN-1 string buffer. The result is the
@@ -3764,8 +4330,9 @@ napi_status NodeApiEnvironment::getStringValueLatin1(
     char *buf,
     size_t bufSize,
     size_t *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this};
-  CHECK_STRING_ARG(value);
+  CHECK_ARG_IS_STRING(value);
   vm::StringView view = vm::StringPrimitive::createStringView(
       runtime_, makeHandle<vm::StringPrimitive>(value));
 
@@ -3797,8 +4364,9 @@ napi_status NodeApiEnvironment::getStringValueUTF8(
     char *buf,
     size_t bufSize,
     size_t *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this};
-  CHECK_STRING_ARG(value);
+  CHECK_ARG_IS_STRING(value);
   vm::StringView view = vm::StringPrimitive::createStringView(
       runtime_, makeHandle<vm::StringPrimitive>(value));
 
@@ -3840,8 +4408,9 @@ napi_status NodeApiEnvironment::getStringValueUTF16(
     char16_t *buf,
     size_t bufSize,
     size_t *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this};
-  CHECK_STRING_ARG(value);
+  CHECK_ARG_IS_STRING(value);
   vm::StringView view = vm::StringPrimitive::createStringView(
       runtime_, makeHandle<vm::StringPrimitive>(value));
 
@@ -3886,14 +4455,14 @@ napi_status NodeApiEnvironment::getUniqueSymbolID(
     size_t length,
     vm::MutableHandle<vm::SymbolID> *result) noexcept {
   napi_value strValue;
-  CHECK_NAPI(createStringUTF8(utf8, length, &strValue));
+  CHECK_STATUS(createStringUTF8(utf8, length, &strValue));
   return getUniqueSymbolID(strValue, result);
 }
 
 napi_status NodeApiEnvironment::getUniqueSymbolID(
     napi_value strValue,
     vm::MutableHandle<vm::SymbolID> *result) noexcept {
-  CHECK_STRING_ARG(strValue);
+  CHECK_ARG_IS_STRING(strValue);
   return setResult(
       vm::stringToSymbolID(
           runtime_, vm::createPseudoHandle(phv(strValue)->getString())),
@@ -3907,10 +4476,11 @@ napi_status NodeApiEnvironment::getUniqueSymbolID(
 napi_status NodeApiEnvironment::createSymbol(
     napi_value description,
     napi_value *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
   vm::MutableHandle<vm::StringPrimitive> descString{runtime_};
   if (description != nullptr) {
-    CHECK_STRING_ARG(description);
+    CHECK_ARG_IS_STRING(description);
     descString = phv(description)->getString();
   } else {
     // If description is undefined, the descString will eventually be "".
@@ -3920,6 +4490,18 @@ napi_status NodeApiEnvironment::createSymbol(
       runtime_, descString));
 }
 
+napi_status NodeApiEnvironment::symbolFor(
+    const char *utf8description,
+    size_t length,
+    napi_value *result) noexcept {
+  checkGCAccess();
+  NodeApiHandleScope scope{*this, result};
+  napi_value key{};
+  CHECK_STATUS(createStringUTF8(utf8description, length, &key));
+  return scope.setResult(runtime_.getSymbolRegistry().getSymbolForKey(
+      runtime_, makeHandle<vm::StringPrimitive>(key)));
+}
+
 //-----------------------------------------------------------------------------
 // Methods to work with BigInt
 //-----------------------------------------------------------------------------
@@ -3927,6 +4509,7 @@ napi_status NodeApiEnvironment::createSymbol(
 napi_status NodeApiEnvironment::createBigIntFromInt64(
     int64_t value,
     napi_value *result) {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
   return scope.setResult(vm::BigIntPrimitive::fromSigned(runtime_, value));
 }
@@ -3934,6 +4517,7 @@ napi_status NodeApiEnvironment::createBigIntFromInt64(
 napi_status NodeApiEnvironment::createBigIntFromUint64(
     uint64_t value,
     napi_value *result) {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
   return scope.setResult(vm::BigIntPrimitive::fromUnsigned(runtime_, value));
 }
@@ -3943,6 +4527,7 @@ napi_status NodeApiEnvironment::createBigIntFromWords(
     size_t wordCount,
     const uint64_t *words,
     napi_value *result) {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(words);
   RETURN_STATUS_IF_FALSE(wordCount <= INT_MAX, napi_invalid_arg);
@@ -3974,6 +4559,7 @@ napi_status NodeApiEnvironment::getBigIntValueInt64(
     napi_value value,
     int64_t *result,
     bool *lossless) {
+  checkGCAccess();
   CHECK_ARG(value);
   CHECK_ARG(result);
   CHECK_ARG(lossless);
@@ -3989,6 +4575,7 @@ napi_status NodeApiEnvironment::getBigIntValueUint64(
     napi_value value,
     uint64_t *result,
     bool *lossless) {
+  checkGCAccess();
   CHECK_ARG(value);
   CHECK_ARG(result);
   CHECK_ARG(lossless);
@@ -4005,6 +4592,7 @@ napi_status NodeApiEnvironment::getBigIntValueWords(
     int *signBit,
     size_t *wordCount,
     uint64_t *words) {
+  checkGCAccess();
   CHECK_ARG(value);
   CHECK_ARG(wordCount);
   RETURN_STATUS_IF_FALSE(phv(value)->isBigInt(), napi_bigint_expected);
@@ -4044,7 +4632,7 @@ napi_status NodeApiEnvironment::getBigIntValueWords(
 napi_status NodeApiEnvironment::coerceToBoolean(
     napi_value value,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(value);
   return scope.setResult(vm::toBoolean(*phv(value)));
@@ -4053,7 +4641,7 @@ napi_status NodeApiEnvironment::coerceToBoolean(
 napi_status NodeApiEnvironment::coerceToNumber(
     napi_value value,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(value);
   return scope.setResult(vm::toNumber_RJS(runtime_, makeHandle(value)));
@@ -4062,7 +4650,7 @@ napi_status NodeApiEnvironment::coerceToNumber(
 napi_status NodeApiEnvironment::coerceToObject(
     napi_value value,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(value);
   return scope.setResult(vm::toObject(runtime_, makeHandle(value)));
@@ -4071,7 +4659,7 @@ napi_status NodeApiEnvironment::coerceToObject(
 napi_status NodeApiEnvironment::coerceToString(
     napi_value value,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(value);
   return scope.setResult(vm::toString_RJS(runtime_, makeHandle(value)));
@@ -4082,6 +4670,7 @@ napi_status NodeApiEnvironment::coerceToString(
 //-----------------------------------------------------------------------------
 
 napi_status NodeApiEnvironment::createObject(napi_value *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
   return scope.setResult(vm::JSObject::create(runtime_));
 }
@@ -4089,10 +4678,10 @@ napi_status NodeApiEnvironment::createObject(napi_value *result) noexcept {
 napi_status NodeApiEnvironment::getPrototype(
     napi_value object,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   napi_value objValue{};
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return scope.setResult(
       vm::JSObject::getPrototypeOf(
           vm::createPseudoHandle(getObjectUnsafe(objValue)), runtime_));
@@ -4101,10 +4690,10 @@ napi_status NodeApiEnvironment::getPrototype(
 napi_status NodeApiEnvironment::getForInPropertyNames(
     napi_value object,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return scope.setResult(
       getForInPropertyNames(objValue, napi_key_numbers_to_strings, result));
 }
@@ -4120,7 +4709,7 @@ napi_status NodeApiEnvironment::getForInPropertyNames(
   vm::CallResult<vm::Handle<vm::BigStorage>> keyStorage =
       vm::getForInPropertyNames(
           runtime_, makeHandle<vm::JSObject>(object), beginIndex, endIndex);
-  CHECK_NAPI(checkJSErrorStatus(keyStorage));
+  CHECK_STATUS(checkJSErrorStatus(keyStorage));
   return convertKeyStorageToArray(
       *keyStorage, beginIndex, endIndex - beginIndex, keyConversion, result);
 }
@@ -4131,11 +4720,11 @@ napi_status NodeApiEnvironment::getAllPropertyNames(
     napi_key_filter keyFilter,
     napi_key_conversion keyConversion,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
 
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   RETURN_STATUS_IF_FALSE(
       isInEnumRange(keyMode, napi_key_include_prototypes, napi_key_own_only),
       napi_invalid_arg);
@@ -4145,10 +4734,10 @@ napi_status NodeApiEnvironment::getAllPropertyNames(
       napi_invalid_arg);
 
   // We can use optimized code if object has no parent.
-  bool hasParent;
-  {
-    napi_value parent;
-    CHECK_NAPI(getPrototype(object, &parent));
+  bool hasParent = false;
+  if (keyMode == napi_key_include_prototypes) {
+    napi_value parent{};
+    CHECK_STATUS(getPrototype(object, &parent));
     hasParent = phv(parent)->isObject();
   }
 
@@ -4176,9 +4765,9 @@ napi_status NodeApiEnvironment::getAllPropertyNames(
             runtime_,
             ownKeyFlags.setIncludeNonEnumerable(
                 (keyFilter & napi_key_enumerable) == 0));
-    CHECK_NAPI(checkJSErrorStatus(ownKeysRes));
+    CHECK_STATUS(checkJSErrorStatus(ownKeysRes));
     if (keyConversion == napi_key_numbers_to_strings) {
-      CHECK_NAPI(convertToStringKeys(*ownKeysRes));
+      CHECK_STATUS(convertToStringKeys(*ownKeysRes));
     }
     return scope.setResult(std::move(*ownKeysRes));
   }
@@ -4186,12 +4775,12 @@ napi_status NodeApiEnvironment::getAllPropertyNames(
   // Collect all properties into the keyStorage.
   vm::CallResult<vm::MutableHandle<vm::BigStorage>> keyStorageRes =
       makeMutableHandle(vm::BigStorage::create(runtime_, 16));
-  CHECK_NAPI(checkJSErrorStatus(keyStorageRes));
+  CHECK_STATUS(checkJSErrorStatus(keyStorageRes));
   uint32_t size{0};
 
   // Make sure that we do not include into the result properties that were
   // shadowed by the derived objects.
-  bool useShadowTracking = keyMode == napi_key_include_prototypes && hasParent;
+  bool useParentChain = keyMode == napi_key_include_prototypes && hasParent;
   NodeApiOrderedSet<uint32_t> shadowIndexes;
   NodeApiOrderedSet<vm::HermesValue> shadowStrings(
       *this, [](const vm::HermesValue &item1, const vm::HermesValue &item2) {
@@ -4221,15 +4810,15 @@ napi_status NodeApiEnvironment::getAllPropertyNames(
 
     vm::CallResult<vm::Handle<vm::JSArray>> props =
         vm::JSObject::getOwnPropertyKeys(currentObj, runtime_, ownKeyFlags);
-    CHECK_NAPI(checkJSErrorStatus(props));
+    CHECK_STATUS(checkJSErrorStatus(props));
 
     vm::GCScope::Marker marker = gcScope.createMarker();
     for (uint32_t i = 0, end = props.getValue()->getEndIndex(); i < end; ++i) {
       gcScope.flushToMarker(marker);
       prop = props.getValue()->at(runtime_, i).unboxToHV(runtime_);
 
-      // Do not add a property if it is overriden in the derived object.
-      if (useShadowTracking) {
+      // Do not add a property if it is overridden in the derived object.
+      if (useParentChain) {
         if (prop->isString()) {
           propString = vm::Handle<vm::StringPrimitive>::vmcast(prop);
           // See if the property name is an index
@@ -4269,7 +4858,7 @@ napi_status NodeApiEnvironment::getAllPropertyNames(
                 vm::JSObject::IgnoreProxy::No,
                 tmpSymbolStorage,
                 desc);
-        CHECK_NAPI(checkJSErrorStatus(hasDescriptorRes));
+        CHECK_STATUS(checkJSErrorStatus(hasDescriptorRes));
         if (*hasDescriptorRes) {
           if ((keyFilter & napi_key_writable) != 0 && !desc.flags.writable) {
             continue;
@@ -4285,15 +4874,20 @@ napi_status NodeApiEnvironment::getAllPropertyNames(
         }
       }
 
-      CHECK_NAPI(checkJSErrorStatus(
+      CHECK_STATUS(checkJSErrorStatus(
           vm::BigStorage::push_back(*keyStorageRes, runtime_, prop)));
       ++size;
+    }
+
+    if (!useParentChain) {
+      // Do not follow the prototype chain.
+      break;
     }
 
     // Continue to follow the prototype chain.
     vm::CallResult<vm::PseudoHandle<vm::JSObject>> parentRes =
         vm::JSObject::getPrototypeOf(currentObj, runtime_);
-    CHECK_NAPI(checkJSErrorStatus(parentRes));
+    CHECK_STATUS(checkJSErrorStatus(parentRes));
     currentObj = std::move(*parentRes);
   }
 
@@ -4309,7 +4903,7 @@ napi_status NodeApiEnvironment::convertKeyStorageToArray(
     napi_value *result) noexcept {
   vm::CallResult<vm::Handle<vm::JSArray>> res =
       vm::JSArray::create(runtime_, length, length);
-  CHECK_NAPI(checkJSErrorStatus(res));
+  CHECK_STATUS(checkJSErrorStatus(res));
   vm::Handle<vm::JSArray> array = *res;
   if (keyConversion == napi_key_numbers_to_strings) {
     vm::GCScopeMarkerRAII marker{runtime_};
@@ -4317,7 +4911,7 @@ napi_status NodeApiEnvironment::convertKeyStorageToArray(
     for (size_t i = 0; i < length; ++i) {
       key = makeHandle(keyStorage->at(runtime_, startIndex + i));
       if (key->isNumber()) {
-        CHECK_NAPI(convertIndexToString(key->getNumber(), &key));
+        CHECK_STATUS(convertIndexToString(key->getNumber(), &key));
       }
       vm::JSArray::setElementAt(array, runtime_, i, key);
       marker.flush();
@@ -4346,7 +4940,7 @@ napi_status NodeApiEnvironment::convertToStringKeys(
     vm::HermesValue key = array->at(runtime_, i).unboxToHV(runtime_);
     if (LLVM_UNLIKELY(key.isNumber())) {
       vm::MutableHandle<> strKey{runtime_};
-      CHECK_NAPI(convertIndexToString(key.getNumber(), &strKey));
+      CHECK_STATUS(convertIndexToString(key.getNumber(), &strKey));
       vm::JSArray::setElementAt(array, runtime_, i, strKey);
       marker.flush();
     }
@@ -4367,11 +4961,11 @@ napi_status NodeApiEnvironment::hasProperty(
     napi_value object,
     napi_value key,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   CHECK_ARG(key);
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return hasComputedProperty(objValue, key, result);
 }
 
@@ -4379,11 +4973,11 @@ napi_status NodeApiEnvironment::getProperty(
     napi_value object,
     napi_value key,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(key);
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return scope.setResult(getComputedProperty(objValue, key, result));
 }
 
@@ -4391,12 +4985,12 @@ napi_status NodeApiEnvironment::setProperty(
     napi_value object,
     napi_value key,
     napi_value value) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   CHECK_ARG(key);
   CHECK_ARG(value);
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return setComputedProperty(objValue, key, value);
 }
 
@@ -4404,11 +4998,11 @@ napi_status NodeApiEnvironment::deleteProperty(
     napi_value object,
     napi_value key,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   CHECK_ARG(key);
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return deleteComputedProperty(objValue, key, result);
 }
 
@@ -4416,7 +5010,7 @@ napi_status NodeApiEnvironment::hasOwnProperty(
     napi_value object,
     napi_value key,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   CHECK_ARG(key);
   CHECK_ARG(result);
   RETURN_STATUS_IF_FALSE(
@@ -4424,7 +5018,7 @@ napi_status NodeApiEnvironment::hasOwnProperty(
 
   NodeApiHandleScope scope{*this};
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   vm::MutableHandle<vm::SymbolID> tmpSymbolStorage{runtime_};
   vm::ComputedPropertyDescriptor desc;
   return getOwnComputedPropertyDescriptor(
@@ -4435,12 +5029,12 @@ napi_status NodeApiEnvironment::hasNamedProperty(
     napi_value object,
     const char *utf8Name,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   CHECK_ARG(utf8Name);
   napi_value objValue, name;
-  CHECK_NAPI(coerceToObject(object, &objValue));
-  CHECK_NAPI(createStringUTF8(utf8Name, &name));
+  CHECK_STATUS(coerceToObject(object, &objValue));
+  CHECK_STATUS(createStringUTF8(utf8Name, &name));
   return hasComputedProperty(objValue, name, result);
 }
 
@@ -4448,12 +5042,12 @@ napi_status NodeApiEnvironment::getNamedProperty(
     napi_value object,
     const char *utf8Name,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(utf8Name);
   napi_value objValue, name;
-  CHECK_NAPI(coerceToObject(object, &objValue));
-  CHECK_NAPI(createStringUTF8(utf8Name, &name));
+  CHECK_STATUS(coerceToObject(object, &objValue));
+  CHECK_STATUS(createStringUTF8(utf8Name, &name));
   return scope.setResult(getComputedProperty(objValue, name, result));
 }
 
@@ -4461,13 +5055,13 @@ napi_status NodeApiEnvironment::setNamedProperty(
     napi_value object,
     const char *utf8Name,
     napi_value value) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   CHECK_ARG(utf8Name);
   CHECK_ARG(value);
   napi_value objValue, name;
-  CHECK_NAPI(coerceToObject(object, &objValue));
-  CHECK_NAPI(createStringUTF8(utf8Name, &name));
+  CHECK_STATUS(coerceToObject(object, &objValue));
+  CHECK_STATUS(createStringUTF8(utf8Name, &name));
   return setComputedProperty(objValue, name, value);
 }
 
@@ -4475,22 +5069,22 @@ napi_status NodeApiEnvironment::defineProperties(
     napi_value object,
     size_t propertyCount,
     const napi_property_descriptor *properties) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
-  CHECK_OBJECT_ARG(object);
+  CHECK_ARG_IS_OBJECT(object);
   if (propertyCount > 0) {
     CHECK_ARG(properties);
   }
 
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   vm::Handle<vm::JSObject> objHandle = makeHandle<vm::JSObject>(objValue);
   vm::MutableHandle<vm::SymbolID> name{runtime_};
   vm::GCScopeMarkerRAII marker{runtime_};
   for (size_t i = 0; i < propertyCount; ++i) {
     marker.flush();
     const napi_property_descriptor *p = &properties[i];
-    CHECK_NAPI(symbolIDFromPropertyDescriptor(p, &name));
+    CHECK_STATUS(symbolIDFromPropertyDescriptor(p, &name));
 
     vm::DefinePropertyFlags dpFlags{};
     dpFlags.setEnumerable = 1;
@@ -4504,7 +5098,7 @@ napi_status NodeApiEnvironment::defineProperties(
 
       if (p->getter != nullptr) {
         dpFlags.setGetter = 1;
-        CHECK_NAPI(createFunction(
+        CHECK_STATUS(createFunction(
             vm::Predefined::getSymbolID(vm::Predefined::get),
             p->getter,
             p->data,
@@ -4512,7 +5106,7 @@ napi_status NodeApiEnvironment::defineProperties(
       }
       if (p->setter != nullptr) {
         dpFlags.setSetter = 1;
-        CHECK_NAPI(createFunction(
+        CHECK_STATUS(createFunction(
             vm::Predefined::getSymbolID(vm::Predefined::set),
             p->setter,
             p->data,
@@ -4521,8 +5115,8 @@ napi_status NodeApiEnvironment::defineProperties(
 
       vm::CallResult<vm::HermesValue> propRes =
           vm::PropertyAccessor::create(runtime_, localGetter, localSetter);
-      CHECK_NAPI(checkJSErrorStatus(propRes));
-      CHECK_NAPI(defineOwnProperty(
+      CHECK_STATUS(checkJSErrorStatus(propRes));
+      CHECK_STATUS(defineOwnProperty(
           objHandle, *name, dpFlags, makeHandle(*propRes), nullptr));
     } else {
       dpFlags.setValue = 1;
@@ -4530,17 +5124,17 @@ napi_status NodeApiEnvironment::defineProperties(
       dpFlags.writable = (p->attributes & napi_writable) == 0 ? 0 : 1;
       if (p->method != nullptr) {
         vm::MutableHandle<vm::Callable> method{runtime_};
-        CHECK_NAPI(createFunction(name.get(), p->method, p->data, &method));
-        CHECK_NAPI(
+        CHECK_STATUS(createFunction(name.get(), p->method, p->data, &method));
+        CHECK_STATUS(
             defineOwnProperty(objHandle, *name, dpFlags, method, nullptr));
       } else {
-        CHECK_NAPI(defineOwnProperty(
+        CHECK_STATUS(defineOwnProperty(
             objHandle, *name, dpFlags, makeHandle(p->value), nullptr));
       }
     }
   }
 
-  return processFinalizerQueue();
+  return processFinalizerQueueFromCode();
 }
 
 napi_status NodeApiEnvironment::symbolIDFromPropertyDescriptor(
@@ -4564,19 +5158,19 @@ napi_status NodeApiEnvironment::symbolIDFromPropertyDescriptor(
 }
 
 napi_status NodeApiEnvironment::objectFreeze(napi_value object) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return checkJSErrorStatus(
       vm::JSObject::freeze(makeHandle<vm::JSObject>(objValue), runtime_));
 }
 
 napi_status NodeApiEnvironment::objectSeal(napi_value object) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return checkJSErrorStatus(
       vm::JSObject::seal(makeHandle<vm::JSObject>(objValue), runtime_));
 }
@@ -4588,6 +5182,7 @@ napi_status NodeApiEnvironment::objectSeal(napi_value object) noexcept {
 napi_status NodeApiEnvironment::createArray(
     size_t length,
     napi_value *result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this, result};
   return scope.setResult(
       vm::JSArray::create(runtime_, /*capacity:*/ length, /*length:*/ length));
@@ -4596,6 +5191,7 @@ napi_status NodeApiEnvironment::createArray(
 napi_status NodeApiEnvironment::isArray(
     napi_value value,
     bool *result) noexcept {
+  checkGCAccess();
   CHECK_ARG(value);
   return setResult(vm::vmisa<vm::JSArray>(*phv(value)), result);
 }
@@ -4603,13 +5199,13 @@ napi_status NodeApiEnvironment::isArray(
 napi_status NodeApiEnvironment::getArrayLength(
     napi_value value,
     uint32_t *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   CHECK_ARG(value);
   RETURN_STATUS_IF_FALSE(
       vm::vmisa<vm::JSArray>(*phv(value)), napi_array_expected);
   napi_value res;
-  CHECK_NAPI(getNamedProperty(
+  CHECK_STATUS(getNamedProperty(
       value, vm::Predefined::getSymbolID(vm::Predefined::length), &res));
   RETURN_STATUS_IF_FALSE(phv(res)->isNumber(), napi_number_expected);
   return setResult(
@@ -4620,10 +5216,10 @@ napi_status NodeApiEnvironment::hasElement(
     napi_value object,
     uint32_t index,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return hasComputedProperty(objValue, index, result);
 }
 
@@ -4631,10 +5227,10 @@ napi_status NodeApiEnvironment::getElement(
     napi_value object,
     uint32_t index,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return scope.setResult(getComputedProperty(objValue, index, result));
 }
 
@@ -4642,11 +5238,11 @@ napi_status NodeApiEnvironment::setElement(
     napi_value object,
     uint32_t index,
     napi_value value) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   CHECK_ARG(value);
   NodeApiHandleScope scope{*this};
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return setComputedProperty(objValue, index, value);
 }
 
@@ -4654,10 +5250,10 @@ napi_status NodeApiEnvironment::deleteElement(
     napi_value object,
     uint32_t index,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
   return deleteComputedProperty(objValue, index, result);
 }
 
@@ -4671,17 +5267,18 @@ napi_status NodeApiEnvironment::createFunction(
     napi_callback callback,
     void *callbackData,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
-  NodeApiHandleScope scope{*this, result};
+  CHECK_STATUS(checkPreconditions());
   CHECK_ARG(callback);
+  NodeApiHandleScope scope{*this, result};
   vm::MutableHandle<vm::SymbolID> nameSymbolID{runtime_};
   if (utf8Name != nullptr) {
-    CHECK_NAPI(getUniqueSymbolID(utf8Name, length, &nameSymbolID));
+    CHECK_STATUS(getUniqueSymbolID(utf8Name, length, &nameSymbolID));
   } else {
     nameSymbolID = getPredefinedSymbol(NodeApiPredefined::hostFunction);
   }
   vm::MutableHandle<vm::Callable> func{runtime_};
-  CHECK_NAPI(createFunction(nameSymbolID.get(), callback, callbackData, &func));
+  CHECK_STATUS(
+      createFunction(nameSymbolID.get(), callback, callbackData, &func));
   return scope.setResult(func.getHermesValue());
 }
 
@@ -4690,6 +5287,7 @@ napi_status NodeApiEnvironment::createFunction(
     napi_callback callback,
     void *callbackData,
     vm::MutableHandle<vm::Callable> *result) noexcept {
+  CHECK_STATUS(checkPreconditions());
   std::unique_ptr<NodeApiHostFunctionContext> context =
       std::make_unique<NodeApiHostFunctionContext>(
           *this, callback, callbackData);
@@ -4701,7 +5299,7 @@ napi_status NodeApiEnvironment::createFunction(
           &NodeApiHostFunctionContext::finalize,
           name,
           /*paramCount:*/ 0);
-  CHECK_NAPI(checkJSErrorStatus(funcRes));
+  CHECK_STATUS(checkJSErrorStatus(funcRes));
   context.release(); // the context is now owned by the func.
   return setResult(makeHandle<vm::Callable>(*funcRes), result);
 }
@@ -4712,7 +5310,7 @@ napi_status NodeApiEnvironment::callFunction(
     size_t argCount,
     const napi_value *args,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
 
   CHECK_ARG(thisArg);
@@ -4723,7 +5321,7 @@ napi_status NodeApiEnvironment::callFunction(
   RETURN_STATUS_IF_FALSE(vm::vmisa<vm::Callable>(*phv(func)), napi_invalid_arg);
   vm::Handle<vm::Callable> funcHandle = makeHandle<vm::Callable>(func);
 
-  if (argCount >= static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+  if (argCount >= std::numeric_limits<uint32_t>::max() ||
       !runtime_.checkAvailableStack(static_cast<uint32_t>(argCount))) {
     return GENERIC_FAILURE("Unable to call function: stack overflow");
   }
@@ -4732,10 +5330,10 @@ napi_status NodeApiEnvironment::callFunction(
       runtime_,
       static_cast<uint32_t>(argCount),
       funcHandle.getHermesValue(),
-      /*newTarget:*/ vm::HermesValue::encodeUndefinedValue(),
+      /*newTarget:*/ getUndefined(),
       *phv(thisArg)};
   if (LLVM_UNLIKELY(newFrame.overflowed())) {
-    CHECK_NAPI(checkJSErrorStatus(runtime_.raiseStackOverflow(
+    CHECK_STATUS(checkJSErrorStatus(runtime_.raiseStackOverflow(
         vm::Runtime::StackOverflowKind::NativeStack)));
   }
 
@@ -4744,7 +5342,7 @@ napi_status NodeApiEnvironment::callFunction(
   }
   vm::CallResult<vm::PseudoHandle<>> callRes =
       vm::Callable::call(funcHandle, runtime_);
-  CHECK_NAPI(checkJSErrorStatus(callRes, napi_pending_exception));
+  CHECK_STATUS(checkJSErrorStatus(callRes, napi_pending_exception));
 
   if (result) {
     RETURN_FAILURE_IF_FALSE(!callRes->get().isEmpty());
@@ -4758,7 +5356,7 @@ napi_status NodeApiEnvironment::createNewInstance(
     size_t argCount,
     const napi_value *args,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
 
   CHECK_ARG(constructor);
@@ -4790,7 +5388,7 @@ napi_status NodeApiEnvironment::createNewInstance(
   // Note that 13.2.2.1-4 are also handled by the call to newObject.
   vm::CallResult<vm::PseudoHandle<vm::JSObject>> thisRes =
       vm::Callable::createThisForConstruct_RJS(ctorHandle, runtime_);
-  CHECK_NAPI(checkJSErrorStatus(thisRes));
+  CHECK_STATUS(checkJSErrorStatus(thisRes));
   // We need to capture this in case the ctor doesn't return an object,
   // we need to return this object.
   vm::Handle<vm::JSObject> thisHandle = makeHandle(std::move(*thisRes));
@@ -4809,7 +5407,7 @@ napi_status NodeApiEnvironment::createNewInstance(
       ctorHandle.getHermesValue(),
       thisHandle.getHermesValue()};
   if (LLVM_UNLIKELY(newFrame.overflowed())) {
-    CHECK_NAPI(checkJSErrorStatus(runtime_.raiseStackOverflow(
+    CHECK_STATUS(checkJSErrorStatus(runtime_.raiseStackOverflow(
         vm::Runtime::StackOverflowKind::NativeStack)));
   }
   for (size_t i = 0; i < argCount; ++i) {
@@ -4818,7 +5416,7 @@ napi_status NodeApiEnvironment::createNewInstance(
   // The last parameter indicates that this call should construct an object.
   vm::CallResult<vm::PseudoHandle<>> callRes =
       vm::Callable::call(ctorHandle, runtime_);
-  CHECK_NAPI(checkJSErrorStatus(callRes, napi_pending_exception));
+  CHECK_STATUS(checkJSErrorStatus(callRes, napi_pending_exception));
 
   // 13.2.2.9:
   //    If Type(result) is Object then return result
@@ -4834,14 +5432,13 @@ napi_status NodeApiEnvironment::isInstanceOf(
     napi_value object,
     napi_value constructor,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
 
   CHECK_ARG(object);
   CHECK_ARG(constructor);
-  CHECK_ARG(result);
   napi_value ctorValue;
-  CHECK_NAPI(coerceToObject(constructor, &ctorValue));
+  CHECK_STATUS(coerceToObject(constructor, &ctorValue));
   if (!vm::vmisa<vm::Callable>(*phv(ctorValue))) {
     throwJSTypeError(
         "ERR_NAPI_CONS_FUNCTION", "Constructor must be a function");
@@ -4854,19 +5451,57 @@ napi_status NodeApiEnvironment::isInstanceOf(
       result);
 }
 
-template <class TLambda>
+// This error handler propagates the exception to the JavaScript
+// environment, so it can be handled by the JavaScript code.
+// If the environment is already terminating, it does nothing.
+void NodeApiEnvironment::rethrowException(
+    NodeApiEnvironment *env,
+    const vm::PinnedHermesValue *error) noexcept {
+  if (env->isTerminatedOrTerminating_) {
+    return;
+  }
+  env->runtime_.setThrownValue(*error);
+}
+
+// This error handler is used when the exception cannot be handled from
+// JavaScript. It triggers a fatal exception in the environment, which may lead
+// to the termination of the process. If the environment is already terminating,
+// it does nothing.
+void NodeApiEnvironment::triggerUnhandledException(
+    NodeApiEnvironment *env,
+    const vm::PinnedHermesValue *error) noexcept {
+  if (env->isTerminatedOrTerminating_) {
+    return;
+  }
+  env->triggerFatalException(error);
+}
+
+template <class TLambda, class TExceptionHandler>
 vm::ExecutionStatus NodeApiEnvironment::callIntoModule(
-    TLambda &&call) noexcept {
+    TLambda &&call,
+    TExceptionHandler &&exceptionHandler) noexcept {
+  CurrentEnvironmentScope envScope(this);
   size_t openHandleScopesBefore = napiValueStackScopes_.size();
   clearLastNativeError();
   call(this);
   CRASH_IF_FALSE(openHandleScopesBefore == napiValueStackScopes_.size());
+
   if (!thrownJSError_.isEmpty()) {
-    runtime_.setThrownValue(thrownJSError_);
+    exceptionHandler(this, &thrownJSError_);
     thrownJSError_ = EmptyHermesValue;
   }
   return runtime_.getThrownValue().isEmpty() ? vm::ExecutionStatus::RETURNED
                                              : vm::ExecutionStatus::EXCEPTION;
+}
+
+void NodeApiEnvironment::triggerFatalException(
+    const vm::PinnedHermesValue *error) noexcept {
+  if (parentEnvironment_ != nullptr) {
+    // The fatal exception must be triggered in the parent environment.
+    parentEnvironment_->triggerFatalException(error);
+    return;
+  }
+  unhandledErrorCallback_(napiEnv(this), napiValue(error));
 }
 
 //-----------------------------------------------------------------------------
@@ -5074,7 +5709,7 @@ napi_status NodeApiEnvironment::strictEquals(
     napi_value lhs,
     napi_value rhs,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   CHECK_ARG(lhs);
   CHECK_ARG(rhs);
   vm::HermesValue::Tag lhsTag = phv(lhs)->getTag();
@@ -5113,7 +5748,7 @@ napi_status NodeApiEnvironment::defineClass(
     size_t propertyCount,
     const napi_property_descriptor *properties,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
 
   CHECK_ARG(constructor);
@@ -5122,7 +5757,7 @@ napi_status NodeApiEnvironment::defineClass(
   }
 
   vm::MutableHandle<vm::SymbolID> nameHandle{runtime_};
-  CHECK_NAPI(getUniqueSymbolID(utf8Name, length, &nameHandle));
+  CHECK_STATUS(getUniqueSymbolID(utf8Name, length, &nameHandle));
 
   vm::Handle<vm::JSObject> parentHandle =
       vm::Handle<vm::JSObject>::vmcast(&runtime_.functionPrototype);
@@ -5152,7 +5787,7 @@ napi_status NodeApiEnvironment::defineClass(
           vm::Predefined::InternalPropertyArrayBufferExternalFinalizer),
       vm::DefinePropertyFlags::getDefaultNewPropertyFlags(),
       runtime_.makeHandle(ns));
-  CHECK_NAPI(checkJSErrorStatus(res));
+  CHECK_STATUS(checkJSErrorStatus(res));
   RETURN_STATUS_IF_FALSE_WITH_MESSAGE(
       *res, napi_generic_failure, "Cannot set external finalizer for a class");
 
@@ -5166,14 +5801,14 @@ napi_status NodeApiEnvironment::defineClass(
       prototypeHandle,
       vm::Callable::WritablePrototype::Yes,
       /*strictMode*/ false);
-  CHECK_NAPI(checkJSErrorStatus(st));
+  CHECK_STATUS(checkJSErrorStatus(st));
 
   for (size_t i = 0; i < propertyCount; ++i) {
     const napi_property_descriptor *p = properties + i;
     if ((p->attributes & napi_static) != 0) {
-      CHECK_NAPI(defineProperties(napiValue(classHandle), 1, p));
+      CHECK_STATUS(defineProperties(napiValue(classHandle), 1, p));
     } else {
-      CHECK_NAPI(defineProperties(napiValue(prototypeHandle), 1, p));
+      CHECK_STATUS(defineProperties(napiValue(prototypeHandle), 1, p));
     }
   }
 
@@ -5186,35 +5821,48 @@ napi_status NodeApiEnvironment::wrapObject(
     node_api_basic_finalize finalizeCallback,
     void *finalizeHint,
     napi_ref *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
 
-  CHECK_OBJECT_ARG(object);
-  if (result != nullptr) {
-    // The returned reference should be deleted via napi_delete_reference()
-    // ONLY in response to the finalize callback invocation. (If it is deleted
-    // before that, then the finalize callback will never be invoked.)
-    // Therefore a finalize callback is required when returning a reference.
-    CHECK_ARG(finalizeCallback);
-  }
+  CHECK_ARG_IS_OBJECT(object);
 
   // If we've already wrapped this object, we error out.
   NodeApiExternalValue *externalValue;
-  CHECK_NAPI(getExternalPropertyValue(
+  CHECK_STATUS(getExternalPropertyValue(
       object, NodeApiIfNotFound::ThenCreate, &externalValue));
   RETURN_STATUS_IF_FALSE(!externalValue->nativeData(), napi_invalid_arg);
 
-  NodeApiReference *reference;
-  CHECK_NAPI(
-      NodeApiFinalizingComplexReference::create(
-          *this,
-          0,
-          /*deleteSelf*/ result == nullptr,
-          phv(object),
-          nativeData,
-          basicFinalize(finalizeCallback),
-          finalizeHint,
-          reinterpret_cast<NodeApiFinalizingComplexReference **>(&reference)));
+  NodeApiReference *reference = nullptr;
+  if (result != nullptr) {
+    // The returned reference should be deleted via napi_delete_reference()
+    // ONLY in response to the finalize callback invocation. (If it is deleted
+    // before then, then the finalize callback will never be invoked.)
+    // Therefore a finalize callback is required when returning a reference.
+    CHECK_ARG(finalizeCallback);
+    reference = NodeApiReferenceWithFinalizer::create(
+        *this,
+        phv(object),
+        0,
+        NodeApiReferenceOwnership::kUserland,
+        nativeData,
+        reinterpret_cast<napi_finalize>(finalizeCallback),
+        finalizeHint);
+  } else if (finalizeCallback != nullptr) {
+    // Create a self-deleting reference.
+    reference = NodeApiReferenceWithFinalizer::create(
+        *this,
+        phv(object),
+        0,
+        NodeApiReferenceOwnership::kRuntime,
+        nativeData,
+        basicFinalize(finalizeCallback),
+        finalizeHint);
+  } else {
+    // Create a self-deleting reference.
+    reference = NodeApiReferenceWithData::create(
+        *this, phv(object), 0, NodeApiReferenceOwnership::kRuntime, nativeData);
+  }
+
   externalValue->setNativeData(reference);
   return setOptionalResult(reinterpret_cast<napi_ref>(reference), result);
 }
@@ -5225,47 +5873,67 @@ napi_status NodeApiEnvironment::addFinalizer(
     node_api_basic_finalize finalizeCallback,
     void *finalizeHint,
     napi_ref *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
+  CHECK_ARG_IS_OBJECT(object);
+  CHECK_ARG(finalizeCallback);
+
   NodeApiHandleScope scope{*this};
 
-  CHECK_OBJECT_ARG(object);
+  // Create a self-deleting reference if the optional out-param result is not
+  // set.
+  NodeApiReferenceOwnership ownership = result == nullptr
+      ? NodeApiReferenceOwnership::kRuntime
+      : NodeApiReferenceOwnership::kUserland;
+  NodeApiReference *reference = NodeApiReferenceWithFinalizer::create(
+      *this,
+      phv(object),
+      0,
+      ownership,
+      nativeData,
+      basicFinalize(finalizeCallback),
+      finalizeHint);
+  return setOptionalResult(reinterpret_cast<napi_ref>(reference), result);
+}
+
+// This method is called from Node-API to schedule finalizers that may run code
+// that may call back to JS engine and affect GC state.
+// It is currently the NAPI_EXPERIMENTAL
+napi_status NodeApiEnvironment::postFinalizer(
+    napi_finalize finalizeCallback,
+    void *finalizeData,
+    void *finalizeHint) noexcept {
   CHECK_ARG(finalizeCallback);
-  if (result != nullptr) {
-    return NodeApiFinalizingComplexReference::create(
-        *this,
-        0,
-        /*deleteSelf:*/ false,
-        phv(object),
-        nativeData,
-        basicFinalize(finalizeCallback),
-        finalizeHint,
-        reinterpret_cast<NodeApiFinalizingComplexReference **>(result));
-  } else {
-    return NodeApiFinalizingAnonymousReference::create(
-        *this,
-        phv(object),
-        nativeData,
-        basicFinalize(finalizeCallback),
-        finalizeHint,
-        nullptr);
+
+  // Create NodeApiTrackedFinalizer and add to task runner queue
+  NodeApiTrackedFinalizer *finalizer = NodeApiTrackedFinalizer::create(
+      *this, finalizeData, finalizeCallback, finalizeHint);
+  if (finalizer == nullptr) {
+    return setLastNativeError(
+        napi_generic_failure, __FILE__, __LINE__, "Failed to create finalizer");
   }
+
+  // Always enqueue to task runner queue regardless of API version
+  // node_api_post_finalizer explicitly allows JS-accessing finalizers
+  enqueueFinalizer(finalizer);
+
+  return clearLastNativeError();
 }
 
 template <NodeApiUnwrapAction action>
 napi_status NodeApiEnvironment::unwrapObject(
     napi_value object,
     void **result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
 
-  CHECK_OBJECT_ARG(object);
+  CHECK_ARG_IS_OBJECT(object);
   if /*constexpr*/ (action == NodeApiUnwrapAction::KeepWrap) {
     CHECK_ARG(result);
   }
 
   NodeApiExternalValue *externalValue = getExternalObjectValue(*phv(object));
   if (!externalValue) {
-    CHECK_NAPI(getExternalPropertyValue(
+    CHECK_STATUS(getExternalPropertyValue(
         object, NodeApiIfNotFound::ThenReturnNull, &externalValue));
     RETURN_STATUS_IF_FALSE(externalValue, napi_invalid_arg);
   }
@@ -5276,10 +5944,15 @@ napi_status NodeApiEnvironment::unwrapObject(
     *result = reference->nativeData();
   }
 
-  if /*constexpr*/ (action == NodeApiUnwrapAction::RemoveWrap) {
+  if constexpr (action == NodeApiUnwrapAction::RemoveWrap) {
     externalValue->setNativeData(nullptr);
-    NodeApiReference::deleteReference(
-        *this, reference, NodeApiReference::ReasonToDelete::ZeroRefCount);
+
+    if (reference->ownership() == NodeApiReferenceOwnership::kUserland) {
+      // When the wrap is been removed, the finalizer should be reset.
+      reference->resetFinalizer();
+    } else {
+      delete reference;
+    }
   }
 
   return clearLastNativeError();
@@ -5288,22 +5961,22 @@ napi_status NodeApiEnvironment::unwrapObject(
 napi_status NodeApiEnvironment::typeTagObject(
     napi_value object,
     const napi_type_tag *typeTag) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
 
   CHECK_ARG(typeTag);
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
 
   // Fail if the tag already exists
   bool hasTag{};
-  CHECK_NAPI(hasPredefinedProperty(
+  CHECK_STATUS(hasPredefinedProperty(
       objValue, NodeApiPredefined::napi_typeTag, &hasTag));
   RETURN_STATUS_IF_FALSE(!hasTag, napi_invalid_arg);
 
   napi_value tagBuffer;
   void *tagBufferData;
-  CHECK_NAPI(
+  CHECK_STATUS(
       createArrayBuffer(sizeof(napi_type_tag), &tagBufferData, &tagBuffer));
 
   const uint8_t *source = reinterpret_cast<const uint8_t *>(typeTag);
@@ -5322,15 +5995,15 @@ napi_status NodeApiEnvironment::checkObjectTypeTag(
     napi_value object,
     const napi_type_tag *typeTag,
     bool *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this};
 
   CHECK_ARG(typeTag);
   napi_value objValue;
-  CHECK_NAPI(coerceToObject(object, &objValue));
+  CHECK_STATUS(coerceToObject(object, &objValue));
 
   napi_value tagBufferValue;
-  CHECK_NAPI(getPredefinedProperty(
+  CHECK_STATUS(getPredefinedProperty(
       objValue, NodeApiPredefined::napi_typeTag, &tagBufferValue));
   vm::JSArrayBuffer *tagBuffer =
       vm::dyn_vmcast_or_null<vm::JSArrayBuffer>(*phv(tagBufferValue));
@@ -5354,21 +6027,21 @@ napi_status NodeApiEnvironment::createExternal(
     node_api_basic_finalize finalizeCallback,
     void *finalizeHint,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
 
   CHECK_ARG(result);
   vm::Handle<vm::DecoratedObject> decoratedObj =
       createExternalObject(nativeData, nullptr);
-  if (finalizeCallback) {
-    CHECK_NAPI(
-        NodeApiFinalizingAnonymousReference::create(
-            *this,
-            decoratedObj.unsafeGetPinnedHermesValue(),
-            nativeData,
-            basicFinalize(finalizeCallback),
-            finalizeHint,
-            nullptr));
+  if (finalizeCallback != nullptr) {
+    NodeApiReferenceWithFinalizer::create(
+        *this,
+        decoratedObj.unsafeGetPinnedHermesValue(),
+        0,
+        NodeApiReferenceOwnership::kRuntime,
+        nativeData,
+        basicFinalize(finalizeCallback),
+        finalizeHint);
   }
   return scope.setResult(std::move(decoratedObj));
 }
@@ -5405,6 +6078,7 @@ vm::Handle<vm::DecoratedObject> NodeApiEnvironment::createExternalObject(
 napi_status NodeApiEnvironment::getValueExternal(
     napi_value value,
     void **result) noexcept {
+  checkGCAccess();
   NodeApiHandleScope scope{*this};
   CHECK_ARG(value);
   NodeApiExternalValue *externalValue = getExternalObjectValue(*phv(value));
@@ -5447,7 +6121,7 @@ napi_status NodeApiEnvironment::getExternalPropertyValue(
   } else if (ifNotFound == NodeApiIfNotFound::ThenCreate) {
     vm::Handle<vm::DecoratedObject> decoratedObj =
         createExternalObject(nullptr, &externalValue);
-    CHECK_NAPI(defineOwnProperty(
+    CHECK_STATUS(defineOwnProperty(
         object,
         getPredefinedSymbol(NodeApiPredefined::napi_externalValue),
         vm::DefinePropertyFlags::getNewNonEnumerableFlags(),
@@ -5459,13 +6133,17 @@ napi_status NodeApiEnvironment::getExternalPropertyValue(
 
 napi_status NodeApiEnvironment::addObjectFinalizer(
     const vm::PinnedHermesValue *value,
-    NodeApiFinalizer *finalizer) noexcept {
+    NodeApiReference *finalizer,
+    NodeApiExternalValue **result) noexcept {
   NodeApiExternalValue *externalValue = getExternalObjectValue(*value);
   if (!externalValue) {
-    CHECK_NAPI(getExternalPropertyValue(
+    CHECK_STATUS(getExternalPropertyValue(
         value, NodeApiIfNotFound::ThenCreate, &externalValue));
   }
   externalValue->addFinalizer(finalizer);
+  if (result != nullptr) {
+    *result = externalValue;
+  }
   return clearLastNativeError();
 }
 
@@ -5473,21 +6151,114 @@ void NodeApiEnvironment::callFinalizer(
     napi_finalize finalizeCallback,
     void *nativeData,
     void *finalizeHint) noexcept {
-  callIntoModule([&](NodeApiEnvironment *env) {
-    finalizeCallback(napiEnv(env), nativeData, finalizeHint);
-  });
+  // Use enhanced callIntoModule with finalizer exception handler
+  callIntoModule(
+      [&](NodeApiEnvironment *envPtr) {
+        finalizeCallback(napiEnv(this), nativeData, finalizeHint);
+      },
+      NodeApiEnvironment::triggerUnhandledException);
 }
 
-void NodeApiEnvironment::addToFinalizerQueue(
-    NodeApiFinalizer *finalizer) noexcept {
-  finalizerQueue_.pushBack(finalizer);
+// Enqueue the finalizer to the task runner finalizer queue for asynchronous
+// execution. Used by node_api_post_finalizer and invokeFinalizerFromGC for
+// non-pure finalizers. Automatically schedules task runner processing if not
+// already scheduled.
+void NodeApiEnvironment::enqueueFinalizer(
+    NodeApiRefTracker *finalizer) noexcept {
+  // During shutdown, execute finalizers immediately
+  // Cannot rely on task runner when environment is being destroyed
+  if (isShuttingDown_) {
+    finalizer->finalize();
+    return;
+  }
+
+  taskRunnerFinalizerQueue_.emplace(finalizer);
+
+  // Schedule task runner processing if not already scheduled
+  if (!isScheduledAsyncFinalizers_) {
+    isScheduledAsyncFinalizers_ = true;
+
+    // Capture smart pointer instead of raw 'this' to avoid use after delete.
+    NodeApiRefCountedPtr<NodeApiEnvironment> envPtr{this};
+
+    taskRunner_->post(makeTask([envPtr = std::move(envPtr)]() mutable {
+      // Process task runner finalizer queue asynchronously on JS thread
+      // envPtr keeps the environment alive until this lambda completes
+      envPtr->drainFinalizerQueue();
+      envPtr->isScheduledAsyncFinalizers_ = false;
+    }));
+  }
 }
 
-napi_status NodeApiEnvironment::processFinalizerQueue() noexcept {
+// Remove the finalizer from the scheduled second pass weak callback queue.
+// The finalizer can be deleted after this call.
+void NodeApiEnvironment::dequeueFinalizer(
+    NodeApiRefTracker *finalizer) noexcept {
+  taskRunnerFinalizerQueue_.erase(finalizer);
+}
+
+void NodeApiEnvironment::drainFinalizerQueue() noexcept {
+  // As userland code can delete additional references in a running finalizer,
+  // the list of pending finalizers may be mutated as we execute them, so
+  // we keep iterating it until it is empty.
+  while (!taskRunnerFinalizerQueue_.empty()) {
+    NodeApiRefTracker *refTracker = *taskRunnerFinalizerQueue_.begin();
+    taskRunnerFinalizerQueue_.erase(refTracker);
+    refTracker->finalize();
+  }
+}
+
+// API version-dependent finalizer dispatch method
+// For NodeApiReferenceWithFinalizer instances triggered by GC
+void NodeApiEnvironment::invokeFinalizerFromGC(
+    NodeApiRefTracker *finalizer) noexcept {
+  // During shutdown, always execute immediately regardless of API version.
+  // Cannot rely on task runner when environment is being destroyed
+  if (isShuttingDown_) {
+    finalizer->finalize();
+    return;
+  }
+
+  if (apiVersion_ != NAPI_VERSION_EXPERIMENTAL) {
+    enqueueFinalizer(finalizer);
+  } else {
+    // The experimental code calls finalizers immediately to release native
+    // objects as soon as possible. In that state any code that may affect GC
+    // state causes a fatal error. To work around this issue the finalizer code
+    // can call node_api_post_finalizer.
+    auto scope = InGCFinalizerScope(this);
+    finalizer->finalize();
+  }
+}
+
+// Termination state tracking methods for Node.js-aligned error handling
+// These methods support coordination for environment termination
+bool NodeApiEnvironment::isTerminatedOrTerminating() const noexcept {
+  return isTerminatedOrTerminating_.load(std::memory_order_acquire);
+}
+
+void NodeApiEnvironment::setTerminatedOrTerminating(bool value) noexcept {
+  isTerminatedOrTerminating_.store(value, std::memory_order_release);
+}
+
+void NodeApiEnvironment::processPendingFinalizers() noexcept {
+  if (pendingFinalizers_->hasPendingFinalizers()) {
+    pendingFinalizers_->processPendingFinalizers();
+  }
+}
+
+// This function processes pending finalizers from GC-triggered
+// NodeApiExternalValue destructors. It handles finalizers that may be created
+// in background GC threads and ensures they execute safely on the JS thread.
+napi_status NodeApiEnvironment::processFinalizerQueueFromCode() noexcept {
   if (!isRunningFinalizers_) {
     isRunningFinalizers_ = true;
-    pendingFinalizers_->applyPendingFinalizers(this);
-    NodeApiReference::finalizeAll(*this, finalizerQueue_);
+
+    // Process GC-triggered finalizers from NodeApiExternalValue destructors
+    // These are handled via NodeApiPendingFinalizers -> NodeApiFinalizerHolder
+    // pattern
+    processPendingFinalizers();
+
     isRunningFinalizers_ = false;
   }
   return napi_ok;
@@ -5501,29 +6272,36 @@ napi_status NodeApiEnvironment::createReference(
     napi_value value,
     uint32_t initialRefCount,
     napi_ref *result) noexcept {
-  return NodeApiComplexReference::create(
-      *this,
-      phv(value),
-      initialRefCount,
-      reinterpret_cast<NodeApiComplexReference **>(result));
+  // Hermes calls cannot throw JS exceptions here.
+  checkGCAccess();
+  CHECK_ARG(value);
+  CHECK_ARG(result);
+
+  const vm::PinnedHermesValue *hermesValue = phv(value);
+  if (apiVersion_ < 10) {
+    if (!hermesValue->isObject() && !hermesValue->isSymbol()) {
+      return ERROR_STATUS(napi_invalid_arg, "Object or Symbol expected.");
+    }
+  }
+
+  NodeApiReference *reference = NodeApiReference::create(
+      env, hermesValue, initialRefCount, NodeApiReferenceOwnership::kUserland);
+
+  *result = reinterpret_cast<napi_ref>(reference);
+  return clearLastNativeError();
 }
 
 napi_status NodeApiEnvironment::deleteReference(napi_ref ref) noexcept {
   CHECK_ARG(ref);
-  if (isShuttingDown_) {
-    // During shutdown all references are going to be deleted by finalizers.
-    return clearLastNativeError();
-  }
-  return NodeApiReference::deleteReference(
-      *this, asReference(ref), NodeApiReference::ReasonToDelete::ExternalCall);
+  delete asReference(ref);
+  return clearLastNativeError();
 }
 
 napi_status NodeApiEnvironment::incReference(
     napi_ref ref,
     uint32_t *result) noexcept {
   CHECK_ARG(ref);
-  uint32_t refCount{};
-  CHECK_NAPI(asReference(ref)->incRefCount(*this, refCount));
+  uint32_t refCount = asReference(ref)->incRefCount(*this);
   return setOptionalResult(std::move(refCount), result);
 }
 
@@ -5531,8 +6309,7 @@ napi_status NodeApiEnvironment::decReference(
     napi_ref ref,
     uint32_t *result) noexcept {
   CHECK_ARG(ref);
-  uint32_t refCount{};
-  CHECK_NAPI(asReference(ref)->decRefCount(*this, refCount));
+  uint32_t refCount = asReference(ref)->decRefCount(*this);
   return setOptionalResult(std::move(refCount), result);
 }
 
@@ -5540,8 +6317,8 @@ napi_status NodeApiEnvironment::getReferenceValue(
     napi_ref ref,
     napi_value *result) noexcept {
   CHECK_ARG(ref);
-  const vm::PinnedHermesValue &value = asReference(ref)->value(env);
-  *result = !value.isUndefined() ? pushNewNodeApiValue(value) : nullptr;
+  CHECK_ARG(result);
+  *result = asReference(ref)->value(env);
   return clearLastNativeError();
 }
 
@@ -5590,10 +6367,6 @@ napi_status NodeApiEnvironment::openEscapableNodeApiValueScope(
     napi_escapable_handle_scope *result) noexcept {
   CHECK_ARG(result);
 
-  // Escapable handle scope must have a parent scope
-  RETURN_STATUS_IF_FALSE(
-      !napiValueStackScopes_.empty(), napi_handle_scope_mismatch);
-
   napiValueStack_.emplace(); // value to escape to parent scope
   napiValueStack_.emplace(
       vm::HermesValue::encodeNativeUInt32(kEscapeableSentinelTag));
@@ -5603,7 +6376,7 @@ napi_status NodeApiEnvironment::openEscapableNodeApiValueScope(
 
 napi_status NodeApiEnvironment::closeEscapableNodeApiValueScope(
     napi_escapable_handle_scope scope) noexcept {
-  CHECK_NAPI(
+  CHECK_STATUS(
       closeNodeApiValueScope(reinterpret_cast<napi_handle_scope>(scope)));
 
   RETURN_STATUS_IF_FALSE(
@@ -5694,12 +6467,12 @@ napi_status NodeApiEnvironment::createArrayBuffer(
     size_t byteLength,
     void **data,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   vm::Handle<vm::JSArrayBuffer> buffer = makeHandle(
       vm::JSArrayBuffer::create(
           runtime_, makeHandle<vm::JSObject>(runtime_.arrayBufferPrototype)));
-  CHECK_NAPI(checkJSErrorStatus(
+  CHECK_STATUS(checkJSErrorStatus(
       vm::JSArrayBuffer::createDataBlock(runtime_, buffer, byteLength, true)));
   if (data != nullptr) {
     *data = buffer->getDataBlock(runtime_);
@@ -5713,7 +6486,7 @@ napi_status NodeApiEnvironment::createExternalArrayBuffer(
     node_api_basic_finalize finalizeCallback,
     void *finalizeHint,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   vm::Handle<vm::JSArrayBuffer> buffer = makeHandle(
       vm::JSArrayBuffer::create(
@@ -5826,7 +6599,7 @@ napi_status NodeApiEnvironment::createTypedArray(
     napi_value arrayBuffer,
     size_t byteOffset,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(arrayBuffer);
 
@@ -5837,57 +6610,57 @@ napi_status NodeApiEnvironment::createTypedArray(
   vm::MutableHandle<vm::JSTypedArrayBase> typedArray{runtime_};
   switch (type) {
     case napi_int8_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<int8_t, vm::CellKind::Int8ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_uint8_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<uint8_t, vm::CellKind::Uint8ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_uint8_clamped_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<uint8_t, vm::CellKind::Uint8ClampedArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_int16_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<int16_t, vm::CellKind::Int16ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_uint16_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<uint16_t, vm::CellKind::Uint16ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_int32_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<int32_t, vm::CellKind::Int32ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_uint32_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<uint32_t, vm::CellKind::Uint32ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_float32_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<float, vm::CellKind::Float32ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_float64_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<double, vm::CellKind::Float64ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_bigint64_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<int64_t, vm::CellKind::BigInt64ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
     case napi_biguint64_array:
-      CHECK_NAPI(
+      CHECK_STATUS(
           createTypedArray<uint64_t, vm::CellKind::BigUint64ArrayKind>(
               length, buffer, byteOffset, &typedArray));
       break;
@@ -5989,7 +6762,7 @@ napi_status NodeApiEnvironment::createDataView(
     napi_value arrayBuffer,
     size_t byteOffset,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(arrayBuffer);
 
@@ -6056,8 +6829,7 @@ napi_status NodeApiEnvironment::getDataViewInfo(
 //-----------------------------------------------------------------------------
 
 napi_status NodeApiEnvironment::getVersion(uint32_t *result) noexcept {
-  // TODO: (vmoroz) use version passed to constructor
-  return setResult(static_cast<uint32_t>(8), result);
+  return setResult(static_cast<uint32_t>(apiVersion_), result);
 }
 
 //-----------------------------------------------------------------------------
@@ -6067,26 +6839,23 @@ napi_status NodeApiEnvironment::getVersion(uint32_t *result) noexcept {
 napi_status NodeApiEnvironment::createPromise(
     napi_deferred *deferred,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   CHECK_ARG(deferred);
 
   napi_value jsPromise, jsDeferred;
   vm::MutableHandle<> jsResolve{runtime_};
   vm::MutableHandle<> jsReject{runtime_};
-  CHECK_NAPI(createPromise(&jsPromise, &jsResolve, &jsReject));
+  CHECK_STATUS(createPromise(&jsPromise, &jsResolve, &jsReject));
 
-  CHECK_NAPI(createObject(&jsDeferred));
-  CHECK_NAPI(
+  CHECK_STATUS(createObject(&jsDeferred));
+  CHECK_STATUS(
       setPredefinedProperty(jsDeferred, NodeApiPredefined::resolve, jsResolve));
-  CHECK_NAPI(
+  CHECK_STATUS(
       setPredefinedProperty(jsDeferred, NodeApiPredefined::reject, jsReject));
 
-  CHECK_NAPI(
-      NodeApiStrongReference::create(
-          *this,
-          *phv(jsDeferred),
-          reinterpret_cast<NodeApiStrongReference **>(deferred)));
+  *deferred = reinterpret_cast<napi_deferred>(NodeApiReference::create(
+      *this, phv(jsDeferred), 1, NodeApiReferenceOwnership::kUserland));
   return scope.setResult(std::move(jsPromise));
 }
 
@@ -6095,8 +6864,8 @@ napi_status NodeApiEnvironment::createPromise(
     vm::MutableHandle<> *resolveFunction,
     vm::MutableHandle<> *rejectFunction) noexcept {
   napi_value global, promiseConstructor;
-  CHECK_NAPI(getGlobal(&global));
-  CHECK_NAPI(getPredefinedProperty(
+  CHECK_STATUS(getGlobal(&global));
+  CHECK_STATUS(getPredefinedProperty(
       global, NodeApiPredefined::Promise, &promiseConstructor));
 
   // The executor function is to be executed by the constructor during the
@@ -6151,15 +6920,16 @@ napi_status NodeApiEnvironment::concludeDeferred(
   CHECK_ARG(deferred);
   CHECK_ARG(resolution);
 
-  NodeApiReference *ref = asReference(deferred);
+  NodeApiReference *deferredRef = asReference(deferred);
 
-  const vm::PinnedHermesValue &jsDeferred = ref->value(*this);
+  napi_value jsDeferred = deferredRef->value(*this);
   napi_value resolver, callResult;
-  CHECK_NAPI(getPredefinedProperty(&jsDeferred, predefinedProperty, &resolver));
-  CHECK_NAPI(callFunction(
+  CHECK_STATUS(
+      getPredefinedProperty(phv(jsDeferred), predefinedProperty, &resolver));
+  CHECK_STATUS(callFunction(
       napi_value(&getUndefined()), resolver, 1, &resolution, &callResult));
-  return NodeApiReference::deleteReference(
-      *this, ref, NodeApiReference::ReasonToDelete::ZeroRefCount);
+  delete deferredRef;
+  return clearLastNativeError();
 }
 
 napi_status NodeApiEnvironment::isPromise(
@@ -6168,8 +6938,8 @@ napi_status NodeApiEnvironment::isPromise(
   CHECK_ARG(value);
 
   napi_value global, promiseConstructor;
-  CHECK_NAPI(getGlobal(&global));
-  CHECK_NAPI(getPredefinedProperty(
+  CHECK_STATUS(getGlobal(&global));
+  CHECK_STATUS(getPredefinedProperty(
       global, NodeApiPredefined::Promise, &promiseConstructor));
 
   return isInstanceOf(value, promiseConstructor, result);
@@ -6218,14 +6988,14 @@ napi_status NodeApiEnvironment::enablePromiseRejectionTracker() noexcept {
           /*paramCount:*/ 2);
 
   napi_value options;
-  CHECK_NAPI(createObject(&options));
-  CHECK_NAPI(setPredefinedProperty(
+  CHECK_STATUS(createObject(&options));
+  CHECK_STATUS(setPredefinedProperty(
       options,
       NodeApiPredefined::allRejections,
       vm::Runtime::getBoolValue(true)));
-  CHECK_NAPI(setPredefinedProperty(
+  CHECK_STATUS(setPredefinedProperty(
       options, NodeApiPredefined::onUnhandled, onUnhandled));
-  CHECK_NAPI(
+  CHECK_STATUS(
       setPredefinedProperty(options, NodeApiPredefined::onHandled, onHandled));
 
   vm::Handle<vm::Callable> hookFunc = vm::Handle<vm::Callable>::dyn_vmcast(
@@ -6287,7 +7057,7 @@ napi_status NodeApiEnvironment::adjustExternalMemory(
 napi_status NodeApiEnvironment::createDate(
     double dateTime,
     napi_value *result) noexcept {
-  CHECK_NAPI(checkPendingJSError());
+  CHECK_STATUS(checkPreconditions());
   NodeApiHandleScope scope{*this, result};
   vm::PseudoHandle<vm::JSDate> dateHandle = vm::JSDate::create(
       runtime_, dateTime, makeHandle<vm::JSObject>(&runtime_.datePrototype));
@@ -6318,19 +7088,22 @@ napi_status NodeApiEnvironment::setInstanceData(
     void *nativeData,
     napi_finalize finalizeCallback,
     void *finalizeHint) noexcept {
-  if (instanceData_ != nullptr) {
+  NodeApiTrackedFinalizer *oldData = std::exchange(instanceData_, nullptr);
+  if (oldData != nullptr) {
     // Our contract so far has been to not finalize any old data there may be.
     // So we simply delete it.
-    delete instanceData_;
-    instanceData_ = nullptr;
+    delete oldData;
   }
-  return NodeApiInstanceData::create(
-      *this, nativeData, finalizeCallback, finalizeHint, &instanceData_);
+  instanceData_ = NodeApiTrackedFinalizer::create(
+      *this, nativeData, finalizeCallback, finalizeHint);
+  return clearLastNativeError();
 }
 
 napi_status NodeApiEnvironment::getInstanceData(void **nativeData) noexcept {
-  return setResult(
-      instanceData_ ? instanceData_->nativeData() : nullptr, nativeData);
+  CHECK_ARG(nativeData);
+  *nativeData =
+      instanceData_ != nullptr ? instanceData_->nativeData() : nullptr;
+  return clearLastNativeError();
 }
 
 //---------------------------------------------------------------------------
@@ -6510,14 +7283,14 @@ napi_status NodeApiEnvironment::setResultUnsafe(
     vm::CallResult<T> &&value,
     napi_status onException,
     TResult *result) noexcept {
-  CHECK_NAPI(checkJSErrorStatus(value, onException));
+  CHECK_STATUS(checkJSErrorStatus(value, onException));
   return setResultUnsafe(std::move(*value), result);
 }
 
 template <class T>
 napi_status NodeApiEnvironment::checkCallResult(
     const vm::CallResult<T> &value) noexcept {
-  CHECK_NAPI(checkJSErrorStatus(value, napi_generic_failure));
+  CHECK_STATUS(checkJSErrorStatus(value, napi_generic_failure));
   return clearLastNativeError();
 }
 
@@ -6530,28 +7303,16 @@ napi_status NodeApiEnvironment::checkCallResult(const T & /*value*/) noexcept {
 // non Node-API external APIs
 //-----------------------------------------------------------------------------
 
-napi_status incEnvRefCount(napi_env env) noexcept {
-  CHECK_ENV(env);
-  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
-  return envPtr->incRefCount();
-}
-
-napi_status decEnvRefCount(napi_env env) noexcept {
-  CHECK_ENV(env);
-  NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
-  return envPtr->decRefCount();
-}
-
 napi_status setNodeApiEnvironmentData(
     napi_env env,
     const napi_type_tag &tag,
     void *data) noexcept {
   CHECK_ENV(env);
   NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
-  // TODO: (vmoroz) uncomment when parent environments are implemented.
-  // if (parentEnvironment_ != nullptr) {
-  //   return parentEnvironment_->setData(tag, data);
-  // }
+  if (envPtr->parentEnvironment_ != nullptr) {
+    return setNodeApiEnvironmentData(
+        napiEnv(envPtr->parentEnvironment_), tag, data);
+  }
 
   if (data != nullptr) {
     envPtr->taggedData_.try_emplace(tag, data);
@@ -6567,22 +7328,15 @@ napi_status getNodeApiEnvironmentData(
     void **data) noexcept {
   CHECK_ENV(env);
   NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
-  // TODO: (vmoroz) uncomment when parent environments are implemented.
-  // if (envPtr->parentEnvironment_ != nullptr) {
-  //   return envPtr->parentEnvironment_->getData(tag, data);
-  // }
+  if (envPtr->parentEnvironment_ != nullptr) {
+    return getNodeApiEnvironmentData(
+        napiEnv(envPtr->parentEnvironment_), tag, data);
+  }
   CHECK_ARG(data);
 
   auto it = envPtr->taggedData_.find(tag);
   *data = (it != envPtr->taggedData_.end()) ? it->second : nullptr;
   return envPtr->clearLastNativeError();
-}
-
-napi_status checkJSErrorStatus(
-    napi_env env,
-    vm::ExecutionStatus hermesStatus) noexcept {
-  return CHECKED_ENV(env)->checkJSErrorStatus(
-      hermesStatus, napi_pending_exception);
 }
 
 napi_status queueMicrotask(napi_env env, napi_value callback) noexcept {
@@ -6607,7 +7361,7 @@ napi_status collectGarbage(napi_env env) noexcept {
   CHECK_ENV(env);
   NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
   envPtr->runtime_.collect("test");
-  CHECK_NAPI(envPtr->processFinalizerQueue());
+  CHECK_STATUS(envPtr->processFinalizerQueueFromCode());
   return envPtr->clearLastNativeError();
 }
 
@@ -6619,7 +7373,7 @@ napi_status runBytecode(
     napi_value *result) noexcept {
   CHECK_ENV(env);
   NodeApiEnvironment *envPtr = reinterpret_cast<NodeApiEnvironment *>(env);
-  CHECK_NAPI(envPtr->checkPendingJSError());
+  CHECK_STATUS(envPtr->checkPreconditions());
   NodeApiHandleScope scope{*envPtr, result};
   vm::CallResult<vm::HermesValue> res = envPtr->runtime_.runBytecode(
       std::move(bytecodeProvider),
@@ -6777,7 +7531,8 @@ napi_status NAPI_CDECL node_api_create_external_string_latin1(
     void *finalize_hint,
     napi_value *result,
     bool *copied) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->createExternalStringLatin1(
+      str, length, finalize_callback, finalize_hint, result, copied);
 }
 
 napi_status NAPI_CDECL node_api_create_external_string_utf16(
@@ -6788,7 +7543,8 @@ napi_status NAPI_CDECL node_api_create_external_string_utf16(
     void *finalize_hint,
     napi_value *result,
     bool *copied) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->createExternalStringUTF16(
+      str, length, finalize_callback, finalize_hint, result, copied);
 }
 
 napi_status NAPI_CDECL node_api_create_property_key_latin1(
@@ -6796,7 +7552,7 @@ napi_status NAPI_CDECL node_api_create_property_key_latin1(
     const char *str,
     size_t length,
     napi_value *result) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->createPropertyKeyLatin1(str, length, result);
 }
 
 napi_status NAPI_CDECL node_api_create_property_key_utf8(
@@ -6804,7 +7560,7 @@ napi_status NAPI_CDECL node_api_create_property_key_utf8(
     const char *str,
     size_t length,
     napi_value *result) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->createPropertyKeyUTF8(str, length, result);
 }
 
 napi_status NAPI_CDECL node_api_create_property_key_utf16(
@@ -6812,7 +7568,7 @@ napi_status NAPI_CDECL node_api_create_property_key_utf16(
     const char16_t *str,
     size_t length,
     napi_value *result) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->createPropertyKeyUTF16(str, length, result);
 }
 
 napi_status NAPI_CDECL
@@ -6825,7 +7581,7 @@ napi_status NAPI_CDECL node_api_symbol_for(
     const char *utf8description,
     size_t length,
     napi_value *result) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->symbolFor(utf8description, length, result);
 }
 
 napi_status NAPI_CDECL napi_create_function(
@@ -6868,7 +7624,7 @@ napi_status NAPI_CDECL node_api_create_syntax_error(
     napi_value code,
     napi_value msg,
     napi_value *result) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->createJSSyntaxError(code, msg, result);
 }
 
 //-----------------------------------------------------------------------------
@@ -6995,6 +7751,14 @@ napi_get_property_names(napi_env env, napi_value object, napi_value *result) {
   return CHECKED_ENV(env)->getForInPropertyNames(object, result);
 }
 
+napi_status NAPI_CDECL napi_set_property(
+    napi_env env,
+    napi_value object,
+    napi_value key,
+    napi_value value) {
+  return CHECKED_ENV(env)->setProperty(object, key, value);
+}
+
 napi_status NAPI_CDECL napi_has_property(
     napi_env env,
     napi_value object,
@@ -7011,20 +7775,28 @@ napi_status NAPI_CDECL napi_get_property(
   return CHECKED_ENV(env)->getProperty(object, key, result);
 }
 
-napi_status NAPI_CDECL napi_set_property(
-    napi_env env,
-    napi_value object,
-    napi_value key,
-    napi_value value) {
-  return CHECKED_ENV(env)->setProperty(object, key, value);
-}
-
 napi_status NAPI_CDECL napi_delete_property(
     napi_env env,
     napi_value object,
     napi_value key,
     bool *result) {
   return CHECKED_ENV(env)->deleteProperty(object, key, result);
+}
+
+napi_status NAPI_CDECL napi_has_own_property(
+    napi_env env,
+    napi_value object,
+    napi_value key,
+    bool *result) {
+  return CHECKED_ENV(env)->hasOwnProperty(object, key, result);
+}
+
+napi_status NAPI_CDECL napi_set_named_property(
+    napi_env env,
+    napi_value object,
+    const char *utf8name,
+    napi_value value) {
+  return CHECKED_ENV(env)->setNamedProperty(object, utf8name, value);
 }
 
 napi_status NAPI_CDECL napi_has_named_property(
@@ -7043,12 +7815,12 @@ napi_status NAPI_CDECL napi_get_named_property(
   return CHECKED_ENV(env)->getNamedProperty(object, utf8name, result);
 }
 
-napi_status NAPI_CDECL napi_set_named_property(
+napi_status NAPI_CDECL napi_set_element(
     napi_env env,
     napi_value object,
-    const char *utf8name,
+    uint32_t index,
     napi_value value) {
-  return CHECKED_ENV(env)->setNamedProperty(object, utf8name, value);
+  return CHECKED_ENV(env)->setElement(object, index, value);
 }
 
 napi_status NAPI_CDECL napi_has_element(
@@ -7067,28 +7839,12 @@ napi_status NAPI_CDECL napi_get_element(
   return CHECKED_ENV(env)->getElement(object, index, result);
 }
 
-napi_status NAPI_CDECL napi_set_element(
-    napi_env env,
-    napi_value object,
-    uint32_t index,
-    napi_value value) {
-  return CHECKED_ENV(env)->setElement(object, index, value);
-}
-
 napi_status NAPI_CDECL napi_delete_element(
     napi_env env,
     napi_value object,
     uint32_t index,
     bool *result) {
   return CHECKED_ENV(env)->deleteElement(object, index, result);
-}
-
-napi_status NAPI_CDECL napi_has_own_property(
-    napi_env env,
-    napi_value object,
-    napi_value key,
-    bool *result) {
-  return CHECKED_ENV(env)->hasOwnProperty(object, key, result);
 }
 
 napi_status NAPI_CDECL napi_define_properties(
@@ -7323,7 +8079,7 @@ napi_throw_range_error(napi_env env, const char *code, const char *msg) {
 
 napi_status NAPI_CDECL
 node_api_throw_syntax_error(napi_env env, const char *code, const char *msg) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->throwJSSyntaxError(code, msg);
 }
 
 napi_status NAPI_CDECL
@@ -7498,9 +8254,9 @@ napi_run_script(napi_env env, napi_value script, napi_value *result) {
 
   // Convert the code into UTF8.
   size_t sourceSize{};
-  CHECK_NAPI(envPtr->getStringValueUTF8(script, nullptr, 0, &sourceSize));
+  CHECK_STATUS(envPtr->getStringValueUTF8(script, nullptr, 0, &sourceSize));
   std::string code(sourceSize, '\0');
-  CHECK_NAPI(
+  CHECK_STATUS(
       envPtr->getStringValueUTF8(script, &code[0], sourceSize + 1, nullptr));
 
   // Create a buffer for the code.
@@ -7563,7 +8319,8 @@ napi_status NAPI_CDECL node_api_post_finalizer(
     napi_finalize finalize_cb,
     void *finalize_data,
     void *finalize_hint) {
-  return napi_generic_failure;
+  return CHECKED_ENV(env)->postFinalizer(
+      finalize_cb, finalize_data, finalize_hint);
 }
 
 //-----------------------------------------------------------------------------
@@ -7689,20 +8446,4 @@ napi_status NAPI_CDECL napi_object_freeze(napi_env env, napi_value object) {
 
 napi_status NAPI_CDECL napi_object_seal(napi_env env, napi_value object) {
   return CHECKED_ENV(env)->objectSeal(object);
-}
-
-//=============================================================================
-// Hermes specific API
-//=============================================================================
-
-napi_status hermes_create_napi_env(
-    ::hermes::vm::Runtime &runtime,
-    ::hermes::hbc::CompileFlags compileFlags,
-    napi_env *env) {
-  if (!env) {
-    return napi_status::napi_invalid_arg;
-  }
-  *env = hermes::node_api::napiEnv(
-      new hermes::node_api::NodeApiEnvironment(runtime, compileFlags));
-  return napi_status::napi_ok;
 }

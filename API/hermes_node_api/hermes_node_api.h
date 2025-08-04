@@ -15,15 +15,49 @@
 #include <string>
 #include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
 #include "hermes/VM/RuntimeModule.h"
-#include "node_api/js_native_api.h"
+#include "node_api/node_api.h"
 
 namespace hermes::node_api {
 
 class NodeApiEnvironment;
 
-napi_status incEnvRefCount(napi_env env) noexcept;
+// A task to execute by TaskRunner.
+class Task {
+ public:
+  virtual ~Task() = default;
+  virtual void invoke() noexcept = 0;
+};
 
-napi_status decEnvRefCount(napi_env env) noexcept;
+// The TaskRunner interface to schedule tasks in JavaScript thread.
+class TaskRunner {
+ public:
+  virtual ~TaskRunner() = default;
+  virtual void post(std::unique_ptr<Task> task) noexcept = 0;
+};
+
+// Get or create a Node API environment associated with the given Hermes
+// runtime. The Node API environment is deleted by the runtime destructor.
+vm::CallResult<napi_env> getOrCreateNodeApiEnvironment(
+    vm::Runtime &runtime,
+    hbc::CompileFlags compileFlags,
+    std::shared_ptr<TaskRunner> taskRunner,
+    const std::function<void(napi_env, napi_value)> &unhandledErrorCallback,
+    int32_t apiVersion) noexcept;
+
+// Initialize new Node API module in a new Node API environment.
+napi_status initializeNodeApiModule(
+    vm::Runtime &runtime,
+    napi_addon_register_func registerModule,
+    int32_t apiVersion,
+    napi_value *exports) noexcept;
+
+napi_status runScript(
+    napi_env env,
+    const char *script,
+    size_t script_length,
+    const char *filename,
+    size_t filename_length,
+    napi_value *result) noexcept;
 
 napi_status setNodeApiEnvironmentData(
     napi_env env,
@@ -34,6 +68,13 @@ napi_status getNodeApiEnvironmentData(
     napi_env env,
     const napi_type_tag &tag,
     void **data) noexcept;
+
+napi_status checkNodeApiPreconditions(napi_env env) noexcept;
+
+napi_status setNodeApiValue(
+    napi_env env,
+    ::hermes::vm::CallResult<::hermes::vm::HermesValue> hvResult,
+    napi_value *result);
 
 napi_status checkJSErrorStatus(
     napi_env env,
