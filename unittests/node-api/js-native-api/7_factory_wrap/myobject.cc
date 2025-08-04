@@ -7,7 +7,7 @@ MyObject::MyObject() : env_(nullptr), wrapper_(nullptr) {}
 
 MyObject::~MyObject() { napi_delete_reference(env_, wrapper_); }
 
-void MyObject::Destructor(napi_env env,
+void MyObject::Destructor(node_api_basic_env env,
                           void* nativeObject,
                           void* /*finalize_hint*/) {
   ++finalize_count;

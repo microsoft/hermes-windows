@@ -388,7 +388,7 @@ TEST_P(NodeApiTest, test_basics_ExternalValue3Test) {
         napi_create_external(
             env,
             native_ptr.get(),
-            [](napi_env env, void *nativeData, void *finalizeHint) {
+            [](node_api_basic_env env, void *nativeData, void *finalizeHint) {
               *static_cast<bool *>(finalizeHint) = true;
             },
             &finalizeRan,
@@ -420,7 +420,7 @@ TEST_P(NodeApiTest, test_basics_ExternalValue4Test) {
         napi_create_external(
             env,
             native_ptr.get(),
-            [](napi_env env, void *nativeData, void *finalizeHint) {
+            [](node_api_basic_env env, void *nativeData, void *finalizeHint) {
               *static_cast<bool *>(finalizeHint) = true;
             },
             &finalizeRan,
@@ -451,7 +451,7 @@ TEST_P(NodeApiTest, DISABLED_test_basics_ExternalValue5Test) {
           napi_create_external(
               env,
               native_ptr.get(),
-              [](napi_env env, void *nativeData, void *finalizeHint) {
+              [](node_api_basic_env env, void *nativeData, void *finalizeHint) {
                 *static_cast<bool *>(finalizeHint) = true;
               },
               &finalizeRan,
@@ -629,7 +629,7 @@ TEST_P(NodeApiTest, test_basics_Finalizer) {
               env,
               object,
               native_ptr.get(),
-              [](napi_env env, void *nativeData, void *finalizeHint) {
+              [](node_api_basic_env env, void *nativeData, void *finalizeHint) {
                 *static_cast<bool *>(finalizeHint) = true;
               },
               &finalizeRan,
@@ -659,7 +659,7 @@ TEST_P(NodeApiTest, test_basics_Wrap) {
               env,
               object,
               native_ptr.get(),
-              [](napi_env env, void *nativeData, void *finalizeHint) {
+              [](node_api_basic_env env, void *nativeData, void *finalizeHint) {
                 *static_cast<bool *>(finalizeHint) = true;
               },
               &finalizeRan,
@@ -700,7 +700,7 @@ TEST_P(NodeApiTest, test_basics_Wrap2) {
               env,
               object,
               myc,
-              [](napi_env env, void *nativeData, void *finalizeHint) {
+              [](node_api_basic_env env, void *nativeData, void *finalizeHint) {
                 *static_cast<bool *>(finalizeHint) = true;
                 delete reinterpret_cast<MyClass *>(nativeData);
               },

@@ -2,6 +2,9 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+#
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 
 set(HERMES_ENABLE_EH_RTTI ON)
 
@@ -15,8 +18,7 @@ add_library(hermesRuntimeApi INTERFACE
 target_include_directories(hermesRuntimeApi INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(libshared SHARED
-  hermes_win.cpp
-  hermes_win.h
+  hermes_api.cpp
   MurmurHash.cpp
   MurmurHash.h
   ScriptStore.h

@@ -3,9 +3,12 @@
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
+ *
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
  */
 
-#include "hermes_win.h"
+#include "hermes_api.h"
 #include "MurmurHash.h"
 #include "ScriptStore.h"
 #include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"

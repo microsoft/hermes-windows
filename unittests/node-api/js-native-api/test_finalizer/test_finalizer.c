@@ -12,7 +12,7 @@ static napi_value GetFinalizeCount(napi_env env, napi_callback_info info) {
   return result;
 }
 
-static void FinalizeExternal(napi_env env, void *data, void *hint) {
+static void FinalizeExternal(node_api_basic_env env, void *data, void *hint) {
   int *actual_value = (int *)data;
   NODE_API_ASSERT_RETURN_VOID(
       env,
