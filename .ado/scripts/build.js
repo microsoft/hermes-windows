@@ -490,6 +490,7 @@ function cmakeTest(buildParams) {
 
 // Run JS tests via check-hermes target using buildParams
 function cmakeJSTest(buildParams) {
+  setupJSTestEnvPaths();
   runCMakeCommand("cmake --build . --target check-hermes", buildParams);
 }
 
@@ -634,7 +635,7 @@ function ensureStagingPaths(buildParams) {
     buildParams.pkgStagingPath,
     "lib",
     "native",
-    getAppPlatformName(/*isUwp:*/false),
+    getAppPlatformName(/*isUwp:*/ false),
     configuration,
     platform,
   );
@@ -642,7 +643,7 @@ function ensureStagingPaths(buildParams) {
     buildParams.pkgStagingPath,
     "lib",
     "native",
-    getAppPlatformName(/*isUwp:*/true),
+    getAppPlatformName(/*isUwp:*/ true),
     configuration,
     platform,
   );
@@ -846,4 +847,67 @@ function deleteDir(dirPath) {
   if (fs.existsSync(dirPath)) {
     fs.rmSync(dirPath, { recursive: true, force: true });
   }
+}
+
+function setupJSTestEnvPaths() {
+  console.log("Setting up environment paths...");
+
+  // Helper function to find executable path using 'where'
+  function findExecutable(name) {
+    try {
+      // The 'where' command returns a list of paths, one per line. We want the first one.
+      const output = execSync(`where ${name}`, { encoding: "utf8" });
+      const firstPath = output.split("\r\n")[0];
+      return firstPath ? path.dirname(firstPath) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function showWarning(message) {
+    console.warn(`Warning: ${message}`);
+  }
+
+  // Add Git Bash to PATH for LIT tests
+  (function () {
+    const gitDir = findExecutable("git.exe");
+    if (!gitDir) {
+      return showWarning("Git (git.exe) not found in PATH.");
+    }
+    console.log(`Found Git at: ${gitDir}`);
+    const gitBashDir = gitDir.replace("cmd", "bin");
+    if (!fs.existsSync(path.join(gitBashDir, "bash.exe"))) {
+      return showWarning(`Git Bash (bash.exe) not found at: ${gitBashDir}`);
+    }
+    if (!process.env.PATH.includes(gitBashDir)) {
+      process.env.PATH = `${gitBashDir};${process.env.PATH}`;
+    }
+  })();
+
+  // Add Python to PATH
+  (function () {
+    const pythonDir = findExecutable("python.exe");
+    if (!pythonDir) {
+      return showWarning("Python (python.exe) not found in PATH.");
+    }
+    const pythonScriptsDir = path.join(pythonDir, "Scripts");
+    console.log(`Found Python at: ${pythonDir}`);
+    if (!process.env.PATH.includes(pythonDir)) {
+      process.env.PATH = `${pythonDir};${pythonScriptsDir};${process.env.PATH}`;
+    }
+  })();
+
+  // Add the bash-alias directory to PATH for the python3 wrapper
+  (function () {
+    const aliasDir = path.join(__dirname, "bash-alias");
+    if (!fs.existsSync(path.join(aliasDir, "python3"))) {
+      return showWarning(`python3 alias script not found at: ${aliasDir}`);
+    }
+    console.log(`Adding python3 alias directory to PATH: ${aliasDir}`);
+    if (!process.env.PATH.includes(aliasDir)) {
+      process.env.PATH = `${aliasDir};${process.env.PATH}`;
+    }
+  })();
+
+  console.log("Environment setup complete.");
 }
