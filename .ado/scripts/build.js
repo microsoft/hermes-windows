@@ -880,6 +880,7 @@ function setupJSTestEnvPaths() {
       return showWarning(`Git Bash (bash.exe) not found at: ${gitBashDir}`);
     }
     if (!process.env.PATH.includes(gitBashDir)) {
+      console.log(`Adding Git Bash directory to PATH: ${gitBashDir}`);
       process.env.PATH = `${gitBashDir};${process.env.PATH}`;
     }
   })();
@@ -893,6 +894,7 @@ function setupJSTestEnvPaths() {
     const pythonScriptsDir = path.join(pythonDir, "Scripts");
     console.log(`Found Python at: ${pythonDir}`);
     if (!process.env.PATH.includes(pythonDir)) {
+      console.log(`Adding python directories to PATH: ${pythonDir}, ${pythonScriptsDir}`);
       process.env.PATH = `${pythonDir};${pythonScriptsDir};${process.env.PATH}`;
     }
   })();
@@ -903,8 +905,8 @@ function setupJSTestEnvPaths() {
     if (!fs.existsSync(path.join(aliasDir, "python3"))) {
       return showWarning(`python3 alias script not found at: ${aliasDir}`);
     }
-    console.log(`Adding python3 alias directory to PATH: ${aliasDir}`);
     if (!process.env.PATH.includes(aliasDir)) {
+      console.log(`Adding python3 alias directory to PATH: ${aliasDir}`);
       process.env.PATH = `${aliasDir};${process.env.PATH}`;
     }
   })();

@@ -12,7 +12,9 @@
 #include "MurmurHash.h"
 #include "ScriptStore.h"
 #include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
+#include "hermes/VM/Callable.h"
 #include "hermes/VM/Runtime.h"
+#include "hermes/hermes.h"
 #include "hermes/inspector/RuntimeAdapter.h"
 #include "hermes/inspector/chrome/Registration.h"
 #include "hermes_node_api.h"
@@ -59,13 +61,6 @@
 // Return napi_generic_failure with message.
 #define GENERIC_FAILURE(...) ERROR_STATUS(napi_generic_failure, __VA_ARGS__)
 
-napi_status hermes_create_napi_env(
-    ::hermes::vm::Runtime &runtime,
-    ::hermes::hbc::CompileFlags compileFlags,
-    napi_env *env);
-
-JSR_API jsr_env_unref(napi_env env);
-
 namespace facebook::hermes {
 
 union HermesBuildVersionInfo {
@@ -80,8 +75,10 @@ union HermesBuildVersionInfo {
 
 constexpr HermesBuildVersionInfo HermesBuildVersion = {HERMES_FILE_VERSION_BIN};
 
-static ::hermes::vm::Runtime &getVMRuntime(HermesRuntime &runtime) noexcept {
-  return *static_cast<::hermes::vm::Runtime *>(runtime.getVMRuntimeUnsafe());
+::hermes::vm::Runtime *getVMRuntime(HermesRuntime &runtime) noexcept {
+  ::facebook::hermes::IHermes *hermes =
+      facebook::jsi::castInterface<::facebook::hermes::IHermes>(&runtime);
+  return static_cast<::hermes::vm::Runtime *>(hermes->getVMRuntimeUnsafe());
 }
 
 class CrashManagerImpl : public ::hermes::vm::CrashManager {
@@ -209,17 +206,17 @@ class CrashManagerImpl : public ::hermes::vm::CrashManager {
 };
 
 void hermesCrashHandler(HermesRuntime &runtime, int fd) {
-  ::hermes::vm::Runtime &vmRuntime = getVMRuntime(runtime);
+  ::hermes::vm::Runtime *vmRuntime = getVMRuntime(runtime);
 
   // Run all callbacks registered to the crash manager
-  auto &crashManager = vmRuntime.getCrashManager();
+  auto &crashManager = vmRuntime->getCrashManager();
   if (auto *crashManagerImpl =
           dynamic_cast<CrashManagerImpl *>(&crashManager)) {
     crashManagerImpl->crashHandler(fd);
   }
 
   // Also serialize the current callstack
-  auto callstack = vmRuntime.getCallStackNoAlloc();
+  auto callstack = vmRuntime->getCallStackNoAlloc();
   llvh::raw_fd_ostream jsonStream(fd, false);
   ::hermes::JSONEmitter json(jsonStream);
   json.openDict();
@@ -228,10 +225,8 @@ void hermesCrashHandler(HermesRuntime &runtime, int fd) {
   json.endJSONL();
 }
 
-class Task {
+class Task : public ::hermes::node_api::Task {
  public:
-  virtual void invoke() noexcept = 0;
-
   static void run(void *task) {
     reinterpret_cast<Task *>(task)->invoke();
   }
@@ -254,7 +249,7 @@ class LambdaTask : public Task {
   TLambda lambda_;
 };
 
-class TaskRunner {
+class TaskRunner : public ::hermes::node_api::TaskRunner {
  public:
   TaskRunner(
       void *data,
@@ -272,7 +267,7 @@ class TaskRunner {
     }
   }
 
-  void post(std::unique_ptr<Task> task) {
+  void post(std::unique_ptr<::hermes::node_api::Task> task) noexcept override {
     postTaskCallback_(
         data_, task.release(), &Task::run, &Task::deleteTask, nullptr);
   }
@@ -425,6 +420,12 @@ class ConfigWrapper {
     return napi_status::napi_ok;
   }
 
+  napi_status setUnhandledErrorCallback(
+      std::function<void(napi_env, napi_value)> unhandledErrorCallback) {
+    unhandledErrorCallback_ = unhandledErrorCallback;
+    return napi_status::napi_ok;
+  }
+
   napi_status setTaskRunner(std::unique_ptr<TaskRunner> taskRunner) {
     taskRunner_ = std::move(taskRunner);
     return napi_status::napi_ok;
@@ -463,6 +464,11 @@ class ConfigWrapper {
     return scriptCache_;
   }
 
+  const std::function<void(napi_env, napi_value)> &unhandledErrorCallback()
+      const {
+    return unhandledErrorCallback_;
+  }
+
   ::hermes::vm::RuntimeConfig getRuntimeConfig() const {
     ::hermes::vm::RuntimeConfig::Builder config;
     if (enableDefaultCrashHandler_) {
@@ -480,6 +486,7 @@ class ConfigWrapper {
   uint16_t inspectorPort_{};
   bool inspectorBreakOnStart_{};
   bool explicitMicrotasks_{};
+  std::function<void(napi_env env, napi_value value)> unhandledErrorCallback_{};
   std::shared_ptr<TaskRunner> taskRunner_;
   std::shared_ptr<ScriptCache> scriptCache_;
 };
@@ -498,7 +505,7 @@ class HermesExecutorRuntimeAdapter final
   void tickleJs() override;
 
  private:
-  std::shared_ptr<facebook::hermes::HermesRuntime> hermesRuntime_;
+  std::shared_ptr<facebook::hermes::HermesRuntime> hermesJsiRuntime_;
   std::shared_ptr<TaskRunner> taskRunner_;
 };
 
@@ -594,7 +601,7 @@ class RuntimeWrapper {
  public:
   explicit RuntimeWrapper(const ConfigWrapper &config)
       : hermesJsiRuntime_(makeHermesRuntime(config.getRuntimeConfig())),
-        hermesVMRuntime_(getVMRuntime(*hermesJsiRuntime_)),
+        hermesVMRuntime_(*getVMRuntime(*hermesJsiRuntime_)),
         isInspectable_(config.enableInspector()),
         scriptCache_(config.scriptCache()) {
     if (isInspectable_) {
@@ -620,7 +627,18 @@ class RuntimeWrapper {
     compileFlags_.emitAsyncBreakCheck =
         runtimeConfig.getAsyncBreakCheckInEval();
 
-    hermes_create_napi_env(hermesVMRuntime_, compileFlags_, &env_);
+    ::hermes::vm::CallResult<napi_env> envRes =
+        ::hermes::node_api::getOrCreateNodeApiEnvironment(
+            hermesVMRuntime_,
+            compileFlags_,
+            config.taskRunner(),
+            config.unhandledErrorCallback(),
+            NAPI_VERSION_EXPERIMENTAL);
+
+    if (envRes.getStatus() == ::hermes::vm::ExecutionStatus::EXCEPTION) {
+      throw std::runtime_error("Failed to create Node API environment");
+    }
+    env_ = envRes.getValue();
     ::hermes::node_api::setNodeApiEnvironmentData(
         env_, kRuntimeWrapperTag, this);
 
@@ -636,10 +654,6 @@ class RuntimeWrapper {
     }
   }
 
-  ~RuntimeWrapper() {
-    jsr_env_unref(env_);
-  }
-
   static facebook::hermes::RuntimeWrapper *from(napi_env env) {
     if (env == nullptr) {
       return nullptr;
@@ -649,12 +663,6 @@ class RuntimeWrapper {
     ::hermes::node_api::getNodeApiEnvironmentData(
         env, kRuntimeWrapperTag, &data);
     return reinterpret_cast<facebook::hermes::RuntimeWrapper *>(data);
-  }
-
-  napi_status getNonAbiSafeRuntime(void **nonAbiSafeRuntime) {
-    CHECK_ARG(nonAbiSafeRuntime);
-    *nonAbiSafeRuntime = hermesJsiRuntime_.get();
-    return napi_ok;
   }
 
   napi_status dumpCrashData(int32_t fd) {
@@ -734,6 +742,7 @@ class RuntimeWrapper {
     // To delete prepared script after execution.
     std::unique_ptr<NodeApiScriptModel> scriptModel{
         reinterpret_cast<NodeApiScriptModel *>(preparedScript)};
+
     return runPreparedScript(preparedScript, result);
   }
 
@@ -888,6 +897,14 @@ class RuntimeWrapper {
         llvh::ArrayRef<uint8_t>(data, len));
   }
 
+  napi_status initializeNativeModule(
+      napi_addon_register_func register_module,
+      int32_t api_version,
+      napi_value *exports) noexcept {
+    return ::hermes::node_api::initializeNodeApiModule(
+        hermesVMRuntime_, register_module, api_version, exports);
+  }
+
  private:
   std::shared_ptr<HermesRuntime> hermesJsiRuntime_;
   ::hermes::vm::Runtime &hermesVMRuntime_;
@@ -896,11 +913,11 @@ class RuntimeWrapper {
   // Can we run a debugger?
   bool isInspectable_{};
 
-  // Flags used by byte code compiler.
-  ::hermes::hbc::CompileFlags compileFlags_{};
-
   // Optional prepared script store.
   std::shared_ptr<facebook::jsi::PreparedScriptStore> scriptCache_{};
+
+  // Flags used by byte code compiler.
+  ::hermes::hbc::CompileFlags compileFlags_{};
 
   static constexpr napi_type_tag kRuntimeWrapperTag{
       0xfa327a491b4b4d20,
@@ -910,18 +927,18 @@ class RuntimeWrapper {
 HermesExecutorRuntimeAdapter::HermesExecutorRuntimeAdapter(
     std::shared_ptr<facebook::hermes::HermesRuntime> hermesRuntime,
     std::shared_ptr<TaskRunner> taskRunner)
-    : hermesRuntime_(std::move(hermesRuntime)),
+    : hermesJsiRuntime_(std::move(hermesRuntime)),
       taskRunner_(std::move(taskRunner)) {}
 
 HermesRuntime &HermesExecutorRuntimeAdapter::getRuntime() {
-  return *hermesRuntime_;
+  return *hermesJsiRuntime_;
 }
 
 void HermesExecutorRuntimeAdapter::tickleJs() {
-  // The queue will ensure that hermesRuntime_ is still valid when this gets
-  // invoked.
+  // The queue will ensure that hermesJsiRuntime_ is still valid when this
+  // gets invoked.
   taskRunner_->post(
-      std::unique_ptr<Task>(new LambdaTask([&runtime = *hermesRuntime_]() {
+      std::unique_ptr<Task>(new LambdaTask([&runtime = *hermesJsiRuntime_]() {
         auto func =
             runtime.global().getPropertyAsFunction(runtime, "__tickleJs");
         func.call(runtime);
@@ -930,7 +947,8 @@ void HermesExecutorRuntimeAdapter::tickleJs() {
 
 } // namespace facebook::hermes
 
-JSR_API jsr_create_runtime(jsr_config config, jsr_runtime *runtime) {
+JSR_API
+jsr_create_runtime(jsr_config config, jsr_runtime *runtime) {
   CHECK_ARG(config);
   CHECK_ARG(runtime);
   *runtime = reinterpret_cast<jsr_runtime>(new facebook::hermes::RuntimeWrapper(
@@ -1040,6 +1058,16 @@ JSR_API jsr_config_set_task_runner(
           deleter_data));
 }
 
+JSR_API jsr_config_on_unhandled_error(
+    jsr_config config,
+    void *cb_data,
+    jsr_unhandled_error_cb unhandled_error_cb) {
+  return CHECKED_CONFIG(config)->setUnhandledErrorCallback(
+      [cb_data, unhandled_error_cb](napi_env env, napi_value error) {
+        unhandled_error_cb(cb_data, env, error);
+      });
+}
+
 JSR_API jsr_config_set_script_cache(
     jsr_config config,
     void *script_cache_data,
@@ -1059,14 +1087,6 @@ JSR_API jsr_config_set_script_cache(
 //=============================================================================
 // Node-API extensions to host JS engine and to implement JSI
 //=============================================================================
-
-JSR_API jsr_env_ref(napi_env env) {
-  return hermes::node_api::incEnvRefCount(env);
-}
-
-JSR_API jsr_env_unref(napi_env env) {
-  return hermes::node_api::decEnvRefCount(env);
-}
 
 JSR_API jsr_collect_garbage(napi_env env) {
   return hermes::node_api::collectGarbage(env);
@@ -1156,4 +1176,13 @@ JSR_API jsr_prepared_script_run(
     jsr_prepared_script prepared_script,
     napi_value *result) {
   return CHECKED_ENV_RUNTIME(env)->runPreparedScript(prepared_script, result);
+}
+
+JSR_API jsr_initialize_native_module(
+    napi_env env,
+    napi_addon_register_func register_module,
+    int32_t api_version,
+    napi_value *exports) {
+  return CHECKED_ENV_RUNTIME(env)->initializeNativeModule(
+      register_module, api_version, exports);
 }
