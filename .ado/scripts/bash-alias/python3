@@ -1,0 +1,7 @@
+#!/bin/bash
+#
+# This is a wrapper script to make 'python3' available in bash environments.
+# It calls the real python.exe with all the arguments passed to this script.
+#
+
+"python.exe" "$@"
