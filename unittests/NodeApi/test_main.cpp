@@ -20,11 +20,9 @@ namespace node_api_tests {
 /*static*/ void TestFixtureBase::InitializeGlobals(
     const char* exePathStr) noexcept {
   fs::path exePath = fs::canonical(exePathStr);
-  std::cerr << "Test exe path: " << exePath << std::endl;
 
   fs::path nodeLitePath =
       fs::path(exePathStr).replace_filename("node_lite.exe");
-  std::cerr << "node_lite.exe path: " << nodeLitePath << std::endl;
   if (!fs::exists(nodeLitePath)) {
     std::cerr << "Error: Cannot find node_lite.exe." << std::endl;
     exit(1);
@@ -33,12 +31,10 @@ namespace node_api_tests {
 
   fs::path testRootPath = exePath.parent_path();
   fs::path rootJsPath = testRootPath / "test";
-  std::cerr << "Trying: " << rootJsPath << std::endl;
   if (!fs::exists(rootJsPath)) {
     testRootPath = testRootPath.parent_path();
     rootJsPath = testRootPath / "test";
   }
-  std::cerr << "Trying: " << rootJsPath << std::endl;
   if (!fs::exists(rootJsPath)) {
     std::cerr << "Error: Cannot find test directory." << std::endl;
     exit(1);
