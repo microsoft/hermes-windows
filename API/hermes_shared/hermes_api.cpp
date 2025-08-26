@@ -90,7 +90,7 @@ class CrashManagerImpl : public ::hermes::vm::CrashManager {
       _largeMemBlocks[(intptr_t)mem] = length;
 
       auto pieceCount = length / WER_MAX_MEM_BLOCK_SIZE;
-      for (auto i = 0; i < pieceCount; i++) {
+      for (size_t i = 0; i < pieceCount; i++) {
         WerRegisterMemoryBlock(
             (char *)mem + i * WER_MAX_MEM_BLOCK_SIZE, WER_MAX_MEM_BLOCK_SIZE);
       }
@@ -108,7 +108,7 @@ class CrashManagerImpl : public ::hermes::vm::CrashManager {
       // This memory was larger than what WER supports so we split it up into
       // chunks of size WER_MAX_MEM_BLOCK_SIZE
       auto pieceCount = _largeMemBlocks[(intptr_t)mem] / WER_MAX_MEM_BLOCK_SIZE;
-      for (auto i = 0; i < pieceCount; i++) {
+      for (size_t i = 0; i < pieceCount; i++) {
         WerUnregisterMemoryBlock((char *)mem + i * WER_MAX_MEM_BLOCK_SIZE);
       }
 
@@ -796,7 +796,7 @@ class RuntimeWrapper {
         cache = scriptCache_->tryGetPreparedScript(
             scriptSignature, runtimeSignature, prepareTag);
         bcErr = ::hermes::hbc::BCProviderFromBuffer::createBCProviderFromBuffer(
-            std::make_unique<JsiBuffer>(move(cache)));
+            std::make_unique<JsiBuffer>(std::move(cache)));
       }
 
       ::hermes::hbc::BCProviderFromSrc *bytecodeProviderFromSrc{};
@@ -883,11 +883,16 @@ class RuntimeWrapper {
     CHECK_ARG(preparedScript);
     const NodeApiScriptModel *hermesPrep =
         reinterpret_cast<NodeApiScriptModel *>(preparedScript);
-    return ::hermes::node_api::runBytecode(
+    return ::hermes::node_api::runInNodeApiContext(
         env_,
-        hermesPrep->bytecodeProvider(),
-        hermesPrep->runtimeFlags(),
-        hermesPrep->sourceURL(),
+        [this, hermesPrep]() {
+          return hermesVMRuntime_.runBytecode(
+              hermesPrep->bytecodeProvider(),
+              hermesPrep->runtimeFlags(),
+              hermesPrep->sourceURL(),
+              ::hermes::vm::Runtime::makeNullHandle<
+                  ::hermes::vm::Environment>());
+        },
         result);
   }
 
@@ -903,6 +908,11 @@ class RuntimeWrapper {
       napi_value *exports) noexcept {
     return ::hermes::node_api::initializeNodeApiModule(
         hermesVMRuntime_, register_module, api_version, exports);
+  }
+
+  napi_status collectGarbage() noexcept {
+    hermesVMRuntime_.collect("test");
+    return napi_ok;
   }
 
  private:
@@ -1089,19 +1099,18 @@ JSR_API jsr_config_set_script_cache(
 //=============================================================================
 
 JSR_API jsr_collect_garbage(napi_env env) {
-  return hermes::node_api::collectGarbage(env);
+  return CHECKED_ENV_RUNTIME(env)->collectGarbage();
 }
 
 JSR_API
-jsr_has_unhandled_promise_rejection(napi_env env, bool *result) {
-  return hermes::node_api::hasUnhandledPromiseRejection(env, result);
+jsr_has_unhandled_promise_rejection(napi_env /*env*/, bool * /*result*/) {
+  return napi_generic_failure;
 }
 
 JSR_API jsr_get_and_clear_last_unhandled_promise_rejection(
-    napi_env env,
-    napi_value *result) {
-  return hermes::node_api::getAndClearLastUnhandledPromiseRejection(
-      env, result);
+    napi_env /*env*/,
+    napi_value * /*result*/) {
+  return napi_generic_failure;
 }
 
 JSR_API jsr_get_description(napi_env env, const char **result) {
@@ -1121,17 +1130,14 @@ JSR_API jsr_is_inspectable(napi_env env, bool *result) {
   return CHECKED_ENV_RUNTIME(env)->isInspectable(result);
 }
 
-JSR_API jsr_open_napi_env_scope(napi_env /*env*/, jsr_napi_env_scope *scope) {
-  if (scope != nullptr) {
-    *scope = nullptr;
-  }
-  return napi_ok;
+JSR_API jsr_open_napi_env_scope(napi_env env, jsr_napi_env_scope *scope) {
+  return hermes::node_api::openNodeApiScope(
+      env, reinterpret_cast<void **>(scope));
 }
 
-JSR_API jsr_close_napi_env_scope(
-    napi_env /*env*/,
-    jsr_napi_env_scope /*scope*/) {
-  return napi_ok;
+JSR_API jsr_close_napi_env_scope(napi_env env, jsr_napi_env_scope scope) {
+  return hermes::node_api::closeNodeApiScope(
+      env, reinterpret_cast<void *>(scope));
 }
 
 //-----------------------------------------------------------------------------

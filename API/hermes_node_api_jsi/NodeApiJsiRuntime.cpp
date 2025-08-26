@@ -2186,6 +2186,7 @@ void NodeApiJsiRuntime::NodeApiRefCountedPointerValue::deleteStackValue(
   CHECK_ELSE_CRASH(value_, "value_ must not be null");
   if (canBeDeletedFromStack_) {
     delete this;
+    return;
   }
 
   if (usedByJsiPointer() && ref_ == nullptr) {

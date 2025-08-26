@@ -51,14 +51,6 @@ napi_status initializeNodeApiModule(
     int32_t apiVersion,
     napi_value *exports) noexcept;
 
-napi_status runScript(
-    napi_env env,
-    const char *script,
-    size_t script_length,
-    const char *filename,
-    size_t filename_length,
-    napi_value *result) noexcept;
-
 napi_status setNodeApiEnvironmentData(
     napi_env env,
     const napi_type_tag &tag,
@@ -69,34 +61,48 @@ napi_status getNodeApiEnvironmentData(
     const napi_type_tag &tag,
     void **data) noexcept;
 
+// TODO: can we remove it?
 napi_status checkNodeApiPreconditions(napi_env env) noexcept;
 
+// TODO: can we remove it?
 napi_status setNodeApiValue(
     napi_env env,
     ::hermes::vm::CallResult<::hermes::vm::HermesValue> hvResult,
     napi_value *result);
 
+// TODO: can we remove it?
 napi_status checkJSErrorStatus(
     napi_env env,
     vm::ExecutionStatus hermesStatus) noexcept;
 
+// TODO: remove it
 napi_status queueMicrotask(napi_env env, napi_value callback) noexcept;
 
-napi_status collectGarbage(napi_env env) noexcept;
+using nodeApiCallback = hermes::vm::CallResult<hermes::vm::HermesValue>(void *);
 
-napi_status hasUnhandledPromiseRejection(napi_env env, bool *result) noexcept;
-
-napi_status getAndClearLastUnhandledPromiseRejection(
+napi_status runInNodeApiContext(
     napi_env env,
+    nodeApiCallback callback,
+    void *data,
     napi_value *result) noexcept;
 
-napi_status runBytecode(
+template <typename TCallback>
+napi_status runInNodeApiContext(
     napi_env env,
-    std::shared_ptr<hbc::BCProvider> bytecodeProvider,
-    vm::RuntimeModuleFlags runtimeFlags,
-    const std::string &sourceURL,
-    napi_value *result) noexcept;
+    TCallback &&callback,
+    napi_value *result) noexcept {
+  return runInNodeApiContext(
+      env,
+      [](void *data) -> ::hermes::vm::CallResult<hermes::vm::HermesValue> {
+        std::remove_reference_t<TCallback> *cb =
+            reinterpret_cast<std::remove_reference_t<TCallback> *>(data);
+        return (*cb)();
+      },
+      &callback,
+      result);
+}
 
+// TODO: can we remove it?
 template <class... TArgs>
 napi_status setLastNativeError(
     napi_env env,
@@ -105,24 +111,12 @@ napi_status setLastNativeError(
     uint32_t line,
     TArgs &&...args) noexcept {
   std::ostringstream sb;
-  (sb << ... << args);
+  (void)(sb << ... << args);
   const std::string message = sb.str();
   return setLastNativeError(env, status, fileName, line, message);
 }
 
-template <class... TArgs>
-napi_status setLastNativeError(
-    NodeApiEnvironment &env,
-    napi_status status,
-    const char *fileName,
-    uint32_t line,
-    TArgs &&...args) noexcept {
-  std::ostringstream sb;
-  (sb << ... << args);
-  const std::string message = sb.str();
-  return setLastNativeError(env, status, fileName, line, message);
-}
-
+// TODO: can we remove it?
 template <>
 napi_status setLastNativeError(
     napi_env env,
@@ -131,15 +125,14 @@ napi_status setLastNativeError(
     uint32_t line,
     const std::string &message) noexcept;
 
-template <>
-napi_status setLastNativeError(
-    NodeApiEnvironment &env,
-    napi_status status,
-    const char *fileName,
-    uint32_t line,
-    const std::string &message) noexcept;
-
+// TODO: can we remove it?
 napi_status clearLastNativeError(napi_env env) noexcept;
+
+// TODO: can we replace it with something else?
+napi_status openNodeApiScope(napi_env env, void **scope) noexcept;
+
+// TODO: can we replace it with something else?
+napi_status closeNodeApiScope(napi_env env, void *scope) noexcept;
 
 } // namespace hermes::node_api
 
