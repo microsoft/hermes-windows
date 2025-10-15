@@ -3615,8 +3615,7 @@ napi_status NodeApiEnvironment::getExternalPropertyValue(
   napi_value napiExternalValue;
   napi_status status = getNamedProperty(
       object,
-      vm::Predefined::getSymbolID(
-          vm::Predefined::InternalPropertyNodeApiExternal),
+      vm::Predefined::getSymbolID(vm::Predefined::InternalPropertyNodeApiData),
       &napiExternalValue);
   if (status == napi_ok &&
       vm::vmisa<vm::DecoratedObject>(*phv(napiExternalValue))) {
@@ -3629,7 +3628,7 @@ napi_status NodeApiEnvironment::getExternalPropertyValue(
         object,
         runtime_,
         vm::Predefined::getSymbolID(
-            vm::Predefined::InternalPropertyNodeApiExternal),
+            vm::Predefined::InternalPropertyNodeApiData),
         vm::DefinePropertyFlags::getDefaultNewPropertyFlags(),
         decoratedObj,
         vm::PropOpFlags().plusThrowOnError().plusInternalForce());
