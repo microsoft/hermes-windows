@@ -282,7 +282,6 @@ enum class NodeApiPredefined {
   allRejections,
   code,
   hostFunction,
-  napi_externalValue,
   napi_typeTag,
   onHandled,
   onUnhandled,
@@ -2846,12 +2845,6 @@ NodeApiEnvironment::NodeApiEnvironment(
           runtime_.getIdentifierTable().registerLazyIdentifier(
               vm::createASCIIRef("hostFunction"))));
   setPredefinedProperty(
-      NodeApiPredefined::napi_externalValue,
-      vm::HermesValue::encodeSymbolValue(
-          runtime_.getIdentifierTable().createNotUniquedLazySymbol(
-              vm::createASCIIRef(
-                  "node_api.externalValue.735e14c9-354f-489b-9f27-02acbc090975"))));
-  setPredefinedProperty(
       NodeApiPredefined::napi_typeTag,
       vm::HermesValue::encodeSymbolValue(
           runtime_.getIdentifierTable().createNotUniquedLazySymbol(
@@ -3620,8 +3613,11 @@ napi_status NodeApiEnvironment::getExternalPropertyValue(
     NodeApiExternalValue **result) noexcept {
   NodeApiExternalValue *externalValue{};
   napi_value napiExternalValue;
-  napi_status status = getPredefinedProperty(
-      object, NodeApiPredefined::napi_externalValue, &napiExternalValue);
+  napi_status status = getNamedProperty(
+      object,
+      vm::Predefined::getSymbolID(
+          vm::Predefined::InternalPropertyNodeApiExternal),
+      &napiExternalValue);
   if (status == napi_ok &&
       vm::vmisa<vm::DecoratedObject>(*phv(napiExternalValue))) {
     externalValue = getExternalObjectValue(*phv(napiExternalValue));
@@ -3629,12 +3625,15 @@ napi_status NodeApiEnvironment::getExternalPropertyValue(
   } else if (ifNotFound == NodeApiIfNotFound::ThenCreate) {
     vm::Handle<vm::DecoratedObject> decoratedObj =
         createExternalObject(nullptr, &externalValue);
-    CHECK_STATUS(defineOwnProperty(
+    vm::CallResult<bool> cr = vm::JSObject::defineOwnProperty(
         object,
-        getPredefinedSymbol(NodeApiPredefined::napi_externalValue),
-        vm::DefinePropertyFlags::getNewNonEnumerableFlags(),
+        runtime_,
+        vm::Predefined::getSymbolID(
+            vm::Predefined::InternalPropertyNodeApiExternal),
+        vm::DefinePropertyFlags::getDefaultNewPropertyFlags(),
         decoratedObj,
-        nullptr));
+        vm::PropOpFlags().plusThrowOnError().plusInternalForce());
+    CHECK_STATUS(checkExecutionStatus(cr.getStatus()));
   }
   *result = externalValue;
   return clearLastNativeError();
