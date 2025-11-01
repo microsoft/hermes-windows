@@ -123,8 +123,6 @@ add_hermes_library(hermesinspector
   ${inspector_public_headers}
   ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 
-#target_compile_features(hermesinspector PUBLIC cxx_std_20)
-
 target_link_libraries(hermesinspector
   hermesNodeApi
   hermesPublic
@@ -139,22 +137,3 @@ target_include_directories(hermesinspector PUBLIC
   ${REACT_NATIVE_SOURCE}/ReactCommon
   ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
   ${REACT_NATIVE_SOURCE_72}/ReactCommon)
-
-if (MSVC)
-  # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
-  set(compile_flags " /await ")
-
-  # Assuming inspector don't use exceptions
-  set(compile_flags "${compile_flags} /EHs-c-")
-
-  # inspector use rtti
-  set(compile_flags "${compile_flags} /GR")
-
-  # Generate PDBs
-  set(compile_flags "${compile_flags} /Zi")
-
-  set_target_properties(hermesinspector PROPERTIES
-    COMPILE_FLAGS "${compile_flags}"
-    OUTPUT_NAME hermesinspector
-  )
-endif()

@@ -8,6 +8,17 @@
 
 set(HERMES_ENABLE_EH_RTTI ON)
 
+# Windows-specific configuration for libhermes targets (defined in ../hermes)
+if(MSVC)
+  # Enable exceptions and RTTI for libhermes and libhermes_lean
+  target_compile_options(libhermes PRIVATE /EHsc /GR)
+  target_compile_options(libhermes_lean PRIVATE /EHsc /GR)
+  
+  # Keep libhermes.lib name on Windows (don't rename to hermes.lib) 
+  # to avoid conflict with hermes.dll from libshared
+  set_target_properties(libhermes PROPERTIES OUTPUT_NAME libhermes)
+endif()
+
 add_subdirectory(inspector)
 
 add_library(hermesRuntimeApi INTERFACE
@@ -53,31 +64,17 @@ target_include_directories(libshared PUBLIC
   ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
   ${REACT_NATIVE_SOURCE_72}/ReactCommon)
 
-if(MSVC)
-  # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
-  set(compile_flags "")
-
-  # Enable exception
-  set(compile_flags "${compile_flags} /EHsc")
-
-  # Enable RTTI
-  set(compile_flags "${compile_flags} /GR")
-
-  # Generate PDBs
-  set(compile_flags "${compile_flags} /Zi")
-endif()
-
 target_link_options(libshared PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 
-set_target_properties(libshared PROPERTIES
-  COMPILE_FLAGS "${compile_flags}"
+if(MSVC)
+  # Enable exceptions and RTTI (required for shared library)
+  target_compile_options(libshared PRIVATE /EHsc /GR)
+  
+  # Temporary avoid the auto-vectorization optimization since VS 17.14.0 produces incorrect code.
+  target_compile_options(libshared PRIVATE $<$<CONFIG:Release>:/O1>)
+endif()
 
+set_target_properties(libshared PROPERTIES
   # To make sure that the resulting DLL name is hermes.dll
   OUTPUT_NAME hermes
 )
-
-if(MSVC)
-  # Temporary avoid the auto-vectorization optimization since VS 17.14.0 produces incorrect code.
-  # Set /O1 only for Release configs using modern CMake target_compile_options.
-  target_compile_options(libshared PRIVATE $<$<CONFIG:Release>:/O1>)
-endif()
