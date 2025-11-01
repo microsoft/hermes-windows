@@ -14,6 +14,8 @@
 #include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/Runtime.h"
+#include "hermes/cdp/CDPAgent.h"
+#include "hermes/cdp/CDPDebugAPI.h"
 #include "hermes/hermes.h"
 #include "hermes/inspector/RuntimeAdapter.h"
 #include "hermes/inspector/chrome/Registration.h"
@@ -60,6 +62,10 @@
 
 // Return napi_generic_failure with message.
 #define GENERIC_FAILURE(...) ERROR_STATUS(napi_generic_failure, __VA_ARGS__)
+
+namespace facebook::react {
+extern bool g_isOldInspectorInitialized;
+}
 
 namespace facebook::hermes {
 
@@ -642,7 +648,7 @@ class RuntimeWrapper {
     ::hermes::node_api::setNodeApiEnvironmentData(
         env_, kRuntimeWrapperTag, this);
 
-    if (config.enableInspector()) {
+    if (react::g_isOldInspectorInitialized && config.enableInspector()) {
       auto adapter = std::make_unique<HermesExecutorRuntimeAdapter>(
           hermesJsiRuntime_, config.taskRunner());
       std::string inspectorRuntimeName = config.inspectorRuntimeName();
@@ -655,7 +661,9 @@ class RuntimeWrapper {
   }
 
   ~RuntimeWrapper() {
-    facebook::hermes::inspector::chrome::disableDebugging(debugSessionToken_);
+    if (debugSessionToken_ != 0) {
+      facebook::hermes::inspector::chrome::disableDebugging(debugSessionToken_);
+    }
   }
 
   static facebook::hermes::RuntimeWrapper *from(napi_env env) {
@@ -917,6 +925,11 @@ class RuntimeWrapper {
   napi_status collectGarbage() noexcept {
     hermesVMRuntime_.collect("test");
     return napi_ok;
+  }
+
+ public:
+  HermesRuntime &getHermesRuntime() {
+    return *hermesJsiRuntime_;
   }
 
  private:
@@ -1197,4 +1210,477 @@ JSR_API jsr_initialize_native_module(
     napi_value *exports) {
   return CHECKED_ENV_RUNTIME(env)->initializeNativeModule(
       register_module, api_version, exports);
+}
+
+//-----------------------------------------------------------------------------
+// Modern inspector API implementation.
+//-----------------------------------------------------------------------------
+
+using namespace facebook::hermes;
+
+namespace {
+
+template <typename TLambda, typename TFunctor>
+struct FunctorAdapter {
+  static_assert(sizeof(TLambda) == -1, "Unsupported signature");
+};
+
+template <typename TLambda, typename TResult, typename... TArgs>
+struct FunctorAdapter<TLambda, TResult(void *, TArgs...)> {
+  static TResult invoke(void *data, TArgs... args) {
+    return reinterpret_cast<TLambda *>(data)->operator()(args...);
+  }
+};
+
+template <typename TFunctor, typename TLambda>
+inline TFunctor toFunctor(TLambda &&lambda) {
+  using TLambdaType = std::remove_reference_t<TLambda>;
+  using TAdapter = FunctorAdapter<
+      TLambdaType,
+      std::remove_pointer_t<
+          decltype(std::remove_reference_t<TFunctor>::invoke)>>;
+  return TFunctor{
+      static_cast<void *>(new TLambdaType(std::forward<TLambdaType>(lambda))),
+      &TAdapter::invoke,
+      [](void *data) { delete static_cast<TLambdaType *>(data); }};
+}
+
+// We use shared_ptr to ensure proper release of functor data even if
+// std::function is copied.
+template <typename TFunctor>
+std::shared_ptr<void> toSharedFuncData(const TFunctor &func) {
+  return std::shared_ptr<void>(
+      func.data, [release = func.release](void *data) { release(data); });
+}
+
+debugger::EnqueueRuntimeTaskFunc toEnqueueRuntimeTaskFunctor(
+    const hermes_enqueue_runtime_task_functor &func) {
+  return [sharedFuncData = toSharedFuncData(func),
+          invoke = func.invoke](debugger::RuntimeTask task) {
+    invoke(
+        sharedFuncData.get(),
+        toFunctor<hermes_run_runtime_task_functor>([task](
+                                                       hermes_runtime runtime) {
+          RuntimeWrapper *wrapper = reinterpret_cast<RuntimeWrapper *>(runtime);
+          task(wrapper->getHermesRuntime());
+        }));
+  };
+}
+
+cdp::OutboundMessageFunc toOutboundMessageFunc(
+    const hermes_enqueue_frontend_message_functor &func) {
+  return [sharedFuncData = toSharedFuncData(func),
+          invoke = func.invoke](const std::string &message) {
+    invoke(sharedFuncData.get(), message.c_str(), message.size());
+  };
+}
+
+hermes_status NAPI_CDECL
+create_cdp_debug_api(hermes_runtime runtime, hermes_cdp_debug_api *result) try {
+  RuntimeWrapper *wrapper = reinterpret_cast<RuntimeWrapper *>(runtime);
+
+  std::unique_ptr<cdp::CDPDebugAPI> cdpDebugAPI =
+      cdp::CDPDebugAPI::create(wrapper->getHermesRuntime());
+
+  *result = reinterpret_cast<hermes_cdp_debug_api>(cdpDebugAPI.release());
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL
+release_cdp_debug_api(hermes_cdp_debug_api cdp_debug_api) try {
+  delete reinterpret_cast<cdp::CDPDebugAPI *>(cdp_debug_api);
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL add_console_message(
+    hermes_cdp_debug_api cdp_debug_api,
+    double timestamp,
+    hermes_console_api_type type,
+    const char *args_property_name,
+    hermes_stack_trace stack_trace) try {
+  cdp::CDPDebugAPI *cdpDebugAPI =
+      reinterpret_cast<cdp::CDPDebugAPI *>(cdp_debug_api);
+  facebook::jsi::Runtime &runtime = cdpDebugAPI->runtime();
+
+  // Retrieve the arguments array from the global property
+  facebook::jsi::Value argsValue =
+      runtime.global().getProperty(runtime, args_property_name);
+
+  // Convert jsi::Array back to std::vector<jsi::Value>
+  std::vector<facebook::jsi::Value> args;
+  if (argsValue.isObject()) {
+    facebook::jsi::Array argsArray =
+        argsValue.asObject(runtime).asArray(runtime);
+    size_t length = argsArray.length(runtime);
+    args.reserve(length);
+
+    for (size_t i = 0; i < length; ++i) {
+      args.push_back(argsArray.getValueAtIndex(runtime, i));
+    }
+  }
+
+  // Delete the temporary property immediately
+  runtime.global().setProperty(
+      runtime, args_property_name, facebook::jsi::Value::undefined());
+
+  // Convert hermes_console_api_type to ConsoleAPIType
+  cdp::ConsoleAPIType consoleType;
+  switch (type) {
+    case hermes_console_api_type_log:
+      consoleType = cdp::ConsoleAPIType::kLog;
+      break;
+    case hermes_console_api_type_debug:
+      consoleType = cdp::ConsoleAPIType::kDebug;
+      break;
+    case hermes_console_api_type_info:
+      consoleType = cdp::ConsoleAPIType::kInfo;
+      break;
+    case hermes_console_api_type_error:
+      consoleType = cdp::ConsoleAPIType::kError;
+      break;
+    case hermes_console_api_type_warning:
+      consoleType = cdp::ConsoleAPIType::kWarning;
+      break;
+    case hermes_console_api_type_dir:
+      consoleType = cdp::ConsoleAPIType::kDir;
+      break;
+    case hermes_console_api_type_dir_xml:
+      consoleType = cdp::ConsoleAPIType::kDirXML;
+      break;
+    case hermes_console_api_type_table:
+      consoleType = cdp::ConsoleAPIType::kTable;
+      break;
+    case hermes_console_api_type_trace:
+      consoleType = cdp::ConsoleAPIType::kTrace;
+      break;
+    case hermes_console_api_type_start_group:
+      consoleType = cdp::ConsoleAPIType::kStartGroup;
+      break;
+    case hermes_console_api_type_start_group_collapsed:
+      consoleType = cdp::ConsoleAPIType::kStartGroupCollapsed;
+      break;
+    case hermes_console_api_type_end_group:
+      consoleType = cdp::ConsoleAPIType::kEndGroup;
+      break;
+    case hermes_console_api_type_clear:
+      consoleType = cdp::ConsoleAPIType::kClear;
+      break;
+    case hermes_console_api_type_assert:
+      consoleType = cdp::ConsoleAPIType::kAssert;
+      break;
+    case hermes_console_api_type_time_end:
+      consoleType = cdp::ConsoleAPIType::kTimeEnd;
+      break;
+    case hermes_console_api_type_count:
+      consoleType = cdp::ConsoleAPIType::kCount;
+      break;
+    default:
+      return hermes_status_error;
+  }
+
+  // Get the stack trace if provided
+  debugger::StackTrace hermesStackTrace;
+  if (stack_trace != nullptr) {
+    hermesStackTrace = *reinterpret_cast<debugger::StackTrace *>(stack_trace);
+  }
+
+  // Create ConsoleMessage and add to CDP
+  cdp::ConsoleMessage message(
+      timestamp, consoleType, std::move(args), std::move(hermesStackTrace));
+  cdpDebugAPI->addConsoleMessage(std::move(message));
+
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL create_cdp_agent(
+    hermes_cdp_debug_api cdp_debug_api,
+    int32_t execution_context_id,
+    hermes_enqueue_runtime_task_functor enqueue_runtime_task_callback,
+    hermes_enqueue_frontend_message_functor enqueue_frontend_message_callback,
+    hermes_cdp_state cdp_state,
+    hermes_cdp_agent *result) try {
+  std::unique_ptr<cdp::CDPAgent> agent = cdp::CDPAgent::create(
+      execution_context_id,
+      *reinterpret_cast<cdp::CDPDebugAPI *>(cdp_debug_api),
+      toEnqueueRuntimeTaskFunctor(enqueue_runtime_task_callback),
+      toOutboundMessageFunc(enqueue_frontend_message_callback),
+      cdp_state != nullptr
+          ? std::move(*reinterpret_cast<cdp::State *>(cdp_state))
+          : cdp::State{});
+
+  *result = reinterpret_cast<hermes_cdp_agent>(agent.release());
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL release_cdp_agent(hermes_cdp_agent cdp_agent) try {
+  delete reinterpret_cast<cdp::CDPAgent *>(cdp_agent);
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL
+cdp_agent_get_state(hermes_cdp_agent cdp_agent, hermes_cdp_state *result) try {
+  cdp::CDPAgent *cdpAgent = reinterpret_cast<cdp::CDPAgent *>(cdp_agent);
+
+  std::unique_ptr<cdp::State> state =
+      std::make_unique<cdp::State>(cdpAgent->getState());
+
+  *result = reinterpret_cast<hermes_cdp_state>(state.release());
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL release_cdp_state(hermes_cdp_state cdp_state) try {
+  delete reinterpret_cast<cdp::State *>(cdp_state);
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL cdp_agent_handle_command(
+    hermes_cdp_agent cdp_agent,
+    const char *json_utf8,
+    size_t json_size) try {
+  cdp::CDPAgent *cdpAgent = reinterpret_cast<cdp::CDPAgent *>(cdp_agent);
+
+  cdpAgent->handleCommand(std::string(json_utf8, json_size));
+
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL
+cdp_agent_enable_runtime_domain(hermes_cdp_agent cdp_agent) try {
+  cdp::CDPAgent *cdpAgent = reinterpret_cast<cdp::CDPAgent *>(cdp_agent);
+
+  cdpAgent->enableRuntimeDomain();
+
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL
+cdp_agent_enable_debugger_domain(hermes_cdp_agent cdp_agent) try {
+  cdp::CDPAgent *cdpAgent = reinterpret_cast<cdp::CDPAgent *>(cdp_agent);
+
+  cdpAgent->enableDebuggerDomain();
+
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL
+capture_stack_trace(hermes_runtime runtime, hermes_stack_trace *result) try {
+  RuntimeWrapper *wrapper = reinterpret_cast<RuntimeWrapper *>(runtime);
+
+  std::unique_ptr<debugger::StackTrace> stackTrace =
+      std::make_unique<debugger::StackTrace>(
+          wrapper->getHermesRuntime().getDebugger().captureStackTrace());
+
+  *result = reinterpret_cast<hermes_stack_trace>(stackTrace.release());
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL
+release_stack_trace(hermes_stack_trace stack_trace) try {
+  delete reinterpret_cast<debugger::StackTrace *>(stack_trace);
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL enable_sampling_profiler(hermes_runtime runtime) try {
+  IHermesRootAPI *hermesAPI =
+      facebook::jsi::castInterface<IHermesRootAPI>(makeHermesRootAPI());
+  const uint16_t kHermesSamplingFrequencyHz = 10000;
+
+  hermesAPI->enableSamplingProfiler(kHermesSamplingFrequencyHz);
+
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL disable_sampling_profiler(hermes_runtime runtime) try {
+  IHermesRootAPI *hermesAPI =
+      facebook::jsi::castInterface<IHermesRootAPI>(makeHermesRootAPI());
+
+  hermesAPI->disableSamplingProfiler();
+
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL collect_sampling_profile(
+    hermes_runtime runtime,
+    void *cb_data,
+    hermes_on_sampling_profile_info_callback on_info_callback,
+    hermes_on_sampling_profile_sample_callback on_sample_callback,
+    hermes_on_sampling_profile_frame_callback on_frame_callback,
+    hermes_sampling_profile *result) try {
+  if (runtime == nullptr || on_info_callback == nullptr ||
+      on_sample_callback == nullptr || on_frame_callback == nullptr) {
+    return hermes_status_error;
+  }
+
+  RuntimeWrapper *wrapper = reinterpret_cast<RuntimeWrapper *>(runtime);
+  HermesRuntime &hermesRuntime = wrapper->getHermesRuntime();
+
+  std::unique_ptr<sampling_profiler::Profile> profile =
+      std::make_unique<sampling_profiler::Profile>(
+          hermesRuntime.dumpSampledTraceToProfile());
+
+  on_info_callback(cb_data, profile->getSamplesCount());
+
+  for (const auto &sample : profile->getSamplesRange()) {
+    on_sample_callback(
+        cb_data,
+        sample.getTimestamp(),
+        sample.getThreadId(),
+        sample.getCallStackFramesCount());
+
+    for (const auto &frame : sample.getCallStackFramesRange()) {
+      hermes_call_stack_frame_kind kind;
+      uint32_t scriptId = 0;
+      std::string_view functionName;
+      std::string_view scriptUrl;
+      uint32_t lineNumber = 0;
+      uint32_t columnNumber = 0;
+
+      if (std::holds_alternative<
+              sampling_profiler::ProfileSampleCallStackJSFunctionFrame>(
+              frame)) {
+        const auto &jsFrame =
+            std::get<sampling_profiler::ProfileSampleCallStackJSFunctionFrame>(
+                frame);
+        kind = hermes_call_stack_frame_kind_js_function;
+        scriptId = jsFrame.getScriptId();
+        functionName = jsFrame.getFunctionName();
+
+        if (jsFrame.hasScriptUrl()) {
+          scriptUrl = jsFrame.getScriptUrl();
+        }
+
+        if (jsFrame.hasFunctionLineNumber()) {
+          lineNumber = jsFrame.getFunctionLineNumber();
+        }
+
+        if (jsFrame.hasFunctionColumnNumber()) {
+          columnNumber = jsFrame.getFunctionColumnNumber();
+        }
+      } else if (std::holds_alternative<
+                     sampling_profiler::
+                         ProfileSampleCallStackNativeFunctionFrame>(frame)) {
+        const auto &nativeFrame = std::get<
+            sampling_profiler::ProfileSampleCallStackNativeFunctionFrame>(
+            frame);
+        kind = hermes_call_stack_frame_kind_native_function;
+        functionName = nativeFrame.getFunctionName();
+      } else if (std::holds_alternative<
+                     sampling_profiler::
+                         ProfileSampleCallStackHostFunctionFrame>(frame)) {
+        const auto &hostFrame = std::get<
+            sampling_profiler::ProfileSampleCallStackHostFunctionFrame>(frame);
+        kind = hermes_call_stack_frame_kind_host_function;
+        functionName = hostFrame.getFunctionName();
+      } else if (std::holds_alternative<
+                     sampling_profiler::ProfileSampleCallStackSuspendFrame>(
+                     frame)) {
+        const auto &suspendFrame =
+            std::get<sampling_profiler::ProfileSampleCallStackSuspendFrame>(
+                frame);
+
+        // Only process GC suspend frames, skip debugger frames
+        if (suspendFrame.getSuspendFrameKind() ==
+            sampling_profiler::ProfileSampleCallStackSuspendFrame::
+                SuspendFrameKind::GC) {
+          kind = hermes_call_stack_frame_kind_gc;
+          functionName = "(garbage collector)";
+        } else {
+          // Skip debugger suspend frames
+          continue;
+        }
+      } else {
+        // Unknown frame type, skip it
+        continue;
+      }
+
+      on_frame_callback(
+          cb_data,
+          kind,
+          scriptId,
+          functionName.data(),
+          functionName.size(),
+          scriptUrl.data(),
+          scriptUrl.size(),
+          lineNumber,
+          columnNumber);
+    }
+  }
+
+  *result = reinterpret_cast<hermes_sampling_profile>(profile.release());
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+hermes_status NAPI_CDECL
+release_sampling_profile(hermes_sampling_profile profile) try {
+  delete reinterpret_cast<sampling_profiler::Profile *>(profile);
+  return hermes_status_ok;
+} catch (...) {
+  return hermes_status_error;
+}
+
+} // namespace
+
+JSR_API hermes_get_inspector_vtable(const hermes_inspector_vtable **vtable) {
+  CHECK_ARG(vtable);
+  static const hermes_inspector_vtable inspector_vtable{
+      nullptr, // reserved0
+      nullptr, // reserved1
+      nullptr, // reserved2
+
+      create_cdp_debug_api,
+      release_cdp_debug_api,
+
+      add_console_message,
+
+      create_cdp_agent,
+      release_cdp_agent,
+
+      cdp_agent_get_state,
+      release_cdp_state,
+
+      cdp_agent_handle_command,
+      cdp_agent_enable_runtime_domain,
+      cdp_agent_enable_debugger_domain,
+
+      capture_stack_trace,
+      release_stack_trace,
+
+      enable_sampling_profiler,
+      disable_sampling_profiler,
+      collect_sampling_profile,
+      release_sampling_profile,
+  };
+
+  *vtable = &inspector_vtable;
+  return napi_ok;
 }

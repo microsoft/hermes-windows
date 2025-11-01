@@ -47,6 +47,7 @@ using namespace std::string_view_literals;
 #if defined(__clang__) || defined(__GNUC__)
 #define CRASH_NOW() __builtin_trap()
 #elif defined(_MSC_VER)
+#include <intrin.h>
 #define CRASH_NOW() __fastfail(/*FAST_FAIL_FATAL_APP_EXIT*/ 7)
 #else
 #define CRASH_NOW() *((volatile int *)0) = 1
