@@ -22,6 +22,8 @@ ILocalConnection::~ILocalConnection() {}
 IRemoteConnection::~IRemoteConnection() {}
 IInspector::~IInspector() {}
 
+bool g_isOldInspectorInitialized = false;
+
 namespace {
 
 class RemoteConnectionWrapper : public IRemoteConnection {
@@ -97,6 +99,7 @@ class InspectorProxy : public IInspector {
       hermes_inspector_remove_page_cb removePageCallback) {
     addPageCallback_ = addPageCallback;
     removePageCallback_ = removePageCallback;
+    g_isOldInspectorInitialized = true;
   }
 
  private:

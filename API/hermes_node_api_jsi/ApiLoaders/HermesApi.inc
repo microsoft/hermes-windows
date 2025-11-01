@@ -20,6 +20,8 @@ HERMES_FUNC(hermes_sampling_profiler_dump_to_file)
 HERMES_FUNC(hermes_config_enable_default_crash_handler)
 HERMES_FUNC(hermes_set_inspector)
 
+HERMES_FUNC(hermes_get_inspector_vtable)
+
 HERMES_INSPECTOR_FUNC(hermes_create_local_connection)
 HERMES_INSPECTOR_FUNC(hermes_delete_local_connection)
 HERMES_INSPECTOR_FUNC(hermes_local_connection_send_message)
