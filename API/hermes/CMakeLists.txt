@@ -106,8 +106,7 @@ target_link_options(libhermes PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 target_include_directories(libhermes PUBLIC .. ../../public ${HERMES_COMMON_DIR}/public ${HERMES_JSI_DIR})
 
 # Avoid becoming liblibhermes (and there's already a target called 'hermes')
-# TODO: (vmoroz) Make conditional
-#set_target_properties(libhermes PROPERTIES OUTPUT_NAME hermes)
+set_target_properties(libhermes PROPERTIES OUTPUT_NAME hermes)
 
 # Create a lean version of libhermes in the same way.
 add_library(libhermes_lean ${api_sources})
@@ -164,24 +163,6 @@ if(APPLE AND HERMES_BUILD_APPLE_FRAMEWORK)
     )
   endif()
 endif()
-
-if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
-  # Same as above, but for windows. Note that there is no equivalent of -fvisibility=default.
-  set(compile_flags "")
-
-  # Enable exeption
-  set(compile_flags "${compile_flags} /EHsc")
-
-  # Enable RTTI
-  set(compile_flags "${compile_flags} /GR")
-
-  # Generate PDBs
-  set(compile_flags "${compile_flags} /Zi")
-endif()
-
-set_target_properties(libhermes PROPERTIES
-  COMPILE_FLAGS "${compile_flags}"
-)
 
 install(TARGETS libhermes
   RUNTIME DESTINATION bin

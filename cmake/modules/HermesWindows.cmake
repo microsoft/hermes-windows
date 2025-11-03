@@ -49,6 +49,15 @@ if (HERMES_MSVC_USE_PLATFORM_UNICODE_WINGLOB)
   add_definitions(-DUSE_PLATFORM_UNICODE_WINGLOB)
 endif()
 
+# Configure Hybrid CRT for Windows builds (must be before any targets)
+# Uses static C++ runtime with dynamic Universal CRT to avoid MSVCP140.dll dependency
+# See for details: https://github.com/microsoft/WindowsAppSDK/blob/main/docs/Coding-Guidelines/HybridCRT.md
+# UWP (WindowsStore) targets do not support the hybrid runtime configuration, so let
+# them fall back to the toolchain default (dynamic CRT) to keep the ABI contract.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # Enable source linking
 if ("${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
   # NOTE: Dependencies are not properly setup here.
@@ -85,12 +94,41 @@ endfunction()
 
 # Configure MSVC compiler flags
 function(hermes_windows_configure_msvc_flags)
-    # Debug information
-    set(MSVC_CXX_FLAGS "/Zi")
+    set(MSVC_CXX_FLAGS "")
+
+    # Enable function-level linking (enables /OPT:REF linker optimization)
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /Gy")
     
+    # Debug information
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /Zi")
+
     # Security flags
     set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /GS /DYNAMICBASE /guard:cf /Qspectre /sdl /ZH:SHA_256")
     
+    # SDL (Security Development Lifecycle) requires these warnings enabled:
+    # Note: Upstream Hermes.cmake disables these with -wd flags, but we override them here
+    # for Windows security compliance. Last flag wins in MSVC.
+    
+    # C4146: Re-enable 'unary minus operator applied to unsigned type, result still unsigned'
+    # Downgrade from error to warning level 3 (promoted to error by /sdl)
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /w34146")
+    # C4244: Re-enable 'conversion from type1 to type2, possible loss of data' 
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /w44244")
+    # C4267: Re-enable 'conversion from size_t to type, possible loss of data'
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /w44267")
+    
+    # Windows-specific warning suppressions for DLL builds
+
+    # C4251: class X needs to have dll-interface to be used by clients of class Y
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /wd4251")
+    # C4275: non dll-interface class X used as base for dll-interface class Y
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /wd4275")
+    # C4646: function declared with 'noreturn' has non-void return type
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /wd4646")
+    # C4312: 'reinterpret_cast': conversion from 'X' to 'hermes::vm::GCCell *' of greater size
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /wd4312")
+
+    # Apply flags to both C and C++
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${MSVC_CXX_FLAGS}" PARENT_SCOPE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MSVC_CXX_FLAGS}" PARENT_SCOPE)
 endfunction()
@@ -115,6 +153,14 @@ function(hermes_windows_configure_lld_flags)
 
     # Deterministic builds
     list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/BREPRO")
+
+    # Hybrid CRT: Remove static UCRT, add dynamic UCRT
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/NODEFAULTLIB:libucrt.lib")
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/DEFAULTLIB:ucrt.lib")
+  else()
+    # Hybrid CRT Debug: Remove static debug UCRT, add dynamic debug UCRT
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/NODEFAULTLIB:libucrtd.lib")
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/DEFAULTLIB:ucrtd.lib")
   endif()
 
   set(HERMES_EXTRA_LINKER_FLAGS "${HERMES_EXTRA_LINKER_FLAGS}" PARENT_SCOPE)
@@ -122,11 +168,23 @@ endfunction()
 
 # Configure MSVC linker flags
 function(hermes_windows_configure_msvc_linker_flags)
-  # Debug information
-  list(APPEND MSVC_DEBUG_LINKER_FLAGS "LINKER:/DEBUG:FULL")
+  # Debug information (common to debug and release)
+  list(APPEND MSVC_COMMON_LINKER_FLAGS "LINKER:/DEBUG:FULL")
 
-  list(APPEND MSVC_RELEASE_LINKER_FLAGS "${MSVC_DEBUG_LINKER_FLAGS}")
+  # Debug-specific flags
+  set(MSVC_DEBUG_LINKER_FLAGS "${MSVC_COMMON_LINKER_FLAGS}")
 
+  # Hybrid CRT: Remove static UCRT, add dynamic UCRT
+  list(APPEND MSVC_DEBUG_LINKER_FLAGS "LINKER:/NODEFAULTLIB:libucrtd.lib")
+  list(APPEND MSVC_DEBUG_LINKER_FLAGS "LINKER:/DEFAULTLIB:ucrtd.lib")
+
+  # Release-specific flags
+  set(MSVC_RELEASE_LINKER_FLAGS "${MSVC_COMMON_LINKER_FLAGS}")
+
+  # Hybrid CRT: Remove static UCRT, add dynamic UCRT
+  list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/NODEFAULTLIB:libucrt.lib")
+  list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/DEFAULTLIB:ucrt.lib")
+  
   # Security flags
   list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/ZH:SHA_256")
   list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/guard:cf")
@@ -142,7 +200,11 @@ function(hermes_windows_configure_msvc_linker_flags)
   # Deterministic builds
   list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/BREPRO")
 
-  set(HERMES_EXTRA_LINKER_FLAGS "$<IF:$<CONFIG:Release>,${MSVC_RELEASE_LINKER_FLAGS},${MSVC_DEBUG_LINKER_FLAGS}>" PARENT_SCOPE)
+  set(HERMES_EXTRA_LINKER_FLAGS 
+    "$<$<CONFIG:Debug>:${MSVC_DEBUG_LINKER_FLAGS}>"
+    "$<$<CONFIG:Release>:${MSVC_RELEASE_LINKER_FLAGS}>"
+    PARENT_SCOPE
+  )
 endfunction()
 
 # Main configuration function

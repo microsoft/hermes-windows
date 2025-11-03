@@ -35,6 +35,11 @@ if(POLICY CMP0022)
   cmake_policy(SET CMP0022 NEW)
 endif()
 
+# Enable CMAKE_MSVC_RUNTIME_LIBRARY variable (CMake 3.15+)
+if (POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
+
 # Has to be set before `project` as per documentation
 # https://cmake.org/cmake/help/latest/variable/CMAKE_OSX_SYSROOT.html
 set(CMAKE_OSX_SYSROOT ${HERMES_APPLE_TARGET_PLATFORM})
@@ -498,8 +503,7 @@ if (GCC_COMPATIBLE)
   # Don't export symbols unless we explicitly say so
   append("-fvisibility=hidden" CMAKE_CXX_FLAGS CMAKE_C_FLAGS)
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
-  # We downgrade 4149 to level 3 to keep this as a warning because the default level 2 is bumped to error
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w34146")
+  # Note: Windows-specific flags (security, DLL warnings) are in HermesWindows.cmake
   # C4068 unknown pragma
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4068")
   # C4200 nonstandard extension used: zero-sized array in struct/union
@@ -508,14 +512,6 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4201")
   # C4530 C++ exception handler used, but unwind semantics are not enabled
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4530")
-  # C4251 class X needs to have dll-interface to be used by clients of class Y
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4251")
-  # C4275: non dll-interface class X used as base for dll-interface class Y
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4275")
-  # C4646: function declared with 'noreturn' has non-void return type
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4646")
-  # C4312: 'reinterpret_cast': conversion from 'X' to 'hermes::vm::GCCell *' of greater size
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4312")
   # Parallelize build
   if (HERMES_MSVC_MP)
     add_compile_options( /MP )

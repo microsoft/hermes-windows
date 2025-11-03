@@ -38,25 +38,14 @@ endfunction()
 
 add_subdirectory(test)
 
-# Turn on EH and RTTI for APITests
+# Turn on EH and RTTI for node_lite and NodeApiTests
 set(HERMES_ENABLE_EH_RTTI ON)
 
 # For some reason (bug?) add_unittest() is clearing LLVM_REQUIRES_RTTI, so
 # we need to set this one.
 set(LLVM_ENABLE_RTTI ON)
 
-if (MSVC)
-  # Enable exception handling
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
-
-  # Enable RTTI
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR")
-
-  # Generate PDBs
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi")
-endif()
-
-add_executable(node_lite
+add_hermes_executable(node_lite
   child_process.cpp
   child_process.h
   compat.h
