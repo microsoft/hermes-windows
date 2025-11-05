@@ -112,11 +112,7 @@ function(hermes_windows_configure_msvc_flags)
     # C4146: Re-enable 'unary minus operator applied to unsigned type, result still unsigned'
     # Downgrade from error to warning level 3 (promoted to error by /sdl)
     set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /w34146")
-    # C4244: Re-enable 'conversion from type1 to type2, possible loss of data' 
-    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /w44244")
-    # C4267: Re-enable 'conversion from size_t to type, possible loss of data'
-    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /w44267")
-    
+
     # Windows-specific warning suppressions for DLL builds
 
     # C4251: class X needs to have dll-interface to be used by clients of class Y
