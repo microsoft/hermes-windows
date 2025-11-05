@@ -97,6 +97,12 @@ function(hermes_update_compile_flags name)
     set_property(TARGET ${name} APPEND_STRING PROPERTY
       COMPILE_FLAGS "${flags}")
   endif ()
+
+  if (MSVC)
+    # Temporary avoid the auto-vectorization optimization since VS 17.14.0 produces incorrect code.
+    # Set /O1 only for Release configs using modern CMake target_compile_options.
+    target_compile_options(${name} PRIVATE $<$<CONFIG:Release>:/O1>)
+  endif ()
 endfunction()
 
 function(add_hermes_library name)
@@ -258,13 +264,14 @@ if (MSVC)
 
   if (NOT CLANG_CL)
     set(msvc_warning_flags
+      # SDL requires these 3 checks enabled: 4146, 4244, 4267
       # Disabled warnings.
       -wd4141 # Suppress ''modifier' : used more than once' (because of __forceinline combined with inline)
-      -wd4146 # Suppress 'unary minus operator applied to unsigned type, result still unsigned'
+      # -wd4146 # Suppress 'unary minus operator applied to unsigned type, result still unsigned'
       -wd4180 # Suppress 'qualifier applied to function type has no meaning; ignored'
-      -wd4244 # Suppress ''argument' : conversion from 'type1' to 'type2', possible loss of data'
+      # -wd4244 # Suppress ''argument' : conversion from 'type1' to 'type2', possible loss of data'
       -wd4258 # Suppress ''var' : definition from the for loop is ignored; the definition from the enclosing scope is used'
-      -wd4267 # Suppress ''var' : conversion from 'size_t' to 'type', possible loss of data'
+      # -wd4267 # Suppress ''var' : conversion from 'size_t' to 'type', possible loss of data'
       -wd4291 # Suppress ''declaration' : no matching operator delete found; memory will not be freed if initialization throws an exception'
       -wd4345 # Suppress 'behavior change: an object of POD type constructed with an initializer of the form () will be default-initialized'
       -wd4351 # Suppress 'new behavior: elements of array 'array' will be default initialized'
