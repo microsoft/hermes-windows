@@ -268,7 +268,7 @@ struct SandboxNativeState {
   F(get_object_property_names, u32, (w2c_hermes *, u32, u32))                 \
   F(set_object_external_memory_pressure, u32, (w2c_hermes *, u32, u32, u32))  \
   F(create_array, u32, (w2c_hermes *, u32, u32))                              \
-  F(get_array_length, u32, (w2c_hermes *, u32, u32))                          \
+  F(get_array_length, void, (w2c_hermes *, u32, u32, u32))                    \
   F(create_arraybuffer_from_external_data, u32, (w2c_hermes *, u32, u32))     \
   F(get_arraybuffer_data, void, (w2c_hermes *, u32, u32, u32))                \
   F(get_arraybuffer_size, void, (w2c_hermes *, u32, u32, u32))                \
@@ -651,7 +651,7 @@ class Ptr {
 
   /// Constructor to create a Ptr and defer initializing it. This is used by
   /// subclasses that need to perform some work before initializing the pointer.
-  Ptr(w2c_hermes *mod) : Ptr(mod, 0, 0){};
+  Ptr(w2c_hermes *mod) : Ptr(mod, 0, 0) {};
 
  public:
   Ptr(w2c_hermes *mod, u32 ptr, u32 n = 1) : mod_(mod) {
@@ -1586,17 +1586,21 @@ class HermesSandboxRuntimeImpl : public facebook::hermes::HermesSandboxRuntime,
       case SandboxValueKindNumber:
         return Value(sb::getNumberValue(v));
       case SandboxValueKindString:
-        return intoJSIString(SandboxString{
-            vt_.clone_string(this, srt_, sb::getStringValue(v).pointer)});
+        return intoJSIString(
+            SandboxString{
+                vt_.clone_string(this, srt_, sb::getStringValue(v).pointer)});
       case SandboxValueKindObject:
-        return intoJSIObject(SandboxObject{
-            vt_.clone_object(this, srt_, sb::getObjectValue(v).pointer)});
+        return intoJSIObject(
+            SandboxObject{
+                vt_.clone_object(this, srt_, sb::getObjectValue(v).pointer)});
       case SandboxValueKindSymbol:
-        return intoJSISymbol(SandboxSymbol{
-            vt_.clone_symbol(this, srt_, sb::getSymbolValue(v).pointer)});
+        return intoJSISymbol(
+            SandboxSymbol{
+                vt_.clone_symbol(this, srt_, sb::getSymbolValue(v).pointer)});
       case SandboxValueKindBigInt:
-        return intoJSIBigInt(SandboxBigInt{
-            vt_.clone_bigint(this, srt_, sb::getBigIntValue(v).pointer)});
+        return intoJSIBigInt(
+            SandboxBigInt{
+                vt_.clone_bigint(this, srt_, sb::getBigIntValue(v).pointer)});
       default:
         // Sandbox returned a value with an unknown kind, it may be compromised.
         abort();
@@ -1909,8 +1913,9 @@ class HermesSandboxRuntimeImpl : public facebook::hermes::HermesSandboxRuntime,
         this, srt_, toSandboxBigInt(bi).pointer);
   }
   String bigintToString(const BigInt &bi, int radix) override {
-    return intoJSIString(SandboxStringOrError{vt_.bigint_to_string(
-        this, srt_, toSandboxBigInt(bi).pointer, (u32)radix)});
+    return intoJSIString(
+        SandboxStringOrError{vt_.bigint_to_string(
+            this, srt_, toSandboxBigInt(bi).pointer, (u32)radix)});
   }
 
   String createStringFromAscii(const char *str, size_t length) override {
@@ -1936,8 +1941,9 @@ class HermesSandboxRuntimeImpl : public facebook::hermes::HermesSandboxRuntime,
   }
   Object createObject(std::shared_ptr<HostObject> ho) override {
     auto how = HostObjectWrapper::create(*this, std::move(ho));
-    return intoJSIObject(SandboxObjectOrError{
-        vt_.create_object_from_host_object(this, srt_, how)});
+    return intoJSIObject(
+        SandboxObjectOrError{
+            vt_.create_object_from_host_object(this, srt_, how)});
   }
   std::shared_ptr<HostObject> getHostObject(const Object &obj) override {
     u32 how = vt_.get_host_object(this, srt_, toSandboxObject(obj).pointer);
@@ -2011,7 +2017,9 @@ class HermesSandboxRuntimeImpl : public facebook::hermes::HermesSandboxRuntime,
   }
 
   bool isArray(const Object &obj) const override {
-    return vt_.object_is_array(getMutMod(), srt_, toSandboxObject(obj).pointer);
+    SandboxBoolOrError resBoolOrError{
+        vt_.object_is_array(getMutMod(), srt_, toSandboxObject(obj).pointer)};
+    return const_cast<HermesSandboxRuntimeImpl *>(this)->unwrap(resBoolOrError);
   }
   bool isArrayBuffer(const Object &obj) const override {
     return vt_.object_is_arraybuffer(
@@ -2029,13 +2037,15 @@ class HermesSandboxRuntimeImpl : public facebook::hermes::HermesSandboxRuntime,
         getMutMod(), srt_, toSandboxFunction(fn).pointer);
   }
   Array getPropertyNames(const Object &obj) override {
-    return intoJSIArray(SandboxArrayOrError{vt_.get_object_property_names(
-        this, srt_, toSandboxObject(obj).pointer)});
+    return intoJSIArray(
+        SandboxArrayOrError{vt_.get_object_property_names(
+            this, srt_, toSandboxObject(obj).pointer)});
   }
 
   WeakObject createWeakObject(const Object &obj) override {
-    return intoJSIWeakObject(SandboxWeakObjectOrError{
-        vt_.create_weak_object(this, srt_, toSandboxObject(obj).pointer)});
+    return intoJSIWeakObject(
+        SandboxWeakObjectOrError{
+            vt_.create_weak_object(this, srt_, toSandboxObject(obj).pointer)});
   }
   Value lockWeakObject(const WeakObject &wo) override {
     StackAlloc<SandboxValue> resValue(this);
@@ -2052,7 +2062,10 @@ class HermesSandboxRuntimeImpl : public facebook::hermes::HermesSandboxRuntime,
     THROW_UNIMPLEMENTED();
   }
   size_t size(const Array &arr) override {
-    return vt_.get_array_length(this, srt_, toSandboxArray(arr).pointer);
+    StackAlloc<SandboxSizeTOrError> resSizeTorError(this);
+    vt_.get_array_length(
+        this, resSizeTorError, srt_, toSandboxArray(arr).pointer);
+    return unwrap(*resSizeTorError);
   }
   size_t size(const ArrayBuffer &ab) override {
     StackAlloc<SandboxSizeTOrError> resSizeTOrError(this);

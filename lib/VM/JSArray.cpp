@@ -586,8 +586,9 @@ CallResult<Handle<JSArray>> JSArray::createAndAllocPropStorage(
   // Allocate property storage with size corresponding to number of properties
   // in the hidden class.
   Handle<JSArray> arr = std::move(*res);
-  runtime.ignoreAllocationFailure(JSObject::allocatePropStorage(
-      arr, runtime, classHandle->getNumProperties()));
+  runtime.ignoreAllocationFailure(
+      JSObject::allocatePropStorage(
+          arr, runtime, classHandle->getNumProperties()));
 
   return arr;
 }
@@ -620,7 +621,7 @@ CallResult<bool> JSArray::setLength(
   double d;
   if (LLVM_LIKELY(newLength->isNumber())) {
     d = newLength->getNumber();
-    ulen = (uint32_t)d;
+    ulen = truncateToUInt32(d);
   } else {
     // According to the spec, toNumber() has to be called twice.
     // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-arraysetlength
@@ -632,7 +633,7 @@ CallResult<bool> JSArray::setLength(
     if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
     d = res->getNumber();
-    ulen = (uint32_t)d;
+    ulen = truncateToUInt32(d);
     // If it is a string, no need to convert again, since it is pretty
     // expensive. Other types are not so important, since their conversions are
     // either fast (bool) or slow (object).

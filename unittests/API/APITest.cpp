@@ -91,10 +91,11 @@ TEST_P(HermesRuntimeTest, StrictHostFunctionBindTest) {
         return thisVal.isUndefined();
       });
   rt->global().setProperty(*rt, "coolify", coolify);
-  EXPECT_TRUE(eval("(function() {"
-                   "  \"use strict\";"
-                   "  return coolify.bind(undefined)();"
-                   "})()")
+  EXPECT_TRUE(eval(
+                  "(function() {"
+                  "  \"use strict\";"
+                  "  return coolify.bind(undefined)();"
+                  "})()")
                   .getBool());
 }
 
@@ -286,14 +287,15 @@ c.doSomething(a, 15);
 
   auto *api = castInterface<IHermesRootAPI>(makeHermesRootAPI());
   std::string bytecode;
-  ASSERT_TRUE(hermes::compileJS(
-      TestSource,
-      "script.js",
-      bytecode,
-      true,
-      true,
-      nullptr,
-      std::optional<std::string_view>(TestSourceMap)));
+  ASSERT_TRUE(
+      hermes::compileJS(
+          TestSource,
+          "script.js",
+          bytecode,
+          true,
+          true,
+          nullptr,
+          std::optional<std::string_view>(TestSourceMap)));
   EXPECT_TRUE(api->isHermesBytecode(
       reinterpret_cast<const uint8_t *>(bytecode.data()), bytecode.size()));
   try {
@@ -598,13 +600,14 @@ TEST_P(HermesRuntimeTest, HostObjectWithOwnProperties) {
   // handling checking for property existence.
   EXPECT_TRUE(eval("\"foo\" in ho").getBool());
 
-  EXPECT_TRUE(eval("var properties = Object.getOwnPropertyNames(ho);"
-                   "properties[0] === '1' && "
-                   "properties[1] === '2' && "
-                   "properties[2] === '3' && "
-                   "properties[3] === 'prop1' && "
-                   "properties[4] === 'prop2' && "
-                   "properties.length === 5")
+  EXPECT_TRUE(eval(
+                  "var properties = Object.getOwnPropertyNames(ho);"
+                  "properties[0] === '1' && "
+                  "properties[1] === '2' && "
+                  "properties[2] === '3' && "
+                  "properties[3] === 'prop1' && "
+                  "properties[4] === 'prop2' && "
+                  "properties.length === 5")
                   .getBool());
   EXPECT_TRUE(eval("ho[2] === undefined").getBool());
   EXPECT_TRUE(eval("ho.prop2 === undefined").getBool());
@@ -614,15 +617,16 @@ TEST_P(HermesRuntimeTest, HostObjectWithOwnProperties) {
   eval("Object.defineProperty(ho, '4', {value: 'hi there'})");
   eval("Object.defineProperty(ho, 'prop2', {value: 'hi there'})");
 
-  EXPECT_TRUE(eval("var properties = Object.getOwnPropertyNames(ho);"
-                   "properties[0] === '0' && "
-                   "properties[1] === '1' && "
-                   "properties[2] === '2' && "
-                   "properties[3] === '3' && "
-                   "properties[4] === '4' && "
-                   "properties[5] === 'prop2' && "
-                   "properties[6] === 'prop1' && "
-                   "properties.length === 7")
+  EXPECT_TRUE(eval(
+                  "var properties = Object.getOwnPropertyNames(ho);"
+                  "properties[0] === '0' && "
+                  "properties[1] === '1' && "
+                  "properties[2] === '2' && "
+                  "properties[3] === '3' && "
+                  "properties[4] === '4' && "
+                  "properties[5] === 'prop2' && "
+                  "properties[6] === 'prop1' && "
+                  "properties.length === 7")
                   .getBool());
   EXPECT_TRUE(eval("ho[2] === 'hi there'").getBool());
   EXPECT_TRUE(eval("ho.prop2 === 'hi there'").getBool());
@@ -634,17 +638,19 @@ TEST_P(HermesRuntimeTest, HostObjectWithOwnProperties) {
       eval("Object.prototype.hasOwnProperty.call(ho, 'any-string')").getBool());
 
   // getOwnPropertyDescriptor() always succeeds on HostObject
-  EXPECT_TRUE(eval("var d = Object.getOwnPropertyDescriptor(ho, 'prop1');"
-                   "d != undefined && "
-                   "d.value == 10 && "
-                   "d.enumerable && "
-                   "d.writable ")
+  EXPECT_TRUE(eval(
+                  "var d = Object.getOwnPropertyDescriptor(ho, 'prop1');"
+                  "d != undefined && "
+                  "d.value == 10 && "
+                  "d.enumerable && "
+                  "d.writable ")
                   .getBool());
-  EXPECT_TRUE(eval("var d = Object.getOwnPropertyDescriptor(ho, 'any-string');"
-                   "d != undefined && "
-                   "d.value == undefined && "
-                   "d.enumerable && "
-                   "d.writable")
+  EXPECT_TRUE(eval(
+                  "var d = Object.getOwnPropertyDescriptor(ho, 'any-string');"
+                  "d != undefined && "
+                  "d.value == undefined && "
+                  "d.enumerable && "
+                  "d.writable")
                   .getBool());
 }
 
@@ -854,6 +860,24 @@ TEST_P(HermesRuntimeTest, PropNameIDFromSymbol) {
   EXPECT_EQ(x.getProperty(*rt, globalProp).getString(*rt).utf8(*rt), "global");
 }
 
+TEST_P(HermesRuntimeTest, ArrayTest) {
+  auto array = eval("[1, 2, 3]").getObject(*rt);
+  EXPECT_TRUE(array.isArray(*rt));
+  auto jsiArray = array.getArray(*rt);
+  EXPECT_EQ(jsiArray.size(*rt), 3);
+  EXPECT_EQ(jsiArray.getValueAtIndex(*rt, 0).asNumber(), 1);
+  jsiArray.setValueAtIndex(*rt, 1, 0);
+  EXPECT_EQ(jsiArray.getValueAtIndex(*rt, 1).asNumber(), 0);
+
+  array = eval("new Proxy([4, 5, 6], {})").getObject(*rt);
+  EXPECT_TRUE(array.isArray(*rt));
+  jsiArray = array.getArray(*rt);
+  EXPECT_EQ(jsiArray.size(*rt), 3);
+  EXPECT_EQ(jsiArray.getValueAtIndex(*rt, 0).asNumber(), 4);
+  jsiArray.setValueAtIndex(*rt, 1, 0);
+  EXPECT_EQ(jsiArray.getValueAtIndex(*rt, 1).asNumber(), 0);
+}
+
 TEST_P(HermesRuntimeTest, HasComputedTest) {
   // The only use of JSObject::hasComputed() is in HermesRuntimeImpl,
   // so we test its Proxy support here, instead of from JS.
@@ -891,9 +915,10 @@ class HermesRuntimeTestWithDisableGenerator
     : public HermesRuntimeCustomConfigTest {
  public:
   HermesRuntimeTestWithDisableGenerator()
-      : HermesRuntimeCustomConfigTest(::hermes::vm::RuntimeConfig::Builder()
-                                          .withEnableGenerator(false)
-                                          .build()) {}
+      : HermesRuntimeCustomConfigTest(
+            ::hermes::vm::RuntimeConfig::Builder()
+                .withEnableGenerator(false)
+                .build()) {}
 };
 
 TEST_F(HermesRuntimeTestWithDisableGenerator, WithDisableGenerator) {
@@ -1003,12 +1028,15 @@ TEST_P(HermesRuntimeTest, BigIntJSIFromScalar) {
       BigInt::strictEquals(*rt, BigInt("0"), BigInt::fromUint64(*rt, 0)));
   EXPECT_TRUE(
       BigInt::strictEquals(*rt, BigInt("0"), BigInt::fromInt64(*rt, 0)));
-  EXPECT_TRUE(BigInt::strictEquals(
-      *rt, BigInt("0xdeadbeef"), BigInt::fromUint64(*rt, 0xdeadbeef)));
-  EXPECT_TRUE(BigInt::strictEquals(
-      *rt, BigInt("0xc0ffee"), BigInt::fromInt64(*rt, 0xc0ffee)));
-  EXPECT_TRUE(BigInt::strictEquals(
-      *rt, BigInt("0xffffffffffffffffn"), BigInt::fromUint64(*rt, ~0ull)));
+  EXPECT_TRUE(
+      BigInt::strictEquals(
+          *rt, BigInt("0xdeadbeef"), BigInt::fromUint64(*rt, 0xdeadbeef)));
+  EXPECT_TRUE(
+      BigInt::strictEquals(
+          *rt, BigInt("0xc0ffee"), BigInt::fromInt64(*rt, 0xc0ffee)));
+  EXPECT_TRUE(
+      BigInt::strictEquals(
+          *rt, BigInt("0xffffffffffffffffn"), BigInt::fromUint64(*rt, ~0ull)));
   EXPECT_TRUE(
       BigInt::strictEquals(*rt, BigInt("-1"), BigInt::fromInt64(*rt, ~0ull)));
 }
@@ -1104,10 +1132,11 @@ class HermesRuntimeTestSmallHeap : public HermesRuntimeCustomConfigTest {
   HermesRuntimeTestSmallHeap()
       : HermesRuntimeCustomConfigTest(
             ::hermes::vm::RuntimeConfig::Builder()
-                .withGCConfig(::hermes::vm::GCConfig::Builder()
-                                  .withInitHeapSize(8 << 20)
-                                  .withMaxHeapSize(8 << 20)
-                                  .build())
+                .withGCConfig(
+                    ::hermes::vm::GCConfig::Builder()
+                        .withInitHeapSize(8 << 20)
+                        .withMaxHeapSize(8 << 20)
+                        .build())
                 .build()) {}
 };
 
@@ -1362,6 +1391,93 @@ TEST_P(HermesRuntimeTest, CreateObjectWithPrototype) {
 
   // Throw when prototype is neither an Object nor null
   EXPECT_THROW(Object::create(*rt, Value(1)), JSError);
+}
+
+TEST_P(HermesRuntimeTest, DeleteProperty) {
+  eval("var obj = {1:2, foo: 'bar', 3:4, salt: 'pepper'}");
+  auto obj = rt->global().getPropertyAsObject(*rt, "obj");
+
+  auto prop = PropNameID::forAscii(*rt, "1");
+  obj.deleteProperty(*rt, prop);
+  auto hasRes = obj.hasProperty(*rt, prop);
+  EXPECT_FALSE(hasRes);
+
+  auto str = String::createFromAscii(*rt, "foo");
+  obj.deleteProperty(*rt, str);
+  hasRes = obj.hasProperty(*rt, str);
+  EXPECT_FALSE(hasRes);
+
+  auto valProp = Value(3);
+  obj.deleteProperty(*rt, valProp);
+  auto getRes = obj.getProperty(*rt, "3");
+  EXPECT_TRUE(getRes.isUndefined());
+
+  hasRes = obj.hasProperty(*rt, "salt");
+  EXPECT_TRUE(hasRes);
+  obj.deleteProperty(*rt, "salt");
+  hasRes = obj.hasProperty(*rt, "salt");
+  EXPECT_FALSE(hasRes);
+
+  obj = eval(
+            "const obj = {};"
+            "Object.defineProperty(obj, 'prop', {"
+            "value: 10,"
+            "configurable: false,"
+            "}); obj;")
+            .getObject(*rt);
+  prop = PropNameID::forAscii(*rt, "prop");
+  EXPECT_THROW(obj.deleteProperty(*rt, prop), JSError);
+  hasRes = obj.hasProperty(*rt, "prop");
+  EXPECT_TRUE(hasRes);
+}
+
+TEST_P(HermesRuntimeTest, ObjectTest) {
+  eval("var obj = {1:2, 3:4}");
+  auto obj = rt->global().getPropertyAsObject(*rt, "obj");
+
+  auto propVal = Value(1);
+  // Check for and get existing properties
+  auto hasRes = obj.hasProperty(*rt, propVal);
+  EXPECT_TRUE(hasRes);
+  auto getRes = obj.getProperty(*rt, propVal);
+  EXPECT_EQ(getRes.getNumber(), 2);
+  // Overwrite existing property
+  obj.setProperty(*rt, propVal, 3);
+  getRes = obj.getProperty(*rt, propVal);
+  EXPECT_EQ(getRes.getNumber(), 3);
+
+  // Tests for non-existing properties
+  propVal = Value(5);
+  hasRes = obj.hasProperty(*rt, propVal);
+  EXPECT_FALSE(hasRes);
+  getRes = obj.getProperty(*rt, propVal);
+  EXPECT_TRUE(getRes.isUndefined());
+
+  // Add new property
+  obj.setProperty(*rt, propVal, "bar");
+  hasRes = obj.hasProperty(*rt, propVal);
+  EXPECT_TRUE(hasRes);
+  getRes = obj.getProperty(*rt, propVal);
+  EXPECT_EQ(getRes.getString(*rt).utf8(*rt), "bar");
+
+  obj = eval(
+            "Object.defineProperty(obj, '456', {"
+            "  value: 10,"
+            "  writable: false,});")
+            .getObject(*rt);
+  auto unwritableProp = Value(456);
+  EXPECT_THROW(obj.setProperty(*rt, unwritableProp, 1), JSError);
+
+  auto badObjKey = eval(
+      "var badObj = {"
+      "    toString: function() {"
+      "        throw new Error('something went wrong');"
+      "    }"
+      "};"
+      "badObj;");
+  EXPECT_THROW(obj.setProperty(*rt, badObjKey, 123), JSError);
+  EXPECT_THROW(obj.hasProperty(*rt, badObjKey), JSError);
+  EXPECT_THROW(obj.getProperty(*rt, badObjKey), JSError);
 }
 
 INSTANTIATE_TEST_CASE_P(
