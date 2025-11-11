@@ -17,7 +17,7 @@ add_library(
 target_include_directories(hermes_executor_common PUBLIC .)
 target_link_libraries(hermes_executor_common
         jsireact
-        hermes-engine::libhermes
+        hermes-engine::hermesvm
         jsi
         hermes_inspector_modern
 )
