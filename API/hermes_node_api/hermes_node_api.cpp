@@ -4538,11 +4538,13 @@ napi_status NAPI_CDECL napi_delete_property(
   if (objRes.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return env->setJSException();
   }
+  vm::Handle<vm::JSObject> objHandle =
+      env->runtime_.makeHandle<vm::JSObject>(*objRes);
 
-  vm::CallResult<bool> cr = vm::JSObject::deleteComputed(
-      env->runtime_.makeHandle<vm::JSObject>(*objRes),
+  vm::CallResult<bool> cr = objHandle->deleteComputed(
+      objHandle,
       env->runtime_,
-      asHandle(key));
+      asHandle(key),vm::PropOpFlags().plusThrowOnError());
   if (cr.getStatus() == vm::ExecutionStatus::EXCEPTION) {
     return env->setJSException();
   }
