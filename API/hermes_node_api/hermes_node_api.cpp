@@ -4999,7 +4999,17 @@ napi_is_array(napi_env env, napi_value value, bool *result) {
   CHECK_POSTCONDITIONS(env, /*valueStackDelta:*/ 0);
   CHECK_ARG(value);
   CHECK_ARG(result);
-  *result = vm::vmisa<vm::JSArray>(*phv(value));
+  
+  // First check if it's a direct JSArray instance
+  if (LLVM_LIKELY(vm::vmisa<vm::JSArray>(*phv(value)))) {
+    *result = true;
+    return env->clearLastNativeError();
+  }
+  
+  // Fall back to vm::isArray for more thorough checking (handles proxies, etc.)
+  vm::CallResult<bool> cr = vm::isArray(env->runtime_, vm::vmcast<vm::JSObject>(*phv(value)));
+  CHECK_STATUS(env->checkExecutionStatus(cr.getStatus()));
+  *result = *cr;
   return env->clearLastNativeError();
 }
 
@@ -5011,11 +5021,29 @@ napi_get_array_length(napi_env env, napi_value value, uint32_t *result) {
   NodeApiValueScope scope{*env};
   vm::GCScope gcScope{env->runtime_};
   CHECK_ARG(value);
-  RETURN_STATUS_IF_FALSE(
-      vm::vmisa<vm::JSArray>(*phv(value)), napi_array_expected);
+
+  bool isArray = false;
+  CHECK_STATUS(napi_is_array(env, value, &isArray));
+  RETURN_STATUS_IF_FALSE(isArray, napi_array_expected);
+  
+  vm::Handle<vm::JSObject> handle = asHandle<vm::JSObject>(value);
+
+  if (LLVM_LIKELY(!vm::vmcast<vm::JSObject>(*phv(value))->isProxyObject())) {
+    vm::JSObject *obj = vm::vmcast<vm::JSObject>(*phv(value));
+    while (obj && obj->isProxyObject()) {
+      // For proxy objects, check if the target is an array
+      auto target = vm::JSProxy::getTarget(obj, env->runtime_);
+      obj = target.get();
+      if (obj && vm::vmisa<vm::JSArray>(obj)) {
+        handle = env->runtime_.makeHandle<vm::JSObject>(obj);
+        break;
+      }
+    }
+  }
+
   napi_value res;
   CHECK_STATUS(env->getNamedProperty(
-      asHandle<vm::JSObject>(value),
+      handle,
       vm::Predefined::getSymbolID(vm::Predefined::length),
       &res));
   RETURN_STATUS_IF_FALSE(phv(res)->isNumber(), napi_number_expected);
