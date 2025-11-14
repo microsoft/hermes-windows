@@ -1167,11 +1167,12 @@ TEST_F(CDPAgentTest, DebuggerBytecodeScript) {
   // Compile code without debug info so that the SourceLocation would be
   // invalid.
   std::string bytecode;
-  EXPECT_TRUE(::hermes::compileJS(
-      R"(
+  EXPECT_TRUE(
+      ::hermes::compileJS(
+          R"(
     true
   )",
-      bytecode));
+          bytecode));
 
   runtimeThread_->add([this, bytecode]() {
     runtime_->evaluateJavaScript(
@@ -4469,7 +4470,7 @@ TEST_F(CDPAgentTest, RuntimeConsoleBuffer) {
         EXPECT_LT(nthLog, kNumLogsToTest);
         EXPECT_EQ(type, "log");
         received[nthLog % kExpectedMaxBufferSize] = true;
-      } catch (const std::exception &e) {
+      } catch (const std::exception &) {
         EXPECT_EQ(type, "warning");
         EXPECT_NE(value.find("discarded"), std::string::npos);
         receivedWarning = true;

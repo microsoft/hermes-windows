@@ -959,7 +959,7 @@ class HadesGC::MarkAcceptor final : public RootAndSlotAcceptor {
         typename std::conditional<sizeof(T) == 4, uint32_t, uint64_t>::type;
     static_assert(sizeof(T) == sizeof(Storage), "Sizes must match");
     union {
-      Storage storage;
+      Storage storage{};
       T val;
     } ret{};
 
@@ -1285,10 +1285,10 @@ HadesGC::HadesGC(
       revertToYGAtTTI_{gcConfig.getRevertToYGAtTTI()},
       overwriteDeadYGObjects_{gcConfig.getOverwriteDeadYGObjects()},
       occupancyTarget_(gcConfig.getOccupancyTarget()),
-      ygAverageSurvivalBytes_{
-          /*weight*/ 0.5,
-          /*init*/ kYGInitialSizeFactor * HeapSegment::maxSize() *
-              kYGInitialSurvivalRatio} {
+      ygAverageSurvivalBytes_{/*weight*/ 0.5,
+                              /*init*/ kYGInitialSizeFactor *
+                                  HeapSegment::maxSize() *
+                                  kYGInitialSurvivalRatio} {
   (void)vmExperimentFlags;
   std::lock_guard<Mutex> lk(gcMutex_);
   crashMgr_->setCustomData("HermesGC", getKindAsStr().c_str());
@@ -1323,6 +1323,9 @@ void HadesGC::getHeapInfo(HeapInfo &info) {
   info.totalAllocatedBytes = totalAllocatedBytes_ + youngGen().used();
   info.va = info.heapSize;
   info.externalBytes = oldGen_.externalBytes() + getYoungGenExternalBytes();
+  info.youngGenStats = ygCumulativeStats_;
+  info.fullStats = ogCumulativeStats_;
+  info.numCompactions = numCompactions_;
 }
 
 void HadesGC::getHeapInfoWithMallocSize(HeapInfo &info) {
@@ -3120,8 +3123,9 @@ void HadesGC::verifyCardTable() {
           gc.compactee_.evacContains(valuePtr);
       if (!gc.inYoungGen(locPtr) &&
           (gc.inYoungGen(valuePtr) || crossRegionCompacteePtr)) {
-        assert(HeapSegment::cardTableCovering(locPtr)->isCardForAddressDirty(
-            locPtr));
+        assert(
+            HeapSegment::cardTableCovering(locPtr)->isCardForAddressDirty(
+                locPtr));
       }
     }
 

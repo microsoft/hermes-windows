@@ -445,7 +445,7 @@ function cmakeConfigure(buildParams) {
   // Use prebuilt Hermes compiler for cross-platform builds
   if (isCrossPlatformBuild(buildParams)) {
     genArgs.push(
-      `-DIMPORT_HERMESC="${path.join(toolsPath, "ImportHermesc.cmake")}"`,
+      `-DIMPORT_HOST_COMPILERS="${path.join(toolsPath, "ImportHostCompilers.cmake")}"`,
     );
   }
 

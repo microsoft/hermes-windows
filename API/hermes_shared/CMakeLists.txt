@@ -8,15 +8,15 @@
 
 set(HERMES_ENABLE_EH_RTTI ON)
 
-# Windows-specific configuration for libhermes targets (defined in ../hermes)
+# Windows-specific configuration for hermesvm targets (defined in ../hermes)
 if(MSVC)
-  # Enable exceptions and RTTI for libhermes and libhermes_lean
-  target_compile_options(libhermes PRIVATE /EHsc /GR)
-  target_compile_options(libhermes_lean PRIVATE /EHsc /GR)
+  # Enable exceptions and RTTI for hermesvm and hermesvmlean
+  target_compile_options(hermesvm PRIVATE /EHsc /GR)
+  target_compile_options(hermesvmlean PRIVATE /EHsc /GR)
   
-  # Keep libhermes.lib name on Windows (don't rename to hermes.lib) 
+  # Keep hermesvm.lib name on Windows (don't rename to hermes.lib) 
   # to avoid conflict with hermes.dll from libshared
-  set_target_properties(libhermes PROPERTIES OUTPUT_NAME libhermes)
+  set_target_properties(hermesvm PROPERTIES OUTPUT_NAME hermesvm)
 endif()
 
 add_subdirectory(inspector)
@@ -45,7 +45,7 @@ target_link_libraries(libshared
     hermesNodeApi
     hermesParser
     hermesVMRuntime
-    libhermes
+    hermesvm
 )
 target_link_options(libshared PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 

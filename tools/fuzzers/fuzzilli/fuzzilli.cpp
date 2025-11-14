@@ -200,11 +200,12 @@ int main(int argc, char **argv) {
   }
   // fuzzing loop
   while (true) {
-    auto runtime = makeHermesRuntime(::hermes::vm::RuntimeConfig::Builder()
-                                         .withES6Proxy(true)
-                                         .withEnableGenerator(true)
-                                         .withEnableHermesInternal(true)
-                                         .build());
+    auto runtime = makeHermesRuntime(
+        ::hermes::vm::RuntimeConfig::Builder()
+            .withES6Proxy(true)
+            .withEnableGenerator(true)
+            .withEnableHermesInternal(true)
+            .build());
     auto crashFunctionName = "fuzzilli";
     auto crashFunctionProp =
         facebook::jsi::PropNameID::forAscii(*runtime, crashFunctionName);
@@ -240,7 +241,7 @@ int main(int argc, char **argv) {
     try {
       runtime->evaluateJavaScript(
           std::make_unique<MemoryBuffer>(script_src, script_size), "");
-    } catch (const JSIException &e) {
+    } catch (const JSIException &) {
       exceptionThrew = true;
     }
     free(script_src);
