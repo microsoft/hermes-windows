@@ -2942,6 +2942,13 @@ void NodeApiJsiRuntime::deleteProperty(
     napi_value propertyId) const {
   bool result{};
   CHECK_NAPI(jsrApi_->napi_delete_property(env_, object, propertyId,&result));
+  
+  if (!result) {
+    // Property deletion failed - this typically means the property is not configurable
+    // According to ECMAScript spec, this should throw a TypeError in strict mode
+    runtime.throwJSException(jsrApi_->napi_throw_type_error(
+        env_, nullptr, "Cannot delete property"));
+  }
 }
 
 // Sets object property value with the provided property accessibility

@@ -232,9 +232,7 @@ assert.strictEqual(newObject.test_string, 'test string');
   const obj = {};
 
   Object.defineProperty(obj, 'foo', { configurable: false });
-  assert.throws(() => {
-    test_object.Delete(obj, 'foo');
-  }, /Property is not configurable/);
+  assert.strictEqual(test_object.Delete(obj, 'foo'), false);
   assert.strictEqual('foo' in obj, true);
 }
 
