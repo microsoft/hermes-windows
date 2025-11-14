@@ -553,10 +553,18 @@ class JSI_EXPORT Runtime {
 
   virtual Value getProperty(const Object&, const PropNameID& name) = 0;
   virtual Value getProperty(const Object&, const String& name) = 0;
+
+#if JSI_VERSION >= 21
   virtual Value getProperty(const Object&, const Value& name);
+#endif
+
   virtual bool hasProperty(const Object&, const PropNameID& name) = 0;
   virtual bool hasProperty(const Object&, const String& name) = 0;
+
+#if JSI_VERSION >= 21
   virtual bool hasProperty(const Object&, const Value& name);
+#endif
+
   virtual void setPropertyValue(
       JSI_CONST_10 Object&,
       const PropNameID& name,

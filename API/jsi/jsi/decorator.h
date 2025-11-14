@@ -365,8 +365,10 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
       const Value& value) override {
     plain_.setPropertyValue(o, name, value);
   }
-  void setPropertyValue(JSI_CONST_10 Object& o, const String& name, const Value& value)
-      override {
+  void setPropertyValue(
+      JSI_CONST_10 Object& o,
+      const String& name,
+      const Value& value) override {
     plain_.setPropertyValue(o, name, value);
   }
 
