@@ -944,7 +944,7 @@ class NodeApiJsiRuntime : public jsi::Runtime {
   napi_value getProperty(napi_value object, napi_value propertyId) const;
   void setProperty(napi_value object, napi_value propertyId, napi_value value)
       const;
-  void deleteProperty(napi_value object, napi_value propertyId) const;
+  bool deleteProperty(napi_value object, napi_value propertyId) const;
   void setProperty(
       napi_value object,
       napi_value propertyId,
@@ -1829,21 +1829,30 @@ void NodeApiJsiRuntime::deleteProperty(
     const jsi::Object &obj,
     const jsi::PropNameID &name) {
   NodeApiScope scope{*this};
-  deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  auto res = deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  if (!res) {
+    throw jsi::JSError(*this, "Failed to delete property");
+  }
 }
 
 void NodeApiJsiRuntime::deleteProperty(
     const jsi::Object& obj,
     const jsi::String& name) {
-  NodeApiScope scope{*this};
-  deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  NodeApiScope scope{*this};  
+  auto res = deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  if (!res) {
+    throw jsi::JSError(*this, "Failed to delete property");
+  }
 }
 
 void NodeApiJsiRuntime::deleteProperty(
     const jsi::Object &obj,
     const jsi::Value &name) {
   NodeApiScope scope{*this};
-  deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  auto res = deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  if (!res) {
+    throw jsi::JSError(*this, "Failed to delete property");
+  }
 }
 #endif
 
@@ -2937,18 +2946,12 @@ void NodeApiJsiRuntime::setProperty(
 }
 
 //Deletes object property value.
-void NodeApiJsiRuntime::deleteProperty(
+bool NodeApiJsiRuntime::deleteProperty(
     napi_value object,
     napi_value propertyId) const {
   bool result{};
-  CHECK_NAPI(jsrApi_->napi_delete_property(env_, object, propertyId,&result));
-  
-  if (!result) {
-    // Property deletion failed - this typically means the property is not configurable
-    // According to ECMAScript spec, this should throw a TypeError in strict mode
-    runtime.throwJSException(jsrApi_->napi_throw_type_error(
-        env_, nullptr, "Cannot delete property"));
-  }
+  CHECK_NAPI(jsrApi_->napi_delete_property(env_, object, propertyId,&result));  
+  return result;
 }
 
 // Sets object property value with the provided property accessibility
