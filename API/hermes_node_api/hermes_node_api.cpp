@@ -4999,15 +4999,16 @@ napi_is_array(napi_env env, napi_value value, bool *result) {
   CHECK_POSTCONDITIONS(env, /*valueStackDelta:*/ 0);
   CHECK_ARG(value);
   CHECK_ARG(result);
-  
+
   // First check if it's a direct JSArray instance
   if (LLVM_LIKELY(vm::vmisa<vm::JSArray>(*phv(value)))) {
     *result = true;
     return env->clearLastNativeError();
   }
-  
+
   // Fall back to vm::isArray for more thorough checking (handles proxies, etc.)
-  vm::CallResult<bool> cr = vm::isArray(env->runtime_, vm::vmcast<vm::JSObject>(*phv(value)));
+  vm::CallResult<bool> cr =
+      vm::isArray(env->runtime_, vm::vmcast<vm::JSObject>(*phv(value)));
   CHECK_STATUS(env->checkExecutionStatus(cr.getStatus()));
   *result = *cr;
   return env->clearLastNativeError();
@@ -5025,7 +5026,7 @@ napi_get_array_length(napi_env env, napi_value value, uint32_t *result) {
   bool isArray = false;
   CHECK_STATUS(napi_is_array(env, value, &isArray));
   RETURN_STATUS_IF_FALSE(isArray, napi_array_expected);
-  
+
   vm::Handle<vm::JSObject> handle = asHandle<vm::JSObject>(value);
 
   if (LLVM_LIKELY(!vm::vmcast<vm::JSObject>(*phv(value))->isProxyObject())) {
@@ -5043,9 +5044,7 @@ napi_get_array_length(napi_env env, napi_value value, uint32_t *result) {
 
   napi_value res;
   CHECK_STATUS(env->getNamedProperty(
-      handle,
-      vm::Predefined::getSymbolID(vm::Predefined::length),
-      &res));
+      handle, vm::Predefined::getSymbolID(vm::Predefined::length), &res));
   RETURN_STATUS_IF_FALSE(phv(res)->isNumber(), napi_number_expected);
   *result = NodeApiDoubleConversion::toUint32(phv(res)->getDouble());
   return env->clearLastNativeError();

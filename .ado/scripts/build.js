@@ -894,7 +894,9 @@ function setupJSTestEnvPaths() {
     const pythonScriptsDir = path.join(pythonDir, "Scripts");
     console.log(`Found Python at: ${pythonDir}`);
     if (!process.env.PATH.includes(pythonDir)) {
-      console.log(`Adding python directories to PATH: ${pythonDir}, ${pythonScriptsDir}`);
+      console.log(
+        `Adding python directories to PATH: ${pythonDir}, ${pythonScriptsDir}`,
+      );
       process.env.PATH = `${pythonDir};${pythonScriptsDir};${process.env.PATH}`;
     }
   })();
