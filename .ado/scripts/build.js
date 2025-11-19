@@ -445,7 +445,7 @@ function cmakeConfigure(buildParams) {
   // Use prebuilt Hermes compiler for cross-platform builds
   if (isCrossPlatformBuild(buildParams)) {
     genArgs.push(
-      `-DIMPORT_HERMESC="${path.join(toolsPath, "ImportHermesc.cmake")}"`,
+      `-DIMPORT_HOST_COMPILERS="${path.join(toolsPath, "ImportHostCompilers.cmake")}"`,
     );
   }
 
@@ -894,7 +894,9 @@ function setupJSTestEnvPaths() {
     const pythonScriptsDir = path.join(pythonDir, "Scripts");
     console.log(`Found Python at: ${pythonDir}`);
     if (!process.env.PATH.includes(pythonDir)) {
-      console.log(`Adding python directories to PATH: ${pythonDir}, ${pythonScriptsDir}`);
+      console.log(
+        `Adding python directories to PATH: ${pythonDir}, ${pythonScriptsDir}`,
+      );
       process.env.PATH = `${pythonDir};${pythonScriptsDir};${process.env.PATH}`;
     }
   })();

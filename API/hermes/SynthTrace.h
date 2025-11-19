@@ -14,6 +14,8 @@
 #include "hermes/Support/StringSetVector.h"
 #include "hermes/VM/GCExecTrace.h"
 
+#include "jsi/jsi.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <memory>
@@ -217,6 +219,7 @@ class SynthTrace {
   RECORD(GetStringData)                  \
   RECORD(GetPrototype)                   \
   RECORD(SetPrototype)                   \
+  RECORD(DeleteProperty)                 \
   RECORD(Global)
 
   /// RecordType is a tag used to differentiate which type of record it is.
@@ -323,6 +326,14 @@ class SynthTrace {
 
   /// Decodes a string into a trace value.
   static TraceValue decode(const std::string &);
+
+#ifdef HERMESVM_API_TRACE_DEBUG
+  /// Given a Value, return a descriptive string. This should only be used to
+  /// provide more debugging info when creating records.
+  static std::string getDescriptiveString(
+      jsi::Runtime &runtime,
+      const jsi::Value &value);
+#endif
 
   /// The version of the Synth Benchmark
   constexpr static uint32_t synthVersion() {
@@ -819,7 +830,7 @@ class SynthTrace {
   struct GetPropertyRecord : public Record {
     /// The ObjectID of the object that was accessed for its property.
     const ObjectID objID_;
-    /// String or PropNameID passed to getProperty.
+    /// String or PropNameID or Value passed to getProperty.
     const TraceValue propID_;
 #ifdef HERMESVM_API_TRACE_DEBUG
     std::string propNameDbg_;
@@ -863,7 +874,7 @@ class SynthTrace {
   struct SetPropertyRecord : public Record {
     /// The ObjectID of the object that was accessed for its property.
     const ObjectID objID_;
-    /// String or PropNameID passed to setProperty.
+    /// String or PropNameID or Value passed to setProperty.
     const TraceValue propID_;
 #ifdef HERMESVM_API_TRACE_DEBUG
     std::string propNameDbg_;
@@ -982,6 +993,29 @@ class SynthTrace {
       pushIfTrackedValue(value_, uses);
       return uses;
     }
+  };
+
+  struct DeletePropertyRecord final : public Record {
+    static constexpr RecordType type{RecordType::DeleteProperty};
+    /// The object ID of the object that was accessed for its property
+    const ObjectID objID_;
+    /// The name of the property being deleted
+    const TraceValue propID_;
+
+    DeletePropertyRecord(TimeSinceStart time, ObjectID objID, TraceValue propID)
+        : Record(time), objID_(objID), propID_(propID) {}
+
+    RecordType getType() const override {
+      return type;
+    }
+
+    std::vector<ObjectID> uses() const override {
+      std::vector<ObjectID> uses{objID_};
+      pushIfTrackedValue(propID_, uses);
+      return uses;
+    }
+
+    void toJSONInternal(::hermes::JSONEmitter &json) const override;
   };
 
   /// A GetPrototypeRecord is an event where native code gets the prototype of a

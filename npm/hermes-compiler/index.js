@@ -1,12 +1,8 @@
-/*
+/**
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-rootProject.name = 'Hermes'
-
-include ':hermes'
-include ':cppruntime'
-include ':intltest'
+// require.resolve fails if the package does not contain an index.js file.

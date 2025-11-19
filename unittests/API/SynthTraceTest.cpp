@@ -370,6 +370,7 @@ TEST_F(SynthTraceTest, CallToNative) {
 TEST_F(SynthTraceTest, GetProperty) {
   std::string a{"a"};
   std::string b{"b"};
+  double propValNumber = 123;
   SynthTrace::ObjectID objID;
   SynthTrace::ObjectID aStringID;
   SynthTrace::ObjectID aPropID;
@@ -395,9 +396,14 @@ TEST_F(SynthTraceTest, GetProperty) {
     bPropID = rt->useObjectID(bProp);
     auto bValue = obj.getProperty(*rt, bProp);
     ASSERT_TRUE(bValue.isUndefined());
+
+    // Get using a jsi::Value
+    auto propVal = jsi::Value(propValNumber);
+    auto value = obj.getProperty(*rt, propVal);
+    ASSERT_TRUE(value.isUndefined());
   }
   const auto &records = rt->trace().records();
-  EXPECT_EQ(10, records.size());
+  EXPECT_EQ(12, records.size());
   EXPECT_EQ_RECORD(
       SynthTrace::CreateObjectRecord(records[0]->time_, objID), *records[0]);
   EXPECT_EQ_RECORD(
@@ -451,11 +457,25 @@ TEST_F(SynthTraceTest, GetProperty) {
   auto rtnExpect2 = SynthTrace::ReturnToNativeRecord(
       records[9]->time_, SynthTrace::encodeUndefined());
   EXPECT_EQ_RECORD(rtnExpect2, *records[9]);
+  auto gprExpect3 = SynthTrace::GetPropertyRecord(
+      records[10]->time_,
+      objID,
+      SynthTrace::encodeNumber(propValNumber)
+#ifdef HERMESVM_API_TRACE_DEBUG
+          ,
+      std::to_string(propValNumber)
+#endif
+  );
+  EXPECT_EQ_RECORD(gprExpect3, *records[10]);
+  auto rtnExpect3 = SynthTrace::ReturnToNativeRecord(
+      records[11]->time_, SynthTrace::encodeUndefined());
+  EXPECT_EQ_RECORD(rtnExpect3, *records[11]);
 }
 
 TEST_F(SynthTraceTest, SetProperty) {
   std::string a{"a"};
   std::string b{"b"};
+  double propValNumber = 123;
   SynthTrace::ObjectID objID;
   SynthTrace::ObjectID aStringID;
   SynthTrace::ObjectID bPropID;
@@ -470,9 +490,13 @@ TEST_F(SynthTraceTest, SetProperty) {
     auto bProp = jsi::PropNameID::forAscii(*rt, b);
     bPropID = rt->useObjectID(bProp);
     obj.setProperty(*rt, bProp, true);
+
+    // Set using a jsi::Value
+    auto propVal = jsi::Value(propValNumber);
+    obj.setProperty(*rt, propVal, 456);
   }
   const auto &records = rt->trace().records();
-  EXPECT_EQ(5, records.size());
+  EXPECT_EQ(6, records.size());
   EXPECT_EQ_RECORD(
       SynthTrace::CreateObjectRecord(records[0]->time_, objID), *records[0]);
   EXPECT_EQ_RECORD(
@@ -501,11 +525,22 @@ TEST_F(SynthTraceTest, SetProperty) {
 #endif
       SynthTrace::encodeBool(true));
   EXPECT_EQ_RECORD(sprExpect1, *records[4]);
+
+  auto sprExpect2 = SynthTrace::SetPropertyRecord(
+      records[5]->time_,
+      objID,
+      SynthTrace::encodeNumber(propValNumber),
+#ifdef HERMESVM_API_TRACE_DEBUG
+      std::to_string(propValNumber),
+#endif
+      SynthTrace::encodeNumber(456));
+  EXPECT_EQ_RECORD(sprExpect2, *records[5]);
 }
 
 TEST_F(SynthTraceTest, HasProperty) {
   std::string a{"a"};
   std::string b{"b"};
+  double propValNumber = 123;
   SynthTrace::ObjectID objID;
   SynthTrace::ObjectID aStringID;
   SynthTrace::ObjectID bPropID;
@@ -524,9 +559,13 @@ TEST_F(SynthTraceTest, HasProperty) {
     bool hasB = obj.hasProperty(*rt, bProp);
     // Whether or not "b" exists is irrelevant in this test.
     (void)hasB;
+
+    // Using a jsi::Value
+    auto propVal = jsi::Value(propValNumber);
+    obj.hasProperty(*rt, propVal);
   }
   const auto &records = rt->trace().records();
-  EXPECT_EQ(5, records.size());
+  EXPECT_EQ(6, records.size());
   EXPECT_EQ_RECORD(
       SynthTrace::CreateObjectRecord(records[0]->time_, objID), *records[0]);
   EXPECT_EQ_RECORD(
@@ -557,6 +596,59 @@ TEST_F(SynthTraceTest, HasProperty) {
 #endif
   );
   EXPECT_EQ_RECORD(hprExpect1, *records[4]);
+  auto hprExpect2 = SynthTrace::HasPropertyRecord(
+      records[5]->time_,
+      objID,
+      SynthTrace::encodeNumber(propValNumber)
+#ifdef HERMESVM_API_TRACE_DEBUG
+          ,
+      std::to_string(propValNumber),
+#endif
+  );
+  EXPECT_EQ_RECORD(hprExpect2, *records[5]);
+}
+
+TEST_F(SynthTraceTest, DeleteProperty) {
+  std::string foo{"foo"};
+  SynthTrace::ObjectID objID;
+  SynthTrace::ObjectID fooID;
+  auto obj = jsi::Object(*rt);
+  objID = rt->useObjectID(obj);
+  auto fooStr = jsi::String::createFromAscii(*rt, foo);
+  fooID = rt->useObjectID(fooStr);
+  auto val = jsi::Value(*rt, 1);
+  obj.setProperty(*rt, fooStr, 1);
+  obj.deleteProperty(*rt, fooStr);
+  const auto &records = rt->trace().records();
+  EXPECT_EQ(4, records.size());
+  EXPECT_EQ(SynthTrace::RecordType::CreateObject, records[0]->getType());
+  EXPECT_EQ(SynthTrace::RecordType::CreateString, records[1]->getType());
+  EXPECT_EQ(SynthTrace::RecordType::SetProperty, records[2]->getType());
+  auto deleteStrRecord = SynthTrace::DeletePropertyRecord(
+      records[3]->time_, objID, SynthTrace::encodeString(fooID));
+  EXPECT_EQ_RECORD(deleteStrRecord, *records[3]);
+
+  objID = rt->useObjectID(obj);
+  auto fooProp = jsi::PropNameID::forAscii(*rt, foo);
+  fooID = rt->useObjectID(fooProp);
+  obj.setProperty(*rt, fooProp, 1);
+  obj.deleteProperty(*rt, fooProp);
+  EXPECT_EQ(7, records.size());
+  EXPECT_EQ(SynthTrace::RecordType::CreatePropNameID, records[4]->getType());
+  EXPECT_EQ(SynthTrace::RecordType::SetProperty, records[5]->getType());
+  auto deletePropRecord = SynthTrace::DeletePropertyRecord(
+      records[6]->time_, objID, SynthTrace::encodePropNameID(fooID));
+  EXPECT_EQ_RECORD(deletePropRecord, *records[6]);
+
+  objID = rt->useObjectID(obj);
+  auto propVal = jsi::Value(*rt, 1);
+  obj.setProperty(*rt, "1", 123);
+  obj.deleteProperty(*rt, propVal);
+  EXPECT_EQ(SynthTrace::RecordType::CreateString, records[7]->getType());
+  EXPECT_EQ(SynthTrace::RecordType::SetProperty, records[8]->getType());
+  auto expectedDeleteRecord = SynthTrace::DeletePropertyRecord(
+      records[9]->time_, objID, SynthTrace::encodeNumber(1));
+  EXPECT_EQ_RECORD(expectedDeleteRecord, *records[9]);
 }
 
 TEST_F(SynthTraceTest, GetPropertyNames) {
@@ -772,9 +864,10 @@ TEST_F(SynthTraceTest, HostObjectProxy) {
                 jsi::PropNameID::forAscii(rt, cs.getHappened.c_str())),
             setHappenedPropName(
                 jsi::PropNameID::forAscii(rt, cs.setHappened.c_str())),
-            getPropertyNamesHappenedPropName(jsi::PropNameID::forAscii(
-                rt,
-                cs.getPropertyNamesHappened.c_str())),
+            getPropertyNamesHappenedPropName(
+                jsi::PropNameID::forAscii(
+                    rt,
+                    cs.getPropertyNamesHappened.c_str())),
             global(global),
             trt(rt) {}
       jsi::Value get(jsi::Runtime &rt, const jsi::PropNameID &name) override {
@@ -1050,8 +1143,9 @@ TEST_F(SynthTraceTest, HostObjectPropertyNamesAreDefs) {
           this.yRes = o.y;
         }) ();
     )###";
-    codeHash = llvh::SHA1::hash(llvh::makeArrayRef(
-        reinterpret_cast<const uint8_t *>(code.data()), code.size()));
+    codeHash = llvh::SHA1::hash(
+        llvh::makeArrayRef(
+            reinterpret_cast<const uint8_t *>(code.data()), code.size()));
 
     rt->evaluateJavaScript(
         std::unique_ptr<jsi::StringBuffer>(new jsi::StringBuffer(code)), "");
@@ -1309,11 +1403,12 @@ struct SynthTraceRuntimeTest : public ::testing::Test {
   std::unique_ptr<TracingHermesRuntime> traceRt;
 
   SynthTraceRuntimeTest()
-      : config(::hermes::vm::RuntimeConfig::Builder()
-                   .withSynthTraceMode(
-                       ::hermes::vm::SynthTraceMode::TracingAndReplaying)
-                   .withMicrotaskQueue(true)
-                   .build()) {
+      : config(
+            ::hermes::vm::RuntimeConfig::Builder()
+                .withSynthTraceMode(
+                    ::hermes::vm::SynthTraceMode::TracingAndReplaying)
+                .withMicrotaskQueue(true)
+                .build()) {
     auto *hermesRoot = jsi::castInterface<IHermesRootAPI>(makeHermesRootAPI());
     traceRt = makeTracingHermesRuntime(
         hermesRoot->makeHermesRuntime(config),
@@ -1459,7 +1554,8 @@ function foo(a, b, c){
     rt.global().getPropertyAsFunction(rt, "foo").call(rt, obj, obj, obj);
   }
   replay();
-  {}
+  {
+  }
 }
 
 TEST_F(SynthTraceReplayTest, CreateObjectReplay) {
@@ -1493,6 +1589,31 @@ TEST_F(SynthTraceReplayTest, CreateObjectReplay) {
 
     auto child2 = rt.global().getProperty(rt, "child2").asObject(rt);
     EXPECT_TRUE(child2.getPrototype(rt).isNull());
+  }
+}
+
+TEST_F(SynthTraceReplayTest, DeletePropertyReplay) {
+  {
+    auto &rt = *traceRt;
+    auto obj = jsi::Object(rt);
+    rt.global().setProperty(rt, "foo", obj);
+
+    obj.setProperty(rt, "bar", 123);
+    obj.setProperty(rt, "baz", 456);
+    obj.setProperty(rt, "100", 789);
+
+    obj.deleteProperty(rt, jsi::String::createFromAscii(rt, "bar"));
+    obj.deleteProperty(rt, jsi::PropNameID::forAscii(rt, "baz"));
+    obj.deleteProperty(rt, jsi::Value(rt, 100));
+  }
+  replay();
+  {
+    auto &rt = *replayRt;
+    auto obj = rt.global().getPropertyAsObject(rt, "foo");
+
+    EXPECT_FALSE(obj.hasProperty(rt, "bar"));
+    EXPECT_FALSE(obj.hasProperty(rt, "baz"));
+    EXPECT_FALSE(obj.hasProperty(rt, "100"));
   }
 }
 
@@ -1703,6 +1824,12 @@ TEST_F(SynthTraceReplayTest, SetPropertyReplay) {
     x.setProperty(rt, symProp, "eggplant");
     rt.global().setProperty(rt, "x", x);
     eval(rt, "x[symD] = 'durian'");
+
+    auto propVal = jsi::Value(123);
+    x.setProperty(rt, propVal, 456);
+    x.hasProperty(rt, propVal);
+    auto val = x.getProperty(rt, propVal);
+    x.setProperty(rt, "num", val);
   }
   replay();
   {
@@ -1712,6 +1839,8 @@ TEST_F(SynthTraceReplayTest, SetPropertyReplay) {
     EXPECT_EQ(eval(rt, "x.c").asString(rt).utf8(rt), "coconut");
     EXPECT_EQ(eval(rt, "x[symD]").asString(rt).utf8(rt), "durian");
     EXPECT_EQ(eval(rt, "x[symE]").asString(rt).utf8(rt), "eggplant");
+    EXPECT_EQ(eval(rt, "x[123]").asNumber(), 456);
+    EXPECT_EQ(eval(rt, "x.num").asNumber(), 456);
   }
 }
 

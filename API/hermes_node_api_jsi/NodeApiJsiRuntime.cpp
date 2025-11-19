@@ -269,9 +269,20 @@ class NodeApiJsiRuntime : public jsi::Runtime {
       override;
   jsi::Value getProperty(const jsi::Object &obj, const jsi::String &name)
       override;
+
+#if JSI_VERSION >= 21
+  jsi::Value getProperty(const jsi::Object &obj, const jsi::Value &name)
+      override;
+#endif
+
   bool hasProperty(const jsi::Object &obj, const jsi::PropNameID &name)
       override;
   bool hasProperty(const jsi::Object &obj, const jsi::String &name) override;
+
+#if JSI_VERSION >= 21
+  bool hasProperty(const jsi::Object &obj, const jsi::Value &name) override;
+#endif
+
   void setPropertyValue(
       JSI_CONST_10 jsi::Object &obj,
       const jsi::PropNameID &name,
@@ -280,6 +291,19 @@ class NodeApiJsiRuntime : public jsi::Runtime {
       JSI_CONST_10 jsi::Object &obj,
       const jsi::String &name,
       const jsi::Value &value) override;
+
+#if JSI_VERSION >= 21
+  void setPropertyValue(
+      const jsi::Object &obj,
+      const jsi::Value &name,
+      const jsi::Value &value) override;
+
+  void deleteProperty(const jsi::Object &obj, const jsi::PropNameID &name)
+      override;
+  void deleteProperty(const jsi::Object &obj, const jsi::String &name) override;
+
+  void deleteProperty(const jsi::Object &obj, const jsi::Value &name) override;
+#endif
 
   bool isArray(const jsi::Object &obj) const override;
   bool isArrayBuffer(const jsi::Object &obj) const override;
@@ -921,6 +945,7 @@ class NodeApiJsiRuntime : public jsi::Runtime {
   napi_value getProperty(napi_value object, napi_value propertyId) const;
   void setProperty(napi_value object, napi_value propertyId, napi_value value)
       const;
+  bool deleteProperty(napi_value object, napi_value propertyId) const;
   void setProperty(
       napi_value object,
       napi_value propertyId,
@@ -1741,6 +1766,15 @@ jsi::Value NodeApiJsiRuntime::getProperty(
   return toJsiValue(getProperty(getNodeApiValue(obj), getNodeApiValue(name)));
 }
 
+#if JSI_VERSION >= 21
+jsi::Value NodeApiJsiRuntime::getProperty(
+    const jsi::Object &obj,
+    const jsi::Value &name) {
+  NodeApiScope scope{*this};
+  return toJsiValue(getProperty(getNodeApiValue(obj), getNodeApiValue(name)));
+}
+#endif
+
 bool NodeApiJsiRuntime::hasProperty(
     const jsi::Object &obj,
     const jsi::PropNameID &name) {
@@ -1754,6 +1788,15 @@ bool NodeApiJsiRuntime::hasProperty(
   NodeApiScope scope{*this};
   return hasProperty(getNodeApiValue(obj), getNodeApiValue(name));
 }
+
+#if JSI_VERSION >= 21
+bool NodeApiJsiRuntime::hasProperty(
+    const jsi::Object &obj,
+    const jsi::Value &name) {
+  NodeApiScope scope{*this};
+  return hasProperty(getNodeApiValue(obj), getNodeApiValue(name));
+}
+#endif
 
 void NodeApiJsiRuntime::setPropertyValue(
     JSI_CONST_10 jsi::Object &obj,
@@ -1772,6 +1815,47 @@ void NodeApiJsiRuntime::setPropertyValue(
   setProperty(
       getNodeApiValue(obj), getNodeApiValue(name), getNodeApiValue(value));
 }
+
+#if JSI_VERSION >= 21
+void NodeApiJsiRuntime::setPropertyValue(
+    const jsi::Object &obj,
+    const jsi::Value &name,
+    const jsi::Value &value) {
+  NodeApiScope scope{*this};
+  setProperty(
+      getNodeApiValue(obj), getNodeApiValue(name), getNodeApiValue(value));
+}
+
+void NodeApiJsiRuntime::deleteProperty(
+    const jsi::Object &obj,
+    const jsi::PropNameID &name) {
+  NodeApiScope scope{*this};
+  bool res = deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  if (!res) {
+    throw jsi::JSError(*this, "Failed to delete property");
+  }
+}
+
+void NodeApiJsiRuntime::deleteProperty(
+    const jsi::Object &obj,
+    const jsi::String &name) {
+  NodeApiScope scope{*this};
+  bool res = deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  if (!res) {
+    throw jsi::JSError(*this, "Failed to delete property");
+  }
+}
+
+void NodeApiJsiRuntime::deleteProperty(
+    const jsi::Object &obj,
+    const jsi::Value &name) {
+  NodeApiScope scope{*this};
+  bool res = deleteProperty(getNodeApiValue(obj), getNodeApiValue(name));
+  if (!res) {
+    throw jsi::JSError(*this, "Failed to delete property");
+  }
+}
+#endif
 
 bool NodeApiJsiRuntime::isArray(const jsi::Object &obj) const {
   NodeApiScope scope{*this};
@@ -2391,7 +2475,7 @@ NodeApiJsiRuntime::PropNameIDView::PropNameIDView(
     NodeApiJsiRuntime * /*runtime*/,
     napi_value propertyId) noexcept
     : propertyId_{make<jsi::PropNameID>(
-          new(std::addressof(pointerStore_)) NodeApiStackOnlyPointerValue(
+          new (std::addressof(pointerStore_)) NodeApiStackOnlyPointerValue(
               propertyId,
               NodeApiPointerValueKind::StringPropNameID))} {}
 
@@ -2860,6 +2944,14 @@ void NodeApiJsiRuntime::setProperty(
     napi_value propertyId,
     napi_value value) const {
   CHECK_NAPI(jsrApi_->napi_set_property(env_, object, propertyId, value));
+}
+
+// Deletes object property value.
+bool NodeApiJsiRuntime::deleteProperty(napi_value object, napi_value propertyId)
+    const {
+  bool result{};
+  CHECK_NAPI(jsrApi_->napi_delete_property(env_, object, propertyId, &result));
+  return result;
 }
 
 // Sets object property value with the provided property accessibility

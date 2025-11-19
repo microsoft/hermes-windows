@@ -639,12 +639,6 @@ std::string TraceInterpreter::executeRecordsWithMarkerOptions() {
   }
   executeRecords();
 
-#ifdef HERMESVM_PROFILER_BB
-  if (auto *hermesRuntime = dynamic_cast<HermesRuntime *>(&rt_)) {
-    hermesRuntime->dumpBasicBlockProfileTrace(std::cerr);
-  }
-#endif
-
   checkMarker(std::string("end"));
   if (!markerFound_) {
     // An action was requested at a marker but that marker wasn't found.
@@ -931,13 +925,20 @@ void TraceInterpreter::executeRecords() {
             assert(propString.utf8(rt_) == gpr.propNameDbg_);
 #endif
             value = obj.getProperty(rt_, propString);
-          } else {
-            assert(gpr.propID_.isPropNameID());
+          } else if (gpr.propID_.isPropNameID()) {
             auto propNameID = getPropNameIDForUse(gpr.propID_.getUID());
 #ifdef HERMESVM_API_TRACE_DEBUG
             assert(propNameID.utf8(rt_) == gpr.propNameDbg_);
 #endif
             value = obj.getProperty(rt_, propNameID);
+          } else {
+            auto propNameVal = traceValueToJSIValue(gpr.propID_);
+#ifdef HERMESVM_API_TRACE_DEBUG
+            assert(
+                SynthTrace::getDescriptiveString(rt_, propNameVal) ==
+                gpr.propNameDbg_);
+#endif
+            value = obj.getProperty(rt_, propNameVal);
           }
           retval = std::move(value);
           break;
@@ -954,13 +955,20 @@ void TraceInterpreter::executeRecords() {
             assert(propString.utf8(rt_) == spr.propNameDbg_);
 #endif
             obj.setProperty(rt_, propString, traceValueToJSIValue(spr.value_));
-          } else {
-            assert(spr.propID_.isPropNameID());
+          } else if (spr.propID_.isPropNameID()) {
             auto propNameID = getPropNameIDForUse(spr.propID_.getUID());
 #ifdef HERMESVM_API_TRACE_DEBUG
             assert(propNameID.utf8(rt_) == spr.propNameDbg_);
 #endif
             obj.setProperty(rt_, propNameID, traceValueToJSIValue(spr.value_));
+          } else {
+            auto propNameVal = traceValueToJSIValue(spr.propID_);
+#ifdef HERMESVM_API_TRACE_DEBUG
+            assert(
+                SynthTrace::getDescriptiveString(rt_, propNameVal) ==
+                gpr.propNameDbg_);
+#endif
+            obj.setProperty(rt_, propNameVal, traceValueToJSIValue(spr.value_));
           }
           break;
         }
@@ -990,13 +998,36 @@ void TraceInterpreter::executeRecords() {
             assert(propString.utf8(rt_) == hpr.propNameDbg_);
 #endif
             obj.hasProperty(rt_, propString);
-          } else {
-            assert(hpr.propID_.isPropNameID());
+          } else if (hpr.propID_.isPropNameID()) {
             auto propNameID = getPropNameIDForUse(hpr.propID_.getUID());
 #ifdef HERMESVM_API_TRACE_DEBUG
             assert(propNameID.utf8(rt_) == hpr.propNameDbg_);
 #endif
             obj.hasProperty(rt_, propNameID);
+          } else {
+            auto propNameVal = traceValueToJSIValue(hpr.propID_);
+#ifdef HERMESVM_API_TRACE_DEBUG
+            assert(
+                SynthTrace::getDescriptiveString(rt_, propNameVal) ==
+                gpr.propNameDbg_);
+#endif
+            obj.hasProperty(rt_, propNameVal);
+          }
+          break;
+        }
+        case RecordType::DeleteProperty: {
+          const auto &record =
+              static_cast<const SynthTrace::DeletePropertyRecord &>(*rec);
+          auto obj = getJSIValueForUse(record.objID_).getObject(rt_);
+          if (record.propID_.isString()) {
+            const jsi::String propString =
+                getJSIValueForUse(record.propID_.getUID()).asString(rt_);
+            obj.deleteProperty(rt_, propString);
+          } else if (record.propID_.isPropNameID()) {
+            auto propNameID = getPropNameIDForUse(record.propID_.getUID());
+            obj.deleteProperty(rt_, propNameID);
+          } else {
+            obj.deleteProperty(rt_, traceValueToJSIValue(record.propID_));
           }
           break;
         }
@@ -1336,11 +1367,7 @@ std::string TraceInterpreter::printStats() {
 #ifdef HERMESVM_PROFILER_OPCODE
   stats += "\n";
   std::ostringstream os;
-  if (auto *hermesRuntime = castInterface<IHermes>(&rt_)) {
-    hermesRuntime->dumpOpcodeStats(os);
-  } else {
-    throw std::runtime_error("Unable to cast runtime into HermesRuntime");
-  }
+  rt_.instrumentation().dumpOpcodeStats(os);
   stats += os.str();
   stats += "\n";
 #endif
