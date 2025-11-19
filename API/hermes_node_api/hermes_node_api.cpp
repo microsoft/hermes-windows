@@ -5027,26 +5027,23 @@ napi_get_array_length(napi_env env, napi_value value, uint32_t *result) {
   CHECK_STATUS(napi_is_array(env, value, &isArray));
   RETURN_STATUS_IF_FALSE(isArray, napi_array_expected);
 
-  vm::Handle<vm::JSObject> handle = asHandle<vm::JSObject>(value);
-
-  if (LLVM_LIKELY(!vm::vmcast<vm::JSObject>(*phv(value))->isProxyObject())) {
-    vm::JSObject *obj = vm::vmcast<vm::JSObject>(*phv(value));
-    while (obj && obj->isProxyObject()) {
-      // For proxy objects, check if the target is an array
-      auto target = vm::JSProxy::getTarget(obj, env->runtime_);
-      obj = target.get();
-      if (obj && vm::vmisa<vm::JSArray>(obj)) {
-        handle = env->runtime_.makeHandle<vm::JSObject>(obj);
-        break;
-      }
-    }
+  if (LLVM_LIKELY(vm::vmisa<vm::JSArray>(*phv(value)))) {
+    *result = vm::JSArray::getLength(
+        vm::vmcast<vm::JSArray>(*phv(value)), env->runtime_);
+    return env->clearLastNativeError();
   }
 
-  napi_value res;
-  CHECK_STATUS(env->getNamedProperty(
-      handle, vm::Predefined::getSymbolID(vm::Predefined::length), &res));
-  RETURN_STATUS_IF_FALSE(phv(res)->isNumber(), napi_number_expected);
-  *result = NodeApiDoubleConversion::toUint32(phv(res)->getDouble());
+  vm::CallResult<vm::PseudoHandle<>> cr = vm::JSObject::getNamed_RJS(
+      asHandle<vm::JSObject>(value),
+      env->runtime_,
+      vm::Predefined::getSymbolID(vm::Predefined::length));
+  CHECK_STATUS(env->checkExecutionStatus(cr.getStatus()));
+
+  vm::Handle<vm::HermesValue> lenHandle =
+      env->runtime_.makeHandle(std::move(*cr));
+  auto lenRes = toLength(env->runtime_, lenHandle);
+  CHECK_STATUS(env->checkExecutionStatus(lenRes.getStatus()));
+  *result = lenRes->getNumber();
   return env->clearLastNativeError();
 }
 
