@@ -7,6 +7,7 @@
 
 
 // RUN: TZ=GMT %hermes -O -target=HBC %s | %FileCheck --match-full-lines %s
+// RUN: TZ=GMT %shermes -O -exec %s | %FileCheck --match-full-lines %s
 // REQUIRES: intl
 
 print("get date time format test");

@@ -5,8 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %hermes -Xhermes-internal-test-methods -Xes6-proxy -non-strict -O -target=HBC %s | %FileCheck --match-full-lines %s
-// REQUIRES: !check_native_stack
+// RUN: ulimit -s 1024 && %hermes -Xhermes-internal-test-methods -Xes6-proxy -non-strict -O -target=HBC %s | %FileCheck --match-full-lines %s
 
 let isStrictMode = (function() { return this === undefined; })();
 
@@ -2227,5 +2226,12 @@ var p2 = new Proxy(p1, {
 
 assert.throws(() => p2.foo, RangeError, "Maximum call stack size exceeded");
 
+(function () {
+  function callableTarget() {}
+  let p = new Proxy(callableTarget, {});
+  assert.equal(typeof new p(), "object", "construct call on a proxy should always return an object");
+})();
+
+print('hi');
 print('done');
 // CHECK-LABEL: done

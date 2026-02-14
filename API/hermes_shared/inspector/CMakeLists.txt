@@ -137,3 +137,13 @@ target_include_directories(hermesinspector PUBLIC
   ${REACT_NATIVE_SOURCE}/ReactCommon
   ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
   ${REACT_NATIVE_SOURCE_72}/ReactCommon)
+
+target_include_directories(hermesinspector_obj PUBLIC
+  ${PROJECT_SOURCE_DIR}/API
+  ${PROJECT_SOURCE_DIR}/API/jsi
+  ${PROJECT_SOURCE_DIR}/API/hermes_node_api/node_api
+  ${PROJECT_SOURCE_DIR}/public
+  ${FOLLY_SOURCE}
+  ${REACT_NATIVE_SOURCE}/ReactCommon
+  ${REACT_NATIVE_SOURCE}/ReactCommon/runtimeexecutor
+  ${REACT_NATIVE_SOURCE_72}/ReactCommon)

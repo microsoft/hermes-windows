@@ -11,11 +11,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#pragma GCC diagnostic push
 
-#ifdef HERMES_COMPILER_SUPPORTS_WSHORTEN_64_TO_32
-#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
-#endif
 namespace hermes {
 namespace vm {
 class Debugger;
@@ -88,7 +84,7 @@ struct StackTrace {
 
  private:
   explicit StackTrace(std::vector<CallFrameInfo> frames)
-      : frames_(std::move(frames)) {}
+      : frames_(std::move(frames)) {};
   friend ProgramState;
   friend ::hermes::vm::Debugger;
   std::vector<CallFrameInfo> frames_;

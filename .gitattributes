@@ -1,2 +1,0 @@
-# Avoid modifying the line endings for lit tests since they change the output.
-test/** text eol=lf

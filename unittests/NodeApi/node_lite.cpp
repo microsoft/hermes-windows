@@ -2,16 +2,18 @@
 // Licensed under the MIT License.
 
 #include "node_lite.h"
-#include <js_runtime_api.h>
+#include "js_runtime_api.h"
 #include <algorithm>
 #include <array>
 #include <cstdarg>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <regex>
 #include <sstream>
+#include <utility>
 #include "child_process.h"
 
 namespace fs = std::filesystem;
@@ -293,8 +295,8 @@ NodeLiteRuntime::NodeLiteRuntime(
     std::shared_ptr<NodeLiteTaskRunner> task_runner,
     std::string js_root,
     std::vector<std::string> args)
-    : js_root_(std::move(js_root)),
-      task_runner_(std::move(task_runner)),
+    : task_runner_(std::move(task_runner)),
+      js_root_(std::move(js_root)),
       args_(std::move(args)) {}
 
 void NodeLiteRuntime::Initialize() {

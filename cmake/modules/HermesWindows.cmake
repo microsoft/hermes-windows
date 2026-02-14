@@ -87,6 +87,7 @@ function(hermes_windows_configure_clang_flags)
     
     # Security flags
     set(CLANG_CXX_FLAGS "${CLANG_CXX_FLAGS} -fstack-protector-all")
+    set(CLANG_CXX_FLAGS "${CLANG_CXX_FLAGS} -Xclang -gsrc-hash=sha256")
    
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CLANG_CXX_FLAGS}" PARENT_SCOPE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CLANG_CXX_FLAGS}" PARENT_SCOPE)
