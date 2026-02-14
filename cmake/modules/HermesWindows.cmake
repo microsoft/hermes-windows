@@ -124,6 +124,14 @@ function(hermes_windows_configure_msvc_flags)
     set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /wd4646")
     # C4312: 'reinterpret_cast': conversion from 'X' to 'hermes::vm::GCCell *' of greater size
     set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /wd4312")
+    # C4703: potentially uninitialized local pointer variable used
+    # /sdl re-promotes this after upstream Hermes.cmake's -wd4703; re-suppress it.
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /wd4703")
+
+    # Silence C++20 deprecation of std::is_pod used in upstream llvh headers.
+    # /sdl promotes C4996 (deprecation) to an error; this targeted macro avoids
+    # modifying the vendored llvh code.
+    set(MSVC_CXX_FLAGS "${MSVC_CXX_FLAGS} /D_SILENCE_CXX20_IS_POD_DEPRECATION_WARNING")
 
     # Apply flags to both C and C++
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${MSVC_CXX_FLAGS}" PARENT_SCOPE)

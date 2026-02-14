@@ -470,7 +470,7 @@ static inline uint64_t _sh_tryfast_f64_to_u64_cvt(double x) {
 #endif
 
 #if (defined(__GNUC__) && defined(__x86_64__)) || \
-    (defined(_MSC_VER) && defined(_M_X64))
+    (defined(_MSC_VER) && defined(_M_X64) && !defined(_M_ARM64EC))
 // =============================================================================
 //
 // Clang/GCC/MSVC x86-64
@@ -605,7 +605,7 @@ static inline unsigned _sh_tryfast_f64_to_u32_cvt(double x) {
 }
 
 #elif (defined(__GNUC__) && defined(__aarch64__)) || \
-    (defined(_MSC_VER) && defined(_M_ARM64))
+    (defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM64EC)))
 // =============================================================================
 //
 // Clang/GCC/MSVC aarch64

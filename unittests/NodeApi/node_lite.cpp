@@ -204,8 +204,8 @@ napi_value NodeLiteModule::LoadScriptModule(napi_env env) {
             .LoadModule(env);
       });
 
-  return NodeApi::CallFunction(
-      env, module_func, {module_obj, exports, require, file_name, dir_name});
+  napi_value call_args[] = {module_obj, exports, require, file_name, dir_name};
+  return NodeApi::CallFunction(env, module_func, call_args);
 }
 
 napi_value NodeLiteModule::LoadNativeModule(napi_env env) {
@@ -435,7 +435,8 @@ void NodeLiteRuntime::RunTestScript(const std::string& script_path) {
 void NodeLiteRuntime::OnExit() {
   for (NodeApiRef& callback_ref : on_exit_callbacks_) {
     napi_value callback = NodeApi::GetReferenceValue(env_, callback_ref.get());
-    NodeApi::CallFunction(env_, callback, {NodeApi::CreateUInt32(env_, 0)});
+    napi_value exit_args[] = {NodeApi::CreateUInt32(env_, 0)};
+    NodeApi::CallFunction(env_, callback, exit_args);
   }
 }
 
@@ -443,10 +444,9 @@ void NodeLiteRuntime::OnUncaughtException(napi_value error) {
   bool shouldExit = true;
   for (NodeApiRef& callback_ref : on_uncaughtException_callbacks_) {
     napi_value callback = NodeApi::GetReferenceValue(env_, callback_ref.get());
-    napi_value result = NodeApi::CallFunction(
-        env_,
-        callback,
-        {error, NodeApi::CreateString(env_, "uncaughtException")});
+    napi_value exc_args[] = {
+        error, NodeApi::CreateString(env_, "uncaughtException")};
+    napi_value result = NodeApi::CallFunction(env_, callback, exc_args);
     // If at least one callback returns false, we do not exit.
     // TODO: (vmoroz) Investigate the Node.js behavior in that case
     // if (shouldExit && NodeApi::TypeOf(env_, result) == napi_boolean) {
@@ -589,7 +589,7 @@ void NodeLiteRuntime::DefineGlobalFunctions() {
             NodeApiHandleScope scope{env};
             napi_value callback =
                 NodeApi::GetReferenceValue(env, callback_ref->get());
-            NodeApi::CallFunction(env, callback, {});
+            NodeApi::CallFunction(env, callback, span<napi_value>{});
           });
         });
     return NodeApi::CreateUInt32(env, task_id);

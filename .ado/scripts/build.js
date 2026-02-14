@@ -425,6 +425,22 @@ function cmakeConfigure(buildParams) {
     if (targetTriple) {
       genArgs.push(`-DCMAKE_C_FLAGS="-target ${targetTriple}"`);
       genArgs.push(`-DCMAKE_CXX_FLAGS="-target ${targetTriple}"`);
+      genArgs.push(`-DCMAKE_ASM_FLAGS="-target ${targetTriple}"`);
+    }
+  }
+
+  // For ARM64/ARM64EC cross-compilation, CMAKE_SYSTEM_PROCESSOR must be set
+  // so that Boost.Context selects ARM64 assembly files instead of defaulting
+  // to x86_64 based on the host processor (AMD64). This applies to both
+  // Clang and MSVC builds.
+  if (platform === "arm64" || platform === "arm64ec") {
+    genArgs.push("-DCMAKE_SYSTEM_PROCESSOR=ARM64");
+
+    // MSVC ARM64 assembler is called armasm64, not armasm (which is ARM32).
+    // CMake's ASM_ARMASM language detection looks for armasm by default,
+    // so we must point it to the correct executable.
+    if (msvc) {
+      genArgs.push("-DCMAKE_ASM_MARMASM_COMPILER=armasm64");
     }
   }
 

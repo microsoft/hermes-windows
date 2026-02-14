@@ -137,7 +137,14 @@ unset(_default_ext)
 
 ## Implementation
 
-set(_default_impl fcontext)
+# ARM64EC cannot use fcontext assembly because armasm64 produces pure ARM64
+# objects without ARM64EC metadata, causing unresolved exit thunks at link time.
+# Use Windows Fibers (winfib) which requires no assembly.
+if(WIN32 AND HERMES_WINDOWS_TARGET_PLATFORM STREQUAL "arm64ec")
+  set(_default_impl winfib)
+else()
+  set(_default_impl fcontext)
+endif()
 
 set(BOOST_CONTEXT_IMPLEMENTATION "${_default_impl}" CACHE STRING "Boost.Context implementation (fcontext, ucontext, winfib)")
 set_property(CACHE BOOST_CONTEXT_IMPLEMENTATION PROPERTY STRINGS fcontext ucontext winfib)
@@ -164,7 +171,7 @@ if(BOOST_CONTEXT_IMPLEMENTATION STREQUAL "fcontext")
       enable_language(ASM)
     endif()
   elseif(BOOST_CONTEXT_ASSEMBLER STREQUAL armasm)
-    enable_language(ASM_ARMASM)
+    enable_language(ASM_MARMASM)
   else()
     enable_language(ASM_MASM)
   endif()

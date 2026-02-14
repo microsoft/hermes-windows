@@ -600,7 +600,7 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -wd4530")
   # Parallelize build
   if (HERMES_MSVC_MP)
-    add_compile_options( /MP )
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/MP>)
   endif()
   # MSVC does not have strict aliasing so there is no need to support it.
   # Similar to GCC/Clang above, disable strict signed integer overflow.
