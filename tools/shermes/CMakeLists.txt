@@ -18,10 +18,16 @@ set(HERMES_ENABLE_EH OFF)
 set(SHERMES_CC "cc" CACHE STRING "C compiler to invoke")
 set(SHERMES_CC_SYSCFLAGS "" CACHE STRING "C compiler system flags")
 set(SHERMES_CC_SYSLDFLAGS "" CACHE STRING "C compiler system linker flags")
+# Use ';' as path separator on Windows because ':' conflicts with drive letters.
+if(WIN32)
+  set(_shermes_path_sep ";")
+else()
+  set(_shermes_path_sep ":")
+endif()
 set(SHERMES_CC_INCLUDE_PATH
-  "${CMAKE_BINARY_DIR}/lib/config:${PROJECT_SOURCE_DIR}/include" CACHE STRING
+  "${CMAKE_BINARY_DIR}/lib/config${_shermes_path_sep}${PROJECT_SOURCE_DIR}/include" CACHE STRING
   "Include path when invoking CC")
-set(SHERMES_CC_LIB_PATH "$<TARGET_FILE_DIR:hermesvm>:$<TARGET_FILE_DIR:jsi>:$<TARGET_FILE_DIR:shermes_console>" CACHE STRING
+set(SHERMES_CC_LIB_PATH "$<TARGET_FILE_DIR:hermesvm>${_shermes_path_sep}$<TARGET_FILE_DIR:jsi>${_shermes_path_sep}$<TARGET_FILE_DIR:shermes_console>" CACHE STRING
   "Library path when invoking CC")
 
 if (HERMES_ENABLE_ADDRESS_SANITIZER)

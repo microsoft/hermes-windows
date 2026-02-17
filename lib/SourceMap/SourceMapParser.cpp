@@ -117,6 +117,11 @@ std::unique_ptr<SourceMap> SourceMapParser::parse(
       pathBuf = baseDir;
       llvh::sys::path::append(pathBuf, sourceRoot);
       llvh::sys::path::remove_dots(pathBuf, true);
+#ifdef _WIN32
+      // Source map paths use forward slashes per the spec. LLVM path
+      // utilities convert to backslashes on Windows, so normalize back.
+      std::replace(pathBuf.begin(), pathBuf.end(), '\\', '/');
+#endif
       sourceRoot = pathBuf;
     }
   }

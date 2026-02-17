@@ -147,12 +147,18 @@ void populateCCCfg(CCCfg &cfg) {
   init(cfg.ldlibs, "LDLIBS", "");
 
   llvh::SmallVector<llvh::StringRef, 2> vec{};
-  llvh::StringLiteral(SHERMES_CC_LIB_PATH).split(vec, ':', -1, false);
+#ifdef _WIN32
+  // Use ';' on Windows because ':' conflicts with drive letters (e.g. E:/).
+  constexpr char pathSep = ';';
+#else
+  constexpr char pathSep = ':';
+#endif
+  llvh::StringLiteral(SHERMES_CC_LIB_PATH).split(vec, pathSep, -1, false);
   for (auto sr : vec)
     cfg.hermesLibPath.push_back(sr.str());
 
   vec.clear();
-  llvh::StringLiteral(SHERMES_CC_INCLUDE_PATH).split(vec, ':', -1, false);
+  llvh::StringLiteral(SHERMES_CC_INCLUDE_PATH).split(vec, pathSep, -1, false);
   for (auto sr : vec)
     cfg.hermesIncludePath.push_back(sr.str());
 }
@@ -220,7 +226,9 @@ bool invokeCC(
       args.emplace_back("-c");
       break;
     case OutputLevelKind::SharedObj:
+#ifndef _WIN32
       args.emplace_back("-fPIC");
+#endif
 #ifdef __APPLE__
       args.emplace_back("-dynamiclib");
 #else
@@ -307,6 +315,8 @@ bool invokeCC(
         if (!params.noHermesLibs) {
           args.emplace_back("-lshermes_console");
         }
+#ifndef _WIN32
+        // rpath is not supported on Windows.
         for (const auto &s : cfg.hermesLibPath) {
           args.emplace_back("-Wl,-rpath");
           args.emplace_back(s);
@@ -315,11 +325,12 @@ bool invokeCC(
           args.emplace_back("-Wl,-rpath");
           args.emplace_back(s);
         }
+#endif
       }
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_WIN32)
       // -lm is needed in both compilation modes because it is directly used by
-      // the shermes C output.
+      // the shermes C output. On Windows, math is part of the CRT.
       args.emplace_back("-lm");
 #endif
 
@@ -354,8 +365,25 @@ bool invokeCC(
   }
 
   std::string errMsg;
+#ifdef _WIN32
+  // On Windows, the MSVC linker outputs "Creating library ..." to stdout
+  // when producing a DLL. Suppress this to avoid polluting program output.
+  llvh::Optional<llvh::StringRef> redirects[] = {
+      llvh::None, // stdin: inherit
+      (outputLevel == OutputLevelKind::SharedObj ||
+       outputLevel == OutputLevelKind::Executable)
+          ? llvh::Optional<llvh::StringRef>(llvh::StringRef(""))
+          : llvh::None, // stdout: /dev/null for linking, inherit otherwise
+      llvh::None // stderr: inherit
+  };
+  auto redirectsArr = llvh::makeArrayRef(redirects);
+#else
+  auto redirectsArr =
+      llvh::ArrayRef<llvh::Optional<llvh::StringRef>>{};
+#endif
   if (llvh::sys::ExecuteAndWait(
-          *res, refArgs, llvh::None, {}, 0, 0, &errMsg, nullptr) == 0) {
+          *res, refArgs, llvh::None, redirectsArr, 0, 0, &errMsg, nullptr) ==
+      0) {
     return true;
   }
 
@@ -441,8 +469,17 @@ bool execute(
     llvh::StringRef inputFilename,
     llvh::ArrayRef<std::string> execArgs) {
   llvh::SmallString<32> tmpPath;
+  // On Windows, LoadLibraryA appends ".dll" to paths without an extension.
+  // Ensure the temp file has a ".dll" suffix so it matches what LoadLibrary
+  // will look for.
   if (auto EC = llvh::sys::fs::createTemporaryFile(
-          llvh::sys::path::filename(inputFilename), {}, tmpPath)) {
+          llvh::sys::path::filename(inputFilename),
+#ifdef _WIN32
+          "dll",
+#else
+          {},
+#endif
+          tmpPath)) {
     llvh::errs() << "Error creating " << tmpPath << ": " << EC.message()
                  << '\n';
     return false;
@@ -486,6 +523,23 @@ bool execute(
 
   // Open the produced shared library and invoke main with args.
 #ifdef _WIN32
+  // Add the Hermes library directories to PATH so LoadLibrary can resolve
+  // dependent DLLs (hermesvm, jsi, shermes_console). Windows has no rpath.
+  {
+    CCCfg dllCfg;
+    populateCCCfg(dllCfg);
+    std::string newPath;
+    for (const auto &s : dllCfg.hermesLibPath) {
+      if (!newPath.empty())
+        newPath += ";";
+      newPath += s;
+    }
+    if (const char *existing = ::getenv("PATH")) {
+      newPath += ";";
+      newPath += existing;
+    }
+    ::_putenv_s("PATH", newPath.c_str());
+  }
   HMODULE handle = LoadLibraryA(tmpPath.c_str());
   if (!handle) {
     llvh::errs() << "LoadLibrary() error, path: " << tmpPath

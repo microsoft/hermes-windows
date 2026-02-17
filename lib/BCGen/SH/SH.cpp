@@ -3099,7 +3099,7 @@ bool run_event_loop(
     SHRuntime *shr,
     SHConsoleContext *consoleContext);
 
-int main(int argc, char **argv) {
+SHERMES_EXPORT int main(int argc, char **argv) {
   SHRuntime *shr = _sh_init(argc, argv);
   SHConsoleContext *consoleContext = init_console_bindings(shr);
   bool success =

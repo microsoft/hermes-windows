@@ -472,6 +472,26 @@ function cmakeConfigure(buildParams) {
     }`,
   );
 
+  // Static Hermes (shermes) invokes an external C compiler at runtime to
+  // compile generated C code. The default is "cc" which doesn't exist on
+  // Windows. Use "clang" since the generated code uses GCC-style flags.
+  genArgs.push('-DSHERMES_CC=clang');
+
+  // When cross-compiling (e.g. x86 on x64 host), shermes must also target the
+  // correct architecture when invoking clang at runtime. The main build gets
+  // this via CMAKE_C_FLAGS, but shermes uses its own SHERMES_CC_SYSCFLAGS.
+  if (platform !== hostCpuArch && !msvc) {
+    let shermesTarget = "";
+    if (platform === "x86") {
+      shermesTarget = "i686-pc-windows-msvc";
+    } else if (platform === "arm64") {
+      shermesTarget = "aarch64-pc-windows-msvc";
+    }
+    if (shermesTarget) {
+      genArgs.push(`-DSHERMES_CC_SYSCFLAGS="-target ${shermesTarget}"`);
+    }
+  }
+
   runCMakeCommand(`cmake ${genArgs.join(" ")} "${sourcesPath}"`, buildParams);
 }
 

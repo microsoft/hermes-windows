@@ -30,6 +30,51 @@
 
 #include <cstdarg>
 
+#if defined(_WIN32) && defined(_M_X64)
+// Raw longjmp for Windows x64 that skips RtlUnwindEx stack unwinding.
+// The CRT's longjmp calls RtlUnwindEx to walk the stack frame-by-frame,
+// which crashes when unwinding across DLL boundaries (e.g., from
+// hermesvm.dll through a shermes-compiled DLL). This directly restores
+// registers and jumps, matching Linux _longjmp behavior.
+// _JUMP_BUFFER layout: Frame(+0), Rbx(+8), Rsp(+10), Rbp(+18), Rsi(+20),
+// Rdi(+28), R12(+30), R13(+38), R14(+40), R15(+48), Rip(+50),
+// MxCsr(+58), Xmm6-15(+60..+F0)
+// Microsoft x64 calling convention: rcx=jmp_buf, edx=return_value
+__attribute__((naked))
+extern "C" void _sh_raw_longjmp(jmp_buf, int) {
+  __asm__ volatile (
+    ".intel_syntax noprefix\n\t"
+    "mov eax, edx\n\t"
+    "test eax, eax\n\t"
+    "jnz 1f\n\t"
+    "inc eax\n"
+    "1:\n\t"
+    "mov rbx, [rcx + 0x08]\n\t"
+    "mov rbp, [rcx + 0x18]\n\t"
+    "mov rsi, [rcx + 0x20]\n\t"
+    "mov rdi, [rcx + 0x28]\n\t"
+    "mov r12, [rcx + 0x30]\n\t"
+    "mov r13, [rcx + 0x38]\n\t"
+    "mov r14, [rcx + 0x40]\n\t"
+    "mov r15, [rcx + 0x48]\n\t"
+    "ldmxcsr [rcx + 0x58]\n\t"
+    "movaps xmm6,  [rcx + 0x60]\n\t"
+    "movaps xmm7,  [rcx + 0x70]\n\t"
+    "movaps xmm8,  [rcx + 0x80]\n\t"
+    "movaps xmm9,  [rcx + 0x90]\n\t"
+    "movaps xmm10, [rcx + 0xA0]\n\t"
+    "movaps xmm11, [rcx + 0xB0]\n\t"
+    "movaps xmm12, [rcx + 0xC0]\n\t"
+    "movaps xmm13, [rcx + 0xD0]\n\t"
+    "movaps xmm14, [rcx + 0xE0]\n\t"
+    "movaps xmm15, [rcx + 0xF0]\n\t"
+    "mov rsp, [rcx + 0x10]\n\t"
+    "jmp qword ptr [rcx + 0x50]\n\t"
+    ".att_syntax\n\t"
+  );
+}
+#endif
+
 using namespace hermes;
 using namespace hermes::vm;
 
@@ -367,7 +412,18 @@ extern "C" void _sh_throw_current(SHRuntime *shr) {
     fprintf(stderr, "SH: uncaught exception");
     abort();
   }
+#if defined(_WIN32) && defined(_M_X64)
+  // On Windows x64, the CRT's longjmp calls RtlUnwindEx to walk the stack
+  // through intermediate frames. This crashes when unwinding across DLL
+  // boundaries (e.g., from hermesvm.dll through a shermes-compiled DLL).
+  // Use a raw longjmp that directly restores registers and jumps, matching
+  // Linux _longjmp behavior. This is safe because the VM manages its own
+  // cleanup via _sh_catch, not SEH unwind handlers.
+  extern void _sh_raw_longjmp(jmp_buf, int);
+  _sh_raw_longjmp(runtime.shCurJmpBuf->buf, 1);
+#else
   _sh_longjmp(runtime.shCurJmpBuf->buf, 1);
+#endif
   // longjmp is not marked as noreturn, so use llvm_unreachable to avoid a
   // compiler warning that this function doesn't actually seem to be noreturn.
   llvm_unreachable("longjmp cannot return");

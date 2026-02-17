@@ -9,6 +9,7 @@
 // we create the file with the unicode character, containing the contents
 // of this test.
 // RUN: cat %s > %t.unicÓde.js && %shermes %t.unicÓde.js -g1 -exec | %FileCheck --match-full-lines %s
+// UNSUPPORTED: windows
 "use strict";
 
 // This filename has a unicode character in it. Make sure that

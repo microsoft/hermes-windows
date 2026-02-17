@@ -9,6 +9,8 @@
 
 #include "llvh/Support/Path.h"
 
+#include <algorithm>
+
 namespace hermes {
 
 SourceMap::SourceMap(
@@ -34,6 +36,11 @@ SourceMap::SourceMap(
         buf = sourceRoot_;
         llvh::sys::path::append(buf, p);
         llvh::sys::path::remove_dots(buf, true);
+#ifdef _WIN32
+        // Source map paths use forward slashes per the spec. LLVM path
+        // utilities convert to backslashes on Windows, so normalize back.
+        std::replace(buf.begin(), buf.end(), '\\', '/');
+#endif
         rootedSources_.push_back(buf.str());
       }
     }
