@@ -433,7 +433,7 @@ std::pair<const void *, size_t> thread_stack_bounds_impl() {
   // This is given by AllocationBase, which corresponds to the base address of
   // the region allocated by VirtualAlloc that contains &x.
   const void *stackLow = info.AllocationBase;
-  // The high bound of the stack is the high bound of the commmitted region.
+  // The high bound of the stack is the high bound of the committed region.
   const void *stackHigh = (char *)info.BaseAddress + info.RegionSize;
 
   size_t sz = (const char *)stackHigh - (const char *)stackLow;

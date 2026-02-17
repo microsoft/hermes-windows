@@ -168,6 +168,12 @@ function(hermes_windows_configure_lld_flags)
     list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/DEFAULTLIB:ucrtd.lib")
   endif()
 
+  # Enable Large Address Aware for x86 builds, allowing up to 4GB of virtual
+  # address space on 64-bit Windows (default is 2GB for 32-bit executables).
+  if(HERMES_WINDOWS_TARGET_PLATFORM STREQUAL "x86")
+    list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:/LARGEADDRESSAWARE")
+  endif()
+
   set(HERMES_EXTRA_LINKER_FLAGS "${HERMES_EXTRA_LINKER_FLAGS}" PARENT_SCOPE)
 endfunction()
 
@@ -175,6 +181,12 @@ endfunction()
 function(hermes_windows_configure_msvc_linker_flags)
   # Debug information (common to debug and release)
   list(APPEND MSVC_COMMON_LINKER_FLAGS "LINKER:/DEBUG:FULL")
+
+  # Enable Large Address Aware for x86 builds, allowing up to 4GB of virtual
+  # address space on 64-bit Windows (default is 2GB for 32-bit executables).
+  if(HERMES_WINDOWS_TARGET_PLATFORM STREQUAL "x86")
+    list(APPEND MSVC_COMMON_LINKER_FLAGS "LINKER:/LARGEADDRESSAWARE")
+  endif()
 
   # Debug-specific flags
   set(MSVC_DEBUG_LINKER_FLAGS "${MSVC_COMMON_LINKER_FLAGS}")
@@ -205,7 +217,7 @@ function(hermes_windows_configure_msvc_linker_flags)
   # Deterministic builds
   list(APPEND MSVC_RELEASE_LINKER_FLAGS "LINKER:/BREPRO")
 
-  set(HERMES_EXTRA_LINKER_FLAGS 
+  set(HERMES_EXTRA_LINKER_FLAGS
     "$<$<CONFIG:Debug>:${MSVC_DEBUG_LINKER_FLAGS}>"
     "$<$<CONFIG:Release>:${MSVC_RELEASE_LINKER_FLAGS}>"
     PARENT_SCOPE
