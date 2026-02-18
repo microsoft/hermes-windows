@@ -30,7 +30,7 @@
 
 #include <cstdarg>
 
-#if defined(_WIN32) && defined(_M_X64)
+#if defined(_WIN32) && defined(_M_X64) && !defined(_M_ARM64EC)
 // Raw longjmp for Windows x64 that skips RtlUnwindEx stack unwinding.
 // The CRT's longjmp calls RtlUnwindEx to walk the stack frame-by-frame,
 // which crashes when unwinding across DLL boundaries (e.g., from
@@ -412,7 +412,7 @@ extern "C" void _sh_throw_current(SHRuntime *shr) {
     fprintf(stderr, "SH: uncaught exception");
     abort();
   }
-#if defined(_WIN32) && defined(_M_X64)
+#if defined(_WIN32) && defined(_M_X64) && !defined(_M_ARM64EC)
   // On Windows x64, the CRT's longjmp calls RtlUnwindEx to walk the stack
   // through intermediate frames. This crashes when unwinding across DLL
   // boundaries (e.g., from hermesvm.dll through a shermes-compiled DLL).
