@@ -54,6 +54,17 @@ extends:
 
         - script: dotnet nuget list source
           displayName: Show Nuget sources
+        
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: 'Office-Hermes-Windows-Bot'
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              # Note that the resoruce is specified to limit the token to Azure DevOps
+              aadToken=$(az account get-access-token --query accessToken --resource 499b84ac-1321-427f-aa17-267ca6975798 -o tsv)
+              echo "##vso[task.setvariable variable=OfficeHermesWindowsBotAadToken;issecret=true]$aadToken"
+          displayName: 'Generate sdxbot AAD token using Azure CLI'
 
         - task: 1ES.PublishNuGet@1
           displayName: NuGet push
@@ -61,9 +72,9 @@ extends:
             useDotNetTask: true
             packageParentPath: '$(Pipeline.Workspace)/published-packages'
             packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
+            publishVstsFeed: ms/react-native-public
             nuGetFeedType: external
-            publishFeedCredentials: 'Nuget - ms/react-native-public'
-            externalEndpoint: 'Nuget - ms/react-native-public'
+            publishFeedCredentials: "$(OfficeHermesWindowsBotAadToken)"
             publishPackageMetadata: true
 
     - stage: nuget_org_publish
