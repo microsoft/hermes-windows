@@ -299,6 +299,10 @@ Runtime::Runtime(
       hasAsyncGenerators_(runtimeConfig.getEnableAsyncGenerators()),
       hasES6BlockScoping_(runtimeConfig.getES6BlockScoping()),
       hasIntl_(runtimeConfig.getIntl()),
+#ifdef _WIN32
+      intlProviderMode_(runtimeConfig.getIntlProviderMode()),
+      intlIcuVtable_(runtimeConfig.getIntlIcuVtable()),
+#endif
       hasMicrotaskQueue_(runtimeConfig.getMicrotaskQueue()),
       shouldRandomizeMemoryLayout_(runtimeConfig.getRandomizeMemoryLayout()),
       bytecodeWarmupPercent_(runtimeConfig.getBytecodeWarmupPercent()),

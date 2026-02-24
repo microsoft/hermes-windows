@@ -30,12 +30,17 @@
 
 #include <cstdarg>
 
+// Raw longjmp for Windows that skips CRT stack unwinding.
+// The CRT's longjmp calls RtlUnwindEx (x64/ARM64) or RtlUnwind (x86) to walk
+// the stack frame-by-frame through SEH exception tables. This crashes when
+// unwinding across DLL boundaries (e.g., from hermesvm.dll through a
+// shermes-compiled DLL). These raw longjmp implementations directly restore
+// registers and jump, matching Linux _longjmp behavior.
+// This is safe because the Hermes VM manages its own exception cleanup via
+// _sh_catch/_sh_end_try, not through SEH unwind handlers.
+
 #if defined(_WIN32) && defined(_M_X64) && !defined(_M_ARM64EC)
-// Raw longjmp for Windows x64 that skips RtlUnwindEx stack unwinding.
-// The CRT's longjmp calls RtlUnwindEx to walk the stack frame-by-frame,
-// which crashes when unwinding across DLL boundaries (e.g., from
-// hermesvm.dll through a shermes-compiled DLL). This directly restores
-// registers and jumps, matching Linux _longjmp behavior.
+// x64 raw longjmp (Clang).
 // _JUMP_BUFFER layout: Frame(+0), Rbx(+8), Rsp(+10), Rbp(+18), Rsi(+20),
 // Rdi(+28), R12(+30), R13(+38), R14(+40), R15(+48), Rip(+50),
 // MxCsr(+58), Xmm6-15(+60..+F0)
@@ -71,6 +76,45 @@ extern "C" void _sh_raw_longjmp(jmp_buf, int) {
     "mov rsp, [rcx + 0x10]\n\t"
     "jmp qword ptr [rcx + 0x50]\n\t"
     ".att_syntax\n\t"
+  );
+}
+
+// Note: x86 does not need raw longjmp. Unlike x64/ARM64 which use table-based
+// SEH (and RtlUnwindEx which crashes across DLL boundaries), x86 uses
+// registration-based SEH where the CRT longjmp works correctly.
+
+#elif defined(_WIN32) && defined(_M_ARM64) && !defined(_M_ARM64EC)
+// ARM64 raw longjmp (Clang).
+// _JUMP_BUFFER layout: Frame(+0), Reserved(+8),
+// X19-X28(+10..+58), Fp(+60), Lr(+68), Sp(+70),
+// Fpcr(+78), Fpsr(+7C), D8-D15(+80..+B8)
+// ARM64 calling convention: x0=jmp_buf, w1=return_value
+__attribute__((naked))
+extern "C" void _sh_raw_longjmp(jmp_buf, int) {
+  __asm__ volatile (
+    "mov x2, x0\n\t"
+    "mov w0, w1\n\t"
+    "cbnz w0, 1f\n\t"
+    "mov w0, #1\n"
+    "1:\n\t"
+    "ldp x19, x20, [x2, #0x10]\n\t"
+    "ldp x21, x22, [x2, #0x20]\n\t"
+    "ldp x23, x24, [x2, #0x30]\n\t"
+    "ldp x25, x26, [x2, #0x40]\n\t"
+    "ldp x27, x28, [x2, #0x50]\n\t"
+    "ldr x29, [x2, #0x60]\n\t"
+    "ldr x30, [x2, #0x68]\n\t"
+    "ldr w3, [x2, #0x78]\n\t"
+    "msr fpcr, x3\n\t"
+    "ldr w3, [x2, #0x7C]\n\t"
+    "msr fpsr, x3\n\t"
+    "ldp d8,  d9,  [x2, #0x80]\n\t"
+    "ldp d10, d11, [x2, #0x90]\n\t"
+    "ldp d12, d13, [x2, #0xA0]\n\t"
+    "ldp d14, d15, [x2, #0xB0]\n\t"
+    "ldr x3, [x2, #0x70]\n\t"
+    "mov sp, x3\n\t"
+    "ret\n\t"
   );
 }
 #endif
@@ -412,13 +456,16 @@ extern "C" void _sh_throw_current(SHRuntime *shr) {
     fprintf(stderr, "SH: uncaught exception");
     abort();
   }
-#if defined(_WIN32) && defined(_M_X64) && !defined(_M_ARM64EC)
-  // On Windows x64, the CRT's longjmp calls RtlUnwindEx to walk the stack
-  // through intermediate frames. This crashes when unwinding across DLL
+#if defined(_WIN32) && !defined(_M_ARM64EC) && \
+    (defined(_M_X64) || defined(_M_ARM64))
+  // On Windows x64/ARM64, the CRT's longjmp calls RtlUnwindEx to walk the
+  // stack through intermediate frames. This crashes when unwinding across DLL
   // boundaries (e.g., from hermesvm.dll through a shermes-compiled DLL).
   // Use a raw longjmp that directly restores registers and jumps, matching
   // Linux _longjmp behavior. This is safe because the VM manages its own
   // cleanup via _sh_catch, not SEH unwind handlers.
+  // Note: x86 is excluded — CRT longjmp works on x86 for both Clang and MSVC
+  // because x86 uses registration-based SEH (not table-based like x64/ARM64).
   extern void _sh_raw_longjmp(jmp_buf, int);
   _sh_raw_longjmp(runtime.shCurJmpBuf->buf, 1);
 #else

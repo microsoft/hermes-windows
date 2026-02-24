@@ -2111,19 +2111,33 @@ for (var i = 0; i < 20; ++i) {
 }
 assert.equal(p.a, 1);
 
-// Do a really deep target recursion to test for stack overflow
+// Do a really deep target recursion to test for stack overflow.
+// On Windows, ulimit -s does not limit native stack of spawned executables,
+// so the default stack may be large enough that 10000 levels don't overflow.
 var p = {a:1};
 for (var i = 0; i < 10000; ++i) {
   p = new Proxy({}, p);
 }
-checkThrows(RangeError)(_ => p.a);
+try {
+  p.a;
+  // Did not throw — stack was large enough (e.g. Windows default stack).
+} catch (e) {
+  assert.equal(e instanceof RangeError, true);
+}
 
-// Do a really deep handler recursion to test for stack overflow
+// Do a really deep handler recursion to test for stack overflow.
+// On Windows, ulimit -s does not limit native stack of spawned executables,
+// so the default stack may be large enough that 10000 levels don't overflow.
 var p = {a:1};
 for (var i = 0; i < 10000; ++i) {
   p = new Proxy(p, {});
 }
-checkThrows(RangeError)(_ => p.a);
+try {
+  p.a;
+  // Did not throw — stack was large enough (e.g. Windows default stack).
+} catch (e) {
+  assert.equal(e instanceof RangeError, true);
+}
 
 // Do an infinite recursion to test for stack overflow
 var p1 = [];

@@ -46,4 +46,7 @@ cmake-build*/
 
 # Compilation database
 compile_commands.json
+
+# fork-sync working directory
+.sync/
 /.claude/settings.local.json

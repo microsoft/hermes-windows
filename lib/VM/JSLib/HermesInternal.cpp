@@ -21,6 +21,10 @@
 #include "hermes/VM/StackFrame-inline.h"
 #include "hermes/VM/StringView.h"
 
+#ifdef _WIN32
+#include "hermes/Platform/Intl/IntlProviderInfo.h"
+#endif
+
 #include <cstring>
 #include <random>
 
@@ -369,6 +373,36 @@ CallResult<HermesValue> hermesInternalGetRuntimeProperties(
           ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
+
+#ifdef _WIN32
+  // ICU Provider name (e.g. "bundled", "windows", "custom", "winglob").
+  {
+    auto info = hermes::platform_intl::getIntlProviderInfo(runtime);
+    auto providerRes = StringPrimitive::create(
+        runtime, ASCIIRef(info.providerName, strlen(info.providerName)));
+    if (LLVM_UNLIKELY(providerRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    lv.tmpHandle = *providerRes;
+    if (LLVM_UNLIKELY(
+            addProperty(lv.tmpHandle, "ICU Provider") ==
+            ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+  }
+
+  // ICU Version (e.g. 78, or 0 if no ICU).
+  {
+    auto info = hermes::platform_intl::getIntlProviderInfo(runtime);
+    lv.tmpHandle =
+        HermesValue::encodeTrustedNumberValue(info.icuVersion);
+    if (LLVM_UNLIKELY(
+            addProperty(lv.tmpHandle, "ICU Version") ==
+            ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+  }
+#endif
 
   return lv.resultHandle.getHermesValue();
 }

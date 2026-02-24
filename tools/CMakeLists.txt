@@ -20,6 +20,7 @@ add_subdirectory(hermes-parser)
 add_subdirectory(shermes)
 add_subdirectory(synth)
 add_subdirectory(hcdp)
+add_subdirectory(hermes_rt)
 
 if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/facebook)
   add_subdirectory(facebook)

@@ -124,6 +124,20 @@ def create_parser():
     group.add_argument(
         "--shermes", dest="shermes", action="store_true", help="Test with shermes"
     )
+    group.add_argument(
+        "--hermes-rt",
+        dest="hermes_rt",
+        action="store_true",
+        help="Run tests using hermes_rt (C API runtime, no compilation)",
+    )
+    parser.add_argument(
+        "--intl-provider",
+        dest="intl_provider",
+        default=None,
+        type=str,
+        choices=["default", "winglob", "system-icu", "host-vtable"],
+        help="Intl provider mode for hermes_rt (only valid with --hermes-rt)",
+    )
     parser.add_argument(
         "--opt", dest="opt", action="store_true", help="Enable compiler optimizations"
     )
@@ -178,9 +192,12 @@ def validate_args(args: argparse.Namespace):
             print("Argument error: Only one path is expected with --dump-source.")
             sys.exit(1)
 
-    utils.check_hermes_exe(
-        args.binary_directory, args.shermes, args.bytecode_compat_check
-    )
+    if args.hermes_rt:
+        utils.check_hermes_rt_exe(args.binary_directory)
+    else:
+        utils.check_hermes_exe(
+            args.binary_directory, args.shermes, args.bytecode_compat_check
+        )
 
 
 def print_stats(stats: dict) -> None:
@@ -293,6 +310,7 @@ async def run(
     extra_compile_vm_args: ExtraCompileVMArgs,
     timeout: int,
     verbose: bool,
+    hermes_rt: bool = False,
 ) -> int:
     """
     Run all tests with async subprocess and wait for results in completion order
@@ -382,6 +400,7 @@ async def run(
             opt,
             extra_compile_vm_args,
             timeout,
+            hermes_rt,
         )
         tasks.append(suite.run_test(test_run_args))
 
@@ -483,9 +502,15 @@ async def main() -> int:
         skipped_paths_features = SkippedPathsOrFeatures(os.fspath(skip_list_cfg_path))
 
     # Consumes all extra flags.
+    extra_vm_args = list(args.extra_vm_args)
+    if args.intl_provider:
+        extra_vm_args.append(f"--intl-provider={args.intl_provider}")
     extra_compile_vm_args = ExtraCompileVMArgs(
-        compile_args=args.extra_compile_args, vm_args=args.extra_vm_args
+        compile_args=args.extra_compile_args, vm_args=extra_vm_args
     )
+
+    # When using hermes_rt, implicitly enable intl tests.
+    test_intl = args.test_intl or args.hermes_rt
 
     exit_code = await run(
         args.paths,
@@ -494,7 +519,7 @@ async def main() -> int:
         work_dir,
         args.n_jobs,
         args.test_skiplist,
-        args.test_intl,
+        test_intl,
         args.bytecode_compat_check,
         args.lazy,
         args.shermes,
@@ -502,6 +527,7 @@ async def main() -> int:
         extra_compile_vm_args,
         args.timeout,
         args.verbose,
+        args.hermes_rt,
     )
 
     # Explicitly clean up the temporary directory if we created one.

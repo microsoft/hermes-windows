@@ -979,6 +979,19 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
     return hasIntl_;
   }
 
+#ifdef _WIN32
+  /// Get the per-runtime Intl provider mode.
+  /// 0 = Default, 1 = ForceWinGlob, 2 = CustomVtable.
+  uint8_t getIntlProviderMode() const {
+    return intlProviderMode_;
+  }
+
+  /// Get the per-runtime ICU vtable pointer (only valid when mode == 2).
+  const void *getIntlIcuVtable() const {
+    return intlIcuVtable_;
+  }
+#endif
+
   bool hasMicrotaskQueue() const {
     return hasMicrotaskQueue_;
   }
@@ -1221,6 +1234,15 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
 
   /// Set to true if we should enable ECMA-402 Intl APIs.
   const bool hasIntl_;
+
+#ifdef _WIN32
+  /// Intl provider mode for this runtime.
+  /// 0 = Default (global), 1 = ForceWinGlob, 2 = CustomVtable.
+  const uint8_t intlProviderMode_;
+
+  /// Per-runtime ICU vtable pointer (only valid when intlProviderMode_ == 2).
+  const void *intlIcuVtable_;
+#endif
 
   /// Set to true if we are using microtasks.
   const bool hasMicrotaskQueue_;

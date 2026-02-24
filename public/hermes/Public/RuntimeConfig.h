@@ -5,8 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#ifndef HERMES_PUBLIC_RUNTIMECONFIG_H
-#define HERMES_PUBLIC_RUNTIMECONFIG_H
+#pragma once
 
 #include "hermes/Public/CrashManager.h"
 #include "hermes/Public/CtorConfig.h"
@@ -75,6 +74,13 @@ class PinnedHermesValue;
   /* Support for ECMA-402 Intl APIs. */                                \
   F(constexpr, bool, Intl, true)                                       \
                                                                        \
+  /* Intl provider mode: 0=Default, 1=ForceWinGlob, 2=CustomVtable */ \
+  F(constexpr, uint8_t, IntlProviderMode, 0)                           \
+                                                                       \
+  /* Per-runtime ICU vtable (void* to avoid hermes_icu.h include). */  \
+  /* Only used when IntlProviderMode == 2 (CustomVtable). */           \
+  F(constexpr, const void *, IntlIcuVtable, nullptr)                   \
+                                                                       \
   /* Support for using microtasks. */                                  \
   F(constexpr, bool, MicrotaskQueue, false)                            \
                                                                        \
@@ -137,5 +143,3 @@ _HERMES_CTORCONFIG_STRUCT(RuntimeConfig, RUNTIME_FIELDS, {})
 
 } // namespace vm
 } // namespace hermes
-
-#endif // HERMES_PUBLIC_RUNTIMECONFIG_H

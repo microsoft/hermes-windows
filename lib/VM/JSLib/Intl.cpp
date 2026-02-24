@@ -121,11 +121,16 @@ CallResult<HermesValue> optionsToJS(
       }
       lv.value = strRes.getValue();
     }
-    auto putRes = JSObject::putComputed_RJS(lv.obj, runtime, lv.key, lv.value);
+    // Use defineOwnComputedPrimitive ([[DefineOwnProperty]]) instead of
+    // putComputed_RJS ([[Set]]) to avoid triggering setters on
+    // Object.prototype installed by taint-Object-prototype tests.
+    DefinePropertyFlags dpf =
+        DefinePropertyFlags::getDefaultNewPropertyFlags();
+    auto putRes = JSObject::defineOwnComputedPrimitive(
+        lv.obj, runtime, lv.key, dpf, lv.value);
     if (LLVM_UNLIKELY(putRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    assert(*putRes && "put returned false on a plain object");
   }
   return lv.obj.getHermesValue();
 }
@@ -162,12 +167,13 @@ ExecutionStatus partToJS(
       return ExecutionStatus::EXCEPTION;
     }
     lv.value = valueRes.getValue();
-    auto putRes = JSObject::putComputed_RJS(lv.obj, runtime, lv.key, lv.value);
+    DefinePropertyFlags dpf =
+        DefinePropertyFlags::getDefaultNewPropertyFlags();
+    auto putRes = JSObject::defineOwnComputedPrimitive(
+        lv.obj, runtime, lv.key, dpf, lv.value);
     if (LLVM_UNLIKELY(putRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-
-    assert(*putRes && "put returned false on a plain object");
   }
 
   out.castAndSetHermesValue<JSObject>(lv.obj.getHermesValue());

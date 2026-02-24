@@ -161,6 +161,17 @@ def check_hermes_exe(
             sys.exit(1)
 
 
+def check_hermes_rt_exe(binary_dir: PathT) -> None:
+    """Check that hermes_rt executable exists, terminate the execution if not."""
+
+    import shutil
+
+    exe = shutil.which(os.path.join(binary_dir, "hermes_rt"))
+    if not exe:
+        print(f"Error: hermes_rt not found in {binary_dir}.")
+        sys.exit(1)
+
+
 HERMES_FEATURES_MATCHER = re.compile(
     r"\s*Features:\s*\n(.*\n)", re.MULTILINE | re.DOTALL
 )

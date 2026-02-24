@@ -88,6 +88,15 @@ function(hermes_windows_configure_clang_flags)
     # Security flags
     set(CLANG_CXX_FLAGS "${CLANG_CXX_FLAGS} -fstack-protector-all")
     set(CLANG_CXX_FLAGS "${CLANG_CXX_FLAGS} -Xclang -gsrc-hash=sha256")
+
+    # On 32-bit x86, Clang assumes 16-byte stack alignment for SSE but the
+    # Windows x86 ABI only guarantees 4-byte alignment.  Without explicit
+    # realignment, SSE codegen in deep floating-point call chains (e.g. ICU's
+    # uprv_floor → ClockMath::floorDivide → Grego::timeToFields) can corrupt
+    # the /GS stack cookie, causing false stack-buffer-overrun aborts.
+    if(HERMES_WINDOWS_TARGET_PLATFORM STREQUAL "x86")
+      set(CLANG_CXX_FLAGS "${CLANG_CXX_FLAGS} -mstackrealign")
+    endif()
    
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CLANG_CXX_FLAGS}" PARENT_SCOPE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CLANG_CXX_FLAGS}" PARENT_SCOPE)

@@ -400,6 +400,12 @@ class ConfigWrapper {
     return napi_status::napi_ok;
   }
 
+  napi_status setIntlProvider(uint8_t mode, const void *vtable) {
+    intlProviderMode_ = mode;
+    intlIcuVtable_ = vtable;
+    return napi_status::napi_ok;
+  }
+
   napi_status enableInspector(bool value) {
     enableInspector_ = value;
     return napi_status::napi_ok;
@@ -481,6 +487,8 @@ class ConfigWrapper {
       config.withCrashMgr(crashManager);
     }
     config.withMicrotaskQueue(explicitMicrotasks_);
+    config.withIntlProviderMode(intlProviderMode_);
+    config.withIntlIcuVtable(intlIcuVtable_);
     return config.build();
   }
 
@@ -490,6 +498,8 @@ class ConfigWrapper {
   std::string inspectorRuntimeName_;
   uint16_t inspectorPort_{};
   bool inspectorBreakOnStart_{};
+  uint8_t intlProviderMode_{0};
+  const void *intlIcuVtable_{nullptr};
   bool explicitMicrotasks_{};
   std::function<void(napi_env env, napi_value value)> unhandledErrorCallback_{};
   std::shared_ptr<TaskRunner> taskRunner_;
@@ -1038,10 +1048,10 @@ class RuntimeWrapper {
       return runScriptBuffer(
           hermesPrep->sourceBuffer()->data(),
           hermesPrep->sourceBuffer()->size(),
-          [](void *data, void * /*deleterData*/) {
+          [](void * /*data*/, void *deleterData) {
             std::shared_ptr<const ::hermes::Buffer> buf =
                 *reinterpret_cast<std::shared_ptr<const ::hermes::Buffer> *>(
-                    data);
+                    deleterData);
             // Let the shared_ptr go out of scope to delete the buffer if needed
           },
           new std::shared_ptr<const ::hermes::Buffer>(
@@ -1175,6 +1185,14 @@ JSR_API hermes_config_enable_default_crash_handler(
     jsr_config config,
     bool value) {
   return CHECKED_CONFIG(config)->enableDefaultCrashHandler(value);
+}
+
+JSR_API hermes_config_set_intl_provider(
+    jsr_config config,
+    uint8_t mode,
+    const struct hermes_icu_vtable *vtable) {
+  return CHECKED_CONFIG(config)->setIntlProvider(
+      mode, static_cast<const void *>(vtable));
 }
 
 JSR_API jsr_config_enable_inspector(jsr_config config, bool value) {

@@ -264,9 +264,6 @@ set(HERMES_ENABLE_WERROR OFF CACHE BOOL
 set(HERMES_THREAD_SAFETY_ANALYSIS OFF CACHE BOOL
   "Whether to compile with clang's -Wthread-safety")
 
-set(HERMES_ENABLE_WIN10_ICU_FALLBACK ON CACHE BOOL
-  "Whether to allow falling back on Win10 ICU")
-
 set(HERMES_GITHUB_RESOURCE_DIR "" CACHE STRING
   "A directory with additional files to bundle in the GitHub release")
 
@@ -279,6 +276,20 @@ set(HERMES_MSVC_MP ON CACHE STRING
 
 set(HERMES_ENABLE_INTL OFF CACHE BOOL
   "Enable JS Intl support (WIP)")
+
+# On Windows, Intl is always enabled - the WinGlob fallback ensures it works
+# even without ICU. Override the cache variable to ON.
+if(WIN32)
+  set(HERMES_ENABLE_INTL ON)
+endif()
+
+set(HERMES_ENABLE_BUNDLED_ICU ON CACHE BOOL
+  "Build bundled hermes-icu.dll with ICU 78 for full Intl support on all Windows versions")
+
+set(HERMES_EXTERNAL_ICU_DIR "" CACHE PATH
+  "Path to external unicode.org ICU bin directory (for testing)")
+set(HERMES_EXTERNAL_ICU_VERSION "" CACHE STRING
+  "External ICU major version, e.g. 78 (for testing)")
 
 set(HERMES_ENABLE_UNICODE_REGEXP_PROPERTY_ESCAPES ON CACHE BOOL
   "Enable RegExp Unicode Property Escapes support")
@@ -479,22 +490,49 @@ if(HERMESVM_CRASH_TRACE)
     add_definitions(-DHERMESVM_CRASH_TRACE=1)
 endif()
 if (HERMES_ENABLE_ADDRESS_SANITIZER)
-    append("-fsanitize=address" CMAKE_CXX_FLAGS CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS)
-    # GCC does not automatically link libpthread when using ASAN
-    append("-lpthread" CMAKE_EXE_LINKER_FLAGS)
+    append("-fsanitize=address" CMAKE_CXX_FLAGS CMAKE_C_FLAGS)
+    # MSVC handles ASAN runtime linking automatically when objects compiled with
+    # /fsanitize=address are linked. Don't pass the flag to the linker on MSVC.
+    if (MSVC)
+        # MSVC needs these debug information for ASAN to report errors correctly.
+        append("/Zi" CMAKE_CXX_FLAGS CMAKE_C_FLAGS)
+        append("/DEBUG" CMAKE_EXE_LINKER_FLAGS)
+        # Disable asan sanitization on contaienrs, which causes redefinition error
+        # on VS2022 when building llvh.
+        add_compile_definitions(_DISABLE_VECTOR_ANNOTATION)
+
+        get_filename_component(MSVC_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY)
+        # Define the paths to the ASAN Release and Debug DLLs.
+        set(ASAN_RELEASE_DLL "${MSVC_BIN_DIR}/clang_rt.asan_dynamic-x86_64.dll")
+        set(ASAN_DEBUG_DLL   "${MSVC_BIN_DIR}/clang_rt.asan_dbg_dynamic-x86_64.dll")
+    else()
+        append("-fsanitize=address" CMAKE_EXE_LINKER_FLAGS)
+        # GCC does not automatically link libpthread when using ASAN
+        append("-lpthread" CMAKE_EXE_LINKER_FLAGS)
+    endif()
 endif()
 if (HERMES_ENABLE_UNDEFINED_BEHAVIOR_SANITIZER)
-    add_definitions(-DHERMES_UBSAN)
-    # Do not enable the vptr sanitizer, as it requires RTTI.
-    append("-fsanitize=undefined -fno-sanitize=vptr -fno-sanitize-recover=undefined" CMAKE_CXX_FLAGS CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS)
-    # Function signature sanitization produces false positives on Apple platforms.
-    # https://github.com/llvm/llvm-project/issues/109074
-    if (APPLE)
-        add_flag_if_supported("-fno-sanitize=function" APPLE_NO_SANITIZE_FUNCTION)
+    # MSVC does not support UBSan
+    if (MSVC)
+        message(WARNING "Undefined Behavior Sanitizer is not supported on MSVC, ignoring HERMES_ENABLE_UNDEFINED_BEHAVIOR_SANITIZER")
+    else()
+        add_definitions(-DHERMES_UBSAN)
+        # Do not enable the vptr sanitizer, as it requires RTTI.
+        append("-fsanitize=undefined -fno-sanitize=vptr -fno-sanitize-recover=undefined" CMAKE_CXX_FLAGS CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS)
+        # Function signature sanitization produces false positives on Apple platforms.
+        # https://github.com/llvm/llvm-project/issues/109074
+        if (APPLE)
+            add_flag_if_supported("-fno-sanitize=function" APPLE_NO_SANITIZE_FUNCTION)
+        endif()
     endif()
 endif()
 if (HERMES_ENABLE_THREAD_SANITIZER)
-    append("-fsanitize=thread" CMAKE_CXX_FLAGS CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS)
+    # MSVC does not support TSan.
+    if (MSVC)
+        message(WARNING "Thread Sanitizer is not supported on MSVC, ignoring HERMES_ENABLE_THREAD_SANITIZER")
+    else()
+        append("-fsanitize=thread" CMAKE_CXX_FLAGS CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS)
+    endif()
 endif()
 if (HERMES_ENABLE_TRACE_PC_GUARD)
     append("-fsanitize-coverage=trace-pc-guard" CMAKE_CXX_FLAGS CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS)
@@ -648,28 +686,12 @@ if (NOT ICU_FOUND)
   endif()
 endif()
 
-# ICU is available on Windows, but only since Windows 10 v1703.
-# Therefore, use it only as fallback.
-# TODO: (vmoroz) Review it as a part of Intl work.
-if (NOT ICU_FOUND AND HERMES_ENABLE_WIN10_ICU_FALLBACK AND
-    WIN32 # Windows 32 or 64 bit
-    # We used to check for at least Windows 10 version 1703 (aka Creators Update)
-    # but the new compliant images return 6.2. Everybody should be running
-    # the right version of windows now.
-    # NOT ${CMAKE_SYSTEM_VERSION} VERSION_LESS "10.0.15063"
-    )
-  add_definitions(-DUSE_WIN10_ICU)
-  set(ICU_FOUND 1)
-  set(ICU_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/icu_decls)
-  set(ICU_LIBRARIES
-    icuuc icuin
-  )
-  include_directories(${ICU_INCLUDE_DIRS})
-  message("Using Windows 10 built-in ICU")
-endif()
+## Windows ICU: loaded at runtime via impl_win/IcuProvider*.cpp.
+## No link-time ICU dependency needed for Intl on Windows.
 
-# If we have no ICU, then error out.
-if (NOT ICU_FOUND)
+# If we have no ICU, then error out (except on Windows where ICU is
+# loaded at runtime via impl_win/IcuProvider*.cpp).
+if (NOT ICU_FOUND AND NOT WIN32)
   message(FATAL_ERROR "Unable to find ICU.")
 endif()
 
@@ -822,6 +844,7 @@ if(HERMES_ENABLE_TEST_SUITE)
     hermes-jsi-lean
     hermes-jsi-shared
     hermes-jsi-lean-shared
+    hermes_rt
     )
 
   set(coverage_directory "")
@@ -858,7 +881,14 @@ if(HERMES_ENABLE_TEST_SUITE)
     unicode_lite=${HERMES_UNICODE_LITE}
     contrib_extensions_enabled=${HERMES_ENABLE_CONTRIB_EXTENSIONS}
     qemu_run_prefix=${QEMU_RUN_PREFIX}
+    hermes_rt=${HERMES_TOOLS_OUTPUT_DIR}/hermes_rt
     )
+
+  if(NOT "${HERMES_EXTERNAL_ICU_DIR}" STREQUAL "")
+    list(APPEND HERMES_LIT_TEST_PARAMS_BASE
+      external_icu_dir=${HERMES_EXTERNAL_ICU_DIR}
+      external_icu_version=${HERMES_EXTERNAL_ICU_VERSION})
+  endif()
 
   set(HERMES_LIT_TEST_PARAMS
     ${HERMES_LIT_TEST_PARAMS_BASE}

@@ -452,3 +452,131 @@ async def generate_ast(
                     hermes_exe, test_name, args + [evaluated.name], timeout
                 )
     return await run_hermes_simple(hermes_exe, test_name, args + [test_file], timeout)
+
+
+async def run_hermes_rt_single(
+    js_source_file: PathT,
+    compile_run_args: CompileRunArgs,
+) -> TestCaseResult:
+    """
+    Run a preprocessed JS file directly with hermes_rt (C API runtime).
+    No compilation step — hermes_rt interprets source directly.
+    Uses the same expected-failure logic as lazy mode since we cannot
+    distinguish parse vs runtime phase.
+    """
+    hermes_rt_exe = shutil.which(
+        os.path.join(compile_run_args.binary_directory, "hermes_rt")
+    )
+    if not hermes_rt_exe:
+        msg = "FAIL: hermes_rt not found"
+        return TestCaseResult(
+            compile_run_args.test_name, TestResultCode.EXECUTE_FAILED, msg
+        )
+
+    cmd_args = [hermes_rt_exe]
+    # Pass through VM args (e.g., --intl-provider=winglob).
+    if compile_run_args.extra_compile_vm_args:
+        cmd_args += compile_run_args.extra_compile_vm_args.vm_args
+    cmd_args.append(str(js_source_file))
+
+    expected_failure_phase = (
+        compile_run_args.expected_failure["phase"]
+        if compile_run_args.expected_failure
+        else ""
+    )
+
+    env = os.environ | {"LC_ALL": "en_US.UTF-8"}
+    proc = await create_subprocess_exec(
+        *cmd_args, env=env, stderr=subprocess.PIPE, stdout=subprocess.PIPE
+    )
+    stdout, stderr = (None, None)
+    try:
+        (stdout, stderr) = await wait_for(
+            proc.communicate(), timeout=compile_run_args.timeout
+        )
+    except TimeoutError:
+        msg = f"FAIL: Execution of hermes_rt timed out for {js_source_file}"
+        output = f"Run command: {' '.join(cmd_args)}\n"
+        proc.kill()
+        return TestCaseResult(
+            compile_run_args.test_name, TestResultCode.EXECUTE_TIMEOUT, msg, output
+        )
+
+    output = f"Run command: {' '.join(cmd_args)}\n"
+    if stdout:
+        output += f"stdout:\n {stdout.decode('utf-8')}"
+    if stderr:
+        output += f"stderr:\n {stderr.decode('utf-8')}"
+
+    stdout_str = stdout.decode("utf-8") if stdout else ""
+    base_file_name = os.path.basename(js_source_file)
+
+    # Use the same expected-failure logic as lazy mode: we cannot distinguish
+    # parse vs runtime phase, so conservatively check exit code.
+    if proc.returncode:
+        if proc.returncode < 0:
+            msg = f"FAIL: Execution terminated with {proc.returncode}"
+            return TestCaseResult(
+                compile_run_args.test_name,
+                TestResultCode.EXECUTE_FAILED,
+                msg,
+                output,
+            )
+        elif expected_failure_phase == "":
+            msg = f"FAIL: Execution of {base_file_name} threw unexpected error"
+            return TestCaseResult(
+                compile_run_args.test_name,
+                TestResultCode.EXECUTE_FAILED,
+                msg,
+                output,
+            )
+        elif compile_run_args.is_async and (
+            "Test262:AsyncTestFailure" in stdout_str
+            or "Test262:AsyncTestComplete" not in stdout_str
+        ):
+            msg = f"FAIL: Execution of async test failed: {stdout_str}"
+            return TestCaseResult(
+                compile_run_args.test_name,
+                TestResultCode.EXECUTE_FAILED,
+                msg,
+                output,
+            )
+        else:
+            msg = f"PASS: Execution of {base_file_name} threw an error as expected"
+            return TestCaseResult(
+                compile_run_args.test_name, TestResultCode.TEST_PASSED, msg
+            )
+    else:
+        if expected_failure_phase != "":
+            msg = f"FAIL: Expected execution of {base_file_name} to throw"
+            return TestCaseResult(
+                compile_run_args.test_name,
+                TestResultCode.EXECUTE_FAILED,
+                msg,
+                output,
+            )
+    return TestCaseResult(
+        compile_run_args.test_name, TestResultCode.TEST_PASSED, "Run passed", output
+    )
+
+
+async def run_hermes_rt(
+    js_source_files: List[PathT],
+    compile_run_args: CompileRunArgs,
+) -> TestCaseResult:
+    """
+    Run the generated source files with hermes_rt and return the result.
+    """
+    output = ""
+    for js_source_file in js_source_files:
+        result = await run_hermes_rt_single(
+            js_source_file,
+            compile_run_args,
+        )
+        if result.code.is_failure:
+            return result
+        output = f"hermes_rt {js_source_file}:\n{result.output}"
+
+    return TestCaseResult(
+        compile_run_args.test_name, TestResultCode.TEST_PASSED, "PASS", output
+    )

@@ -13,7 +13,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .es_ast import diff
-from .hermes import compile_and_run, CompileRunArgs, ExtraCompileVMArgs, generate_ast
+from .hermes import (
+    compile_and_run,
+    CompileRunArgs,
+    ExtraCompileVMArgs,
+    generate_ast,
+    run_hermes_rt,
+)
 from .preprocess import generate_source, StrictMode
 from .skiplist import SkipCategory, SkippedPathsOrFeatures
 from .typing_defs import PathT
@@ -50,6 +56,8 @@ class TestRunArgs(object):
     """Extra compiler and VM arguments"""
     timeout: int
     """Timeout (in seconds) for compiling/running each test."""
+    hermes_rt: bool = False
+    """Whether to run with hermes_rt (C API runtime) instead of hermes."""
 
 
 class Suite(ABC):
@@ -161,7 +169,7 @@ class Test262Suite(Suite):
             content = reader.read().decode("utf-8")
         full_test_name = self.get_full_test_name(args.test_file)
         test_case = generate_source(content, self.directory, full_test_name)
-        if "testIntl.js" in test_case.includes:
+        if "testIntl.js" in test_case.includes and not args.hermes_rt:
             msg = f"SKIP: No support for multiple Intl constructors in {full_test_name}"
             return TestCaseResult(full_test_name, TestResultCode.TEST_SKIPPED, msg)
 
@@ -236,6 +244,8 @@ class Test262Suite(Suite):
             is_async,
             args.extra_compile_vm_args,
         )
+        if args.hermes_rt:
+            return await run_hermes_rt(js_sources, compile_run_args)
         return await compile_and_run(js_sources, compile_run_args)
 
 

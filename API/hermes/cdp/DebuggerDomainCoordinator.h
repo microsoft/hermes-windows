@@ -5,8 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#ifndef HERMES_CDP_DEBUGGERDOMAINCOORDINATOR_H
-#define HERMES_CDP_DEBUGGERDOMAINCOORDINATOR_H
+#pragma once
 
 #include <vector>
 
@@ -104,10 +103,6 @@ class DebuggerDomainCoordinator {
 
   HermesRuntime &runtime_;
 
-  /// ID for the registered DebuggerEventCallback
-  debugger::DebuggerEventCallbackID debuggerEventCallbackId_ =
-      debugger::kInvalidDebuggerEventCallbackID;
-
   /// The set of agents that are currently enabled.
   std::vector<DebuggerDomainAgent *> enabledAgents_;
 
@@ -140,5 +135,3 @@ class DebuggerDomainCoordinator {
 } // namespace cdp
 } // namespace hermes
 } // namespace facebook
-
-#endif // HERMES_CDP_DEBUGGERDOMAINCOORDINATOR_H

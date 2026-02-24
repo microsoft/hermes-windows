@@ -128,8 +128,8 @@ print((1).toLocaleString());
 // CHECK-NEXT: 1
 
 var infinityString = (+Infinity).toLocaleString();
-var expected = globalThis.Intl ? "+∞" : "Infinity";
-print(infinityString === expected);
+// ICU returns "∞", Apple returns "+∞", no-Intl returns "Infinity"
+print(infinityString === "∞" || infinityString === "+∞" || infinityString === "Infinity");
 // CHECK-NEXT: true
 
 print((-3.14).toLocaleString());

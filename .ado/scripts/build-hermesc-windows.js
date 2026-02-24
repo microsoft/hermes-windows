@@ -130,7 +130,6 @@ function ensureCMakeBuild() {
     '-Ax64',
     '-DCMAKE_BUILD_TYPE=Release',
     '-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=True',
-    '-DHERMES_ENABLE_WIN10_ICU_FALLBACK=OFF',
   ];
   run('cmake', configureArgs, {
     env: {
