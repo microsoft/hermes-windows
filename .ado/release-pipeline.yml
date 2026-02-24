@@ -58,10 +58,10 @@ extends:
         - task: 1ES.PublishNuGet@1
           displayName: NuGet push (react-native-public)
           inputs:
-            useDotNetTask: true
             packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
             packageParentPath: '$(Pipeline.Workspace)/published-packages'
             nuGetFeedType: external
+            publishVstsFeed: https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/nuget/v3/index.json
             publishFeedCredentials: b24b3fad-4e9b-4697-a54b-61f7e2d9aaf1
             publishPackageMetadata: true
 
