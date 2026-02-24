@@ -63,7 +63,7 @@ extends:
       ${{ if eq(parameters.MustPublish, false) }}:
         skipBuildTagsForGitHubPullRequests: true
     pool:
-      name: Azure-Pipelines-1ESPT-ExDShared
+      name: fabric-internal-pool-large
       image: windows-latest
       os: windows
     sdl:
