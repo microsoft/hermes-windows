@@ -54,26 +54,37 @@ extends:
 
         - script: dotnet nuget list source
           displayName: Show Nuget sources
-
+        
         - task: 1ES.PublishNuGet@1
-          displayName: NuGet push Microsoft.JavaScript.Hermes (react-native-public)
+          displayName: NuGet push (react-native-public)
           inputs:
-            useVstsNugetPush: true
-            package: '$(Pipeline.Workspace)\published-packages\Microsoft.JavaScript.Hermes.nupkg' # Full path of the package to be pushed, it cannot use wild cards. Required.
-            packageParentPath: '$(Pipeline.Workspace)\published-packages' # Folder path to common ancestor for SDL binary analysis. Required.
-            serviceConnection: Office-Hermes-Windows-Bot  # Name of the service connection to be used to push packages. Required.
-            feed: https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/nuget/v3/index.json  # Path for the source feed, must use the NuGet v3 URI of the feed. Required.
+            useDotNetTask: true
+            packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
+            packageParentPath: '$(Pipeline.Workspace)/published-packages'
+            nuGetFeedType: external
             publishPackageMetadata: true
+            publishFeedCredentials: Office-Hermes-Windows-Bot
+            feed: https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/nuget/v3/index.json
 
-        - task: 1ES.PublishNuGet@1
-          displayName: NuGet push Microsoft.JavaScript.Hermes.Fat (react-native-public)
-          inputs:
-            useVstsNugetPush: true
-            package: '$(Pipeline.Workspace)\published-packages\Microsoft.JavaScript.Hermes.Fat.nupkg' # Full path of the package to be pushed, it cannot use wild cards. Required.
-            packageParentPath: '$(Pipeline.Workspace)\published-packages' # Folder path to common ancestor for SDL binary analysis. Required.
-            serviceConnection: Office-Hermes-Windows-Bot  # Name of the service connection to be used to push packages. Required.
-            feed: https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/nuget/v3/index.json  # Path for the source feed, must use the NuGet v3 URI of the feed. Required.
-            publishPackageMetadata: true
+        # - task: 1ES.PublishNuGet@1
+        #   displayName: NuGet push Microsoft.JavaScript.Hermes (react-native-public)
+        #   inputs:
+        #     useVstsNugetPush: true
+        #     package: '$(Pipeline.Workspace)\published-packages\Microsoft.JavaScript.Hermes.nupkg' # Full path of the package to be pushed, it cannot use wild cards. Required.
+        #     packageParentPath: '$(Pipeline.Workspace)\published-packages' # Folder path to common ancestor for SDL binary analysis. Required.
+        #     serviceConnection: Office-Hermes-Windows-Bot  # Name of the service connection to be used to push packages. Required.
+        #     feed: https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/nuget/v3/index.json  # Path for the source feed, must use the NuGet v3 URI of the feed. Required.
+        #     publishPackageMetadata: true
+
+        # - task: 1ES.PublishNuGet@1
+        #   displayName: NuGet push Microsoft.JavaScript.Hermes.Fat (react-native-public)
+        #   inputs:
+        #     useVstsNugetPush: true
+        #     package: '$(Pipeline.Workspace)\published-packages\Microsoft.JavaScript.Hermes.Fat.nupkg' # Full path of the package to be pushed, it cannot use wild cards. Required.
+        #     packageParentPath: '$(Pipeline.Workspace)\published-packages' # Folder path to common ancestor for SDL binary analysis. Required.
+        #     serviceConnection: Office-Hermes-Windows-Bot  # Name of the service connection to be used to push packages. Required.
+        #     feed: https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/nuget/v3/index.json  # Path for the source feed, must use the NuGet v3 URI of the feed. Required.
+        #     publishPackageMetadata: true
 
     - stage: nuget_org_publish
       displayName: Nuget nuget.org feed
