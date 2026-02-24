@@ -129,9 +129,18 @@ std::optional<ParsedLocaleIdentifier> getDefaultLocale(
 }
 
 /// Best-fit locale matching via uloc_acceptLanguage.
+/// Falls back to bestAvailableLocaleICU when optional ICU functions are
+/// not available (e.g. system icu.dll with limited exports).
 std::string bestFitBestAvailableLocale(
     const hermes_icu_vtable *icu,
     const std::u16string &localeNoExt) {
+  // uloc_openAvailableByType and uloc_acceptLanguage are optional vtable
+  // entries — they may be nullptr when using a limited ICU provider
+  // (e.g. the Windows system icu.dll).
+  if (!icu->uloc_openAvailableByType || !icu->uloc_acceptLanguage) {
+    return bestAvailableLocaleICU(icu, localeNoExt);
+  }
+
   std::string localeICU = convertBCP47toICULocale(icu, localeNoExt);
   const char *acceptList[1]{localeICU.c_str()};
 
@@ -661,7 +670,7 @@ void CollatorWindows::setAttributes() {
     } else {
       icu_->ucol_setAttribute(coll_, UCOL_CASE_FIRST, UCOL_OFF, &err);
     }
-  } else {
+  } else if (icu_->ucol_getAttribute) {
     err = U_ZERO_ERROR;
     UColAttributeValue val = icu_->ucol_getAttribute(coll_, UCOL_CASE_FIRST, &err);
     if (val == UCOL_UPPER_FIRST)
@@ -670,6 +679,8 @@ void CollatorWindows::setAttributes() {
       resolvedCaseFirstValue_ = u"lower";
     else
       resolvedCaseFirstValue_ = u"false";
+  } else {
+    resolvedCaseFirstValue_ = u"false";
   }
 
   // sensitivity
@@ -686,7 +697,7 @@ void CollatorWindows::setAttributes() {
     } else if (resolvedSensitivityValue_ == u"variant") {
       icu_->ucol_setAttribute(coll_, UCOL_STRENGTH, UCOL_TERTIARY, &err);
     }
-  } else {
+  } else if (icu_->ucol_getAttribute) {
     err = U_ZERO_ERROR;
     UColAttributeValue strengthVal =
         icu_->ucol_getAttribute(coll_, UCOL_STRENGTH, &err);
@@ -701,6 +712,8 @@ void CollatorWindows::setAttributes() {
     } else {
       resolvedSensitivityValue_ = u"variant";
     }
+  } else {
+    resolvedSensitivityValue_ = u"variant";
   }
 
   // ignorePunctuation
@@ -1992,8 +2005,10 @@ vm::ExecutionStatus NumberFormatWindows::initialize(
       localeICU += "@numbers=" + nuUtf8;
   }
 
-  if (style_ == u"unit" && icu_->unumf_openForSkeletonAndLocale) {
-    // Use ICU Number Formatter v2 for unit formatting.
+  bool useUnitV2 = false;
+  if (style_ == u"unit" && icu_->unumf_openForSkeletonAndLocale &&
+      icu_->unumf_openResult) {
+    // Try ICU Number Formatter v2 for unit formatting.
     // Build skeleton using ICU 68+ "unit/" syntax which takes ECMA-402
     // unit identifiers directly (e.g., "unit/kilometer-per-hour").
     std::string skeleton = "unit/";
@@ -2018,22 +2033,31 @@ vm::ExecutionStatus NumberFormatWindows::initialize(
         static_cast<int32_t>(skeleton16.size()),
         localeICU.c_str(),
         &err);
-    if (U_FAILURE(err) || !unumf_) {
-      return runtime.raiseRangeError("Failed to create unit NumberFormat");
+    if (U_SUCCESS(err) && unumf_) {
+      err = U_ZERO_ERROR;
+      unumfResult_ = icu_->unumf_openResult(&err);
+      if (U_SUCCESS(err) && unumfResult_) {
+        useUnitV2 = true;
+        // Also create a basic decimal formatter for resolvedOptions defaults
+        err = U_ZERO_ERROR;
+        nf_ = icu_->unum_open(
+            UNUM_DECIMAL, nullptr, 0, localeICU.c_str(), nullptr, &err);
+      } else {
+        // Clean up partial state.
+        if (icu_->unumf_close)
+          icu_->unumf_close(unumf_);
+        unumf_ = nullptr;
+        unumfResult_ = nullptr;
+      }
+    } else {
+      // Unit skeleton not supported by this ICU provider (e.g. older system
+      // icu.dll). Fall through to legacy decimal formatter.
+      unumf_ = nullptr;
     }
+  }
 
-    err = U_ZERO_ERROR;
-    unumfResult_ = icu_->unumf_openResult(&err);
-    if (U_FAILURE(err) || !unumfResult_) {
-      return runtime.raiseRangeError("Failed to create unit format result");
-    }
-
-    // Also create a basic decimal formatter for resolvedOptions defaults
-    err = U_ZERO_ERROR;
-    nf_ = icu_->unum_open(
-        UNUM_DECIMAL, nullptr, 0, localeICU.c_str(), nullptr, &err);
-  } else {
-    // ICU number format style (legacy API for non-unit styles)
+  if (!useUnitV2) {
+    // Legacy ICU number format API (non-unit styles, or unit fallback)
     int32_t icuStyle = UNUM_DECIMAL;
     if (style_ == u"percent")
       icuStyle = UNUM_PERCENT;
