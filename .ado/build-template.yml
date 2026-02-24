@@ -64,8 +64,6 @@ extends:
         skipBuildTagsForGitHubPullRequests: true
     pool:
       name: fabric-internal-pool-large
-      image: windows-latest
-      os: windows
     sdl:
       binskim:
         analyzeTarget: |
