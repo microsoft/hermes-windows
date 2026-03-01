@@ -61,13 +61,11 @@ extends:
         - script: dir /S $(Pipeline.Workspace)\published-packages
           displayName: Show directory contents
 
-        - script: dotnet nuget list source
-          displayName: Show Nuget sources
-
         - task: AzureCLI@2
           displayName: Override NuGet credentials with Managed Identity
           inputs:
             azureSubscription: 'Office-Hermes-Windows-Bot'
+            visibleAzLogin: false
             scriptType: 'pscore'
             scriptLocation: 'inlineScript'
             inlineScript: |
@@ -102,9 +100,6 @@ extends:
         - script: dir /S $(Pipeline.Workspace)\published-packages
           displayName: Show directory contents
 
-        - script: dotnet nuget list source
-          displayName: Show Nuget sources
-
         - task: AzureKeyVault@2
           inputs:
             azureSubscription: ESRP-JSHost3
@@ -116,6 +111,7 @@ extends:
           displayName: Override NuGet.org credentials from Key Vault
           inputs:
             azureSubscription: ESRP-JSHost3
+            visibleAzLogin: false
             scriptType: 'pscore'
             scriptLocation: 'inlineScript'
             inlineScript: |
