@@ -72,19 +72,21 @@ extends:
               $accessToken = az account get-access-token --query accessToken --resource 499b84ac-1321-427f-aa17-267ca6975798 -o tsv
               # Set the access token as a secret, so it doesn't get leaked in the logs
               Write-Host "##vso[task.setsecret]$accessToken"
-              # Override the apitoken of the nuget service connection, for the duration of this stage
-              Write-Host "##vso[task.setendpoint id=29e4c04c-ae69-4453-b9f3-bfef7a4c8d32;field=authParameter;key=apitoken]$accessToken"
+              # Store as a secret variable for subsequent NuGet push step.
+              Write-Host "##vso[task.setvariable variable=msReactNativePublicApiToken;issecret=true]$accessToken"
 
-        - task: 1ES.PublishNuGet@1
+        - task: NuGetToolInstaller@1
+          displayName: Install NuGet client
+
+        - script: >
+            nuget.exe push "$(Pipeline.Workspace)\published-packages\Microsoft.JavaScript.Hermes.*.nupkg"
+            -Source "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/nuget/v3/index.json"
+            -ApiKey "$(msReactNativePublicApiToken)"
+            -NonInteractive
+            -Verbosity Detailed
+            -SkipDuplicate
           displayName: NuGet push to ms/react-native-public
-          inputs:
-            useDotNetTask: true
-            packageParentPath: '$(Pipeline.Workspace)/published-packages'
-            packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
-            nuGetFeedType: external
-            publishFeedCredentials: 'Nuget - ms/react-native-public'
-            externalEndpoint: 'Nuget - ms/react-native-public'
-            publishPackageMetadata: true
+
 
       - job: nuget_org_job
         displayName: Publish Nuget to nuget.org
@@ -118,16 +120,18 @@ extends:
               $nugetOrgApiKey = "$(OGX-JSHost-Nuget-org-API-key-Microsoft-JavaScript-NodeApi)"
               # Set the API key as a secret, so it doesn't get leaked in logs.
               Write-Host "##vso[task.setsecret]$nugetOrgApiKey"
-              # Override the apitoken of the NuGet.org service connection for this job.
-              Write-Host "##vso[task.setendpoint id=f15cbb2b-c0a8-4325-a866-960fa0bec9af;field=authParameter;key=apitoken]$nugetOrgApiKey"
+              # Store as a secret variable for subsequent NuGet push step.
+              Write-Host "##vso[task.setvariable variable=nugetOrgApiToken;issecret=true]$nugetOrgApiKey"
 
-        - task: 1ES.PublishNuGet@1
+        - task: NuGetToolInstaller@1
+          displayName: Install NuGet client
+
+        - script: >
+            nuget.exe push "$(Pipeline.Workspace)\published-packages\Microsoft.JavaScript.Hermes.*.nupkg"
+            -Source "https://api.nuget.org/v3/index.json"
+            -ApiKey "$(nugetOrgApiToken)"
+            -NonInteractive
+            -Verbosity Detailed
+            -SkipDuplicate
           displayName: NuGet push to nuget.org
-          inputs:
-            useDotNetTask: false
-            packageParentPath: '$(Pipeline.Workspace)/published-packages'
-            packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
-            nuGetFeedType: external
-            publishFeedCredentials: 'nuget.org/cxe/hermes-windows'
-            externalEndpoint: 'nuget.org/cxe/hermes-windows'
-            publishPackageMetadata: true
+
