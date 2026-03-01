@@ -43,14 +43,12 @@ extends:
         suppressionFile: $(Build.SourcesDirectory)\.ado\guardian\sdl\.gdnsuppress
 
     stages:
-    - stage: ms_react_native_nuget_publish
-      displayName: Nuget ms/react-native feed
+    - stage: nuget_publish
+      displayName: Nuget publish
 
       jobs:
       - job: ms_react_native_nuget_job
-        displayName: Publish Nuget to ms/react-native
-        condition: succeeded()
-        timeoutInMinutes: 0
+        displayName: Publish Nuget to ms/react-native-public
 
         templateContext:
           inputs:
@@ -90,14 +88,8 @@ extends:
             externalEndpoint: 'Nuget - ms/react-native-public'
             publishPackageMetadata: true
 
-    - stage: nuget_org_publish
-      displayName: Nuget nuget.org feed
-
-      jobs:
       - job: nuget_org_job
         displayName: Publish Nuget to nuget.org
-        condition: succeeded()
-        timeoutInMinutes: 0
 
         templateContext:
           inputs:
@@ -136,7 +128,7 @@ extends:
         - task: 1ES.PublishNuGet@1
           displayName: NuGet push to nuget.org
           inputs:
-            useDotNetTask: true
+            useDotNetTask: false
             packageParentPath: '$(Pipeline.Workspace)/published-packages'
             packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
             nuGetFeedType: external
