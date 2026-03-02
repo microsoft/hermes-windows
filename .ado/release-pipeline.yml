@@ -56,11 +56,11 @@ extends:
 
         strategy:
           matrix:
-            apitoken:
+            key_apitoken:
               endpointAuthParameterKey: apitoken
-            apikey:
+            key_apikey_lower:
               endpointAuthParameterKey: apikey
-            ApiKey:
+            key_apikey_pascal:
               endpointAuthParameterKey: ApiKey
 
         templateContext:
