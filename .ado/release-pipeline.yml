@@ -84,11 +84,35 @@ extends:
             scriptType: 'pscore'
             scriptLocation: 'inlineScript'
             inlineScript: |
-              $nugetOrgApiKey = "FAKE-NUGET-API-KEY-EXPERIMENT"
+              $nugetOrgApiKey = "FAKE-NUGET-API-KEY-$(endpointAuthParameterKey)-EXPERIMENT"
+              $hashBytes = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($nugetOrgApiKey))
+              $hash = ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
               Write-Host "Fake API key for experiment: $nugetOrgApiKey"
+              Write-Host "Fake API key SHA256: $hash"
               Write-Host "Trying endpoint auth parameter key: $(endpointAuthParameterKey)"
               # Endpoint ID for 'nuget.org/cxe/hermes-windows'.
               Write-Host "##vso[task.setendpoint id=f15cbb2b-c0a8-4325-a866-960fa0bec9af;field=authParameter;key=$(endpointAuthParameterKey)]$nugetOrgApiKey"
+
+        - task: AzureCLI@2
+          displayName: Dump endpoint auth parameter hashes
+          inputs:
+            azureSubscription: ESRP-JSHost3
+            visibleAzLogin: false
+            scriptType: 'pscore'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              $endpointId = 'f15cbb2b-c0a8-4325-a866-960fa0bec9af'
+              $prefix = "ENDPOINT_AUTH_PARAMETER_${endpointId}_".ToUpper().Replace('-', '_')
+              Write-Host "Endpoint auth parameter env hashes for prefix: $prefix"
+              Get-ChildItem Env: |
+                Where-Object { $_.Name -like "$prefix*" } |
+                Sort-Object Name |
+                ForEach-Object {
+                  $value = $_.Value
+                  $hashBytes = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($value))
+                  $hash = ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+                  Write-Host "$($_.Name)_SHA256=$hash"
+                }
 
         - task: 1ES.PublishNuGet@1
           displayName: NuGet push to nuget.org (experiment)
