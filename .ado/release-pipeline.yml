@@ -126,7 +126,7 @@ extends:
         - task: 1ES.PublishNuGet@1
           displayName: NuGet push to nuget.org
           inputs:
-            useDotNetTask: true
+            useDotNetTask: false
             packageParentPath: '$(Pipeline.Workspace)/published-packages'
             packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
             nuGetFeedType: external
