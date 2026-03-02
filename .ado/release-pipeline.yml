@@ -62,6 +62,8 @@ extends:
               endpointAuthParameterKey: apikey
             key_apikey_pascal:
               endpointAuthParameterKey: ApiKey
+            key_nugetkey:
+              endpointAuthParameterKey: nugetkey
 
         templateContext:
           inputs:
