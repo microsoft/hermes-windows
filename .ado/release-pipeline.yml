@@ -9,10 +9,6 @@ name: Release $(Date:yyyyMMdd).$(Rev:r)
 trigger: none
 pr: none
 
-variables:
-  - name: System.Debug
-    value: true
-
 resources:
   pipelines:
   - pipeline: microsoft.hermes-windows
@@ -51,19 +47,48 @@ extends:
       displayName: Nuget publish
 
       jobs:
-      - job: nuget_org_job
-        displayName: Publish Nuget to nuget.org (1ES experiment)
+      - job: ms_react_native_nuget_job
+        displayName: Publish Nuget to ms/react-native-public
 
-        strategy:
-          matrix:
-            key_apitoken:
-              endpointAuthParameterKey: apitoken
-            key_apikey_lower:
-              endpointAuthParameterKey: apikey
-            key_apikey_pascal:
-              endpointAuthParameterKey: ApiKey
-            key_nugetkey:
-              endpointAuthParameterKey: nugetkey
+        templateContext:
+          inputs:
+          - input: pipelineArtifact
+            pipeline: microsoft.hermes-windows
+            artifactName: published-packages
+            targetPath: $(Pipeline.Workspace)\published-packages
+
+        steps:
+        - script: dir /S $(Pipeline.Workspace)\published-packages
+          displayName: Show directory contents
+
+        - task: AzureCLI@2
+          displayName: Override NuGet credentials with Managed Identity
+          inputs:
+            azureSubscription: 'Office-Hermes-Windows-Bot'
+            visibleAzLogin: false
+            scriptType: 'pscore'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              $accessToken = az account get-access-token --query accessToken --resource 499b84ac-1321-427f-aa17-267ca6975798 -o tsv
+              # Set the access token as a secret, so it doesn't get leaked in the logs
+              Write-Host "##vso[task.setsecret]$accessToken"
+              # Override the apitoken of the nuget service connection, for the duration of this stage
+              Write-Host "##vso[task.setendpoint id=29e4c04c-ae69-4453-b9f3-bfef7a4c8d32;field=authParameter;key=apitoken]$accessToken"
+
+        - task: 1ES.PublishNuGet@1
+          displayName: NuGet push to ms/react-native-public
+          inputs:
+            useDotNetTask: true
+            packageParentPath: '$(Pipeline.Workspace)/published-packages'
+            packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
+            nuGetFeedType: external
+            publishFeedCredentials: 'Nuget - ms/react-native-public'
+            externalEndpoint: 'Nuget - ms/react-native-public'
+            publishPackageMetadata: true
+
+
+      - job: nuget_org_job
+        displayName: Publish Nuget to nuget.org
 
         templateContext:
           inputs:
@@ -76,47 +101,30 @@ extends:
         - script: dir /S $(Pipeline.Workspace)\published-packages
           displayName: Show directory contents
 
-        - task: AzureCLI@2
-          displayName: Override endpoint with fake key
+        - task: AzureKeyVault@2
           inputs:
             azureSubscription: ESRP-JSHost3
-            visibleAzLogin: false
-            scriptType: 'pscore'
-            scriptLocation: 'inlineScript'
-            inlineScript: |
-              $nugetOrgApiKey = "FAKE-NUGET-API-KEY-$(endpointAuthParameterKey)-EXPERIMENT"
-              $hashBytes = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($nugetOrgApiKey))
-              $hash = ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
-              Write-Host "Fake API key for experiment: $nugetOrgApiKey"
-              Write-Host "Fake API key SHA256: $hash"
-              Write-Host "Trying endpoint auth parameter key: $(endpointAuthParameterKey)"
-              # Endpoint ID for 'nuget.org/cxe/hermes-windows'.
-              Write-Host "##vso[task.setendpoint id=f15cbb2b-c0a8-4325-a866-960fa0bec9af;field=authParameter;key=$(endpointAuthParameterKey)]$nugetOrgApiKey"
+            KeyVaultName: OGX-JSHost-KV
+            SecretsFilter: 'OGX-JSHost-Nuget-org-API-key-Microsoft-JavaScript-NodeApi'
+            RunAsPreJob: true
 
         - task: AzureCLI@2
-          displayName: Dump endpoint auth parameter hashes
+          displayName: Override NuGet.org credentials from Key Vault
           inputs:
             azureSubscription: ESRP-JSHost3
             visibleAzLogin: false
             scriptType: 'pscore'
             scriptLocation: 'inlineScript'
             inlineScript: |
-              $endpointId = 'f15cbb2b-c0a8-4325-a866-960fa0bec9af'
-              $prefix = "ENDPOINT_AUTH_PARAMETER_${endpointId}_".ToUpper().Replace('-', '_')
-              Write-Host "Endpoint auth parameter env hashes for prefix: $prefix"
-              Get-ChildItem Env: |
-                Where-Object { $_.Name -like "$prefix*" } |
-                Sort-Object Name |
-                ForEach-Object {
-                  $value = $_.Value
-                  $hashBytes = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($value))
-                  $hash = ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
-                  Write-Host "$($_.Name)_SHA256=$hash"
-                }
+              $nugetOrgApiKey = "$(OGX-JSHost-Nuget-org-API-key-Microsoft-JavaScript-NodeApi)"
+              # Set the API key as a secret, so it doesn't get leaked in logs.
+              Write-Host "##vso[task.setsecret]$nugetOrgApiKey"
+              # Replace the endpoint id below with the id of the
+              # 'nuget.org/cxe/hermes-windows' service connection.
+              Write-Host "##vso[task.setendpoint id=f15cbb2b-c0a8-4325-a866-960fa0bec9af;field=authParameter;key=nugetkey]$nugetOrgApiKey"
 
         - task: 1ES.PublishNuGet@1
-          displayName: NuGet push to nuget.org (experiment)
-          continueOnError: true
+          displayName: NuGet push to nuget.org
           inputs:
             useDotNetTask: false
             packageParentPath: '$(Pipeline.Workspace)/published-packages'
@@ -125,4 +133,3 @@ extends:
             publishFeedCredentials: 'nuget.org/cxe/hermes-windows'
             externalEndpoint: 'nuget.org/cxe/hermes-windows'
             publishPackageMetadata: true
-
