@@ -383,7 +383,7 @@ endif (MSVC)
 # -Werror=undef (compiler bug fixed in GCC 13), so we only enable it for C++
 # when the compiler is not affected.
 macro(hermes_enable_werror_undef)
-  if (GCC_COMPATIBLE)
+  if (GCC_COMPATIBLE AND NOT CLANG_CL)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror=undef")
     if (NOT (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
              CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13))
