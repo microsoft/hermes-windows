@@ -227,6 +227,30 @@ See `API/hermes/extensions/contrib/README.md` for contributor guidelines.
 
 Runs JS benchmarks and compares results across engines or builds. Full docs: `benchmarks/bench-runner/README.md`.
 
+### How It Works
+
+The benchmark JS files live in `benchmarks/bench-runner/resource/test-suites/`, organized by category:
+- `v8-v6-perf/` — V8 benchmark suite (crypto, deltablue, raytrace, regexp, richards, splay)
+- `octane/` — Octane suite (box2d, earley-boyer, navier-stokes, pdfjs, gbemu, code-load, typescript)
+- `tsc/` — TypeScript compiler benchmark
+- `micros/` — ~60 micro-benchmarks targeting specific operations (array, string, regexp, etc.)
+
+Every JS file follows the same contract: do work, then print `Time: <milliseconds>` to stdout. For example, `micros/simpleSum.js`:
+```js
+var start = Date.now();
+print(doSumNTimes(10000));
+var end = Date.now();
+print("Time: " + (end - start));
+```
+
+The runner (`bench-runner.py`) does the following for each benchmark:
+1. **Compiles** the JS file to Hermes bytecode (`.hbc`) using: `hermes -O -Wno-undefined-variable -emit-binary`
+2. **Warm-up run** — runs once to warm disk caches (discards result)
+3. **Timed runs** — runs N times (set by `-c`), parses `Time: <ms>` from each run's stdout
+4. **Reports** mean and stddev across runs
+
+Benchmark names (used with `--bm`) and their JS file mappings are defined in `benchmarks/bench-runner/categories.py`.
+
 ### Windows Fork Differences
 
 - **Script path**: `benchmarks/bench-runner/bench-runner.py` (not `xplat/static_h/benchmarks/...`)
@@ -240,7 +264,8 @@ python3 benchmarks/bench-runner/bench-runner.py --hermes -b build/ninja-clang-re
 ```
 
 Parameters:
-- `--cats v8` / `--cats octane` / `--cats v8 octane` — select benchmark categories
+- `--bm v8-crypto simpleSum` — run specific benchmarks by name
+- `--cats v8` / `--cats octane` / `--cats v8 octane` — run all benchmarks in a category
 - `-c 5` — run each benchmark 5 times (default 1)
 - `-f json` / `-f tsv` — output format (default: `ascii` table to stdout)
 - `--out results.json` — write results to file
@@ -260,4 +285,4 @@ python3 benchmarks/bench-runner/bench-merge.py before.json after.json
 - `v8` — 6 benchmarks (crypto, deltablue, raytrace, regexp, richards, splay)
 - `octane` — 7 benchmarks (box2d, earley-boyer, navier-stokes, pdfjs, gbemu, code-load, typescript)
 - `tsc` — TypeScript compiler benchmark
-- `micros` — 59 micro-benchmarks (not run by default)
+- `micros` — ~60 micro-benchmarks (not run by default)
