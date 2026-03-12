@@ -59,3 +59,10 @@ Files requiring Static Hermes (`shermes`) or Flow type annotations do not work w
 - octane/zlib.js: `zlib {score}`
 
 Note: Octane {score} is `reference / meanTime * 100` — higher = faster. The actual milliseconds are not printed. To get real time measurements, use the bench-runner versions in `bench-runner/resource/test-suites/octane/` instead. Some octane benchmarks emit compiler warnings to stderr but still run correctly.
+
+### Overlap with bench-runner test suites
+
+bench-runner `--cats v8 octane` covers most of these but not all:
+- crypto, deltablue, raytrace, regexp, richards, splay — available in bench-runner under the `v8` category
+- box2d, earley-boyer, navier-stokes, pdfjs, gbemu, code-load, typescript — available in bench-runner under the `octane` category
+- mandreel, mandreel_latency, splay_latency, zlib — **only available here**, not in bench-runner
