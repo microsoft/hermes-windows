@@ -222,3 +222,42 @@ Community contributions go in `extensions/contrib/`. These are:
 - May be promoted to core if widely adopted
 
 See `API/hermes/extensions/contrib/README.md` for contributor guidelines.
+
+## Benchmarks
+
+Runs JS benchmarks and compares results across engines or builds. Full docs: `benchmarks/bench-runner/README.md`.
+
+### Windows Fork Differences
+
+- **Script path**: `benchmarks/bench-runner/bench-runner.py` (not `xplat/static_h/benchmarks/...`)
+- **Binary path**: Use local build, e.g. `build/ninja-clang-release/bin/hermes.exe`
+- **`-gc-min-heap` unsupported**: Commented out in `benchmarks/bench-runner/runner.py`
+
+### Running Benchmarks
+
+```bash
+python3 benchmarks/bench-runner/bench-runner.py --hermes -b build/ninja-clang-release/bin/hermes.exe {PARAMETERS}
+```
+
+Parameters:
+- `--cats v8` / `--cats octane` / `--cats v8 octane` — select benchmark categories
+- `-c 5` — run each benchmark 5 times (default 1)
+- `-f json` / `-f tsv` — output format (default: `ascii` table to stdout)
+- `--out results.json` — write results to file
+- `-l name` — label the run as `name` (used for comparisons)
+
+### Comparing Before/After
+
+```bash
+# Save labeled JSON runs, then merge
+python3 benchmarks/bench-runner/bench-runner.py --hermes -b {BINARY} --cats v8 octane -l before -f json --out before.json -c 5
+python3 benchmarks/bench-runner/bench-runner.py --hermes -b {BINARY} --cats v8 octane -l after -f json --out after.json -c 5
+python3 benchmarks/bench-runner/bench-merge.py before.json after.json
+```
+
+### Available Categories
+
+- `v8` — 6 benchmarks (crypto, deltablue, raytrace, regexp, richards, splay)
+- `octane` — 7 benchmarks (box2d, earley-boyer, navier-stokes, pdfjs, gbemu, code-load, typescript)
+- `tsc` — TypeScript compiler benchmark
+- `micros` — 59 micro-benchmarks (not run by default)
