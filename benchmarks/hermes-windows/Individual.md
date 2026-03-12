@@ -1,7 +1,20 @@
 # Individual Benchmarks
 
 Standalone JS files that can be run directly with `hermes` (not through bench-runner.py).
-Files requiring Static Hermes (`shermes`) or Flow type annotations do not work with `hermes.exe` and are excluded.
+
+### Typed mode
+
+Files with Flow type annotations need the `-typed` flag (or at minimum `-parse-flow`):
+- `-typed` — parses Flow types **and** uses them for optimization (faster execution)
+- `-parse-flow` — parses and strips Flow types without optimization (same speed as untyped)
+
+```bash
+hermes -typed benchmarks/many-subclasses/many-sh-1.js    # optimized (e.g. 8033ms)
+hermes -parse-flow benchmarks/many-subclasses/many-sh-1.js  # unoptimized (e.g. 18397ms)
+hermes benchmarks/many-subclasses/many.js                # plain JS (e.g. 18556ms)
+```
+
+Some files still fail even with `-typed` due to unsupported features (ES module imports, unimplemented type annotations). These are marked below.
 
 ## micros/
 
@@ -18,25 +31,25 @@ Files requiring Static Hermes (`shermes`) or Flow type annotations do not work w
 ## many-subclasses/
 
 - many-subclasses/many.js: `{result} M={num-subclasses}, N={iterations}, time={ms}`
-- many-subclasses/many-sh-1.js: **requires shermes** (Flow type annotations)
-- many-subclasses/many-sh-2.js: **requires shermes** (Flow type annotations)
-- many-subclasses/many-sh-3.js: **requires shermes** (Flow type annotations)
-- many-subclasses/many-sh-4.js: **requires shermes** (Flow type annotations)
+- many-subclasses/many-sh-1.js: `{result} M={num-subclasses}, N={iterations}, time={ms}` (requires `-typed`)
+- many-subclasses/many-sh-2.js: `{result} M={num-subclasses}, N={iterations}, time={ms}` (requires `-typed`)
+- many-subclasses/many-sh-3.js: `{result} M={num-subclasses}, N={iterations}, time={ms}` (requires `-typed`)
+- many-subclasses/many-sh-4.js: `{result} M={num-subclasses}, N={iterations}, time={ms}` (requires `-typed`)
 
 ## map-objects/
 
 - map-objects/map-objects-untyped.js: `{ms} ms {N} iterations`
-- map-objects/map-objects-typed.js: **requires shermes** (Flow type annotations)
+- map-objects/map-objects-typed.js: `{ms} ms {N} iterations` (requires `-typed`)
 
 ## map-strings/
 
 - map-strings/map-strings-untyped.js: `{ms} ms {N} iterations`
-- map-strings/map-strings-typed.js: **requires shermes** (Flow type annotations)
+- map-strings/map-strings-typed.js: `{ms} ms {N} iterations` (requires `-typed`)
 
 ## nbody/
 
 - nbody/original/nbody.js: `{energy-value}` (correctness check only, no timing output)
-- nbody/fully-typed/nbody.js: **requires shermes** (Flow type annotations)
+- nbody/fully-typed/nbody.js: `{energy-value}` (requires `-typed`, correctness check only, no timing output)
 
 ## string-switch/
 
@@ -54,16 +67,16 @@ Files requiring Static Hermes (`shermes`) or Flow type annotations do not work w
 - MiniReact/no-objects/out/music-stripped.js: renders HTML only, no timing output
 - MiniReact/no-objects/out/music-lowered.js: renders HTML only, no timing output
 - MiniReact/no-deps/stripped/MiniReact.js: no output
-- MiniReact/no-deps/MiniReact.js: **requires shermes** (Flow type annotations)
-- MiniReact/original/MiniReact.js: **requires shermes** (Flow imports)
-- MiniReact/no-objects/out/simple.js: **requires shermes** (Flow type annotations)
-- MiniReact/no-objects/out/music.js: **requires shermes** (Flow type annotations)
+- MiniReact/no-deps/MiniReact.js: **does not work** (unsupported type annotations even with `-typed`)
+- MiniReact/original/MiniReact.js: **does not work** (ES module imports not supported)
+- MiniReact/no-objects/out/simple.js: **does not work** (crashes with `-typed`)
+- MiniReact/no-objects/out/music.js: **does not work** (unsupported type annotations even with `-typed`)
 
 ## widgets/
 
-- widgets/original/app_runner.js: **requires shermes** (Flow imports)
-- widgets/simple-classes/widgets.js: **requires shermes** (Flow type annotations)
-- widgets/single-file/widgets.js: **requires shermes** (Flow type annotations)
+- widgets/simple-classes/widgets.js: `{ms} ms {N} iterations` (requires `-typed`)
+- widgets/original/app_runner.js: **does not work** (ES module imports not supported)
+- widgets/single-file/widgets.js: **does not work** (unsupported type annotations even with `-typed`)
 
 ## octane/ (Google Octane v2, BenchmarkSuite scoring)
 
