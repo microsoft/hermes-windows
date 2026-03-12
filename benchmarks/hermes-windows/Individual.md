@@ -50,6 +50,7 @@ Some files still fail even with `-typed` due to unsupported features (ES module 
 
 - nbody/original/nbody.js: `{energy-value}` (correctness check only, no timing output)
 - nbody/fully-typed/nbody.js: `{energy-value}` (requires `-typed`, correctness check only, no timing output)
+- nbody/fully-typed/nbody.ts: `{energy-value}` (requires `-parse-ts` or `-transform-ts`, correctness check only, no timing output)
 
 ## string-switch/
 
@@ -58,6 +59,7 @@ Some files still fail even with `-typed` due to unsupported features (ES module 
 ## raytracer/
 
 - raytracer/original/bench-raytracer.js: `exec time:  {ms} ms`
+- raytracer/original/raytracer.ts: **does not work** (uses TS parameter properties unsupported by hermes)
 - raytracer/typed/: **requires shermes + CMake build** (compiled typed JS + C++ GUI, not available on Windows)
 
 ## MiniReact/
