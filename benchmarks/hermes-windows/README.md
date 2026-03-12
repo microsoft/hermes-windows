@@ -2,6 +2,69 @@
 
 Runs JS benchmarks and compares results across engines or builds. Full docs: `benchmarks/bench-runner/README.md`.
 
+## PowerShell Scripts
+
+All scripts live in `benchmarks/hermes-windows/` and use `$PSScriptRoot` for paths, so they work from any working directory. They expect `build/ninja-clang-release/bin/hermes.exe` to exist.
+
+### bench-all.ps1
+
+Runs everything (test suites + individual benchmarks) and merges into one JSON file.
+
+```powershell
+.\bench-all.ps1 -c 5 -l baseline -output results.json
+```
+
+- `-c` — number of iterations per benchmark
+- `-l` — label (e.g. "before", "after") included in the JSON output
+- `-output` — output JSON file path
+
+### bench-test-suits.ps1
+
+Runs only the bench-runner test suites (`v8`, `octane`, `micros` categories). Wraps `bench-runner.py`.
+
+```powershell
+.\bench-test-suits.ps1 -c 5 -l baseline -output test-suits.json
+```
+
+### bench-individual-samples.ps1
+
+Runs only the standalone individual benchmarks (listed in `Individual.md`), multiple iterations.
+
+```powershell
+.\bench-individual-samples.ps1 -c 5 -output individual.json
+```
+
+### bench-individual.ps1
+
+Single-run helper used by `bench-individual-samples.ps1`. Runs each individual benchmark once and outputs a flat JSON of `{ "path": ms }`.
+
+```powershell
+.\bench-individual.ps1 -output single-run.json
+```
+
+### format-json.ps1
+
+Reformats a JSON file in-place with consistent 4-space indentation (fixes PowerShell's default formatting).
+
+```powershell
+.\format-json.ps1 results.json
+```
+
+### Comparing before/after
+
+```powershell
+# 1. Build baseline, run all benchmarks
+.\bench-all.ps1 -c 5 -l before -output before.json
+
+# 2. Make changes, rebuild, run again
+.\bench-all.ps1 -c 5 -l after -output after.json
+
+# 3. Compare test-suite results (bench-runner's merge tool)
+python3 benchmarks/bench-runner/bench-merge.py before.json after.json
+```
+
+Note: `bench-merge.py` only compares bench-runner test suite results (it ignores individual benchmark entries). For individual benchmarks, compare the JSON files directly.
+
 ## How It Works
 
 The benchmark JS files live in `benchmarks/bench-runner/resource/test-suites/`, organized by category:
