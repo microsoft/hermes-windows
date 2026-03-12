@@ -18,18 +18,25 @@ Files requiring Static Hermes (`shermes`) or Flow type annotations do not work w
 ## many-subclasses/
 
 - many-subclasses/many.js: `{result} M={num-subclasses}, N={iterations}, time={ms}`
+- many-subclasses/many-sh-1.js: **requires shermes** (Flow type annotations)
+- many-subclasses/many-sh-2.js: **requires shermes** (Flow type annotations)
+- many-subclasses/many-sh-3.js: **requires shermes** (Flow type annotations)
+- many-subclasses/many-sh-4.js: **requires shermes** (Flow type annotations)
 
 ## map-objects/
 
 - map-objects/map-objects-untyped.js: `{ms} ms {N} iterations`
+- map-objects/map-objects-typed.js: **requires shermes** (Flow type annotations)
 
 ## map-strings/
 
 - map-strings/map-strings-untyped.js: `{ms} ms {N} iterations`
+- map-strings/map-strings-typed.js: **requires shermes** (Flow type annotations)
 
 ## nbody/
 
 - nbody/original/nbody.js: `{energy-value}` (correctness check only, no timing output)
+- nbody/fully-typed/nbody.js: **requires shermes** (Flow type annotations)
 
 ## string-switch/
 
@@ -38,6 +45,25 @@ Files requiring Static Hermes (`shermes`) or Flow type annotations do not work w
 ## raytracer/
 
 - raytracer/original/bench-raytracer.js: `exec time:  {ms} ms`
+- raytracer/typed/: **requires shermes + CMake build** (compiled typed JS + C++ GUI, not available on Windows)
+
+## MiniReact/
+
+- MiniReact/no-objects/out/simple-stripped.js: `{ms} ms` (also renders HTML to stdout)
+- MiniReact/no-objects/out/simple-lowered.js: `{ms} ms` (also renders HTML to stdout)
+- MiniReact/no-objects/out/music-stripped.js: renders HTML only, no timing output
+- MiniReact/no-objects/out/music-lowered.js: renders HTML only, no timing output
+- MiniReact/no-deps/stripped/MiniReact.js: no output
+- MiniReact/no-deps/MiniReact.js: **requires shermes** (Flow type annotations)
+- MiniReact/original/MiniReact.js: **requires shermes** (Flow imports)
+- MiniReact/no-objects/out/simple.js: **requires shermes** (Flow type annotations)
+- MiniReact/no-objects/out/music.js: **requires shermes** (Flow type annotations)
+
+## widgets/
+
+- widgets/original/app_runner.js: **requires shermes** (Flow imports)
+- widgets/simple-classes/widgets.js: **requires shermes** (Flow type annotations)
+- widgets/single-file/widgets.js: **requires shermes** (Flow type annotations)
 
 ## octane/ (Google Octane v2, BenchmarkSuite scoring)
 
