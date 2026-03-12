@@ -58,4 +58,4 @@ Files requiring Static Hermes (`shermes`) or Flow type annotations do not work w
 - octane/typescript.js: `Typescript {score}`
 - octane/zlib.js: `zlib {score}`
 
-Note: Octane scores are higher = faster (inverse of time). Some octane benchmarks emit compiler warnings to stderr but still run correctly.
+Note: Octane {score} is `reference / meanTime * 100` — higher = faster. The actual milliseconds are not printed. To get real time measurements, use the bench-runner versions in `bench-runner/resource/test-suites/octane/` instead. Some octane benchmarks emit compiler warnings to stderr but still run correctly.
