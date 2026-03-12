@@ -286,3 +286,55 @@ python3 benchmarks/bench-runner/bench-merge.py before.json after.json
 - `octane` — 7 benchmarks (box2d, earley-boyer, navier-stokes, pdfjs, gbemu, code-load, typescript)
 - `tsc` — TypeScript compiler benchmark
 - `micros` — ~60 micro-benchmarks (not run by default)
+
+### Standalone Benchmarks
+
+There are additional JS benchmarks outside of `bench-runner/` that are run directly with `hermes` (not through bench-runner.py). Each is a self-contained JS file you run with:
+
+```bash
+build/ninja-clang-release/bin/hermes benchmarks/<path-to-file>.js
+```
+
+| Directory | What it tests | Example |
+|-----------|--------------|---------|
+| `octane/` | Google Octane v2 suite (standalone versions) | `hermes benchmarks/octane/box2d.js` |
+| `micros/` | Focused micro-benchmarks (tree search, set insert, stringify, typed array sort) | `hermes benchmarks/micros/getNodeById.js` |
+| `jit-benches/` | JIT-targeted workloads | `hermes benchmarks/jit-benches/idisp.js` |
+| `many-subclasses/` | Property access across many subclasses | `hermes benchmarks/many-subclasses/many.js` |
+| `map-objects/` | Map with object keys | `hermes benchmarks/map-objects/map-objects-untyped.js` |
+| `map-strings/` | Map with string keys | `hermes benchmarks/map-strings/map-strings-untyped.js` |
+| `nbody/` | N-body physics simulation | `hermes benchmarks/nbody/original/nbody.js` |
+| `string-switch/` | Switch vs object vs Map for property setting | `hermes benchmarks/string-switch/plain/bench.js` |
+| `widgets/` | Widget rendering (classes, inheritance, arrays, Maps) | `hermes benchmarks/widgets/original/app_runner.js` |
+| `MiniReact/` | React-like virtual DOM rendering | `hermes benchmarks/MiniReact/no-deps/MiniReact.js` |
+
+Some directories also have typed variants (`*-sh-*.js`, `*-typed.js`) meant for Static Hermes (`shermes`), and C++ comparison implementations (`raytracer/typed/`, `sqlite-read/`, `imgui-demo/`) built via CMake.
+
+### Examples
+
+Run a single bench-runner benchmark (quick smoke test):
+```bash
+python3 benchmarks/bench-runner/bench-runner.py --hermes -b build/ninja-clang-release/bin/hermes.exe --bm v8-crypto
+```
+
+Run a standalone benchmark directly:
+```bash
+build/ninja-clang-release/bin/hermes.exe benchmarks/micros/getNodeById.js
+```
+
+Run a category with 3 iterations:
+```bash
+python3 benchmarks/bench-runner/bench-runner.py --hermes -b build/ninja-clang-release/bin/hermes.exe --cats v8 -c 3
+```
+
+Compare before/after a code change:
+```bash
+# 1. Run benchmarks on the baseline, save as labeled JSON
+python3 benchmarks/bench-runner/bench-runner.py --hermes -b build/ninja-clang-release/bin/hermes.exe --cats v8 -c 3 -l before -f json --out before.json
+
+# 2. Make changes, rebuild, run again
+python3 benchmarks/bench-runner/bench-runner.py --hermes -b build/ninja-clang-release/bin/hermes.exe --cats v8 -c 3 -l after -f json --out after.json
+
+# 3. Merge and compare — ratio < 1.0 means faster, > 1.0 means slower
+python3 benchmarks/bench-runner/bench-merge.py before.json after.json
+```
