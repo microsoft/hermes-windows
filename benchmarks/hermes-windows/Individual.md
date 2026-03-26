@@ -109,3 +109,15 @@ bench-runner `--cats v8 octane` covers most of these but not all:
 - crypto, deltablue, raytrace, regexp, richards, splay — available in bench-runner under the `v8` category
 - box2d, earley-boyer, navier-stokes, pdfjs, gbemu, code-load, typescript — available in bench-runner under the `octane` category
 - mandreel, mandreel_latency, splay_latency, zlib — **only available here**, not in bench-runner
+
+## Upstream Fixes
+
+These commits fixed upstream code to make individual benchmarks work:
+
+- `e631f052` Fix es5/bundled and typescript benchmark files (#285)
+  — Rewrote `raytracer/original/raytracer.ts` to replace TypeScript parameter
+  properties (unsupported by Hermes's `-parse-ts`) with plain assignments.
+- `d8add470` Fix FlowChecker.cpp to support remaining benchmark cases (#287)
+  — Fixed `lib/Sema/FlowChecker.cpp` to handle Flow type annotations used by
+  MiniReact and widgets benchmarks, enabling `-parse-flow` for MiniReact
+  variants and `-typed` for widgets.
