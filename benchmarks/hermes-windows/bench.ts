@@ -10,9 +10,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const benchmarksDir = resolve(__dirname, '..');
 const repoRoot = resolve(benchmarksDir, '..');
-const hermes = resolve(
-  repoRoot, 'build', 'ninja-clang-release', 'bin', 'hermes.exe',
-);
+// Binary path — set after CLI arg parsing.
+let hermes: string;
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -160,7 +159,9 @@ function runBenchmark(def: BenchmarkDef): [string, number] | null {
   }
 
   const resolvedPath = resolve(fullPath);
-  const args = [...(def.flags || []), resolvedPath];
+  // shermes is a compiler — it needs -exec to compile-and-run in one step.
+  const execFlag = mode === 'static' ? ['-exec'] : [];
+  const args = [...execFlag, ...(def.flags || []), resolvedPath];
   const key = def.path;
 
   try {
@@ -197,12 +198,12 @@ function runBenchmark(def: BenchmarkDef): [string, number] | null {
 
 function benchIndividual(): Benchmark {
   if (!existsSync(hermes)) {
-    console.error(`hermes.exe not found at: ${hermes}`);
+    console.error(`Binary not found at: ${hermes}`);
     process.exit(1);
   }
 
   console.log('Running individual benchmarks...');
-  console.log(`hermes: ${hermes}`);
+  console.log(`binary: ${hermes}`);
   console.log('');
 
   const results: { [key: string]: number } = {};
@@ -285,7 +286,7 @@ function benchTestSuites(count: number, label: string): TestSuiteBenchmark {
   }
 
   if (!existsSync(hermes)) {
-    console.error(`hermes.exe not found at: ${hermes}`);
+    console.error(`Binary not found at: ${hermes}`);
     process.exit(1);
   }
 
@@ -297,7 +298,7 @@ function benchTestSuites(count: number, label: string): TestSuiteBenchmark {
 
   // tsc category is excluded -- tsc-vs-chunk.js is not available in this repo
   console.log('Running test suites: v8 octane micros');
-  console.log(`hermes: ${hermes}`);
+  console.log(`binary: ${hermes}`);
   console.log(`count: ${count}`);
   console.log(`label: ${label}`);
   console.log('');
@@ -306,7 +307,7 @@ function benchTestSuites(count: number, label: string): TestSuiteBenchmark {
 
   try {
     const result = spawnSync('python3', [
-      benchRunner, '--hermes', '-b', hermes,
+      benchRunner, mode === 'static' ? '--shermes' : '--hermes', '-b', hermes,
       '--cats', 'v8', 'octane', 'micros',
       '-c', String(count), '-l', label,
       '-f', 'json', '--out', tempOut,
@@ -366,17 +367,33 @@ const { values } = parseArgs({
     count: { type: 'string', short: 'c' },
     label: { type: 'string', short: 'l' },
     output: { type: 'string', short: 'o' },
+    dynamic: { type: 'boolean', default: false },
+    static: { type: 'boolean', default: false },
   },
 });
 
 const count = parseInt(values.count || '1');
 const label = values.label || 'test';
 const output = values.output;
+const useDynamic = values.dynamic!;
+const useStatic = values.static!;
 
-if (!output) {
-  console.error('Usage: node bench.ts -c <count> -l <label> -o <output.json>');
+if (useDynamic && useStatic) {
+  console.error('Error: --dynamic and --static cannot be used together.');
   process.exit(1);
 }
+
+if (!output) {
+  console.error(
+    'Usage: node bench.ts -c <count> -l <label> -o <output.json> [--dynamic|--static]',
+  );
+  process.exit(1);
+}
+
+// Default to dynamic (hermes.exe) unless --static is specified.
+const mode: 'dynamic' | 'static' = useStatic ? 'static' : 'dynamic';
+const binaryName = mode === 'static' ? 'shermes.exe' : 'hermes.exe';
+hermes = resolve(repoRoot, 'build', 'ninja-clang-release', 'bin', binaryName);
 
 const result = benchAll(count, label);
 writeFileSync(output, JSON.stringify(result, undefined, 4) + '\n');
