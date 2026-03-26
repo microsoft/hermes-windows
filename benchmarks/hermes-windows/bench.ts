@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { tmpdir } from 'node:os';
@@ -148,6 +148,44 @@ const benchmarks: BenchmarkDef[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Static Hermes helpers — two-phase compile-then-run so that compilation
+// time is excluded from wall-clock measurements.
+// ---------------------------------------------------------------------------
+
+let shermesExecEnv: Record<string, string> | undefined;
+
+/// Build a process env with DLL directories on PATH so that executables
+/// compiled by shermes can find hermesvm.dll and shermes_console.dll.
+function getShermesExecEnv(): Record<string, string> {
+  if (shermesExecEnv) return shermesExecEnv;
+  const buildDir = resolve(dirname(hermes), '..');
+  const libDir = join(buildDir, 'lib');
+  const consoleDir = join(buildDir, 'tools', 'shermes');
+  shermesExecEnv = { ...process.env } as Record<string, string>;
+  shermesExecEnv['PATH'] =
+    libDir + delimiter + consoleDir + delimiter + (process.env['PATH'] || '');
+  return shermesExecEnv;
+}
+
+let shermesSeq = 0;
+
+/// Compile a JS file to a native executable via shermes.
+/// Returns the path to the temp .exe, or null on failure.
+function shermesCompile(def: BenchmarkDef, jsPath: string): string | null {
+  const exePath = join(tmpdir(), `shermes-bench-${process.pid}-${shermesSeq++}.exe`);
+  const args = ['-O', ...(def.flags || []), '-o', exePath, jsPath];
+  const result = spawnSync(hermes, args, {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  if (result.status !== 0) {
+    console.warn(`  ${def.path} compile failed: ${(result.stderr || '').trim()}`);
+    return null;
+  }
+  return exePath;
+}
+
+// ---------------------------------------------------------------------------
 // Run a single benchmark
 // ---------------------------------------------------------------------------
 
@@ -159,11 +197,22 @@ function runBenchmark(def: BenchmarkDef): [string, number] | null {
   }
 
   const resolvedPath = resolve(fullPath);
-  // shermes is a compiler — it needs -exec to compile-and-run in one step.
-  const execFlag = mode === 'static' ? ['-exec'] : [];
-  const args = [...execFlag, ...(def.flags || []), resolvedPath];
   const key = def.path;
 
+  // In static mode, pre-compile to a native exe so wall-clock measurements
+  // reflect only execution time, not compilation.
+  if (mode === 'static') {
+    const exePath = shermesCompile(def, resolvedPath);
+    if (!exePath) return null;
+    const env = getShermesExecEnv();
+    try {
+      return runCompiledBenchmark(def, key, exePath, env);
+    } finally {
+      try { unlinkSync(exePath); } catch {}
+    }
+  }
+
+  const args = [...(def.flags || []), resolvedPath];
   try {
     if (def.parser) {
       const result = spawnSync(hermes, args, {
@@ -182,6 +231,42 @@ function runBenchmark(def: BenchmarkDef): [string, number] | null {
     } else {
       const start = Date.now();
       spawnSync(hermes, args, { stdio: 'ignore' });
+      const elapsed = Date.now() - start;
+      console.log(`  ${def.path} ${elapsed} ms (measured)`);
+      return [key, elapsed];
+    }
+  } catch (e) {
+    console.warn(`  ERROR ${def.path}: ${e}`);
+    return null;
+  }
+}
+
+/// Run an already-compiled native exe and collect timing.
+function runCompiledBenchmark(
+  def: BenchmarkDef,
+  key: string,
+  exePath: string,
+  env: Record<string, string>,
+): [string, number] | null {
+  try {
+    if (def.parser) {
+      const result = spawnSync(exePath, [], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+        env,
+      });
+      const stdout = result.stdout || '';
+      const time = def.parser(stdout);
+      if (time !== null && time > 0) {
+        console.log(`  ${def.path} ${time} ms`);
+        return [key, time];
+      } else {
+        console.warn(`  ${def.path} failed to parse time`);
+        return null;
+      }
+    } else {
+      const start = Date.now();
+      spawnSync(exePath, [], { stdio: 'ignore', env });
       const elapsed = Date.now() - start;
       console.log(`  ${def.path} ${elapsed} ms (measured)`);
       return [key, elapsed];
