@@ -7,16 +7,16 @@ import { parseArgs } from 'node:util';
 
 const { values } = parseArgs({
   options: {
-    input: { type: 'string', short: 'i' },
+    input: { type: 'string', short: 'i', multiple: true },
     output: { type: 'string', short: 'o' },
   },
 });
 
-const input = values.input;
+const inputs = values.input;
 const output = values.output;
 
-if (!input || !output) {
-  console.error('Usage: report.ts -i <input.json> -o <output.md>');
+if (!inputs || inputs.length === 0 || !output) {
+  console.error('Usage: report.ts -i <input.json> [-i <input2.json> ...] -o <output.md>');
   process.exit(1);
 }
 
@@ -38,33 +38,49 @@ interface BenchData {
 }
 
 // ---------------------------------------------------------------------------
-// Read and group
+// Load all inputs
 // ---------------------------------------------------------------------------
 
-const data: BenchData = JSON.parse(readFileSync(input, 'utf-8'));
-const results = data.results;
+const datasets: BenchData[] = inputs.map(
+  (f) => JSON.parse(readFileSync(f, 'utf-8')) as BenchData,
+);
 
-// Group benchmarks: entries with '/' use first directory, others go by prefix.
-interface Group {
-  name: string;
-  entries: [string, number][];
+const runtimeNames = datasets.map((d, i) => d.runtime || `input-${i + 1}`);
+
+// ---------------------------------------------------------------------------
+// Collect all benchmark names and group them
+// ---------------------------------------------------------------------------
+
+function groupOf(name: string): string {
+  if (name.includes('/')) return name.split('/')[0];
+  if (name.startsWith('v8-')) return 'v8';
+  return 'test-suites';
 }
 
-const groupMap = new Map<string, [string, number][]>();
+// Ordered groups and ordered benchmark names within each group.
+const groupOrder: string[] = [];
+const groupBenchmarks = new Map<string, string[]>();
 
-for (const [name, result] of Object.entries(results)) {
-  let group: string;
-  if (name.includes('/')) {
-    group = name.split('/')[0];
-  } else if (name.startsWith('v8-')) {
-    group = 'v8';
-  } else {
-    // octane + micros from bench-runner all end up here
-    group = 'test-suites';
+for (const data of datasets) {
+  for (const name of Object.keys(data.results)) {
+    const g = groupOf(name);
+    if (!groupBenchmarks.has(g)) {
+      groupBenchmarks.set(g, []);
+      groupOrder.push(g);
+    }
+    const list = groupBenchmarks.get(g)!;
+    if (!list.includes(name)) list.push(name);
   }
-  if (!groupMap.has(group)) groupMap.set(group, []);
-  groupMap.get(group)!.push([name, result.totalTime.mean]);
 }
+
+// Build a quick lookup: datasetIndex -> benchmarkName -> mean
+const meanLookup: Map<string, number>[] = datasets.map((d) => {
+  const m = new Map<string, number>();
+  for (const [name, result] of Object.entries(d.results)) {
+    m.set(name, result.totalTime.mean);
+  }
+  return m;
+});
 
 // ---------------------------------------------------------------------------
 // Generate markdown
@@ -74,22 +90,29 @@ const lines: string[] = [];
 
 lines.push(`# Benchmark Results`);
 lines.push('');
-if (data.runtime) {
-  lines.push(`**Runtime:** ${data.runtime}`);
-  lines.push('');
-}
 
-const totalCount = Object.keys(results).length;
+const totalCount = new Set(datasets.flatMap((d) => Object.keys(d.results))).size;
 lines.push(`**Total benchmarks:** ${totalCount}`);
 lines.push('');
 
-for (const [group, entries] of groupMap) {
+for (const group of groupOrder) {
+  const benchNames = groupBenchmarks.get(group)!;
   lines.push(`## ${group}`);
   lines.push('');
-  lines.push('| Benchmark | Mean (ms) |');
-  lines.push('|-----------|----------:|');
-  for (const [name, mean] of entries) {
-    lines.push(`| ${name} | ${mean} |`);
+
+  // Header
+  const header = ['Benchmark (ms)', ...runtimeNames];
+  lines.push('| ' + header.join(' | ') + ' |');
+  lines.push('|' + header.map((_, i) => i === 0 ? '---|' : '---:|').join(''));
+
+  // Rows
+  for (const name of benchNames) {
+    const cells = [name];
+    for (const lookup of meanLookup) {
+      const v = lookup.get(name);
+      cells.push(v !== undefined ? String(v) : '-');
+    }
+    lines.push('| ' + cells.join(' | ') + ' |');
   }
   lines.push('');
 }
