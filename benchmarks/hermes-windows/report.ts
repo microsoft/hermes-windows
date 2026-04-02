@@ -15,7 +15,14 @@ const { values } = parseArgs({
 const inputs = values.input;
 const output = values.output;
 
-if (!inputs || inputs.length === 0 || !output) {
+if (!inputs || inputs.length === 0) {
+  console.error('Error: at least one -i <input.json> is required.');
+  console.error('Usage: report.ts -i <input.json> [-i <input2.json> ...] -o <output.md>');
+  process.exit(1);
+}
+
+if (!output) {
+  console.error('Error: exactly one -o <output.md> is required.');
   console.error('Usage: report.ts -i <input.json> [-i <input2.json> ...] -o <output.md>');
   process.exit(1);
 }
@@ -46,6 +53,7 @@ const datasets: BenchData[] = inputs.map(
 );
 
 const runtimeNames = datasets.map((d, i) => d.runtime || `input-${i + 1}`);
+const multiInput = datasets.length > 1;
 
 // ---------------------------------------------------------------------------
 // Collect all benchmark names and group them
@@ -107,10 +115,19 @@ for (const group of groupOrder) {
 
   // Rows
   for (const name of benchNames) {
+    const vals = meanLookup.map((lookup) => lookup.get(name));
+    const min = multiInput
+      ? Math.min(...vals.filter((v): v is number => v !== undefined))
+      : undefined;
     const cells = [name];
-    for (const lookup of meanLookup) {
-      const v = lookup.get(name);
-      cells.push(v !== undefined ? String(v) : '-');
+    for (const v of vals) {
+      if (v === undefined) {
+        cells.push('-');
+      } else if (multiInput && v === min) {
+        cells.push(`**${v}**`);
+      } else {
+        cells.push(String(v));
+      }
     }
     lines.push('| ' + cells.join(' | ') + ' |');
   }
