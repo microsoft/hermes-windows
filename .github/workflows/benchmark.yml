@@ -38,7 +38,6 @@ jobs:
 
       - name: Run benchmarks
         shell: bash
-        continue-on-error: true
         run: |
           node --experimental-strip-types \
             benchmarks/hermes-windows/bench_and_report.ts \
