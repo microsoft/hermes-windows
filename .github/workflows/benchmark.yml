@@ -28,7 +28,7 @@ jobs:
         env:
           MSYS2_ARG_CONV_EXCL: "*"
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" \
+          cmake -S . -B build -G "Visual Studio 17 2022" -T ClangCL \
             -DCMAKE_SYSTEM_NAME=Windows \
             -DCMAKE_SYSTEM_VERSION=10.0.15063 \
             -DCMAKE_SYSTEM_PROCESSOR=x86_64
