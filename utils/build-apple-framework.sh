@@ -45,6 +45,7 @@ function get_mac_deployment_target {
 }
 
 function get_release_version {
+  # Try npm/hermes-compiler/package.json first (facebook/hermes upstream).
   local package_json_path="$HERMES_COMPILER_PACKAGE_PATH/package.json"
   if [[ -f "$package_json_path" ]]; then
     local version
@@ -52,21 +53,31 @@ function get_release_version {
     if [[ -n "$version" ]]; then
       echo "$version"
       return
-    else
-      echo >&2 "Error: Failed to read version from $package_json_path"
-      exit 1
     fi
-  else
-    echo >&2 "Error: Package file not found at $package_json_path"
-    exit 1
   fi
+
+  # Fall back to the version in CMakeLists.txt (hermes-windows).
+  local cmake_version
+  cmake_version=$(grep -oP 'VERSION \K[0-9]+\.[0-9]+\.[0-9]+' "$HERMES_PATH/CMakeLists.txt" 2>/dev/null | head -1)
+  if [[ -n "$cmake_version" ]]; then
+    echo "$cmake_version"
+    return
+  fi
+
+  echo >&2 "Error: Could not determine Hermes release version"
+  exit 1
 }
 
 # Build host hermes compiler for internal bytecode
 function build_host_hermesc {
   echo "Building hermesc"
   pushd "$HERMES_PATH" > /dev/null || exit 1
-    cmake -S . -B build_host_hermesc -DJSI_DIR="$JSI_PATH" -DCMAKE_BUILD_TYPE=Release
+    cmake -S . -B build_host_hermesc -DJSI_DIR="$JSI_PATH" -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_SYSTEM_NAME=Darwin \
+      -DCMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+      -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15" \
+      -DHAVE_CXX_ATOMICS_WITHOUT_LIB=ON \
+      -DHAVE_CXX_ATOMICS64_WITHOUT_LIB=ON
     cmake --build ./build_host_hermesc --target hermesc -j "${NUM_CORES}"
   popd > /dev/null || exit 1
 }
