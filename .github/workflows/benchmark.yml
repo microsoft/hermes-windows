@@ -24,33 +24,27 @@ jobs:
       - uses: ./.github/actions/setup-node
 
       - name: Build hermes (x64 Release)
-        shell: bash
-        env:
-          MSYS2_ARG_CONV_EXCL: "*"
+        shell: cmd
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" \
-            -DCMAKE_SYSTEM_NAME=Windows \
-            -DCMAKE_SYSTEM_VERSION=10.0.15063 \
-            -DCMAKE_SYSTEM_PROCESSOR=x86_64
-
-          cmake --build build --config Release --target hermes -- \
-            -m /p:UseMultiToolTask=true /p:EnforceProcessCountAcrossBuilds=true
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake --preset=ninja-clang-release
+          cmake --build build/ninja-clang-release --target hermes
 
       - name: Run benchmarks
         shell: bash
         run: |
           node --experimental-strip-types \
             benchmarks/hermes-windows/bench_and_report.ts \
-            --binary build/bin/Release/hermes.exe
+            --binary build/ninja-clang-release/bin/hermes.exe
 
       - name: Stage results
         if: always()
         shell: bash
         run: |
-          mkdir -p .benchmark-results
-          cp -f benchmarks/hermes-windows/bench_report.md .benchmark-results/ 2>/dev/null || true
+          mkdir -p benchmark-results
+          cp -f benchmarks/hermes-windows/bench_report.md benchmark-results/ 2>/dev/null || true
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "${{ github.event.pull_request.number }}" > .benchmark-results/pr-number.txt
+            echo "${{ github.event.pull_request.number }}" > benchmark-results/pr-number.txt
           fi
 
       - name: Upload results
@@ -58,5 +52,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: .benchmark-results/
+          path: benchmark-results/
           retention-days: 30

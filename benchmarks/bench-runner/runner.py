@@ -43,7 +43,11 @@ def collectorHeapSize(peakSize):
 
 
 def displayFilePath(file):
-    relpath = os.path.relpath(file)
+    try:
+        relpath = os.path.relpath(file)
+    except ValueError:
+        # relpath fails on Windows when file and cwd are on different drives
+        return os.path.abspath(file)
     abspath = os.path.abspath(file)
     return relpath if len(relpath) < len(abspath) else abspath
 
