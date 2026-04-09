@@ -41,10 +41,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          mkdir -p .benchmark-results
-          cp -f benchmarks/hermes-windows/bench_report.md .benchmark-results/ 2>/dev/null || true
+          mkdir -p benchmark-results
+          cp -f benchmarks/hermes-windows/bench_report.md benchmark-results/ 2>/dev/null || true
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "${{ github.event.pull_request.number }}" > .benchmark-results/pr-number.txt
+            echo "${{ github.event.pull_request.number }}" > benchmark-results/pr-number.txt
           fi
 
       - name: Upload results
@@ -52,5 +52,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: .benchmark-results/
+          path: benchmark-results/
           retention-days: 30
