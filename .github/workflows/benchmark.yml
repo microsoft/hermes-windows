@@ -25,17 +25,14 @@ jobs:
 
       - name: Build hermes (x64 Release)
         shell: cmd
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake --preset=ninja-clang-release
-          cmake --build build/ninja-clang-release --target hermes
+        run: node .ado\scripts\build.js --platform x64 --configuration release --targets hermes
 
       - name: Run benchmarks
         shell: bash
         run: |
           node --experimental-strip-types \
             benchmarks/hermes-windows/bench_and_report.ts \
-            --binary build/ninja-clang-release/bin/hermes.exe
+            --binary out/build/win32-x64-release/bin/hermes.exe
 
       - name: Stage results
         if: always()
