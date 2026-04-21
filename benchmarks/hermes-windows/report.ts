@@ -105,31 +105,69 @@ lines.push('');
 
 for (const group of groupOrder) {
   const benchNames = groupBenchmarks.get(group)!;
-  lines.push(`## ${group}`);
-  lines.push('');
 
-  // Header
-  const header = ['Benchmark (ms)', ...runtimeNames];
-  lines.push('| ' + header.join(' | ') + ' |');
-  lines.push('|' + header.map((_, i) => i === 0 ? '---|' : '---:|').join(''));
+  if (multiInput) {
+    // Compare mode: one column per runtime. Group name goes in column 1 header
+    // (replacing the old `## <group>` heading + "Benchmark (ms)" label).
+    const header = [group, ...runtimeNames];
+    lines.push('| ' + header.join(' | ') + ' |');
+    lines.push(
+      '|' +
+        header.map((_, i) => (i === 0 ? '---|' : '---:|')).join(''),
+    );
 
-  // Rows
-  for (const name of benchNames) {
-    const vals = meanLookup.map((lookup) => lookup.get(name));
-    const min = multiInput
-      ? Math.min(...vals.filter((v): v is number => v !== undefined))
-      : undefined;
-    const cells = [name];
-    for (const v of vals) {
-      if (v === undefined) {
-        cells.push('-');
-      } else if (multiInput && v === min) {
-        cells.push(`**${v}**`);
+    for (const name of benchNames) {
+      const vals = meanLookup.map((lookup) => lookup.get(name));
+      const defined = vals.filter((v): v is number => v !== undefined);
+      const min = defined.length > 0 ? Math.min(...defined) : undefined;
+      const cells: string[] = [name];
+      for (const v of vals) {
+        if (v === undefined) cells.push('-');
+        else if (v === min) cells.push(`**${v}ms**`);
+        else cells.push(`${v}ms`);
+      }
+      lines.push('| ' + cells.join(' | ') + ' |');
+    }
+    lines.push('');
+    continue;
+  }
+
+  // Single-input: pack up to 3 benchmarks per row (N1 T1 N2 T2 N3 T3).
+  // If the group has fewer than 3 benchmarks total, shrink the column count
+  // so no entire column is left empty.
+  const lookup = meanLookup[0];
+  const packWidth = Math.min(3, benchNames.length);
+  const totalCols = packWidth * 2;
+
+  // Header row: col 1 = group title, col 2 = runtime label, rest empty.
+  const headerCells: string[] = new Array(totalCols).fill('');
+  headerCells[0] = group;
+  headerCells[1] = runtimeNames[0];
+  lines.push('| ' + headerCells.join(' | ') + ' |');
+
+  // Separator: name cols left-aligned, time cols right-aligned.
+  const sep: string[] = [];
+  for (let c = 0; c < totalCols; c++) {
+    sep.push(c % 2 === 0 ? '---' : '---:');
+  }
+  lines.push('| ' + sep.join(' | ') + ' |');
+
+  // Body rows, packed.
+  for (let i = 0; i < benchNames.length; i += packWidth) {
+    const row: string[] = [];
+    for (let j = 0; j < packWidth; j++) {
+      const idx = i + j;
+      if (idx < benchNames.length) {
+        const name = benchNames[idx];
+        const v = lookup.get(name);
+        row.push(name);
+        row.push(v === undefined ? '-' : `${v}ms`);
       } else {
-        cells.push(String(v));
+        row.push('');
+        row.push('');
       }
     }
-    lines.push('| ' + cells.join(' | ') + ' |');
+    lines.push('| ' + row.join(' | ') + ' |');
   }
   lines.push('');
 }
