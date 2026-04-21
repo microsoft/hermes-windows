@@ -1012,7 +1012,9 @@ class NodeApiEnvironment {
       vm::SymbolID name,
       vm::DefinePropertyFlags dpFlags,
       vm::Handle<> valueOrAccessor,
-      bool *result) noexcept;
+      bool *result,
+      vm::PropOpFlags opFlags =
+          vm::PropOpFlags().plusThrowOnError()) noexcept;
 
   //---------------------------------------------------------------------------
   // Methods to work with external data objects
@@ -3549,14 +3551,15 @@ napi_status NodeApiEnvironment::defineOwnProperty(
     vm::SymbolID name,
     vm::DefinePropertyFlags dpFlags,
     vm::Handle<> valueOrAccessor,
-    bool *result) noexcept {
+    bool *result,
+    vm::PropOpFlags opFlags) noexcept {
   vm::CallResult<bool> cr = vm::JSObject::defineOwnProperty(
       object,
       runtime_,
       name,
       dpFlags,
       valueOrAccessor,
-      vm::PropOpFlags().plusThrowOnError());
+      opFlags);
   CHECK_STATUS(checkExecutionStatus(cr.getStatus()));
   if (result != nullptr) {
     *result = *cr;
@@ -3674,7 +3677,8 @@ napi_status NodeApiEnvironment::getExternalPropertyValue(
         getPredefinedSymbol(NodeApiPredefined::napi_externalValue),
         vm::DefinePropertyFlags::getNewNonEnumerableFlags(),
         decoratedObj,
-        nullptr));
+        nullptr,
+        vm::PropOpFlags().plusInternalForce()));
   }
   *result = externalValue;
   return clearLastNativeError();
@@ -6219,7 +6223,8 @@ napi_status NAPI_CDECL napi_type_tag_object(
       env->getPredefinedSymbol(NodeApiPredefined::napi_typeTag),
       vm::DefinePropertyFlags::getNewNonEnumerableFlags(),
       asHandle(tagBuffer),
-      nullptr);
+      nullptr,
+      vm::PropOpFlags().plusInternalForce());
 }
 
 // TODO: match Node.js code for tags
