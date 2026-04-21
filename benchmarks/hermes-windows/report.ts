@@ -90,6 +90,36 @@ const meanLookup: Map<string, number>[] = datasets.map((d) => {
   return m;
 });
 
+// Split a benchmark name into path components on either separator.
+const PATH_SEP = /[\/\\]/;
+
+// Longest path prefix shared by every name in `names`. Returns the shared
+// components as an array (empty when there is nothing to factor out). The
+// last path component of each name is always left in place so row cells
+// are never emptied out.
+function commonPathPrefix(names: string[]): string[] {
+  if (names.length === 0) return [];
+  const split = names.map((n) => n.split(PATH_SEP));
+  const minLen = Math.min(...split.map((s) => s.length));
+  if (minLen < 2) return [];
+  const maxPrefix = minLen - 1;
+  const prefix: string[] = [];
+  for (let i = 0; i < maxPrefix; i++) {
+    const first = split[0][i];
+    if (split.every((s) => s[i] === first)) {
+      prefix.push(first);
+    } else {
+      break;
+    }
+  }
+  return prefix;
+}
+
+function stripPathPrefix(name: string, prefixLen: number): string {
+  if (prefixLen === 0) return name;
+  return name.split(PATH_SEP).slice(prefixLen).join('/');
+}
+
 // ---------------------------------------------------------------------------
 // Generate markdown
 // ---------------------------------------------------------------------------
@@ -106,10 +136,19 @@ lines.push('');
 for (const group of groupOrder) {
   const benchNames = groupBenchmarks.get(group)!;
 
+  // Factor out the longest path prefix shared by every name in this group.
+  // When present, the prefix moves into the header as `<group> (<prefix>)`
+  // and is stripped from each row cell. Groups whose names share nothing
+  // (e.g. flat `v8-*` or `box2d`) render unchanged.
+  const prefix = commonPathPrefix(benchNames);
+  const titleCell = prefix.length > 0
+    ? `${group} (${prefix.join('/')})`
+    : group;
+
   if (multiInput) {
-    // Compare mode: one column per runtime. Group name goes in column 1 header
-    // (replacing the old `## <group>` heading + "Benchmark (ms)" label).
-    const header = [group, ...runtimeNames];
+    // Compare mode: one column per runtime. Group+prefix goes in column 1
+    // header (replacing the old `## <group>` heading + "Benchmark (ms)" label).
+    const header = [titleCell, ...runtimeNames];
     lines.push('| ' + header.join(' | ') + ' |');
     lines.push(
       '|' +
@@ -120,7 +159,7 @@ for (const group of groupOrder) {
       const vals = meanLookup.map((lookup) => lookup.get(name));
       const defined = vals.filter((v): v is number => v !== undefined);
       const min = defined.length > 0 ? Math.min(...defined) : undefined;
-      const cells: string[] = [name];
+      const cells: string[] = [stripPathPrefix(name, prefix.length)];
       for (const v of vals) {
         if (v === undefined) cells.push('-');
         else if (v === min) cells.push(`**${v}ms**`);
@@ -139,9 +178,10 @@ for (const group of groupOrder) {
   const packWidth = Math.min(3, benchNames.length);
   const totalCols = packWidth * 2;
 
-  // Header row: col 1 = group title, col 2 = runtime label, rest empty.
+  // Header row: col 1 = group title (with common path), col 2 = runtime
+  // label, rest empty.
   const headerCells: string[] = new Array(totalCols).fill('');
-  headerCells[0] = group;
+  headerCells[0] = titleCell;
   headerCells[1] = runtimeNames[0];
   lines.push('| ' + headerCells.join(' | ') + ' |');
 
@@ -160,7 +200,7 @@ for (const group of groupOrder) {
       if (idx < benchNames.length) {
         const name = benchNames[idx];
         const v = lookup.get(name);
-        row.push(name);
+        row.push(stripPathPrefix(name, prefix.length));
         row.push(v === undefined ? '-' : `${v}ms`);
       } else {
         row.push('');
