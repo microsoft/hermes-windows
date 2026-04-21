@@ -137,12 +137,14 @@ for (const group of groupOrder) {
   const benchNames = groupBenchmarks.get(group)!;
 
   // Factor out the longest path prefix shared by every name in this group.
-  // When present, the prefix moves into the header as `<group> (<prefix>)`
-  // and is stripped from each row cell. Groups whose names share nothing
-  // (e.g. flat `v8-*` or `box2d`) render unchanged.
+  // When present, the prefix is stripped from each row cell. The parenthetical
+  // `(<prefix>)` is appended to the header only when it carries new info
+  // beyond the group name — if prefix == group the annotation would be
+  // redundant (`micros (micros)`), so omit it.
   const prefix = commonPathPrefix(benchNames);
-  const titleCell = prefix.length > 0
-    ? `${group} (${prefix.join('/')})`
+  const prefixStr = prefix.join('/');
+  const titleCell = prefix.length > 0 && prefixStr !== group
+    ? `${group} (${prefixStr})`
     : group;
 
   if (multiInput) {
