@@ -147,6 +147,9 @@ for (const group of groupOrder) {
     ? `${group} (${prefixStr})`
     : group;
 
+  lines.push(`## ${group}`);
+  lines.push('');
+
   if (multiInput) {
     // Compare mode: one column per runtime. Group+prefix goes in column 1
     // header (replacing the old `## <group>` heading + "Benchmark (ms)" label).
