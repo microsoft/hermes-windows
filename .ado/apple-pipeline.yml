@@ -1,0 +1,156 @@
+#
+# Standalone pipeline for building Hermes Apple frameworks (macOS, iOS, tvOS, visionOS).
+# This pipeline runs outside the 1ES template since 1ES shared pools
+# do not currently offer macOS images.
+#
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: macos-15
+
+variables:
+  IOS_DEPLOYMENT_TARGET: "15.1"
+  XROS_DEPLOYMENT_TARGET: "1.0"
+  MAC_DEPLOYMENT_TARGET: "10.15"
+
+parameters:
+- name: AppleSliceMatrix
+  type: object
+  default:
+  - Name: macosx
+  - Name: iphoneos
+  - Name: iphonesimulator
+  - Name: appletvos
+  - Name: appletvsimulator
+  - Name: catalyst
+  - Name: xros
+  - Name: xrsimulator
+
+- name: AppleFlavorMatrix
+  type: object
+  default:
+  - Name: Debug
+  - Name: Release
+
+stages:
+- stage: build_apple
+  displayName: Build Apple Frameworks
+  jobs:
+
+    #=========================================================================
+    # Step 1: Build the host HermesC compiler.
+    #=========================================================================
+    - job: Build_HermesC_Apple
+      displayName: Build HermesC (Apple host)
+      steps:
+      - checkout: self
+      - task: UseNode@1
+        displayName: Use Node.js 22.x
+        inputs:
+          version: 22.x
+      - script: |
+          sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+          xcodebuild -version
+        displayName: Setup Xcode
+      - script: >
+          node .ado/scripts/build-apple.mts
+          --no-build
+          --no-build-xcframework
+        displayName: Build host hermesc
+      - publish: $(Build.SourcesDirectory)/build_host_hermesc
+        artifact: hermesc-apple
+        displayName: Publish HermesC artifact
+
+    #=========================================================================
+    # Step 2: Build each Apple platform slice (matrix: slice x flavor).
+    #=========================================================================
+    - ${{ each flavor in parameters.AppleFlavorMatrix }}:
+      - ${{ each slice in parameters.AppleSliceMatrix }}:
+        - job: Build_Apple_${{ slice.Name }}_${{ flavor.Name }}
+          displayName: Build Apple ${{ slice.Name }} (${{ flavor.Name }})
+          dependsOn: Build_HermesC_Apple
+          timeoutInMinutes: 120
+          steps:
+          - checkout: self
+          - task: UseNode@1
+            displayName: Use Node.js 22.x
+            inputs:
+              version: 22.x
+          - script: |
+              sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+            displayName: Setup Xcode
+          - download: current
+            artifact: hermesc-apple
+            displayName: Download HermesC artifact
+          - script: |
+              cp -R $(Pipeline.Workspace)/hermesc-apple $(Build.SourcesDirectory)/build_host_hermesc
+              chmod +x ./build_host_hermesc/bin/hermesc
+
+              node .ado/scripts/build-apple.mts \
+                --no-build-hermesc \
+                --slice ${{ slice.Name }} \
+                --configuration ${{ flavor.Name }} \
+                --no-build-xcframework
+
+              # Rename for artifact uniqueness and compress to preserve symlinks
+              mv "build_${{ slice.Name }}" "build_${{ slice.Name }}_${{ flavor.Name }}"
+              tar -czf "build_${{ slice.Name }}_${{ flavor.Name }}.tar.gz" "build_${{ slice.Name }}_${{ flavor.Name }}"
+            displayName: Build ${{ slice.Name }} ${{ flavor.Name }} framework
+          - publish: $(Build.SourcesDirectory)/build_${{ slice.Name }}_${{ flavor.Name }}.tar.gz
+            artifact: apple-slice-${{ slice.Name }}-${{ flavor.Name }}
+            displayName: Publish ${{ slice.Name }} ${{ flavor.Name }} artifact
+
+    #=========================================================================
+    # Step 3: Assemble universal xcframework from all slices (per flavor).
+    #=========================================================================
+    - ${{ each flavor in parameters.AppleFlavorMatrix }}:
+      - job: Build_Apple_XCFramework_${{ flavor.Name }}
+        displayName: Build Apple XCFramework (${{ flavor.Name }})
+        dependsOn:
+        - ${{ each slice in parameters.AppleSliceMatrix }}:
+          - Build_Apple_${{ slice.Name }}_${{ flavor.Name }}
+        timeoutInMinutes: 60
+        steps:
+        - checkout: self
+        - task: UseNode@1
+          displayName: Use Node.js 22.x
+          inputs:
+            version: 22.x
+        - script: |
+            sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+          displayName: Setup Xcode
+
+        # Download all slice artifacts for this flavor.
+        - ${{ each slice in parameters.AppleSliceMatrix }}:
+          - download: current
+            artifact: apple-slice-${{ slice.Name }}-${{ flavor.Name }}
+            displayName: Download ${{ slice.Name }} ${{ flavor.Name }} slice
+
+        # Untar and rename all slices back to build_<slice> for the script.
+        - script: |
+            set -euo pipefail
+            SLICES="macosx iphoneos iphonesimulator appletvos appletvsimulator catalyst xros xrsimulator"
+            for SLICE in $SLICES; do
+              cp "$(Pipeline.Workspace)/apple-slice-${SLICE}-${{ flavor.Name }}/build_${SLICE}_${{ flavor.Name }}.tar.gz" .
+              tar -xzf "build_${SLICE}_${{ flavor.Name }}.tar.gz"
+              mv "build_${SLICE}_${{ flavor.Name }}" "build_${SLICE}"
+            done
+          displayName: Unpack slice artifacts
+
+        # Assemble universal xcframework and create dSYM archive.
+        - script: >
+            node .ado/scripts/build-apple.mts
+            --no-build-hermesc
+            --no-build
+            --configuration ${{ flavor.Name }}
+            --create-dsym-archive
+          displayName: Create universal xcframework
+
+        - publish: $(Build.SourcesDirectory)/destroot
+          artifact: apple-hermes-xcframework-${{ flavor.Name }}
+          displayName: Publish xcframework artifact
+        - publish: $(Build.SourcesDirectory)/hermes-dSYM-${{ flavor.Name }}.tar.gz
+          artifact: apple-hermes-dsym-${{ flavor.Name }}
+          displayName: Publish dSYM artifact

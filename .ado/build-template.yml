@@ -13,6 +13,25 @@ parameters:
   type: boolean
   default: false
 
+  # Matrix with Apple platform slices for Hermes xcframework.
+- name: AppleSliceMatrix
+  type: object
+  default:
+  - Name: macosx
+  - Name: iphoneos
+  - Name: iphonesimulator
+  - Name: appletvos
+  - Name: appletvsimulator
+  - Name: catalyst
+  - Name: xros
+  - Name: xrsimulator
+
+- name: AppleFlavorMatrix
+  type: object
+  default:
+  - Name: Debug
+  - Name: Release
+
   # Matrix with target platforms for Hermes binaries.
 - name: BuildMatrix
   type: object
@@ -43,6 +62,7 @@ parameters:
   - Name: win32_arm64ec
     TargetCPU: arm64ec
     BuildUWP: --no-uwp
+
 
 resources:
   repositories:
@@ -355,3 +375,179 @@ extends:
                     "ToolVersion" : "1.0"
                   }
                 ]
+
+    #=============================================================================
+    # Apple framework builds
+    # Builds Hermes for all Apple platforms (macOS, iOS, tvOS, visionOS, catalyst)
+    # and assembles them into a universal xcframework.
+    #=============================================================================
+    - stage: apple
+      dependsOn: []  # Run in parallel with the Windows 'main' stage
+      jobs:
+
+        # Step 1: Build the host HermesC compiler on macOS.
+      - job: Build_HermesC_Apple
+        displayName: Build HermesC (Apple host)
+
+        pool:
+          name: Azure Pipelines
+          vmImage: macos-15
+          os: macOS
+
+        variables:
+        - name: skipComponentGovernanceDetection
+          value: true
+        - name: ONEES_ENFORCED_CODEQL_ENABLED
+          value: false
+
+        templateContext:
+          outputs:
+          - output: pipelineArtifact
+            artifactName: hermesc-apple
+            targetPath: $(Build.SourcesDirectory)/build_host_hermesc
+
+        steps:
+        - checkout: self
+        - task: UseNode@1
+          displayName: Use Node.js 22.x
+          inputs:
+            version: 22.x
+        - script: |
+            sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+            xcodebuild -version
+          displayName: Setup Xcode
+        - script: >
+            node .ado/scripts/build-apple.mts
+            --no-build
+            --no-build-xcframework
+          displayName: Build host hermesc
+
+        # Step 2: Build each Apple platform slice (matrix: slice x flavor).
+      - ${{ each flavor in parameters.AppleFlavorMatrix }}:
+        - ${{ each slice in parameters.AppleSliceMatrix }}:
+          - job: Build_Apple_${{ slice.Name }}_${{ flavor.Name }}
+            displayName: Build Apple ${{ slice.Name }} (${{ flavor.Name }})
+
+            dependsOn:
+            - Build_HermesC_Apple
+
+            pool:
+              name: Azure Pipelines
+              vmImage: macos-15
+              os: macOS
+
+            timeoutInMinutes: 120
+
+            variables:
+            - name: skipComponentGovernanceDetection
+              value: true
+            - name: ONEES_ENFORCED_CODEQL_ENABLED
+              value: false
+
+            templateContext:
+              outputs:
+              - output: pipelineArtifact
+                artifactName: apple-slice-${{ slice.Name }}-${{ flavor.Name }}
+                targetPath: $(Build.SourcesDirectory)/build_${{ slice.Name }}_${{ flavor.Name }}.tar.gz
+
+            steps:
+            - checkout: self
+
+            - task: UseNode@1
+              displayName: Use Node.js 22.x
+              inputs:
+                version: 22.x
+
+            - script: |
+                sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+              displayName: Setup Xcode
+
+            - task: DownloadPipelineArtifact@2
+              displayName: Download HermesC artifact
+              inputs:
+                artifact: hermesc-apple
+                path: $(Build.SourcesDirectory)/build_host_hermesc
+
+            - script: |
+                chmod +x ./build_host_hermesc/bin/hermesc
+
+                node .ado/scripts/build-apple.mts \
+                  --no-build-hermesc \
+                  --slice ${{ slice.Name }} \
+                  --configuration ${{ flavor.Name }} \
+                  --no-build-xcframework
+
+                # Rename for artifact uniqueness and compress to preserve symlinks
+                mv "build_${{ slice.Name }}" "build_${{ slice.Name }}_${{ flavor.Name }}"
+                tar -czf "build_${{ slice.Name }}_${{ flavor.Name }}.tar.gz" "build_${{ slice.Name }}_${{ flavor.Name }}"
+              displayName: Build ${{ slice.Name }} ${{ flavor.Name }} framework
+
+        # Step 3: Assemble universal xcframework from all slices (per flavor).
+      - ${{ each flavor in parameters.AppleFlavorMatrix }}:
+        - job: Build_Apple_XCFramework_${{ flavor.Name }}
+          displayName: Build Apple XCFramework (${{ flavor.Name }})
+
+          dependsOn:
+          - ${{ each slice in parameters.AppleSliceMatrix }}:
+            - Build_Apple_${{ slice.Name }}_${{ flavor.Name }}
+
+          pool:
+            name: Azure Pipelines
+            vmImage: macos-15
+            os: macOS
+
+          timeoutInMinutes: 60
+
+          variables:
+          - name: skipComponentGovernanceDetection
+            value: true
+          - name: ONEES_ENFORCED_CODEQL_ENABLED
+            value: false
+
+          templateContext:
+            outputs:
+            - output: pipelineArtifact
+              artifactName: apple-hermes-xcframework-${{ flavor.Name }}
+              targetPath: $(Build.SourcesDirectory)/destroot
+            - output: pipelineArtifact
+              artifactName: apple-hermes-dsym-${{ flavor.Name }}
+              targetPath: $(Build.SourcesDirectory)/hermes-dSYM-${{ flavor.Name }}.tar.gz
+
+          steps:
+          - checkout: self
+
+          - task: UseNode@1
+            displayName: Use Node.js 22.x
+            inputs:
+              version: 22.x
+
+          - script: |
+              sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+            displayName: Setup Xcode
+
+          # Download all slice artifacts for this flavor.
+          - ${{ each slice in parameters.AppleSliceMatrix }}:
+            - task: DownloadPipelineArtifact@2
+              displayName: Download ${{ slice.Name }} ${{ flavor.Name }} slice
+              inputs:
+                artifact: apple-slice-${{ slice.Name }}-${{ flavor.Name }}
+                path: $(Build.SourcesDirectory)
+
+          # Untar and rename all slices back to build_<slice> for the script.
+          - script: |
+              set -euo pipefail
+              SLICES="macosx iphoneos iphonesimulator appletvos appletvsimulator catalyst xros xrsimulator"
+              for SLICE in $SLICES; do
+                tar -xzf "build_${SLICE}_${{ flavor.Name }}.tar.gz"
+                mv "build_${SLICE}_${{ flavor.Name }}" "build_${SLICE}"
+              done
+            displayName: Unpack slice artifacts
+
+          # Assemble universal xcframework and create dSYM archive.
+          - script: >
+              node .ado/scripts/build-apple.mts
+              --no-build-hermesc
+              --no-build
+              --configuration ${{ flavor.Name }}
+              --create-dsym-archive
+            displayName: Create universal xcframework
