@@ -15,7 +15,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 120
     permissions:
-      contents: read
+      contents: write
       actions: read
 
     steps:
@@ -33,6 +33,43 @@ jobs:
           node --experimental-strip-types \
             benchmarks/hermes-windows/bench_and_report.ts \
             --binary out/build/win32-x64-release/bin/hermes.exe
+
+      - name: Commit baseline if missing
+        if: success() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          RESULT_SRC="benchmarks/hermes-windows/bench_result.json"
+          BASELINE_DST="benchmarks/hermes-windows/baseline/baseline.json"
+
+          if [ ! -f "$RESULT_SRC" ]; then
+            echo "No bench_result.json generated; skipping baseline commit."
+            exit 0
+          fi
+
+          # Preserve the freshly-generated result before switching branches.
+          BACKUP="$RUNNER_TEMP/bench_result.json"
+          cp "$RESULT_SRC" "$BACKUP"
+
+          # Switch to the head branch so the commit lands there.
+          git fetch origin "$HEAD_REF"
+          git checkout "$HEAD_REF"
+
+          if [ -f "$BASELINE_DST" ]; then
+            echo "$BASELINE_DST already exists on $HEAD_REF; nothing to commit."
+            exit 0
+          fi
+
+          mkdir -p "$(dirname "$BASELINE_DST")"
+          cp "$BACKUP" "$BASELINE_DST"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$BASELINE_DST"
+          git commit -m "Seed benchmark baseline from CI run"
+          git push origin "HEAD:$HEAD_REF"
 
       - name: Stage results
         if: always()
