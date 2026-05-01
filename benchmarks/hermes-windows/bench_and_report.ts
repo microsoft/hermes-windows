@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -34,6 +35,12 @@ if (benchResult.status !== 0) {
   console.error(`bench.ts failed with exit code ${benchResult.status}`);
   process.exit(1);
 }
+
+// Stamp the result with the current time so any baseline copied from
+// it is traceable back to the CI run that produced it.
+const resultObj = JSON.parse(readFileSync(resultJson, 'utf8'));
+resultObj.timestamp = new Date().toISOString();
+writeFileSync(resultJson, JSON.stringify(resultObj, undefined, 4) + '\n');
 
 // Step 2: Generate report
 console.log('');
