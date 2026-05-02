@@ -155,7 +155,7 @@ function renderSection(group: string, benchNames: string[]): string[] {
   // Foldable section with a heading-styled summary, e.g.
   //   <details><summary><h2>v8 (3256ms)</h2></summary>
   out.push(`<details>`);
-  out.push(`<summary><h3>${group} (${sumStr})</h3></summary>`);
+  out.push(`<summary><strong>${group} (${sumStr})</strong></summary>`);
   out.push('');
 
   // Table header: column 1 = group title (with optional path annotation),
