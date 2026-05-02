@@ -199,6 +199,11 @@ const totalCount = new Set(datasets.flatMap((d) => Object.keys(d.results))).size
 lines.push(`**Total benchmarks:** ${totalCount}`);
 lines.push('');
 
+if (datasets.length > 1) {
+  lines.push(`**Runtimes:** ${runtimeNames.join(', ')}`);
+  lines.push('');
+}
+
 for (const group of groupOrder) {
   const benchNames = groupBenchmarks.get(group)!;
   lines.push(...renderSection(group, benchNames));
