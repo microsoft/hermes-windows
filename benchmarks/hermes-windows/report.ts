@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 // ---------------------------------------------------------------------------
@@ -200,7 +201,14 @@ lines.push(`**Total benchmarks:** ${totalCount}`);
 lines.push('');
 
 if (datasets.length > 1) {
-  lines.push(`**Runtimes:** ${runtimeNames.join(', ')}`);
+  // Show input paths relative to this script's folder
+  // (benchmarks/hermes-windows). Runtime labels are often identical
+  // across inputs in real runs, so they don't help disambiguate.
+  const reportDir = import.meta.dirname;
+  const inputPaths = inputs.map((p) =>
+    relative(reportDir, resolve(p)).replaceAll('\\', '/'),
+  );
+  lines.push(`**Inputs:** ${inputPaths.join(', ')}`);
   lines.push('');
 }
 
