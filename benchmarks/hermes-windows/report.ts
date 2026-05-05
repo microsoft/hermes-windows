@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 // ---------------------------------------------------------------------------
@@ -53,7 +54,6 @@ const datasets: BenchData[] = inputs.map(
 );
 
 const runtimeNames = datasets.map((d, i) => d.runtime || `input-${i + 1}`);
-const multiInput = datasets.length > 1;
 
 // ---------------------------------------------------------------------------
 // Collect all benchmark names and group them
@@ -124,6 +124,73 @@ function stripPathPrefix(name: string, prefixLen: number): string {
 // Generate markdown
 // ---------------------------------------------------------------------------
 
+// Render a single group section. Used for both single-input (one runtime
+// column) and comparison (multiple runtime columns) modes — the only
+// difference is how many value columns there are and whether the row
+// minimum is bolded.
+function renderSection(group: string, benchNames: string[]): string[] {
+  const out: string[] = [];
+
+  // Per-dataset sums of all benchmark means in this group, used in the
+  // foldable title.
+  const sums: number[] = meanLookup.map((lookup) => {
+    let s = 0;
+    for (const name of benchNames) {
+      const v = lookup.get(name);
+      if (v !== undefined) s += v;
+    }
+    return s;
+  });
+  const sumStr = sums.map((s) => `${s}ms`).join(', ');
+
+  // Factor out the longest path prefix shared by every name in this group.
+  // When present, the prefix is stripped from each row cell. The header
+  // cell shows `(<prefix>)` only when it carries new info beyond the
+  // group name — if prefix == group the annotation is redundant.
+  const prefix = commonPathPrefix(benchNames);
+  const prefixStr = prefix.join('/');
+  const titleCell = prefix.length > 0 && prefixStr !== group
+    ? `${group} (${prefixStr})`
+    : group;
+
+  // Foldable section with a heading-styled summary, e.g.
+  //   <details><summary><h2>v8 (3256ms)</h2></summary>
+  out.push(`<details>`);
+  out.push(`<summary><strong>${group} (${sumStr})</strong></summary>`);
+  out.push('');
+
+  // Table header: column 1 = group title (with optional path annotation),
+  // remaining columns = one per dataset/runtime.
+  const header = [titleCell, ...runtimeNames];
+  out.push('| ' + header.join(' | ') + ' |');
+  out.push('|---|' + runtimeNames.map(() => '---:|').join(''));
+
+  // One benchmark per row.
+  const compare = datasets.length > 1;
+  for (const name of benchNames) {
+    const vals = meanLookup.map((lookup) => lookup.get(name));
+    const cells: string[] = [stripPathPrefix(name, prefix.length)];
+    if (compare) {
+      const defined = vals.filter((v): v is number => v !== undefined);
+      const min = defined.length > 0 ? Math.min(...defined) : undefined;
+      for (const v of vals) {
+        if (v === undefined) cells.push('-');
+        else if (v === min) cells.push(`**${v}ms**`);
+        else cells.push(`${v}ms`);
+      }
+    } else {
+      for (const v of vals) {
+        cells.push(v === undefined ? '-' : `${v}ms`);
+      }
+    }
+    out.push('| ' + cells.join(' | ') + ' |');
+  }
+
+  out.push('');
+  out.push(`</details>`);
+  return out;
+}
+
 const lines: string[] = [];
 
 lines.push(`# Benchmark Results`);
@@ -133,88 +200,21 @@ const totalCount = new Set(datasets.flatMap((d) => Object.keys(d.results))).size
 lines.push(`**Total benchmarks:** ${totalCount}`);
 lines.push('');
 
+if (datasets.length > 1) {
+  // Show input paths relative to this script's folder
+  // (benchmarks/hermes-windows). Runtime labels are often identical
+  // across inputs in real runs, so they don't help disambiguate.
+  const reportDir = import.meta.dirname;
+  const inputPaths = inputs.map((p) =>
+    relative(reportDir, resolve(p)).replaceAll('\\', '/'),
+  );
+  lines.push(`**Inputs:** ${inputPaths.join(', ')}`);
+  lines.push('');
+}
+
 for (const group of groupOrder) {
   const benchNames = groupBenchmarks.get(group)!;
-
-  // Factor out the longest path prefix shared by every name in this group.
-  // When present, the prefix is stripped from each row cell. The parenthetical
-  // `(<prefix>)` is appended to the header only when it carries new info
-  // beyond the group name — if prefix == group the annotation would be
-  // redundant (`micros (micros)`), so omit it.
-  const prefix = commonPathPrefix(benchNames);
-  const prefixStr = prefix.join('/');
-  const titleCell = prefix.length > 0 && prefixStr !== group
-    ? `${group} (${prefixStr})`
-    : group;
-
-  lines.push(`## ${group}`);
-  lines.push('');
-
-  if (multiInput) {
-    // Compare mode: one column per runtime. Group+prefix goes in column 1
-    // header (replacing the old `## <group>` heading + "Benchmark (ms)" label).
-    const header = [titleCell, ...runtimeNames];
-    lines.push('| ' + header.join(' | ') + ' |');
-    lines.push(
-      '|' +
-        header.map((_, i) => (i === 0 ? '---|' : '---:|')).join(''),
-    );
-
-    for (const name of benchNames) {
-      const vals = meanLookup.map((lookup) => lookup.get(name));
-      const defined = vals.filter((v): v is number => v !== undefined);
-      const min = defined.length > 0 ? Math.min(...defined) : undefined;
-      const cells: string[] = [stripPathPrefix(name, prefix.length)];
-      for (const v of vals) {
-        if (v === undefined) cells.push('-');
-        else if (v === min) cells.push(`**${v}ms**`);
-        else cells.push(`${v}ms`);
-      }
-      lines.push('| ' + cells.join(' | ') + ' |');
-    }
-    lines.push('');
-    continue;
-  }
-
-  // Single-input: pack up to 3 benchmarks per row (N1 T1 N2 T2 N3 T3).
-  // If the group has fewer than 3 benchmarks total, shrink the column count
-  // so no entire column is left empty.
-  const lookup = meanLookup[0];
-  const packWidth = Math.min(3, benchNames.length);
-  const totalCols = packWidth * 2;
-
-  // Header row: col 1 = group title (with common path), col 2 = runtime
-  // label, rest empty.
-  const headerCells: string[] = new Array(totalCols).fill('');
-  headerCells[0] = titleCell;
-  headerCells[1] = runtimeNames[0];
-  lines.push('| ' + headerCells.join(' | ') + ' |');
-
-  // Separator: name cols left-aligned, time cols right-aligned.
-  const sep: string[] = [];
-  for (let c = 0; c < totalCols; c++) {
-    sep.push(c % 2 === 0 ? '---' : '---:');
-  }
-  lines.push('| ' + sep.join(' | ') + ' |');
-
-  // Body rows, packed.
-  for (let i = 0; i < benchNames.length; i += packWidth) {
-    const row: string[] = [];
-    for (let j = 0; j < packWidth; j++) {
-      const idx = i + j;
-      if (idx < benchNames.length) {
-        const name = benchNames[idx];
-        const v = lookup.get(name);
-        row.push(stripPathPrefix(name, prefix.length));
-        row.push(v === undefined ? '-' : `${v}ms`);
-      } else {
-        row.push('');
-        row.push('');
-      }
-    }
-    lines.push('| ' + row.join(' | ') + ' |');
-  }
-  lines.push('');
+  lines.push(...renderSection(group, benchNames));
 }
 
 const md = lines.join('\n');
