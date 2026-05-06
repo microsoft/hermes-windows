@@ -281,6 +281,74 @@ TEST_P(JSITestExt, WeakReferences) {
   EXPECT_TRUE(wo.lock(rt).isUndefined());
 }
 
+// Regression test for a GC-safety bug in the Hermes Node-API
+// implementation: NodeApiReference::create() called
+// convertToWeakRootStorage() from the constructor *before* registering the
+// reference as a GC root via env.addReference(). When the underlying
+// JSObject was a JS Proxy (as is the case for Fabric instance handles in
+// React Native Windows), the call into addObjectFinalizer() ->
+// JSObject::defineOwnProperty() -> JSProxy::defineOwnProperty() allocated
+// inside that unrooted window. A collection triggered there would move
+// the JSObject; the still-unrooted value_ member retained a stale
+// pointer, and the subsequent dispatch into detail::slots() crashed
+// reading proxy->slots_, and the sibling weakRoot_ encoded a stale
+// target.
+//
+// Reproduction strategy: between every WeakObject creation we keep the
+// proxy strongly reachable (in the previous iteration's `prev` slot) and
+// drop the local. Then we call gc() once per iteration. With
+// HERMESVM_SANITIZE_HANDLES=ON the GC compacts the OG, so the proxy gets
+// relocated. If value_ was unrooted at any point during convertToWeakRoot
+// Storage, lock() in the second pass returns a stale pointer that either
+// crashes or fails the property check.
+//
+// Note that with HadesGC the per-allocation movement promised by
+// HERMESVM_SANITIZE_HANDLES is approximated by forcing OG compaction
+// (lib/VM/gcs/HadesGC.cpp prepareCompactee). True per-alloc movement is
+// only available with MallocGC (HERMESVM_GCKIND=MALLOC). For the most
+// reliable repro, build with the MallocGC variant.
+//
+//   .\dev build --clean-build --configure --configuration debug \
+//       --sanitize-handles --test
+TEST_P(JSITestExt, WeakObjectOverProxyRegressionTest) {
+  constexpr int kIterations = 256;
+
+  std::vector<WeakObject> weakRefs;
+  weakRefs.reserve(kIterations);
+
+  // Keep one strong root in JS for each iteration so the GC does not just
+  // collect the proxy outright — we want it relocated, not freed.
+  rt.global().setProperty(rt, "__rnw_proxy_keepalive", Array(rt, kIterations));
+
+  for (int i = 0; i < kIterations; ++i) {
+    Object proxy = eval("new Proxy({tag: 'rnw-proxy'}, {})").getObject(rt);
+    rt.global()
+        .getPropertyAsObject(rt, "__rnw_proxy_keepalive")
+        .asArray(rt)
+        .setValueAtIndex(rt, i, proxy);
+
+    // The actual repro target: createWeakObject() over a Proxy. The
+    // implementation calls napi_create_reference(... initialRefCount=0 ...)
+    // inside its NodeApiScope destructor, which is the unsafe window.
+    weakRefs.emplace_back(rt, proxy);
+
+    // Force a collection. With sanitize-handles + HadesGC this forces an
+    // OG compaction on every gc() call, relocating the proxy.
+    eval("gc()");
+  }
+
+  // Lock every weak ref. If value_ / weakRoot_ ever pointed at a stale
+  // location, this loop will either crash inside JSProxy::defineOwnProperty
+  // or return a target whose property reads come back wrong/undefined.
+  for (size_t i = 0; i < weakRefs.size(); ++i) {
+    Value locked = weakRefs[i].lock(rt);
+    ASSERT_TRUE(locked.isObject()) << "weakRefs[" << i << "] locked to non-object";
+    Value tag = locked.getObject(rt).getProperty(rt, "tag");
+    ASSERT_TRUE(tag.isString()) << "weakRefs[" << i << "].tag is not a string";
+    EXPECT_EQ(tag.getString(rt).utf8(rt), "rnw-proxy");
+  }
+}
+
 TEST_P(JSITestExt, HostObjectAsParentTest) {
   class HostObjectWithProp : public HostObject {
     Value get(Runtime& runtime, const PropNameID& name) override {
@@ -560,7 +628,7 @@ TEST_P(JSITestExt, NativeExceptionDoesNotUseGlobalError) {
       test.call(rt).getString(rt).utf8(rt));
 }
 
-INSTANTIATE_TEST_SUITE_P(
+INSTANTIATE_TEST_CASE_P(
     Runtimes,
     JSITestExt,
     ::testing::ValuesIn(runtimeGenerators()));
