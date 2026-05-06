@@ -30,9 +30,18 @@ jobs:
       - name: Run benchmarks
         shell: bash
         run: |
+          BASELINE="benchmarks/hermes-windows/baseline/baseline.json"
+          EXTRA_ARGS=()
+          if [ -f "$BASELINE" ]; then
+            echo "Baseline found at $BASELINE — generating comparison report."
+            EXTRA_ARGS+=(--baseline "$BASELINE")
+          else
+            echo "No baseline at $BASELINE — generating single-input report."
+          fi
           node --experimental-strip-types \
             benchmarks/hermes-windows/bench_and_report.ts \
-            --binary out/build/win32-x64-release/bin/hermes.exe
+            --binary out/build/win32-x64-release/bin/hermes.exe \
+            "${EXTRA_ARGS[@]}"
 
       - name: Commit baseline if missing
         if: success() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
