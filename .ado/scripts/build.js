@@ -67,6 +67,12 @@ const options = {
   "test262-intl": { type: "boolean", default: false },
   "intl-provider": { type: "string", default: "" },
   binskim: { type: "boolean", default: false },
+  "sanitize-handles": { type: "boolean", default: false },
+  "gc-kind": {
+    type: "string",
+    default: "hades",
+    validSet: ["hades", "malloc"],
+  },
 };
 
 // To access parsed args values, use args.<option-name>.
@@ -151,6 +157,23 @@ Options:
   --binskim               Run BinSkim security validation on shipped binaries (default: ${
     options.binskim.default
   })
+  --sanitize-handles      Build with HERMESVM_SANITIZE_HANDLES=ON to deterministically
+                          surface GC-safety bugs (the GC moves the heap after every
+                          allocation). Slower; use for diagnostic / red-green test runs
+                          and pair with --configure (or --clean-build) so the CMake
+                          cache picks up the change. (default: ${
+                            options["sanitize-handles"].default
+                          })
+                          Note: under HadesGC this only forces OG compaction during
+                          OG collections, so subtle GC bugs may stay hidden. Pair
+                          with --gc-kind malloc for true per-allocation movement.
+  --gc-kind               GC implementation to compile in (default: ${
+                            options["gc-kind"].default
+                          }) [valid values: ${options["gc-kind"].validSet.join(", ")}]
+                          Sets HERMESVM_GCKIND. Use "malloc" together with
+                          --sanitize-handles for deterministic GC-safety tests
+                          (every alloc moves the heap). Requires --configure or
+                          --clean-build to take effect on existing builds.
 
 Examples:
   node ${scriptRelativePath} --configure --no-build        # Configure only, don't build
@@ -242,6 +265,8 @@ function main() {
   console.log(`         test262-intl: ${args["test262-intl"]}`);
   console.log(`        intl-provider: ${args["intl-provider"]}`);
   console.log(`              binskim: ${args.binskim}`);
+  console.log(`     sanitize-handles: ${args["sanitize-handles"]}`);
+  console.log(`              gc-kind: ${args["gc-kind"]}`);
   console.log();
 
   removeUnusedFilesForComponentGovernance();
@@ -538,6 +563,17 @@ function cmakeConfigure(buildParams) {
       genArgs.push(`-DSHERMES_CC_SYSCFLAGS="-target ${shermesTarget}"`);
     }
   }
+
+  // Toggle HERMESVM_SANITIZE_HANDLES. Set explicitly in both directions so a
+  // prior cached value does not stick across builds.
+  genArgs.push(
+    `-DHERMESVM_SANITIZE_HANDLES=${args["sanitize-handles"] ? "ON" : "OFF"}`,
+  );
+
+  // Select the GC implementation. CMake expects HADES or MALLOC (uppercase).
+  genArgs.push(
+    `-DHERMESVM_GCKIND=${args["gc-kind"] === "malloc" ? "MALLOC" : "HADES"}`,
+  );
 
   // Pass external ICU path for testing if available, or clear cache value.
   if (buildParams.externalIcuDir) {

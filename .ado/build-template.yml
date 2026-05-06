@@ -13,6 +13,13 @@ parameters:
   type: boolean
   default: false
 
+  # Build with HERMESVM_SANITIZE_HANDLES=ON to deterministically surface GC-safety
+  # bugs (the GC moves the heap after every allocation). Off by default; enable it
+  # for diagnostic / red-green test runs.
+- name: SanitizeHandles
+  type: boolean
+  default: false
+
   # Matrix with target platforms for Hermes binaries.
 - name: BuildMatrix
   type: object
@@ -141,6 +148,11 @@ extends:
               value: --fake-build
             ${{ else }}:
               value: --no-fake-build
+          - name: sanitizeHandlesArg
+            ${{ if eq(parameters.SanitizeHandles, true) }}:
+              value: --sanitize-handles
+            ${{ else }}:
+              value: --no-sanitize-handles
 
           templateContext:
             outputs:
@@ -166,6 +178,7 @@ extends:
               --semantic-version "$(semanticVersion)"
               --file-version "$(fileVersion)"
               $(fakeBuildArg)
+              $(sanitizeHandlesArg)
             displayName: Build binaries
 
             # Show all built files to help debug issues.
@@ -186,6 +199,7 @@ extends:
                 --semantic-version "$(semanticVersion)"
                 --file-version "$(fileVersion)"
                 $(fakeBuildArg)
+                $(sanitizeHandlesArg)
               displayName: Run unit tests
 
             # Run Lit tests which are mostly JS tests.
@@ -200,6 +214,7 @@ extends:
                 --semantic-version "$(semanticVersion)"
                 --file-version "$(fileVersion)"
                 $(fakeBuildArg)
+                $(sanitizeHandlesArg)
               displayName: Run JS regression tests
 
             # Run Test262 Intl tests.
@@ -214,6 +229,7 @@ extends:
                 --semantic-version "$(semanticVersion)"
                 --file-version "$(fileVersion)"
                 $(fakeBuildArg)
+                $(sanitizeHandlesArg)
               displayName: Run Test262 Intl tests
 
             # Sign and publish symbols only for the CI builds and real builds.

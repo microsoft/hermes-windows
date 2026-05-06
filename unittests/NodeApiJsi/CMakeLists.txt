@@ -11,6 +11,7 @@ set(LLVM_ENABLE_RTTI ON)
 add_hermes_unittest(NodeApiJsiTest
   NodeApiJsiTestFactory.cpp
   ${HERMES_JSI_DIR}/jsi/test/testlib.cpp
+  ${HERMES_JSI_DIR}/jsi/test/testlib_ext.cpp
 )
 
 target_link_libraries(NodeApiJsiTest

@@ -1770,14 +1770,20 @@ class NodeApiReference : public NodeApiRefTracker {
       const vm::PinnedHermesValue *value,
       uint32_t initialRefCount,
       NodeApiReferenceOwnership ownership) noexcept {
-    // Make sure GC does not collect the value while we create the reference.
     vm::GCScope scope{env.runtime()};
-    // vm::Handle<vm::HermesValue> handleValue =
-    // env.runtime().makeHandle(*value);
 
     NodeApiReference *reference = new (std::nothrow)
         NodeApiReference(env, value, initialRefCount, ownership);
     env.addReference(reference);
+    // Register the reference as a GC root *before* running
+    // convertToWeakRootStorage, since that path triggers JS allocations
+    // (createExternalObject + defineOwnProperty on the underlying object,
+    // which may be a JSProxy). Without this ordering, value_ is not yet
+    // visible to NodeApiReference::getGCRoots and a moving GC inside
+    // addObjectFinalizer would leave it pointing at a freed cell.
+    if (initialRefCount == 0) {
+      reference->convertToWeakRootStorage(env);
+    }
     return reference;
   }
 
@@ -1870,9 +1876,13 @@ class NodeApiReference : public NodeApiRefTracker {
         refCount_(initialRefCount),
         ownership_(ownership),
         canBeWeak_(сanBeHeldWeakly(value)) {
-    if (refCount_ == 0) {
-      convertToWeakRootStorage(env);
-    }
+    // Note: convertToWeakRootStorage() must NOT be called from the
+    // constructor when initialRefCount == 0 — at that point `this` has
+    // not yet been added to env.references_ via addReference(), so
+    // value_ is not a registered GC root and an allocation inside
+    // addObjectFinalizer would corrupt it. The owning create() function
+    // is responsible for invoking convertToWeakRootStorage() *after*
+    // registering the reference.
   }
 
   virtual void callUserFinalizer() noexcept {
@@ -1978,6 +1988,10 @@ class NodeApiReference : public NodeApiRefTracker {
     isUsingWeakStorage_ = false;
   }
 
+  // Accessible to the derived classes' static create() functions, which
+  // must invoke this *after* registering the new reference in env's
+  // tracking list (see NodeApiReference::create comment).
+ protected:
   void convertToWeakRootStorage(NodeApiEnvironment &env) noexcept {
     if (isUsingWeakStorage_) {
       return; // It is already a weak storage.
@@ -2017,6 +2031,7 @@ class NodeApiReference : public NodeApiRefTracker {
     isUsingWeakStorage_ = true;
   }
 
+ private:
   napi_value getStorageValue(NodeApiEnvironment &env) const noexcept {
     vm::PinnedHermesValue rawValue;
 
@@ -2072,6 +2087,9 @@ class NodeApiReferenceWithData final : public NodeApiReference {
         new (std::nothrow) NodeApiReferenceWithData(
             env, value, initialRefCount, ownership, nativeData);
     env.addReference(reference);
+    if (initialRefCount == 0) {
+      reference->convertToWeakRootStorage(env);
+    }
     return reference;
   }
 
@@ -2120,6 +2138,9 @@ class NodeApiReferenceWithFinalizer final : public NodeApiReference {
             finalizeCallback,
             finalizeHint);
     env.addFinalizingReference(reference);
+    if (initialRefCount == 0) {
+      reference->convertToWeakRootStorage(env);
+    }
     return reference;
   }
 

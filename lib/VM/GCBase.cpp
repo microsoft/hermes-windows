@@ -59,7 +59,15 @@ GCBase::GCBase(
       samplingAllocationTracker_(this),
 #endif
 #if HERMESVM_SANITIZE_HANDLES != 0
-      sanitizeRate_(gcConfig.getSanitizeConfig().getSanitizeRate()),
+      // When the build is compiled with HERMESVM_SANITIZE_HANDLES, default the
+      // runtime rate to 1.0 (move the heap on every alloc) unless an explicit
+      // positive rate was supplied via GCConfig. The public default in
+      // GCSanitizeConfig is 0.0 so without this override the build-time flag
+      // would be a no-op at runtime.
+      sanitizeRate_(
+          gcConfig.getSanitizeConfig().getSanitizeRate() > 0.0
+              ? gcConfig.getSanitizeConfig().getSanitizeRate()
+              : 1.0),
 #endif
       tripwireCallback_(gcConfig.getTripwireConfig().getCallback()),
       tripwireLimit_(gcConfig.getTripwireConfig().getLimit()) {
