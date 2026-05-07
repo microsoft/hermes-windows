@@ -1875,7 +1875,7 @@ class NodeApiReference : public NodeApiRefTracker {
         value_(*value),
         refCount_(initialRefCount),
         ownership_(ownership),
-        canBeWeak_(сanBeHeldWeakly(value)) {
+        canBeWeak_(canBeHeldWeakly(value)) {
     // Note: convertToWeakRootStorage() must NOT be called from the
     // constructor when initialRefCount == 0 — at that point `this` has
     // not yet been added to env.references_ via addReference(), so
@@ -1941,7 +1941,7 @@ class NodeApiReference : public NodeApiRefTracker {
     }
   }
 
-  static bool сanBeHeldWeakly(const vm::PinnedHermesValue *value) {
+  static bool canBeHeldWeakly(const vm::PinnedHermesValue *value) {
     // Note that Hermes does not support weak symbols yet.
     return value != nullptr && value->isObject();
   }
