@@ -10,6 +10,7 @@ const __dirname = dirname(__filename);
 const { values } = parseArgs({
   options: {
     binary: { type: 'string', short: 'b' },
+    baseline: { type: 'string' },
   },
   strict: false,
 });
@@ -42,12 +43,20 @@ const resultObj = JSON.parse(readFileSync(resultJson, 'utf8'));
 resultObj.timestamp = new Date().toISOString();
 writeFileSync(resultJson, JSON.stringify(resultObj, undefined, 4) + '\n');
 
-// Step 2: Generate report
+// Step 2: Generate report. If --baseline <path> is given, render
+// comparison mode with baseline first and the new result second.
 console.log('');
 console.log('=== Generating report ===');
+const reportArgs = ['--experimental-strip-types', reportScript];
+if (values.baseline) {
+  reportArgs.push('-i', values.baseline, '-i', resultJson);
+} else {
+  reportArgs.push('-i', resultJson);
+}
+reportArgs.push('-o', reportMd);
 const reportResult = spawnSync(
   process.execPath,
-  ['--experimental-strip-types', reportScript, '-i', resultJson, '-o', reportMd],
+  reportArgs,
   { stdio: 'inherit' },
 );
 
