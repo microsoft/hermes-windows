@@ -141,7 +141,17 @@ function renderSection(group: string, benchNames: string[]): string[] {
     }
     return s;
   });
-  const sumStr = sums.map((s) => `${s}ms`).join(', ');
+  const sumStr = sums.map((s) => `${Math.round(s)}ms`).join(', ');
+
+  // When comparing exactly two inputs, append the relative time change of
+  // the second input vs. the first to the foldable title. Positive means
+  // the second run was slower; negative means it was faster.
+  let pctStr = '';
+  if (sums.length === 2 && sums[0] > 0) {
+    const pct = ((sums[1] - sums[0]) / sums[0]) * 100;
+    const sign = pct >= 0 ? '+' : '-';
+    pctStr = ` ${sign}${Math.abs(pct).toFixed(1)}%`;
+  }
 
   // Factor out the longest path prefix shared by every name in this group.
   // When present, the prefix is stripped from each row cell. The header
@@ -156,7 +166,7 @@ function renderSection(group: string, benchNames: string[]): string[] {
   // Foldable section with a heading-styled summary, e.g.
   //   <details><summary><h2>v8 (3256ms)</h2></summary>
   out.push(`<details>`);
-  out.push(`<summary><strong>${group} (${sumStr})</strong></summary>`);
+  out.push(`<summary><strong>${group} (${sumStr})${pctStr}</strong></summary>`);
   out.push('');
 
   // Table header: column 1 = group title (with optional path annotation),

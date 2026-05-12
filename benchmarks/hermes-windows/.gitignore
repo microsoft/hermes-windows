@@ -1,2 +1,4 @@
 bench_result.json
+bench_dynamic_result.json
+bench_static_result.json
 bench_report.md

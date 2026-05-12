@@ -17,33 +17,56 @@ const { values } = parseArgs({
 
 const benchScript = join(__dirname, 'bench.ts');
 const reportScript = join(__dirname, 'report.ts');
+const dynamicJson = join(__dirname, 'bench_dynamic_result.json');
+const staticJson = join(__dirname, 'bench_static_result.json');
 const resultJson = join(__dirname, 'bench_result.json');
 const reportMd = join(__dirname, 'bench_report.md');
 
-// Step 1: Run benchmarks
-console.log('=== Running benchmarks ===');
-const benchArgs = ['--experimental-strip-types', benchScript, '--dynamic', '-c', '5', '-l', 'CI', '-o', resultJson];
-if (values.binary) {
-  benchArgs.push('--binary', values.binary);
-}
-const benchResult = spawnSync(
-  process.execPath,
-  benchArgs,
-  { stdio: 'inherit' },
-);
-
-if (benchResult.status !== 0) {
-  console.error(`bench.ts failed with exit code ${benchResult.status}`);
-  process.exit(1);
+interface BenchData {
+  runtime?: string;
+  results: { [key: string]: unknown };
+  timestamp?: string;
 }
 
-// Stamp the result with the current time so any baseline copied from
-// it is traceable back to the CI run that produced it.
-const resultObj = JSON.parse(readFileSync(resultJson, 'utf8'));
-resultObj.timestamp = new Date().toISOString();
-writeFileSync(resultJson, JSON.stringify(resultObj, undefined, 4) + '\n');
+function runBench(mode: '--dynamic' | '--static', output: string): void {
+  const args = ['--experimental-strip-types', benchScript, mode, '-c', '5', '-l', 'CI', '-o', output];
+  if (values.binary) {
+    args.push('--binary', values.binary);
+  }
+  const r = spawnSync(process.execPath, args, { stdio: 'inherit' });
+  if (r.status !== 0) {
+    console.error(`bench.ts (${mode}) failed with exit code ${r.status}`);
+    process.exit(1);
+  }
+}
 
-// Step 2: Generate report. If --baseline <path> is given, render
+// Step 1: Run dynamic benchmarks
+console.log('=== Running dynamic benchmarks ===');
+runBench('--dynamic', dynamicJson);
+
+// Step 2: Run static benchmarks
+console.log('');
+console.log('=== Running static benchmarks ===');
+runBench('--static', staticJson);
+
+// Step 3: Merge dynamic + static into bench_result.json. Static benchmark
+// names are suffixed with " (static)" so they coexist with dynamic results
+// in the same groups. Runtime is taken from the dynamic run; static's
+// runtime field is intentionally dropped.
+const dynamicObj = JSON.parse(readFileSync(dynamicJson, 'utf8')) as BenchData;
+const staticObj = JSON.parse(readFileSync(staticJson, 'utf8')) as BenchData;
+
+const merged: BenchData = {
+  runtime: dynamicObj.runtime,
+  results: { ...dynamicObj.results },
+};
+for (const [name, value] of Object.entries(staticObj.results)) {
+  merged.results[`${name} (static)`] = value;
+}
+merged.timestamp = new Date().toISOString();
+writeFileSync(resultJson, JSON.stringify(merged, undefined, 4) + '\n');
+
+// Step 4: Generate report. If --baseline <path> is given, render
 // comparison mode with baseline first and the new result second.
 console.log('');
 console.log('=== Generating report ===');
