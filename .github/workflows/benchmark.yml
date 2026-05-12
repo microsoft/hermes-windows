@@ -25,7 +25,7 @@ jobs:
 
       - name: Build hermes (x64 Release)
         shell: cmd
-        run: node .ado\scripts\build.js --platform x64 --configuration release --targets hermes,shermes
+        run: node .ado\scripts\build.js --platform x64 --configuration release --targets hermes,shermes-dep
 
       # shermes spawns clang, which needs MSVC LIB/INCLUDE/PATH to invoke
       # the MS linker. The build step above sets these inside build.js but
