@@ -29,11 +29,17 @@ jobs:
 
       # shermes spawns clang, which needs MSVC LIB/INCLUDE/PATH to invoke
       # the MS linker. The build step above sets these inside build.js but
-      # they don't survive to the next step.
+      # they don't survive to the next step, so locate vcvarsall via
+      # vswhere and export the resulting env to GITHUB_ENV.
       - name: Setup MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" x64
+          echo INCLUDE=%INCLUDE%>> "%GITHUB_ENV%"
+          echo LIB=%LIB%>> "%GITHUB_ENV%"
+          echo LIBPATH=%LIBPATH%>> "%GITHUB_ENV%"
+          echo PATH=%PATH%>> "%GITHUB_ENV%"
 
       - name: Run benchmarks
         shell: bash
