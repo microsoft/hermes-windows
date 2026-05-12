@@ -25,7 +25,21 @@ jobs:
 
       - name: Build hermes (x64 Release)
         shell: cmd
-        run: node .ado\scripts\build.js --platform x64 --configuration release --targets hermes
+        run: node .ado\scripts\build.js --platform x64 --configuration release --targets hermes,shermes-dep
+
+      # shermes spawns clang, which needs MSVC LIB/INCLUDE/PATH to invoke
+      # the MS linker. The build step above sets these inside build.js but
+      # they don't survive to the next step, so locate vcvarsall via
+      # vswhere and export the resulting env to GITHUB_ENV.
+      - name: Setup MSVC environment
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" x64
+          echo INCLUDE=%INCLUDE%>> "%GITHUB_ENV%"
+          echo LIB=%LIB%>> "%GITHUB_ENV%"
+          echo LIBPATH=%LIBPATH%>> "%GITHUB_ENV%"
+          echo PATH=%PATH%>> "%GITHUB_ENV%"
 
       - name: Run benchmarks
         shell: bash
@@ -41,6 +55,7 @@ jobs:
           node --experimental-strip-types \
             benchmarks/hermes-windows/bench_and_report.ts \
             --binary out/build/win32-x64-release/bin/hermes.exe \
+            --static-binary out/build/win32-x64-release/bin/shermes.exe \
             "${EXTRA_ARGS[@]}"
 
       - name: Commit baseline if missing
