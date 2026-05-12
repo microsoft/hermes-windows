@@ -25,7 +25,7 @@ jobs:
 
       - name: Build hermes (x64 Release)
         shell: cmd
-        run: node .ado\scripts\build.js --platform x64 --configuration release --targets hermes
+        run: node .ado\scripts\build.js --platform x64 --configuration release --targets hermes,shermes
 
       - name: Run benchmarks
         shell: bash
@@ -41,6 +41,7 @@ jobs:
           node --experimental-strip-types \
             benchmarks/hermes-windows/bench_and_report.ts \
             --binary out/build/win32-x64-release/bin/hermes.exe \
+            --static-binary out/build/win32-x64-release/bin/shermes.exe \
             "${EXTRA_ARGS[@]}"
 
       - name: Commit baseline if missing

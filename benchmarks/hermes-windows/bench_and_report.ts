@@ -10,6 +10,7 @@ const __dirname = dirname(__filename);
 const { values } = parseArgs({
   options: {
     binary: { type: 'string', short: 'b' },
+    'static-binary': { type: 'string' },
     baseline: { type: 'string' },
   },
   strict: false,
@@ -28,10 +29,10 @@ interface BenchData {
   timestamp?: string;
 }
 
-function runBench(mode: '--dynamic' | '--static', output: string): void {
+function runBench(mode: '--dynamic' | '--static', output: string, binary: string | undefined): void {
   const args = ['--experimental-strip-types', benchScript, mode, '-c', '5', '-l', 'CI', '-o', output];
-  if (values.binary) {
-    args.push('--binary', values.binary);
+  if (binary) {
+    args.push('--binary', binary);
   }
   const r = spawnSync(process.execPath, args, { stdio: 'inherit' });
   if (r.status !== 0) {
@@ -42,12 +43,12 @@ function runBench(mode: '--dynamic' | '--static', output: string): void {
 
 // Step 1: Run dynamic benchmarks
 console.log('=== Running dynamic benchmarks ===');
-runBench('--dynamic', dynamicJson);
+runBench('--dynamic', dynamicJson, values.binary);
 
 // Step 2: Run static benchmarks
 console.log('');
 console.log('=== Running static benchmarks ===');
-runBench('--static', staticJson);
+runBench('--static', staticJson, values['static-binary']);
 
 // Step 3: Merge dynamic + static into bench_result.json. Static benchmark
 // names are suffixed with " (static)" so they coexist with dynamic results
