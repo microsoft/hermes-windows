@@ -1,0 +1,2658 @@
+{
+    "runtime": "hermes (CI)",
+    "results": {
+        "v8-crypto": {
+            "totalTime": {
+                "mean": 622.6,
+                "stdev": 13.792751719653333,
+                "samples": [
+                    636,
+                    629,
+                    636,
+                    606,
+                    606
+                ]
+            }
+        },
+        "v8-deltablue": {
+            "totalTime": {
+                "mean": 739.4,
+                "stdev": 2.0591260281974,
+                "samples": [
+                    737,
+                    740,
+                    742,
+                    737,
+                    741
+                ]
+            }
+        },
+        "v8-raytrace": {
+            "totalTime": {
+                "mean": 127.8,
+                "stdev": 3.6,
+                "samples": [
+                    126,
+                    135,
+                    126,
+                    126,
+                    126
+                ]
+            }
+        },
+        "v8-regexp": {
+            "totalTime": {
+                "mean": 593,
+                "stdev": 2.0976176963403033,
+                "samples": [
+                    592,
+                    595,
+                    591,
+                    596,
+                    591
+                ]
+            }
+        },
+        "v8-richards": {
+            "totalTime": {
+                "mean": 937,
+                "stdev": 3.7416573867739413,
+                "samples": [
+                    939,
+                    933,
+                    940,
+                    932,
+                    941
+                ]
+            }
+        },
+        "v8-splay": {
+            "totalTime": {
+                "mean": 225.2,
+                "stdev": 2.5612496949731396,
+                "samples": [
+                    225,
+                    222,
+                    227,
+                    229,
+                    223
+                ]
+            }
+        },
+        "box2d": {
+            "totalTime": {
+                "mean": 2949.8,
+                "stdev": 10.533755265810953,
+                "samples": [
+                    2945,
+                    2950,
+                    2943,
+                    2970,
+                    2941
+                ]
+            }
+        },
+        "earley-boyer": {
+            "totalTime": {
+                "mean": 2564.8,
+                "stdev": 18.669761648183943,
+                "samples": [
+                    2567,
+                    2556,
+                    2553,
+                    2600,
+                    2548
+                ]
+            }
+        },
+        "navier-stokes": {
+            "totalTime": {
+                "mean": 5743.8,
+                "stdev": 24.489997958350262,
+                "samples": [
+                    5733,
+                    5751,
+                    5706,
+                    5748,
+                    5781
+                ]
+            }
+        },
+        "pdfjs": {
+            "totalTime": {
+                "mean": 1038.2,
+                "stdev": 84.46395680999086,
+                "samples": [
+                    1204,
+                    1026,
+                    997,
+                    979,
+                    985
+                ]
+            }
+        },
+        "gbemu": {
+            "totalTime": {
+                "mean": 2296,
+                "stdev": 7.720103626247513,
+                "samples": [
+                    2297,
+                    2290,
+                    2310,
+                    2288,
+                    2295
+                ]
+            }
+        },
+        "code-load": {
+            "totalTime": {
+                "mean": 4472.8,
+                "stdev": 33.3550595862157,
+                "samples": [
+                    4430,
+                    4533,
+                    4468,
+                    4468,
+                    4465
+                ]
+            }
+        },
+        "typescript": {
+            "totalTime": {
+                "mean": 3381.8,
+                "stdev": 240.34924589022532,
+                "samples": [
+                    3277,
+                    3256,
+                    3269,
+                    3245,
+                    3862
+                ]
+            }
+        },
+        "simpleSum": {
+            "totalTime": {
+                "mean": 8855.4,
+                "stdev": 62.310833728975254,
+                "samples": [
+                    8791,
+                    8774,
+                    8917,
+                    8923,
+                    8872
+                ]
+            }
+        },
+        "propAccess": {
+            "totalTime": {
+                "mean": 2691.2,
+                "stdev": 25.08704845134238,
+                "samples": [
+                    2685,
+                    2692,
+                    2710,
+                    2648,
+                    2721
+                ]
+            }
+        },
+        "allocObj": {
+            "totalTime": {
+                "mean": 252,
+                "stdev": 3.521363372331802,
+                "samples": [
+                    250,
+                    250,
+                    250,
+                    259,
+                    251
+                ]
+            }
+        },
+        "allocObjLit": {
+            "totalTime": {
+                "mean": 6371.8,
+                "stdev": 55.5964027613298,
+                "samples": [
+                    6316,
+                    6331,
+                    6343,
+                    6466,
+                    6403
+                ]
+            }
+        },
+        "allocNewObj": {
+            "totalTime": {
+                "mean": 20053,
+                "stdev": 31.189741903388683,
+                "samples": [
+                    20031,
+                    20011,
+                    20049,
+                    20099,
+                    20075
+                ]
+            }
+        },
+        "allocArray": {
+            "totalTime": {
+                "mean": 249,
+                "stdev": 5.019960159204453,
+                "samples": [
+                    251,
+                    252,
+                    252,
+                    239,
+                    251
+                ]
+            }
+        },
+        "allocNewArray": {
+            "totalTime": {
+                "mean": 34956.8,
+                "stdev": 205.03502139878447,
+                "samples": [
+                    34964,
+                    34716,
+                    35274,
+                    34760,
+                    35070
+                ]
+            }
+        },
+        "arrayRead": {
+            "totalTime": {
+                "mean": 115.6,
+                "stdev": 4.673328578219169,
+                "samples": [
+                    115,
+                    124,
+                    110,
+                    116,
+                    113
+                ]
+            }
+        },
+        "arrayReadByIndex": {
+            "totalTime": {
+                "mean": 550,
+                "stdev": 15.974980438172686,
+                "samples": [
+                    561,
+                    541,
+                    530,
+                    543,
+                    575
+                ]
+            }
+        },
+        "largeArrayRead": {
+            "totalTime": {
+                "mean": 827.2,
+                "stdev": 33.222883679777105,
+                "samples": [
+                    776,
+                    800,
+                    859,
+                    845,
+                    856
+                ]
+            }
+        },
+        "arrayWrite": {
+            "totalTime": {
+                "mean": 261.8,
+                "stdev": 4.308131845707603,
+                "samples": [
+                    263,
+                    267,
+                    265,
+                    259,
+                    255
+                ]
+            }
+        },
+        "largeArrayWrite": {
+            "totalTime": {
+                "mean": 2218,
+                "stdev": 51.450947513141095,
+                "samples": [
+                    2314,
+                    2167,
+                    2225,
+                    2195,
+                    2189
+                ]
+            }
+        },
+        "interp-dispatch": {
+            "totalTime": {
+                "mean": 2880,
+                "stdev": 41.86167698504206,
+                "samples": [
+                    2876,
+                    2877,
+                    2943,
+                    2812,
+                    2892
+                ]
+            }
+        },
+        "wb-perf": {
+            "totalTime": {
+                "mean": 8327,
+                "stdev": 240.03083135297433,
+                "samples": [
+                    8264,
+                    8229,
+                    8021,
+                    8371,
+                    8750
+                ]
+            }
+        },
+        "arrayReverse": {
+            "totalTime": {
+                "mean": 40.6,
+                "stdev": 0.4898979485566356,
+                "samples": [
+                    41,
+                    40,
+                    40,
+                    41,
+                    41
+                ]
+            }
+        },
+        "arrayMap": {
+            "totalTime": {
+                "mean": 1472.6,
+                "stdev": 53.23758071137343,
+                "samples": [
+                    1443,
+                    1449,
+                    1445,
+                    1579,
+                    1447
+                ]
+            }
+        },
+        "arrayIndexOf": {
+            "totalTime": {
+                "mean": 143.2,
+                "stdev": 0.9797958971132712,
+                "samples": [
+                    144,
+                    144,
+                    144,
+                    142,
+                    142
+                ]
+            }
+        },
+        "arrayLastIndexOf": {
+            "totalTime": {
+                "mean": 148.6,
+                "stdev": 0.4898979485566356,
+                "samples": [
+                    149,
+                    149,
+                    148,
+                    149,
+                    148
+                ]
+            }
+        },
+        "arrayEvery": {
+            "totalTime": {
+                "mean": 2308.8,
+                "stdev": 107.61115183845956,
+                "samples": [
+                    2206,
+                    2438,
+                    2418,
+                    2310,
+                    2172
+                ]
+            }
+        },
+        "arraySome": {
+            "totalTime": {
+                "mean": 2174.4,
+                "stdev": 7.578918128598566,
+                "samples": [
+                    2187,
+                    2167,
+                    2168,
+                    2179,
+                    2171
+                ]
+            }
+        },
+        "arrayFill": {
+            "totalTime": {
+                "mean": 2401.2,
+                "stdev": 47.02509968091508,
+                "samples": [
+                    2357,
+                    2361,
+                    2375,
+                    2438,
+                    2475
+                ]
+            }
+        },
+        "arrayFilter": {
+            "totalTime": {
+                "mean": 1866.4,
+                "stdev": 15.186836405255704,
+                "samples": [
+                    1869,
+                    1885,
+                    1878,
+                    1858,
+                    1842
+                ]
+            }
+        },
+        "arrayFind": {
+            "totalTime": {
+                "mean": 3207,
+                "stdev": 10.039920318408907,
+                "samples": [
+                    3199,
+                    3201,
+                    3211,
+                    3225,
+                    3199
+                ]
+            }
+        },
+        "arrayFindIndex": {
+            "totalTime": {
+                "mean": 3322,
+                "stdev": 23.630488780387086,
+                "samples": [
+                    3302,
+                    3292,
+                    3358,
+                    3322,
+                    3336
+                ]
+            }
+        },
+        "arrayPop": {
+            "totalTime": {
+                "mean": 1031.4,
+                "stdev": 5.314132102234569,
+                "samples": [
+                    1029,
+                    1029,
+                    1042,
+                    1028,
+                    1029
+                ]
+            }
+        },
+        "arrayReduce": {
+            "totalTime": {
+                "mean": 1994.2,
+                "stdev": 4.214261501141095,
+                "samples": [
+                    1990,
+                    1994,
+                    2002,
+                    1991,
+                    1994
+                ]
+            }
+        },
+        "arrayReduceRight": {
+            "totalTime": {
+                "mean": 2075.8,
+                "stdev": 28.131121556027587,
+                "samples": [
+                    2030,
+                    2094,
+                    2106,
+                    2057,
+                    2092
+                ]
+            }
+        },
+        "arrayShift": {
+            "totalTime": {
+                "mean": 2065.8,
+                "stdev": 21.84856974723975,
+                "samples": [
+                    2109,
+                    2061,
+                    2052,
+                    2055,
+                    2052
+                ]
+            }
+        },
+        "arrayUnshift": {
+            "totalTime": {
+                "mean": 2109.4,
+                "stdev": 22.419634252146043,
+                "samples": [
+                    2097,
+                    2079,
+                    2114,
+                    2147,
+                    2110
+                ]
+            }
+        },
+        "arrayIncludes": {
+            "totalTime": {
+                "mean": 1216.6,
+                "stdev": 1.7435595774162693,
+                "samples": [
+                    1216,
+                    1216,
+                    1216,
+                    1215,
+                    1220
+                ]
+            }
+        },
+        "arrayFrom": {
+            "totalTime": {
+                "mean": 1102.8,
+                "stdev": 9.325234581499814,
+                "samples": [
+                    1090,
+                    1109,
+                    1110,
+                    1093,
+                    1112
+                ]
+            }
+        },
+        "arrayCopyWithin": {
+            "totalTime": {
+                "mean": 1487,
+                "stdev": 0,
+                "samples": [
+                    1487,
+                    1487,
+                    1487,
+                    1487,
+                    1487
+                ]
+            }
+        },
+        "stringFromCharCode": {
+            "totalTime": {
+                "mean": 92.6,
+                "stdev": 0.4898979485566356,
+                "samples": [
+                    92,
+                    93,
+                    93,
+                    92,
+                    93
+                ]
+            }
+        },
+        "arraySlice": {
+            "totalTime": {
+                "mean": 786.2,
+                "stdev": 0.7483314773547883,
+                "samples": [
+                    786,
+                    787,
+                    787,
+                    785,
+                    786
+                ]
+            }
+        },
+        "arraySplice": {
+            "totalTime": {
+                "mean": 26.8,
+                "stdev": 0.4,
+                "samples": [
+                    27,
+                    27,
+                    26,
+                    27,
+                    27
+                ]
+            }
+        },
+        "arrayOf": {
+            "totalTime": {
+                "mean": 1048.8,
+                "stdev": 6.615134163416491,
+                "samples": [
+                    1046,
+                    1062,
+                    1045,
+                    1046,
+                    1045
+                ]
+            }
+        },
+        "stringCharAt": {
+            "totalTime": {
+                "mean": 1346.6,
+                "stdev": 21.87784267243916,
+                "samples": [
+                    1371,
+                    1367,
+                    1336,
+                    1311,
+                    1348
+                ]
+            }
+        },
+        "stringMatch": {
+            "totalTime": {
+                "mean": 3192.4,
+                "stdev": 213.42783323643616,
+                "samples": [
+                    2924,
+                    3063,
+                    3096,
+                    3378,
+                    3501
+                ]
+            }
+        },
+        "stringSearch": {
+            "totalTime": {
+                "mean": 3508.2,
+                "stdev": 50.70069033060595,
+                "samples": [
+                    3525,
+                    3439,
+                    3549,
+                    3459,
+                    3569
+                ]
+            }
+        },
+        "stringStartsWith": {
+            "totalTime": {
+                "mean": 701,
+                "stdev": 20.33715811021786,
+                "samples": [
+                    714,
+                    709,
+                    724,
+                    692,
+                    666
+                ]
+            }
+        },
+        "stringEndsWith": {
+            "totalTime": {
+                "mean": 650.4,
+                "stdev": 34.7597468345211,
+                "samples": [
+                    671,
+                    678,
+                    668,
+                    583,
+                    652
+                ]
+            }
+        },
+        "stringIncludes": {
+            "totalTime": {
+                "mean": 1520.6,
+                "stdev": 32.5674684309358,
+                "samples": [
+                    1578,
+                    1487,
+                    1492,
+                    1528,
+                    1518
+                ]
+            }
+        },
+        "stringIndexOf": {
+            "totalTime": {
+                "mean": 1555.6,
+                "stdev": 64.74133146607352,
+                "samples": [
+                    1498,
+                    1529,
+                    1652,
+                    1611,
+                    1488
+                ]
+            }
+        },
+        "stringLastIndexOf": {
+            "totalTime": {
+                "mean": 1821.4,
+                "stdev": 29.32984827782101,
+                "samples": [
+                    1806,
+                    1877,
+                    1799,
+                    1800,
+                    1825
+                ]
+            }
+        },
+        "stringSplit": {
+            "totalTime": {
+                "mean": 822,
+                "stdev": 6.164414002968976,
+                "samples": [
+                    824,
+                    832,
+                    823,
+                    816,
+                    815
+                ]
+            }
+        },
+        "stringSlice": {
+            "totalTime": {
+                "mean": 490,
+                "stdev": 4.604345773288535,
+                "samples": [
+                    492,
+                    487,
+                    498,
+                    485,
+                    488
+                ]
+            }
+        },
+        "stringPadStart": {
+            "totalTime": {
+                "mean": 2910.8,
+                "stdev": 11.737120600896967,
+                "samples": [
+                    2930,
+                    2901,
+                    2901,
+                    2903,
+                    2919
+                ]
+            }
+        },
+        "stringPadEnd": {
+            "totalTime": {
+                "mean": 2910,
+                "stdev": 8.390470785361213,
+                "samples": [
+                    2899,
+                    2909,
+                    2920,
+                    2903,
+                    2919
+                ]
+            }
+        },
+        "regExpMatch": {
+            "totalTime": {
+                "mean": 1506.2,
+                "stdev": 15.727682601069999,
+                "samples": [
+                    1491,
+                    1505,
+                    1493,
+                    1535,
+                    1507
+                ]
+            }
+        },
+        "regExpSearch": {
+            "totalTime": {
+                "mean": 1227,
+                "stdev": 7.014271166700073,
+                "samples": [
+                    1224,
+                    1235,
+                    1217,
+                    1235,
+                    1224
+                ]
+            }
+        },
+        "regExpToString": {
+            "totalTime": {
+                "mean": 1204,
+                "stdev": 4.732863826479693,
+                "samples": [
+                    1206,
+                    1202,
+                    1198,
+                    1212,
+                    1202
+                ]
+            }
+        },
+        "stringReplace": {
+            "totalTime": {
+                "mean": 1394.8,
+                "stdev": 36.27891949879434,
+                "samples": [
+                    1392,
+                    1365,
+                    1371,
+                    1381,
+                    1465
+                ]
+            }
+        },
+        "regExpReplace": {
+            "totalTime": {
+                "mean": 3309.2,
+                "stdev": 3747.6989953837005,
+                "samples": [
+                    10736,
+                    2426,
+                    1120,
+                    1221,
+                    1043
+                ]
+            }
+        },
+        "regExpFlags": {
+            "totalTime": {
+                "mean": 956.8,
+                "stdev": 12.718490476467716,
+                "samples": [
+                    961,
+                    945,
+                    967,
+                    939,
+                    972
+                ]
+            }
+        },
+        "regExpSplit": {
+            "totalTime": {
+                "mean": 1307.8,
+                "stdev": 8.97552226892675,
+                "samples": [
+                    1300,
+                    1303,
+                    1301,
+                    1311,
+                    1324
+                ]
+            }
+        },
+        "numberArrayReadWrite": {
+            "totalTime": {
+                "mean": 2477.8,
+                "stdev": 35.24429031772381,
+                "samples": [
+                    2483,
+                    2538,
+                    2483,
+                    2447,
+                    2438
+                ]
+            }
+        },
+        "protoCache": {
+            "totalTime": {
+                "mean": 3594.6,
+                "stdev": 29.38434957592221,
+                "samples": [
+                    3607,
+                    3537,
+                    3606,
+                    3603,
+                    3620
+                ]
+            }
+        },
+        "micros/getNodeById.js": {
+            "totalTime": {
+                "mean": 5273,
+                "stdev": 499.56431017437586,
+                "samples": [
+                    5146,
+                    5001,
+                    5033,
+                    6161,
+                    5024
+                ]
+            }
+        },
+        "micros/setInsert.js": {
+            "totalTime": {
+                "mean": 2864.8,
+                "stdev": 179.9158136462718,
+                "samples": [
+                    3074,
+                    2963,
+                    2590,
+                    2852,
+                    2845
+                ]
+            }
+        },
+        "micros/stringify-number.js": {
+            "totalTime": {
+                "mean": 1823.4,
+                "stdev": 30.046630426721723,
+                "samples": [
+                    1877,
+                    1807,
+                    1813,
+                    1809,
+                    1811
+                ]
+            }
+        },
+        "micros/typed-array-sort.js": {
+            "totalTime": {
+                "mean": 22381,
+                "stdev": 203.84430332977178,
+                "samples": [
+                    22737,
+                    22235,
+                    22263,
+                    22334,
+                    22336
+                ]
+            }
+        },
+        "jit-benches/idisp.js": {
+            "totalTime": {
+                "mean": 2810.2,
+                "stdev": 73.18606424723221,
+                "samples": [
+                    2926,
+                    2810,
+                    2794,
+                    2723,
+                    2798
+                ]
+            }
+        },
+        "jit-benches/idispn.js": {
+            "totalTime": {
+                "mean": 3395.8,
+                "stdev": 12.37739875741264,
+                "samples": [
+                    3417,
+                    3396,
+                    3390,
+                    3386,
+                    3390
+                ]
+            }
+        },
+        "many-subclasses/many.js": {
+            "totalTime": {
+                "mean": 19104.8,
+                "stdev": 625.3428659543499,
+                "samples": [
+                    19251,
+                    18700,
+                    18722,
+                    20142,
+                    18709
+                ]
+            }
+        },
+        "many-subclasses/many-sh-1.js": {
+            "totalTime": {
+                "mean": 7322.8,
+                "stdev": 68.51788087791391,
+                "samples": [
+                    7373,
+                    7352,
+                    7300,
+                    7213,
+                    7376
+                ]
+            }
+        },
+        "many-subclasses/many-sh-2.js": {
+            "totalTime": {
+                "mean": 7329,
+                "stdev": 44.86646854834911,
+                "samples": [
+                    7397,
+                    7292,
+                    7352,
+                    7308,
+                    7296
+                ]
+            }
+        },
+        "many-subclasses/many-sh-3.js": {
+            "totalTime": {
+                "mean": 7083.6,
+                "stdev": 61.88941751220479,
+                "samples": [
+                    7160,
+                    7049,
+                    7040,
+                    7141,
+                    7028
+                ]
+            }
+        },
+        "many-subclasses/many-sh-4.js": {
+            "totalTime": {
+                "mean": 7235,
+                "stdev": 260.6415162632385,
+                "samples": [
+                    7624,
+                    7052,
+                    7385,
+                    7080,
+                    7034
+                ]
+            }
+        },
+        "map-objects/map-objects-untyped.js": {
+            "totalTime": {
+                "mean": 1023.6,
+                "stdev": 14.484474446799924,
+                "samples": [
+                    1045,
+                    1031,
+                    1019,
+                    1009,
+                    1014
+                ]
+            }
+        },
+        "map-objects/map-objects-typed.js": {
+            "totalTime": {
+                "mean": 957.6,
+                "stdev": 7.536577472566708,
+                "samples": [
+                    970,
+                    950,
+                    958,
+                    956,
+                    954
+                ]
+            }
+        },
+        "map-strings/map-strings-untyped.js": {
+            "totalTime": {
+                "mean": 1196.8,
+                "stdev": 12.37739875741264,
+                "samples": [
+                    1214,
+                    1203,
+                    1193,
+                    1193,
+                    1181
+                ]
+            }
+        },
+        "map-strings/map-strings-typed.js": {
+            "totalTime": {
+                "mean": 1139.2,
+                "stdev": 10.329569206893384,
+                "samples": [
+                    1142,
+                    1132,
+                    1156,
+                    1131,
+                    1135
+                ]
+            }
+        },
+        "nbody/original/nbody.js": {
+            "totalTime": {
+                "mean": 839.6,
+                "stdev": 11.104053313993047,
+                "samples": [
+                    854,
+                    842,
+                    823,
+                    838,
+                    841
+                ]
+            }
+        },
+        "nbody/fully-typed/nbody.js": {
+            "totalTime": {
+                "mean": 710,
+                "stdev": 12.806248474865697,
+                "samples": [
+                    713,
+                    689,
+                    724,
+                    711,
+                    713
+                ]
+            }
+        },
+        "nbody/fully-typed/nbody.ts": {
+            "totalTime": {
+                "mean": 865.2,
+                "stdev": 22.532199182503245,
+                "samples": [
+                    860,
+                    905,
+                    850,
+                    856,
+                    855
+                ]
+            }
+        },
+        "string-switch/plain/bench.js": {
+            "totalTime": {
+                "mean": 1316,
+                "stdev": 15.459624833740307,
+                "samples": [
+                    1337,
+                    1324,
+                    1301,
+                    1317,
+                    1301
+                ]
+            }
+        },
+        "raytracer/original/bench-raytracer.js": {
+            "totalTime": {
+                "mean": 1550.4,
+                "stdev": 32.867917488030784,
+                "samples": [
+                    1608,
+                    1542,
+                    1528,
+                    1531,
+                    1543
+                ]
+            }
+        },
+        "raytracer/original/raytracer.ts": {
+            "totalTime": {
+                "mean": 1667.6,
+                "stdev": 22.38972978845435,
+                "samples": [
+                    1688,
+                    1693,
+                    1642,
+                    1651,
+                    1664
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/simple-stripped.js": {
+            "totalTime": {
+                "mean": 2239.2,
+                "stdev": 37.8378117760528,
+                "samples": [
+                    2306,
+                    2226,
+                    2227,
+                    2212,
+                    2225
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/simple-lowered.js": {
+            "totalTime": {
+                "mean": 2270.8,
+                "stdev": 37.05671329192593,
+                "samples": [
+                    2336,
+                    2249,
+                    2263,
+                    2247,
+                    2259
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/music-stripped.js": {
+            "totalTime": {
+                "mean": 42.6,
+                "stdev": 1.51657508881031,
+                "samples": [
+                    44,
+                    41,
+                    44,
+                    41,
+                    43
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/music-lowered.js": {
+            "totalTime": {
+                "mean": 47.2,
+                "stdev": 1.7888543819998317,
+                "samples": [
+                    49,
+                    45,
+                    49,
+                    46,
+                    47
+                ]
+            }
+        },
+        "MiniReact/no-deps/stripped/MiniReact.js": {
+            "totalTime": {
+                "mean": 5004,
+                "stdev": 78.49203781276162,
+                "samples": [
+                    5141,
+                    4945,
+                    4965,
+                    4992,
+                    4977
+                ]
+            }
+        },
+        "MiniReact/no-deps/MiniReact.js": {
+            "totalTime": {
+                "mean": 5256.2,
+                "stdev": 768.6655319448115,
+                "samples": [
+                    6631,
+                    4933,
+                    4898,
+                    4918,
+                    4901
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/simple.js": {
+            "totalTime": {
+                "mean": 2260.4,
+                "stdev": 48.21617985697332,
+                "samples": [
+                    2346,
+                    2248,
+                    2240,
+                    2232,
+                    2236
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/music.js": {
+            "totalTime": {
+                "mean": 45.6,
+                "stdev": 0.5477225575051661,
+                "samples": [
+                    45,
+                    45,
+                    46,
+                    46,
+                    46
+                ]
+            }
+        },
+        "widgets/simple-classes/widgets.js": {
+            "totalTime": {
+                "mean": 1758.2,
+                "stdev": 22.609732417700126,
+                "samples": [
+                    1769,
+                    1745,
+                    1739,
+                    1793,
+                    1745
+                ]
+            }
+        },
+        "widgets/original/es5/widgets.js": {
+            "totalTime": {
+                "mean": 2798.8,
+                "stdev": 28.865203966021095,
+                "samples": [
+                    2845,
+                    2777,
+                    2801,
+                    2799,
+                    2772
+                ]
+            }
+        },
+        "widgets/single-file/es5/widgets.js": {
+            "totalTime": {
+                "mean": 2775.2,
+                "stdev": 24.92388412747901,
+                "samples": [
+                    2816,
+                    2748,
+                    2774,
+                    2770,
+                    2768
+                ]
+            }
+        },
+        "v8-crypto (static)": {
+            "totalTime": {
+                "mean": 452,
+                "stdev": 2.0976176963403033,
+                "samples": [
+                    451,
+                    455,
+                    450,
+                    454,
+                    450
+                ]
+            }
+        },
+        "v8-deltablue (static)": {
+            "totalTime": {
+                "mean": 661.6,
+                "stdev": 4.029888335921977,
+                "samples": [
+                    669,
+                    662,
+                    658,
+                    661,
+                    658
+                ]
+            }
+        },
+        "v8-raytrace (static)": {
+            "totalTime": {
+                "mean": 91.8,
+                "stdev": 0.4,
+                "samples": [
+                    92,
+                    92,
+                    92,
+                    91,
+                    92
+                ]
+            }
+        },
+        "v8-regexp (static)": {
+            "totalTime": {
+                "mean": 749.2,
+                "stdev": 7.626270385975047,
+                "samples": [
+                    743,
+                    764,
+                    747,
+                    744,
+                    748
+                ]
+            }
+        },
+        "v8-richards (static)": {
+            "totalTime": {
+                "mean": 781.4,
+                "stdev": 3.4985711369071804,
+                "samples": [
+                    779,
+                    780,
+                    785,
+                    777,
+                    786
+                ]
+            }
+        },
+        "v8-splay (static)": {
+            "totalTime": {
+                "mean": 195,
+                "stdev": 3.5777087639996634,
+                "samples": [
+                    194,
+                    201,
+                    190,
+                    196,
+                    194
+                ]
+            }
+        },
+        "box2d (static)": {
+            "totalTime": {
+                "mean": 1792.6,
+                "stdev": 5.71314274283428,
+                "samples": [
+                    1788,
+                    1798,
+                    1788,
+                    1801,
+                    1788
+                ]
+            }
+        },
+        "earley-boyer (static)": {
+            "totalTime": {
+                "mean": 1875.6,
+                "stdev": 13.46996659238619,
+                "samples": [
+                    1864,
+                    1894,
+                    1864,
+                    1866,
+                    1890
+                ]
+            }
+        },
+        "navier-stokes (static)": {
+            "totalTime": {
+                "mean": 3410.2,
+                "stdev": 2.3151673805580453,
+                "samples": [
+                    3407,
+                    3410,
+                    3414,
+                    3409,
+                    3411
+                ]
+            }
+        },
+        "pdfjs (static)": {
+            "totalTime": {
+                "mean": 812.8,
+                "stdev": 1.9390719429665317,
+                "samples": [
+                    812,
+                    813,
+                    816,
+                    810,
+                    813
+                ]
+            }
+        },
+        "gbemu (static)": {
+            "totalTime": {
+                "mean": 1797,
+                "stdev": 39.6837498228179,
+                "samples": [
+                    1773,
+                    1781,
+                    1773,
+                    1782,
+                    1876
+                ]
+            }
+        },
+        "code-load (static)": {
+            "totalTime": {
+                "mean": 4199.2,
+                "stdev": 7.4404300950953095,
+                "samples": [
+                    4201,
+                    4197,
+                    4207,
+                    4186,
+                    4205
+                ]
+            }
+        },
+        "typescript (static)": {
+            "totalTime": {
+                "mean": 2685.6,
+                "stdev": 17.556765077883796,
+                "samples": [
+                    2701,
+                    2712,
+                    2668,
+                    2675,
+                    2672
+                ]
+            }
+        },
+        "simpleSum (static)": {
+            "totalTime": {
+                "mean": 936.2,
+                "stdev": 0.4,
+                "samples": [
+                    937,
+                    936,
+                    936,
+                    936,
+                    936
+                ]
+            }
+        },
+        "propAccess (static)": {
+            "totalTime": {
+                "mean": 2298,
+                "stdev": 3.03315017762062,
+                "samples": [
+                    2298,
+                    2303,
+                    2296,
+                    2299,
+                    2294
+                ]
+            }
+        },
+        "allocObj (static)": {
+            "totalTime": {
+                "mean": 0.2,
+                "stdev": 0.4,
+                "samples": [
+                    0,
+                    1,
+                    0,
+                    0,
+                    0
+                ]
+            }
+        },
+        "allocObjLit (static)": {
+            "totalTime": {
+                "mean": 4154.4,
+                "stdev": 11.53429668423697,
+                "samples": [
+                    4175,
+                    4154,
+                    4156,
+                    4144,
+                    4143
+                ]
+            }
+        },
+        "allocNewObj (static)": {
+            "totalTime": {
+                "mean": 15749.2,
+                "stdev": 16.14187101918486,
+                "samples": [
+                    15757,
+                    15756,
+                    15719,
+                    15766,
+                    15748
+                ]
+            }
+        },
+        "allocArray (static)": {
+            "totalTime": {
+                "mean": 0.6,
+                "stdev": 0.48989794855663565,
+                "samples": [
+                    1,
+                    1,
+                    0,
+                    0,
+                    1
+                ]
+            }
+        },
+        "allocNewArray (static)": {
+            "totalTime": {
+                "mean": 28494.2,
+                "stdev": 220.8342364761406,
+                "samples": [
+                    28364,
+                    28529,
+                    28286,
+                    28385,
+                    28907
+                ]
+            }
+        },
+        "arrayRead (static)": {
+            "totalTime": {
+                "mean": 74.2,
+                "stdev": 0.4,
+                "samples": [
+                    74,
+                    74,
+                    74,
+                    74,
+                    75
+                ]
+            }
+        },
+        "arrayReadByIndex (static)": {
+            "totalTime": {
+                "mean": 453.2,
+                "stdev": 6.939740629158989,
+                "samples": [
+                    451,
+                    467,
+                    449,
+                    449,
+                    450
+                ]
+            }
+        },
+        "largeArrayRead (static)": {
+            "totalTime": {
+                "mean": 552.2,
+                "stdev": 0.9797958971132712,
+                "samples": [
+                    551,
+                    552,
+                    552,
+                    552,
+                    554
+                ]
+            }
+        },
+        "arrayWrite (static)": {
+            "totalTime": {
+                "mean": 178.4,
+                "stdev": 7.49933330370107,
+                "samples": [
+                    174,
+                    171,
+                    188,
+                    187,
+                    172
+                ]
+            }
+        },
+        "largeArrayWrite (static)": {
+            "totalTime": {
+                "mean": 1568.6,
+                "stdev": 3.6110940170535577,
+                "samples": [
+                    1569,
+                    1569,
+                    1562,
+                    1573,
+                    1570
+                ]
+            }
+        },
+        "interp-dispatch (static)": {
+            "totalTime": {
+                "mean": 1918.8,
+                "stdev": 3.7094473981982814,
+                "samples": [
+                    1916,
+                    1921,
+                    1925,
+                    1915,
+                    1917
+                ]
+            }
+        },
+        "wb-perf (static)": {
+            "totalTime": {
+                "mean": 8991.2,
+                "stdev": 13.96280774056565,
+                "samples": [
+                    8976,
+                    9005,
+                    8974,
+                    8994,
+                    9007
+                ]
+            }
+        },
+        "arrayReverse (static)": {
+            "totalTime": {
+                "mean": 37,
+                "stdev": 1.0954451150103321,
+                "samples": [
+                    36,
+                    37,
+                    37,
+                    39,
+                    36
+                ]
+            }
+        },
+        "arrayMap (static)": {
+            "totalTime": {
+                "mean": 1064.8,
+                "stdev": 1.469693845669907,
+                "samples": [
+                    1063,
+                    1063,
+                    1066,
+                    1066,
+                    1066
+                ]
+            }
+        },
+        "arrayIndexOf (static)": {
+            "totalTime": {
+                "mean": 128.2,
+                "stdev": 0.7483314773547882,
+                "samples": [
+                    129,
+                    128,
+                    129,
+                    127,
+                    128
+                ]
+            }
+        },
+        "arrayLastIndexOf (static)": {
+            "totalTime": {
+                "mean": 138.8,
+                "stdev": 0.4,
+                "samples": [
+                    139,
+                    139,
+                    139,
+                    138,
+                    139
+                ]
+            }
+        },
+        "arrayEvery (static)": {
+            "totalTime": {
+                "mean": 1397.6,
+                "stdev": 3.1999999999999997,
+                "samples": [
+                    1393,
+                    1395,
+                    1401,
+                    1398,
+                    1401
+                ]
+            }
+        },
+        "arraySome (static)": {
+            "totalTime": {
+                "mean": 1406.6,
+                "stdev": 7.605261336732617,
+                "samples": [
+                    1400,
+                    1404,
+                    1401,
+                    1407,
+                    1421
+                ]
+            }
+        },
+        "arrayFill (static)": {
+            "totalTime": {
+                "mean": 1969.2,
+                "stdev": 10.303397497913005,
+                "samples": [
+                    1969,
+                    1952,
+                    1966,
+                    1982,
+                    1977
+                ]
+            }
+        },
+        "arrayFilter (static)": {
+            "totalTime": {
+                "mean": 1061,
+                "stdev": 3.8987177379235853,
+                "samples": [
+                    1056,
+                    1058,
+                    1066,
+                    1060,
+                    1065
+                ]
+            }
+        },
+        "arrayFind (static)": {
+            "totalTime": {
+                "mean": 2242.2,
+                "stdev": 16.726027621644057,
+                "samples": [
+                    2232,
+                    2275,
+                    2237,
+                    2229,
+                    2238
+                ]
+            }
+        },
+        "arrayFindIndex (static)": {
+            "totalTime": {
+                "mean": 2235.8,
+                "stdev": 5.1146847410177685,
+                "samples": [
+                    2239,
+                    2227,
+                    2234,
+                    2237,
+                    2242
+                ]
+            }
+        },
+        "arrayPop (static)": {
+            "totalTime": {
+                "mean": 878,
+                "stdev": 1.4142135623730951,
+                "samples": [
+                    879,
+                    876,
+                    877,
+                    878,
+                    880
+                ]
+            }
+        },
+        "arrayReduce (static)": {
+            "totalTime": {
+                "mean": 1311.8,
+                "stdev": 7.4404300950953095,
+                "samples": [
+                    1301,
+                    1323,
+                    1307,
+                    1313,
+                    1315
+                ]
+            }
+        },
+        "arrayReduceRight (static)": {
+            "totalTime": {
+                "mean": 1322.6,
+                "stdev": 10.762899237658969,
+                "samples": [
+                    1330,
+                    1326,
+                    1315,
+                    1336,
+                    1306
+                ]
+            }
+        },
+        "arrayShift (static)": {
+            "totalTime": {
+                "mean": 1512,
+                "stdev": 6.985699678629192,
+                "samples": [
+                    1525,
+                    1509,
+                    1505,
+                    1508,
+                    1513
+                ]
+            }
+        },
+        "arrayUnshift (static)": {
+            "totalTime": {
+                "mean": 1568.2,
+                "stdev": 9.947864092356712,
+                "samples": [
+                    1565,
+                    1562,
+                    1588,
+                    1563,
+                    1563
+                ]
+            }
+        },
+        "arrayIncludes (static)": {
+            "totalTime": {
+                "mean": 963.4,
+                "stdev": 5.571355310873647,
+                "samples": [
+                    964,
+                    960,
+                    960,
+                    974,
+                    959
+                ]
+            }
+        },
+        "arrayFrom (static)": {
+            "totalTime": {
+                "mean": 1030.6,
+                "stdev": 29.789931184881915,
+                "samples": [
+                    1013,
+                    1020,
+                    1090,
+                    1015,
+                    1015
+                ]
+            }
+        },
+        "arrayCopyWithin (static)": {
+            "totalTime": {
+                "mean": 1109.6,
+                "stdev": 6.770524351924303,
+                "samples": [
+                    1123,
+                    1106,
+                    1105,
+                    1106,
+                    1108
+                ]
+            }
+        },
+        "stringFromCharCode (static)": {
+            "totalTime": {
+                "mean": 77,
+                "stdev": 1.0954451150103321,
+                "samples": [
+                    77,
+                    79,
+                    76,
+                    76,
+                    77
+                ]
+            }
+        },
+        "arraySlice (static)": {
+            "totalTime": {
+                "mean": 571.6,
+                "stdev": 2.244994432064365,
+                "samples": [
+                    576,
+                    571,
+                    571,
+                    570,
+                    570
+                ]
+            }
+        },
+        "arraySplice (static)": {
+            "totalTime": {
+                "mean": 26,
+                "stdev": 0,
+                "samples": [
+                    26,
+                    26,
+                    26,
+                    26,
+                    26
+                ]
+            }
+        },
+        "arrayOf (static)": {
+            "totalTime": {
+                "mean": 868.8,
+                "stdev": 2.227105745132009,
+                "samples": [
+                    871,
+                    869,
+                    868,
+                    865,
+                    871
+                ]
+            }
+        },
+        "stringCharAt (static)": {
+            "totalTime": {
+                "mean": 1100.6,
+                "stdev": 8.380930735902785,
+                "samples": [
+                    1102,
+                    1107,
+                    1098,
+                    1086,
+                    1110
+                ]
+            }
+        },
+        "stringMatch (static)": {
+            "totalTime": {
+                "mean": 2227.6,
+                "stdev": 2.4166091947189146,
+                "samples": [
+                    2226,
+                    2231,
+                    2224,
+                    2229,
+                    2228
+                ]
+            }
+        },
+        "stringSearch (static)": {
+            "totalTime": {
+                "mean": 2219.2,
+                "stdev": 6.794115100585212,
+                "samples": [
+                    2232,
+                    2213,
+                    2219,
+                    2214,
+                    2218
+                ]
+            }
+        },
+        "stringStartsWith (static)": {
+            "totalTime": {
+                "mean": 494.2,
+                "stdev": 13.818827736099758,
+                "samples": [
+                    485,
+                    494,
+                    485,
+                    486,
+                    521
+                ]
+            }
+        },
+        "stringEndsWith (static)": {
+            "totalTime": {
+                "mean": 457.8,
+                "stdev": 5.946427498927402,
+                "samples": [
+                    452,
+                    454,
+                    454,
+                    461,
+                    468
+                ]
+            }
+        },
+        "stringIncludes (static)": {
+            "totalTime": {
+                "mean": 1437.4,
+                "stdev": 8.42852300228219,
+                "samples": [
+                    1454,
+                    1432,
+                    1433,
+                    1432,
+                    1436
+                ]
+            }
+        },
+        "stringIndexOf (static)": {
+            "totalTime": {
+                "mean": 1440.8,
+                "stdev": 0.7483314773547883,
+                "samples": [
+                    1442,
+                    1440,
+                    1441,
+                    1441,
+                    1440
+                ]
+            }
+        },
+        "stringLastIndexOf (static)": {
+            "totalTime": {
+                "mean": 1956.6,
+                "stdev": 7.418894796396563,
+                "samples": [
+                    1948,
+                    1966,
+                    1965,
+                    1952,
+                    1952
+                ]
+            }
+        },
+        "stringSplit (static)": {
+            "totalTime": {
+                "mean": 651.2,
+                "stdev": 2.3151673805580453,
+                "samples": [
+                    654,
+                    653,
+                    648,
+                    652,
+                    649
+                ]
+            }
+        },
+        "stringSlice (static)": {
+            "totalTime": {
+                "mean": 445.6,
+                "stdev": 25.84260048834095,
+                "samples": [
+                    427,
+                    427,
+                    487,
+                    465,
+                    422
+                ]
+            }
+        },
+        "stringPadStart (static)": {
+            "totalTime": {
+                "mean": 2294.4,
+                "stdev": 15.43502510525979,
+                "samples": [
+                    2280,
+                    2283,
+                    2283,
+                    2309,
+                    2317
+                ]
+            }
+        },
+        "stringPadEnd (static)": {
+            "totalTime": {
+                "mean": 2499.2,
+                "stdev": 252.8908064758385,
+                "samples": [
+                    2941,
+                    2627,
+                    2317,
+                    2308,
+                    2303
+                ]
+            }
+        },
+        "regExpMatch (static)": {
+            "totalTime": {
+                "mean": 1483.2,
+                "stdev": 9.019977827023745,
+                "samples": [
+                    1499,
+                    1484,
+                    1473,
+                    1484,
+                    1476
+                ]
+            }
+        },
+        "regExpSearch (static)": {
+            "totalTime": {
+                "mean": 1296.2,
+                "stdev": 25.97229292919668,
+                "samples": [
+                    1312,
+                    1312,
+                    1252,
+                    1323,
+                    1282
+                ]
+            }
+        },
+        "regExpToString (static)": {
+            "totalTime": {
+                "mean": 1326.6,
+                "stdev": 24.605690398767518,
+                "samples": [
+                    1351,
+                    1335,
+                    1323,
+                    1343,
+                    1281
+                ]
+            }
+        },
+        "stringReplace (static)": {
+            "totalTime": {
+                "mean": 1455.6,
+                "stdev": 17.2580416038437,
+                "samples": [
+                    1446,
+                    1465,
+                    1480,
+                    1458,
+                    1429
+                ]
+            }
+        },
+        "regExpReplace (static)": {
+            "totalTime": {
+                "mean": 851.8,
+                "stdev": 18.733926443754388,
+                "samples": [
+                    869,
+                    867,
+                    823,
+                    836,
+                    864
+                ]
+            }
+        },
+        "regExpFlags (static)": {
+            "totalTime": {
+                "mean": 870.6,
+                "stdev": 94.9475644763993,
+                "samples": [
+                    824,
+                    820,
+                    1060,
+                    835,
+                    814
+                ]
+            }
+        },
+        "regExpSplit (static)": {
+            "totalTime": {
+                "mean": 1200,
+                "stdev": 45.6902615444473,
+                "samples": [
+                    1288,
+                    1166,
+                    1163,
+                    1195,
+                    1188
+                ]
+            }
+        },
+        "numberArrayReadWrite (static)": {
+            "totalTime": {
+                "mean": 2132.8,
+                "stdev": 28.680306832389366,
+                "samples": [
+                    2181,
+                    2119,
+                    2145,
+                    2123,
+                    2096
+                ]
+            }
+        },
+        "protoCache (static)": {
+            "totalTime": {
+                "mean": 3595.8,
+                "stdev": 14.105318146004363,
+                "samples": [
+                    3607,
+                    3618,
+                    3586,
+                    3583,
+                    3585
+                ]
+            }
+        },
+        "micros/getNodeById.js (static)": {
+            "totalTime": {
+                "mean": 3941,
+                "stdev": 82.08836701993772,
+                "samples": [
+                    4086,
+                    3923,
+                    3892,
+                    3911,
+                    3893
+                ]
+            }
+        },
+        "micros/setInsert.js (static)": {
+            "totalTime": {
+                "mean": 2517.6,
+                "stdev": 30.41052449399714,
+                "samples": [
+                    2525,
+                    2541,
+                    2481,
+                    2491,
+                    2550
+                ]
+            }
+        },
+        "micros/stringify-number.js (static)": {
+            "totalTime": {
+                "mean": 1663.6,
+                "stdev": 17.271363582531635,
+                "samples": [
+                    1643,
+                    1667,
+                    1650,
+                    1686,
+                    1672
+                ]
+            }
+        },
+        "micros/typed-array-sort.js (static)": {
+            "totalTime": {
+                "mean": 20411.4,
+                "stdev": 136.823974507394,
+                "samples": [
+                    20348,
+                    20654,
+                    20323,
+                    20372,
+                    20360
+                ]
+            }
+        },
+        "jit-benches/idisp.js (static)": {
+            "totalTime": {
+                "mean": 1906,
+                "stdev": 2.7386127875258306,
+                "samples": [
+                    1909,
+                    1908,
+                    1906,
+                    1905,
+                    1902
+                ]
+            }
+        },
+        "jit-benches/idispn.js (static)": {
+            "totalTime": {
+                "mean": 450.8,
+                "stdev": 3.5637059362410923,
+                "samples": [
+                    447,
+                    454,
+                    452,
+                    454,
+                    447
+                ]
+            }
+        },
+        "many-subclasses/many.js (static)": {
+            "totalTime": {
+                "mean": 15996,
+                "stdev": 27.865749586185547,
+                "samples": [
+                    16022,
+                    16020,
+                    16003,
+                    15958,
+                    15977
+                ]
+            }
+        },
+        "many-subclasses/many-sh-1.js (static)": {
+            "totalTime": {
+                "mean": 2285.2,
+                "stdev": 9.833615815151617,
+                "samples": [
+                    2280,
+                    2279,
+                    2292,
+                    2299,
+                    2276
+                ]
+            }
+        },
+        "many-subclasses/many-sh-2.js (static)": {
+            "totalTime": {
+                "mean": 2387,
+                "stdev": 8.12403840463596,
+                "samples": [
+                    2380,
+                    2390,
+                    2377,
+                    2392,
+                    2396
+                ]
+            }
+        },
+        "many-subclasses/many-sh-3.js (static)": {
+            "totalTime": {
+                "mean": 2347.2,
+                "stdev": 2.863564212655271,
+                "samples": [
+                    2349,
+                    2347,
+                    2351,
+                    2344,
+                    2345
+                ]
+            }
+        },
+        "many-subclasses/many-sh-4.js (static)": {
+            "totalTime": {
+                "mean": 2346,
+                "stdev": 3.7416573867739413,
+                "samples": [
+                    2343,
+                    2343,
+                    2345,
+                    2347,
+                    2352
+                ]
+            }
+        },
+        "map-objects/map-objects-untyped.js (static)": {
+            "totalTime": {
+                "mean": 917.2,
+                "stdev": 13.989281611290838,
+                "samples": [
+                    910,
+                    909,
+                    914,
+                    911,
+                    942
+                ]
+            }
+        },
+        "map-objects/map-objects-typed.js (static)": {
+            "totalTime": {
+                "mean": 728.8,
+                "stdev": 4.658325879540846,
+                "samples": [
+                    728,
+                    732,
+                    725,
+                    735,
+                    724
+                ]
+            }
+        },
+        "map-strings/map-strings-untyped.js (static)": {
+            "totalTime": {
+                "mean": 1092.2,
+                "stdev": 3.7013511046643495,
+                "samples": [
+                    1094,
+                    1087,
+                    1097,
+                    1092,
+                    1091
+                ]
+            }
+        },
+        "map-strings/map-strings-typed.js (static)": {
+            "totalTime": {
+                "mean": 906.8,
+                "stdev": 12.59761882261882,
+                "samples": [
+                    904,
+                    907,
+                    896,
+                    928,
+                    899
+                ]
+            }
+        },
+        "nbody/original/nbody.js (static)": {
+            "totalTime": {
+                "mean": 449.2,
+                "stdev": 2.3874672772626644,
+                "samples": [
+                    448,
+                    449,
+                    446,
+                    452,
+                    451
+                ]
+            }
+        },
+        "nbody/fully-typed/nbody.js (static)": {
+            "totalTime": {
+                "mean": 135,
+                "stdev": 5.244044240850758,
+                "samples": [
+                    144,
+                    135,
+                    133,
+                    132,
+                    131
+                ]
+            }
+        },
+        "nbody/fully-typed/nbody.ts (static)": {
+            "totalTime": {
+                "mean": 449.2,
+                "stdev": 5.974947698515862,
+                "samples": [
+                    450,
+                    448,
+                    445,
+                    459,
+                    444
+                ]
+            }
+        },
+        "string-switch/plain/bench.js (static)": {
+            "totalTime": {
+                "mean": 5187,
+                "stdev": 306.51508935124224,
+                "samples": [
+                    5116,
+                    5157,
+                    5379,
+                    4736,
+                    5547
+                ]
+            }
+        },
+        "raytracer/original/bench-raytracer.js (static)": {
+            "totalTime": {
+                "mean": 1198.4,
+                "stdev": 23.458473948660853,
+                "samples": [
+                    1182,
+                    1204,
+                    1181,
+                    1237,
+                    1188
+                ]
+            }
+        },
+        "raytracer/original/raytracer.ts (static)": {
+            "totalTime": {
+                "mean": 1191.8,
+                "stdev": 4.147288270665545,
+                "samples": [
+                    1186,
+                    1189,
+                    1196,
+                    1194,
+                    1194
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/simple-stripped.js (static)": {
+            "totalTime": {
+                "mean": 1725.2,
+                "stdev": 6.906518659932803,
+                "samples": [
+                    1734,
+                    1727,
+                    1716,
+                    1721,
+                    1728
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/simple-lowered.js (static)": {
+            "totalTime": {
+                "mean": 1725.4,
+                "stdev": 9.016651263079881,
+                "samples": [
+                    1729,
+                    1728,
+                    1737,
+                    1714,
+                    1719
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/music-stripped.js (static)": {
+            "totalTime": {
+                "mean": 18.8,
+                "stdev": 0.4472135954999579,
+                "samples": [
+                    19,
+                    19,
+                    19,
+                    19,
+                    18
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/music-lowered.js (static)": {
+            "totalTime": {
+                "mean": 19.4,
+                "stdev": 0.5477225575051661,
+                "samples": [
+                    19,
+                    19,
+                    20,
+                    20,
+                    19
+                ]
+            }
+        },
+        "MiniReact/no-deps/stripped/MiniReact.js (static)": {
+            "totalTime": {
+                "mean": 4024.8,
+                "stdev": 33.529091845738975,
+                "samples": [
+                    3988,
+                    4053,
+                    4007,
+                    4009,
+                    4067
+                ]
+            }
+        },
+        "MiniReact/no-deps/MiniReact.js (static)": {
+            "totalTime": {
+                "mean": 3938.2,
+                "stdev": 8.983317872590282,
+                "samples": [
+                    3931,
+                    3940,
+                    3927,
+                    3945,
+                    3948
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/simple.js (static)": {
+            "totalTime": {
+                "mean": 1695.2,
+                "stdev": 14.75466028073842,
+                "samples": [
+                    1703,
+                    1700,
+                    1713,
+                    1682,
+                    1678
+                ]
+            }
+        },
+        "MiniReact/no-objects/out/music.js (static)": {
+            "totalTime": {
+                "mean": 19,
+                "stdev": 0.7071067811865476,
+                "samples": [
+                    19,
+                    19,
+                    20,
+                    19,
+                    18
+                ]
+            }
+        },
+        "widgets/simple-classes/widgets.js (static)": {
+            "totalTime": {
+                "mean": 1012,
+                "stdev": 5.830951894845301,
+                "samples": [
+                    1013,
+                    1011,
+                    1010,
+                    1021,
+                    1005
+                ]
+            }
+        },
+        "widgets/original/es5/widgets.js (static)": {
+            "totalTime": {
+                "mean": 2283.2,
+                "stdev": 9.959919678390985,
+                "samples": [
+                    2283,
+                    2294,
+                    2287,
+                    2285,
+                    2267
+                ]
+            }
+        },
+        "widgets/single-file/es5/widgets.js (static)": {
+            "totalTime": {
+                "mean": 2306.2,
+                "stdev": 45.367389168873274,
+                "samples": [
+                    2363,
+                    2278,
+                    2346,
+                    2284,
+                    2260
+                ]
+            }
+        }
+    },
+    "timestamp": "2026-05-13T16:12:36.264Z"
+}
