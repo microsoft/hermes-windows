@@ -51,11 +51,12 @@ pipelines:
         credscan:
           lastModifiedDate: 2025-02-25
         eslint:
-          lastModifiedDate: 2025-02-25
+          lastModifiedDate: 2026-05-13
         armory:
-          lastModifiedDate: 2025-02-25
+          lastModifiedDate: 2026-05-13
       binary:
         credscan:
           lastModifiedDate: 2025-02-25
         binskim:
-          lastModifiedDate: 2025-02-25
+          lastModifiedDate: 2026-05-13
+    usedNonDefaultBranch: true
