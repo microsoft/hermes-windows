@@ -281,26 +281,119 @@ TEST_P(JSITestExt, WeakReferences) {
   EXPECT_TRUE(wo.lock(rt).isUndefined());
 }
 
-// Regression test for a GC-safety bug in the Hermes Node-API
-// implementation: NodeApiReference::create() called
-// convertToWeakRootStorage() from the constructor *before* registering the
-// reference as a GC root via env.addReference(). When the underlying
-// JSObject was a JS Proxy (as is the case for Fabric instance handles in
-// React Native Windows), the call into addObjectFinalizer() ->
-// JSObject::defineOwnProperty() -> JSProxy::defineOwnProperty() allocated
-// inside that unrooted window. A collection triggered there would move
-// the JSObject; the still-unrooted value_ member retained a stale
-// pointer, and the subsequent dispatch into detail::slots() crashed
-// reading proxy->slots_, and the sibling weakRoot_ encoded a stale
-// target.
+TEST_P(JSITestExt, WeakObjectDoesNotAccessProxyProperties) {
+  Object proxy = eval(R"(
+    globalThis.__weakRefProxyTrapCount = 0;
+    new Proxy({tag: 'proxy'}, {
+      get(target, key, receiver) {
+        ++globalThis.__weakRefProxyTrapCount;
+        return Reflect.get(target, key, receiver);
+      },
+      getOwnPropertyDescriptor(target, key) {
+        ++globalThis.__weakRefProxyTrapCount;
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+      defineProperty(target, key, descriptor) {
+        ++globalThis.__weakRefProxyTrapCount;
+        return Reflect.defineProperty(target, key, descriptor);
+      }
+    });
+  )")
+                     .getObject(rt);
+
+  WeakObject weakProxy(rt, proxy);
+
+  EXPECT_EQ(eval("__weakRefProxyTrapCount").getNumber(), 0);
+  EXPECT_TRUE(weakProxy.lock(rt).isObject());
+  EXPECT_EQ(eval("__weakRefProxyTrapCount").getNumber(), 0);
+}
+
+#if !defined(JSI_V8_IMPL)
+TEST_P(JSITestExt, WeakObjectDoesNotAccessHostObjectProperties) {
+  class CountingHostObject : public HostObject {
+   public:
+    Value get(Runtime&, const PropNameID&) override {
+      ++getCount;
+      return Value();
+    }
+
+    void set(Runtime&, const PropNameID&, const Value&) override {
+      ++setCount;
+    }
+
+    std::vector<PropNameID> getPropertyNames(Runtime&) override {
+      ++propertyNamesCount;
+      return {};
+    }
+
+    int getCount{0};
+    int setCount{0};
+    int propertyNamesCount{0};
+  };
+
+  auto hostObject = std::make_shared<CountingHostObject>();
+  Object object = Object::createFromHostObject(rt, hostObject);
+
+  WeakObject weakObject(rt, object);
+
+  EXPECT_TRUE(weakObject.lock(rt).isObject());
+  EXPECT_EQ(hostObject->getCount, 0);
+  EXPECT_EQ(hostObject->setCount, 0);
+  EXPECT_EQ(hostObject->propertyNamesCount, 0);
+}
+#endif
+
+#if !defined(JSI_V8_IMPL) && JSI_VERSION >= 7
+TEST_P(JSITestExt, NativeStateDoesNotAccessHostObjectProperties) {
+  class CountingHostObject : public HostObject {
+   public:
+    Value get(Runtime&, const PropNameID&) override {
+      ++getCount;
+      return Value();
+    }
+
+    void set(Runtime&, const PropNameID&, const Value&) override {
+      ++setCount;
+    }
+
+    std::vector<PropNameID> getPropertyNames(Runtime&) override {
+      ++propertyNamesCount;
+      return {};
+    }
+
+    int getCount{0};
+    int setCount{0};
+    int propertyNamesCount{0};
+  };
+
+  class TestNativeState : public NativeState {};
+
+  auto hostObject = std::make_shared<CountingHostObject>();
+  Object object = Object::createFromHostObject(rt, hostObject);
+  auto state = std::make_shared<TestNativeState>();
+
+  object.setNativeState(rt, state);
+
+  EXPECT_TRUE(object.hasNativeState<TestNativeState>(rt));
+  EXPECT_EQ(object.getNativeState<TestNativeState>(rt), state);
+  EXPECT_EQ(hostObject->getCount, 0);
+  EXPECT_EQ(hostObject->setCount, 0);
+  EXPECT_EQ(hostObject->propertyNamesCount, 0);
+}
+#endif
+
+// Regression coverage for weak references to JS Proxy objects, as used for
+// Fabric instance handles in React Native Windows (see issue #343 and the
+// earlier GC-safety fix). Two invariants are checked:
 //
-// Reproduction strategy: between every WeakObject creation we keep the
-// proxy strongly reachable (in the previous iteration's `prev` slot) and
-// drop the local. Then we call gc() once per iteration. With
-// HERMESVM_SANITIZE_HANDLES=ON the GC compacts the OG, so the proxy gets
-// relocated. If value_ was unrooted at any point during convertToWeakRoot
-// Storage, lock() in the second pass returns a stale pointer that either
-// crashes or fails the property check.
+//   1. Creating a weak reference over a Proxy must not touch proxy properties.
+//      Node-API metadata now lives in a private own slot, so plain weak
+//      references never run a proxy trap or walk the prototype chain.
+//   2. The weak root must keep tracking a live proxy across repeated
+//      collections and relocation. The reference is registered as a GC root
+//      *before* any weak-storage conversion; without that ordering, a moving
+//      GC during creation would leave the stored value pointing at a freed
+//      cell and a later lock() would read stale proxy memory and crash.
 //
 // Note that with HadesGC the per-allocation movement promised by
 // HERMESVM_SANITIZE_HANDLES is approximated by forcing OG compaction
@@ -327,9 +420,8 @@ TEST_P(JSITestExt, WeakObjectOverProxyRegressionTest) {
         .asArray(rt)
         .setValueAtIndex(rt, i, proxy);
 
-    // The actual repro target: createWeakObject() over a Proxy. The
-    // implementation calls napi_create_reference(... initialRefCount=0 ...)
-    // inside its NodeApiScope destructor, which is the unsafe window.
+    // Create a plain user-owned weak reference without attaching finalizer
+    // metadata to the proxy.
     weakRefs.emplace_back(rt, proxy);
 
     // Force a collection. With sanitize-handles + HadesGC this forces an
@@ -337,12 +429,11 @@ TEST_P(JSITestExt, WeakObjectOverProxyRegressionTest) {
     eval("gc()");
   }
 
-  // Lock every weak ref. If value_ / weakRoot_ ever pointed at a stale
-  // location, this loop will either crash inside JSProxy::defineOwnProperty
-  // or return a target whose property reads come back wrong/undefined.
+  // Lock every weak ref and verify that relocation updated each weak root.
   for (size_t i = 0; i < weakRefs.size(); ++i) {
     Value locked = weakRefs[i].lock(rt);
-    ASSERT_TRUE(locked.isObject()) << "weakRefs[" << i << "] locked to non-object";
+    ASSERT_TRUE(locked.isObject())
+        << "weakRefs[" << i << "] locked to non-object";
     Value tag = locked.getObject(rt).getProperty(rt, "tag");
     ASSERT_TRUE(tag.isString()) << "weakRefs[" << i << "].tag is not a string";
     EXPECT_EQ(tag.getString(rt).utf8(rt), "rnw-proxy");

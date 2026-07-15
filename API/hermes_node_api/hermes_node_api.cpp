@@ -283,8 +283,6 @@ enum class NodeApiPredefined {
   allRejections,
   code,
   hostFunction,
-  napi_externalValue,
-  napi_typeTag,
   onHandled,
   onUnhandled,
   reject,
@@ -1512,10 +1510,23 @@ class NodeApiExternalValue final : public vm::DecoratedObject::Decoration {
     return finalizerHolder_.get();
   }
 
+  bool setTypeTag(const napi_type_tag &typeTag) noexcept {
+    if (typeTag_) {
+      return false;
+    }
+    typeTag_ = typeTag;
+    return true;
+  }
+
+  bool checkTypeTag(const napi_type_tag &typeTag) const noexcept {
+    return typeTag_ && *typeTag_ == typeTag;
+  }
+
  private:
   NodeApiRefCountedPtr<NodeApiPendingFinalizers> pendingFinalizers_;
   void *nativeData_{};
   std::unique_ptr<NodeApiFinalizerHolder> finalizerHolder_;
+  std::optional<napi_type_tag> typeTag_;
 };
 
 // Keep native data associated with a function.
@@ -1772,15 +1783,15 @@ class NodeApiReference : public NodeApiRefTracker {
       NodeApiReferenceOwnership ownership) noexcept {
     vm::GCScope scope{env.runtime()};
 
-    NodeApiReference *reference = new (std::nothrow)
-        NodeApiReference(env, value, initialRefCount, ownership);
+    NodeApiReference *reference =
+        new NodeApiReference(env, value, initialRefCount, ownership);
     env.addReference(reference);
     // Register the reference as a GC root *before* running
     // convertToWeakRootStorage, since that path triggers JS allocations
-    // (createExternalObject + defineOwnProperty on the underlying object,
-    // which may be a JSProxy). Without this ordering, value_ is not yet
-    // visible to NodeApiReference::getGCRoots and a moving GC inside
-    // addObjectFinalizer would leave it pointing at a freed cell.
+    // (addObjectFinalizer -> defineNewOwnProperty installs the Node-API
+    // metadata slot). Without this ordering, value_ is not yet visible to
+    // NodeApiReference::getGCRoots and a moving GC inside that path would
+    // leave it pointing at a freed cell.
     if (initialRefCount == 0) {
       reference->convertToWeakRootStorage(env);
     }
@@ -1798,10 +1809,12 @@ class NodeApiReference : public NodeApiRefTracker {
       return 0;
     }
     // Convert from weak to strong storage when transitioning from 0 to 1
-    if (++refCount_ == 1 && canBeWeak_) {
-      convertToValueStorage(env);
+    if (refCount_ == 0 && canBeWeak_) {
+      if (!convertToValueStorage(env)) {
+        return 0;
+      }
     }
-    return refCount_;
+    return ++refCount_;
   }
 
   uint32_t decRefCount(NodeApiEnvironment &env) noexcept {
@@ -1905,6 +1918,10 @@ class NodeApiReference : public NodeApiRefTracker {
     finalizerHolder_ = nullptr;
   }
 
+  virtual bool needsFinalizerTracking() const noexcept {
+    return ownership_ == NodeApiReferenceOwnership::kRuntime;
+  }
+
   void resetStorage() noexcept {
     isUsingWeakStorage_ = false;
     new (&value_) vm::PinnedHermesValue(vm::HermesValue::encodeEmptyValue());
@@ -1961,9 +1978,9 @@ class NodeApiReference : public NodeApiRefTracker {
     return !isUsingWeakStorage_ && value_.isEmpty();
   }
 
-  void convertToValueStorage(NodeApiEnvironment &env) noexcept {
+  bool convertToValueStorage(NodeApiEnvironment &env) noexcept {
     if (!isUsingWeakStorage_) {
-      return; // It is already a value storage.
+      return !isStorageEmpty();
     }
     ABORT_IF_FALSE(canBeWeak_ && "This value cannot use the weak storage.");
 
@@ -1986,6 +2003,7 @@ class NodeApiReference : public NodeApiRefTracker {
       new (&value_) vm::PinnedHermesValue(vm::HermesValue::encodeEmptyValue());
     }
     isUsingWeakStorage_ = false;
+    return lockedObject != nullptr;
   }
 
   // Accessible to the derived classes' static create() functions, which
@@ -2011,16 +2029,16 @@ class NodeApiReference : public NodeApiRefTracker {
 
     ABORT_IF_FALSE(value_.isObject() && "Expected an Object");
 
-    // Check if finalizerHolder_ is not null and add directly if possible
-    if (finalizerHolder_ != nullptr) {
-      // Reuse existing finalizer holder - add this reference directly
-      finalizerHolder_->addFinalizer(this);
-    } else {
-      // Call addObjectFinalizer to get the NodeApiFinalizerHolder and set
-      // backlink
-      NodeApiExternalValue *externalValue = nullptr;
-      if (env.addObjectFinalizer(&value_, this, &externalValue) == napi_ok &&
-          externalValue) {
+    if (needsFinalizerTracking()) {
+      if (finalizerHolder_ != nullptr) {
+        finalizerHolder_->addFinalizer(this);
+      } else {
+        // addObjectFinalizer installs the Node-API metadata in a private own
+        // slot. It has no recoverable failure: the only failure path is
+        // allocation, and Hermes aborts on OOM like every other allocation.
+        NodeApiExternalValue *externalValue = nullptr;
+        env.addObjectFinalizer(&value_, this, &externalValue);
+        ABORT_IF_FALSE(externalValue != nullptr);
         finalizerHolder_ = externalValue->getFinalizerHolder();
       }
     }
@@ -2039,9 +2057,7 @@ class NodeApiReference : public NodeApiRefTracker {
       vm::JSObject *lockedObject =
           weakRoot_.get(env.runtime(), env.runtime().getHeap());
       if (lockedObject == nullptr) {
-        // TODO: Should we return an empty value here?
-        // The weakly referenced object has been collected; return undefined.
-        return napiValue(&env.UndefinedHermesValue);
+        return nullptr;
       }
       rawValue = vm::HermesValue::encodeObjectValue(lockedObject);
     } else {
@@ -2083,9 +2099,8 @@ class NodeApiReferenceWithData final : public NodeApiReference {
       uint32_t initialRefCount,
       NodeApiReferenceOwnership ownership,
       void *nativeData) noexcept {
-    NodeApiReferenceWithData *reference =
-        new (std::nothrow) NodeApiReferenceWithData(
-            env, value, initialRefCount, ownership, nativeData);
+    NodeApiReferenceWithData *reference = new NodeApiReferenceWithData(
+        env, value, initialRefCount, ownership, nativeData);
     env.addReference(reference);
     if (initialRefCount == 0) {
       reference->convertToWeakRootStorage(env);
@@ -2128,15 +2143,14 @@ class NodeApiReferenceWithFinalizer final : public NodeApiReference {
       void *nativeData,
       napi_finalize finalizeCallback,
       void *finalizeHint) noexcept {
-    NodeApiReferenceWithFinalizer *reference =
-        new (std::nothrow) NodeApiReferenceWithFinalizer(
-            env,
-            value,
-            initialRefCount,
-            ownership,
-            nativeData,
-            finalizeCallback,
-            finalizeHint);
+    NodeApiReferenceWithFinalizer *reference = new NodeApiReferenceWithFinalizer(
+        env,
+        value,
+        initialRefCount,
+        ownership,
+        nativeData,
+        finalizeCallback,
+        finalizeHint);
     env.addFinalizingReference(reference);
     if (initialRefCount == 0) {
       reference->convertToWeakRootStorage(env);
@@ -2152,6 +2166,11 @@ class NodeApiReferenceWithFinalizer final : public NodeApiReference {
   // Override to call user finalizer
   void callUserFinalizer() noexcept override {
     finalizer_.callFinalizer(env_);
+  }
+
+  bool needsFinalizerTracking() const noexcept override {
+    return finalizer_.hasFinalizer() ||
+        NodeApiReference::needsFinalizerTracking();
   }
 
   void invokeFinalizerFromGC() noexcept override {
@@ -2199,9 +2218,8 @@ class NodeApiTrackedFinalizer final : public NodeApiRefTracker {
       void *nativeData,
       napi_finalize finalizeCallback,
       void *finalizeHint) noexcept {
-    NodeApiTrackedFinalizer *finalizer =
-        new (std::nothrow) NodeApiTrackedFinalizer(
-            env, nativeData, finalizeCallback, finalizeHint);
+    NodeApiTrackedFinalizer *finalizer = new NodeApiTrackedFinalizer(
+        env, nativeData, finalizeCallback, finalizeHint);
     return finalizer;
   }
 
@@ -2895,18 +2913,6 @@ NodeApiEnvironment::NodeApiEnvironment(
       vm::HermesValue::encodeSymbolValue(
           runtime_.getIdentifierTable().registerLazyIdentifier(
               runtime_, vm::createASCIIRef("hostFunction"))));
-  setPredefinedProperty(
-      NodeApiPredefined::napi_externalValue,
-      vm::HermesValue::encodeSymbolValue(
-          runtime_.getIdentifierTable().createNotUniquedLazySymbol(
-              vm::createASCIIRef(
-                  "node_api.externalValue.735e14c9-354f-489b-9f27-02acbc090975"))));
-  setPredefinedProperty(
-      NodeApiPredefined::napi_typeTag,
-      vm::HermesValue::encodeSymbolValue(
-          runtime_.getIdentifierTable().createNotUniquedLazySymbol(
-              vm::createASCIIRef(
-                  "node_api.typeTag.026ae0ec-b391-49da-a935-0cab733ab615"))));
   setPredefinedProperty(
       NodeApiPredefined::onHandled,
       vm::HermesValue::encodeSymbolValue(
@@ -3674,32 +3680,40 @@ NodeApiExternalValue *NodeApiEnvironment::getExternalObjectValue(
   return nullptr;
 }
 
-// Get the NodeApiExternalValue from the object's property.
+// Get the NodeApiExternalValue from the object's private metadata slot.
 // If it is not found and the ifNotFound parameter is
-// NodeApiIfNotFound::ThenCreate, then create the property with the new
+// NodeApiIfNotFound::ThenCreate, then create the slot with the new
 // NodeApiExternalValue and return it.
 napi_status NodeApiEnvironment::getExternalPropertyValue(
     vm::Handle<vm::JSObject> object,
     NodeApiIfNotFound ifNotFound,
     NodeApiExternalValue **result) noexcept {
   NodeApiExternalValue *externalValue{};
-  napi_value napiExternalValue;
-  napi_status status = getPredefinedProperty(
-      object, NodeApiPredefined::napi_externalValue, &napiExternalValue);
-  if (status == napi_ok &&
-      vm::vmisa<vm::DecoratedObject>(*phv(napiExternalValue))) {
-    externalValue = getExternalObjectValue(*phv(napiExternalValue));
+  vm::SymbolID dataSymbol =
+      vm::Predefined::getSymbolID(vm::Predefined::InternalPropertyNodeApiData);
+  auto desc = vm::HiddenClass::findPropertyNoAlloc(
+      object->getClass(runtime_), runtime_, dataSymbol);
+
+  if (desc) {
+    RETURN_STATUS_IF_FALSE(desc->flags.privateName, napi_generic_failure);
+    vm::NoAllocScope noAlloc{runtime_};
+    vm::HermesValue propertyValue =
+        vm::JSObject::getNamedSlotValueUnsafe(*object, runtime_, *desc)
+            .unboxToHV(runtime_);
+    RETURN_STATUS_IF_FALSE(
+        vm::vmisa<vm::DecoratedObject>(propertyValue), napi_generic_failure);
+    externalValue = getExternalObjectValue(propertyValue);
     RETURN_STATUS_IF_FALSE(externalValue != nullptr, napi_generic_failure);
   } else if (ifNotFound == NodeApiIfNotFound::ThenCreate) {
     vm::Handle<vm::DecoratedObject> decoratedObj =
         createExternalObject(nullptr, &externalValue);
-    CHECK_STATUS(defineOwnProperty(
+    vm::ExecutionStatus status = vm::JSObject::defineNewOwnProperty(
         object,
-        getPredefinedSymbol(NodeApiPredefined::napi_externalValue),
-        vm::DefinePropertyFlags::getNewNonEnumerableFlags(),
-        decoratedObj,
-        nullptr,
-        vm::PropOpFlags().plusInternalForce()));
+        runtime_,
+        dataSymbol,
+        vm::PropertyFlags::privateFieldPropertyFlags(),
+        decoratedObj);
+    CHECK_STATUS(checkExecutionStatus(status));
   }
   *result = externalValue;
   return clearLastNativeError();
@@ -6205,7 +6219,10 @@ napi_status NAPI_CDECL napi_create_external(
   return env->makeResultValue(decoratedObj.getHermesValue(), result);
 }
 
-// TODO: Update the tag implementation per new code in Node.js
+// Stores a type tag on an object or external value. For an external value the
+// tag is stored inline on its NodeApiExternalValue; for any other object it is
+// stored in the object's private Node-API metadata slot. This mirrors Node.js,
+// which tags its ExternalWrapper inline and uses a private property otherwise.
 napi_status NAPI_CDECL napi_type_tag_object(
     napi_env env,
     napi_value object,
@@ -6224,31 +6241,18 @@ napi_status NAPI_CDECL napi_type_tag_object(
   vm::Handle<vm::JSObject> objValue =
       env->runtime_.makeHandle<vm::JSObject>(*cr);
 
-  // Fail if the tag already exists
-  bool hasTag{};
-  CHECK_STATUS(env->hasPredefinedProperty(
-      objValue, NodeApiPredefined::napi_typeTag, &hasTag));
-  RETURN_STATUS_IF_FALSE(!hasTag, napi_invalid_arg);
-
-  napi_value tagBuffer;
-  void *tagBufferData;
-  CHECK_STATUS(napi_create_arraybuffer(
-      env, sizeof(napi_type_tag), &tagBufferData, &tagBuffer));
-
-  const uint8_t *source = reinterpret_cast<const uint8_t *>(typeTag);
-  uint8_t *dest = reinterpret_cast<uint8_t *>(tagBufferData);
-  std::copy(source, source + sizeof(napi_type_tag), dest);
-
-  return env->defineOwnProperty(
-      objValue,
-      env->getPredefinedSymbol(NodeApiPredefined::napi_typeTag),
-      vm::DefinePropertyFlags::getNewNonEnumerableFlags(),
-      asHandle(tagBuffer),
-      nullptr,
-      vm::PropOpFlags().plusInternalForce());
+  NodeApiExternalValue *externalValue =
+      env->getExternalObjectValue(*phv(object));
+  if (externalValue == nullptr) {
+    CHECK_STATUS(env->getExternalPropertyValue(
+        objValue, NodeApiIfNotFound::ThenCreate, &externalValue));
+  }
+  RETURN_STATUS_IF_FALSE(externalValue->setTypeTag(*typeTag), napi_invalid_arg);
+  return env->clearLastNativeError();
 }
 
-// TODO: match Node.js code for tags
+// Compares the type tag previously set by napi_type_tag_object. Sets *result to
+// false when the object was never tagged or the tags differ.
 napi_status NAPI_CDECL napi_check_object_type_tag(
     napi_env env,
     napi_value object,
@@ -6269,23 +6273,17 @@ napi_status NAPI_CDECL napi_check_object_type_tag(
   vm::Handle<vm::JSObject> objValue =
       env->runtime_.makeHandle<vm::JSObject>(*cr);
 
-  napi_value tagBufferValue;
-  CHECK_STATUS(env->getPredefinedProperty(
-      objValue, NodeApiPredefined::napi_typeTag, &tagBufferValue));
-  vm::JSArrayBuffer *tagBuffer =
-      vm::dyn_vmcast_or_null<vm::JSArrayBuffer>(*phv(tagBufferValue));
-  if (tagBuffer == nullptr) {
+  NodeApiExternalValue *externalValue =
+      env->getExternalObjectValue(*phv(object));
+  if (externalValue == nullptr) {
+    CHECK_STATUS(env->getExternalPropertyValue(
+        objValue, NodeApiIfNotFound::ThenReturnNull, &externalValue));
+  }
+  if (externalValue == nullptr) {
     *result = false;
     return env->clearLastNativeError();
   }
-
-  const uint8_t *source = reinterpret_cast<const uint8_t *>(typeTag);
-  const uint8_t *tagBufferData = tagBuffer->getDataBlock();
-  *result = std::equal(
-      source,
-      source + sizeof(napi_type_tag),
-      tagBufferData,
-      tagBufferData + sizeof(napi_type_tag));
+  *result = externalValue->checkTypeTag(*typeTag);
   return env->clearLastNativeError();
 }
 
@@ -6367,6 +6365,8 @@ napi_reference_unref(napi_env env, napi_ref ref, uint32_t *result) {
   CHECK_STATUS(checkGCPreconditions(env));
   CHECK_POSTCONDITIONS(env, /*valueStackDelta:*/ 0);
   CHECK_ARG(ref);
+  RETURN_STATUS_IF_FALSE(
+      asReference(ref)->refCount() != 0, napi_generic_failure);
   uint32_t refCount = asReference(ref)->decRefCount(*env);
   if (result != nullptr) {
     *result = refCount;
@@ -6682,14 +6682,13 @@ napi_status NAPI_CDECL napi_create_external_arraybuffer(
             basicFinalize(finalizeCallback),
             finalizeHint);
     vm::JSArrayBuffer::setExternalDataBlock(
-            env->runtime_,
-            buffer,
-            reinterpret_cast<uint8_t *>(externalData),
-            byteLength,
-            std::shared_ptr<void>(externalBuffer.release(),
-                [](void *ptr) {
-                  delete reinterpret_cast<NodeApiExternalBuffer *>(ptr);
-                }));
+        env->runtime_,
+        buffer,
+        reinterpret_cast<uint8_t *>(externalData),
+        byteLength,
+        std::shared_ptr<void>(externalBuffer.release(), [](void *ptr) {
+          delete reinterpret_cast<NodeApiExternalBuffer *>(ptr);
+        }));
   }
   return env->makeResultValue(buffer.getHermesValue(), result);
 }
