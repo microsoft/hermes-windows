@@ -122,9 +122,16 @@ hoost_ontop_fcontext proc BOOST_CONTEXT_EXPORT
     ; X0 == FCTX, X1 == DATA
     mov x0, x4
 
-    ; skip pc
-    ; restore stack from GP + FPU
-    add  sp, sp, #0xc0
+    ; skip pc (not read into a register -- ret targets X2 instead), but still
+    ; deallocate the full 0xd0 saved-context block (matching the prolog and
+    ; hoost_jump_fcontext's epilog). The ontop-function (X2) is entered via a
+    ; tail-jump, not a call, and its own eventual `ret` returns to the target
+    ; context's original LR expecting SP restored to the target's pre-suspend
+    ; value. Deallocating only 0xc0 here leaves SP 0x10 bytes below that value,
+    ; corrupting the target context's stack frame (observed as a /GS
+    ; __security_check_cookie FAST_FAIL, STATUS_STACK_BUFFER_OVERRUN /
+    ; 0xc0000409, on resume; see also related _CxxFrameHandler3 unwind aborts).
+    add  sp, sp, #0xd0
 
     ; jump to ontop-function
     ret x2
