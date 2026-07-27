@@ -130,11 +130,13 @@ extends:
           value: ${{ parameters.MustPublish }}
 
         steps:
-          # Node.js version >= 22.x is required to handle args in JS scripts.
+          # Node.js >= 22 is required to handle args in JS scripts. Use 24.x: it is
+          # the version installed on the build images, so the task resolves it
+          # locally instead of downloading a different one.
         - task: UseNode@1
-          displayName: Use Node.js 22.x
+          displayName: Use Node.js 24.x
           inputs:
-            version: 22.x
+            version: 24.x
 
           # Compute the semanticVersion and fileVersion, and then update the build title.
         - script: node .ado\scripts\setVersionNumber.js
@@ -194,11 +196,13 @@ extends:
           - ${{ if eq(MatrixEntry.UseArm64Pool, true) }}:
             - template: /.ado/ensure-node10-shim.yml@self
 
-            # Node.js version >= 22.x is required to handle args in JS scripts.
+            # Node.js >= 22 is required to handle args in JS scripts. Use 24.x:
+            # it is the version installed on the build images, so the task
+            # resolves it locally instead of downloading a different one.
           - task: UseNode@1
-            displayName: Use Node.js 22.x
+            displayName: Use Node.js 24.x
             inputs:
-              version: 22.x
+              version: 24.x
 
             # Invoke the build specific for the target platform.
           - script: >
@@ -340,11 +344,13 @@ extends:
             artifactName: published-packages
 
         steps:
-          # Node.js version >= 22.x is required to handle args in JS scripts.
+          # Node.js >= 22 is required to handle args in JS scripts. Use 24.x: it is
+          # the version installed on the build images, so the task resolves it
+          # locally instead of downloading a different one.
         - task: UseNode@1
-          displayName: Use Node.js 22.x
+          displayName: Use Node.js 24.x
           inputs:
-            version: 22.x
+            version: 24.x
 
           # The substitution tags in the nuspec require that we use at least NuGet 4.6.
         - task: NuGetToolInstaller@0
