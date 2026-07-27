@@ -1259,13 +1259,18 @@ function setupJSTestEnvPaths() {
 
   // Helper function to find executable path using 'where'
   function findExecutable(name) {
+    return findExecutables(name)[0] ?? null;
+  }
+
+  // The 'where' command returns a list of paths, one per line.
+  function findExecutables(name) {
     try {
-      // The 'where' command returns a list of paths, one per line. We want the first one.
-      const output = execSync(`where ${name}`, { encoding: "utf8" });
-      const firstPath = output.split("\r\n")[0];
-      return firstPath ? path.dirname(firstPath) : null;
+      return execSync(`where ${name}`, { encoding: "utf8" })
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((exePath) => path.dirname(exePath));
     } catch {
-      return null;
+      return [];
     }
   }
 
@@ -1273,19 +1278,24 @@ function setupJSTestEnvPaths() {
     console.warn(`Warning: ${message}`);
   }
 
-  // Add Git Bash to PATH for LIT tests
+  // Add Git Bash to PATH for LIT tests. The build agent's own bundled Git has
+  // no bash.exe, so consider every Git on PATH plus the default install dirs.
   (function () {
-    const gitDir = findExecutable("git.exe");
-    if (!gitDir) {
-      return showWarning("Git (git.exe) not found in PATH.");
+    const candidates = [
+      ...findExecutables("git.exe").map((dir) =>
+        path.join(path.dirname(dir), "bin"),
+      ),
+      path.join(process.env.ProgramFiles ?? "", "Git", "bin"),
+      path.join(process.env["ProgramFiles(x86)"] ?? "", "Git", "bin"),
+    ];
+    const gitBashDir = candidates.find((dir) =>
+      fs.existsSync(path.join(dir, "bash.exe")),
+    );
+    if (!gitBashDir) {
+      return showWarning("Git Bash (bash.exe) not found. LIT tests require it.");
     }
-    console.log(`Found Git at: ${gitDir}`);
-    const gitBashDir = gitDir.replace("cmd", "bin");
-    if (!fs.existsSync(path.join(gitBashDir, "bash.exe"))) {
-      return showWarning(`Git Bash (bash.exe) not found at: ${gitBashDir}`);
-    }
+    console.log(`Found Git Bash at: ${gitBashDir}`);
     if (!process.env.PATH.includes(gitBashDir)) {
-      console.log(`Adding Git Bash directory to PATH: ${gitBashDir}`);
       process.env.PATH = `${gitBashDir};${process.env.PATH}`;
     }
   })();
