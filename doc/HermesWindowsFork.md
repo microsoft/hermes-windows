@@ -145,11 +145,23 @@ When adding or modifying Windows-specific features:
   - Git for Windows
   - Powershell 7 (included in azure devbox)
     - `winget install Microsoft.Powershell` to install if not present
-  - Visual Studio 2026, but currently using v143 build tools
-    - Open vsinstaller, click `modify` in 2026 followed by `individual components`, install in total 4 packages:
-      - C++ AST for latest v143 build tools with Spectre Mitigation (ARM64)/(x86 & x64)
-      - MSVC v143 - VS 2022 C++ ARM64/ARM64EC//x64/x86 Spectre-mitigated libs
-      - After upgrading to v145 package names are completely different
+  - Visual Studio 2026 (required; Visual Studio 2022 is not supported)
+    - The build script locates Visual Studio with `vswhere -version 18` and uses
+      its MSVC 14.5x toolset and bundled Clang 22.
+    - Open vsinstaller, click `modify` on 2026 followed by `individual components`
+      and install, in addition to the C++ desktop workload:
+      - `C++ Clang Compiler for Windows`
+        (`Microsoft.VisualStudio.Component.VC.Llvm.Clang`)
+      - `MSBuild support for LLVM (clang-cl) toolset`
+        (`Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset`)
+      - MSVC ARM64 build tools
+        (`Microsoft.VisualStudio.Component.VC.Tools.ARM64`)
+      - Spectre-mitigated runtime libraries for every target you build
+        (`...VC.Runtimes.x86.x64.Spectre`, `...VC.Runtimes.ARM64.Spectre`,
+        `...VC.Runtimes.ARM64EC.Spectre`) — the build script always passes
+        `-vcvars_spectre_libs=spectre`
+      - C++ ATL with Spectre mitigations (`...VC.ATL.Spectre`,
+        `...VC.ATL.ARM64.Spectre`)
   - Visual Studio Code
     - Install `CMake Tools` (by Microsoft) and `C++ TestMate`
 

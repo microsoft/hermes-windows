@@ -34,7 +34,11 @@ inline void asm_volatile_memory() {
 }
 
 inline void asm_volatile_pause() {
-#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+// ARM64EC defines _M_X64 / FOLLY_X64 for x64 source compatibility, but the code
+// generated is AArch64, so emit the AArch64 "yield" rather than "pause".
+#if defined(__arm64ec__)
+  asm volatile("yield");
+#elif defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
   ::_mm_pause();
 #elif defined(__i386__) || FOLLY_X64 || (__mips_isa_rev > 1)
   asm volatile("pause");

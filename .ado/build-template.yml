@@ -44,12 +44,23 @@ parameters:
   - Name: win32_arm64
     TargetCPU: arm64
     BuildUWP: --no-uwp
+    CanRunTest: true
+    # ARM64 binaries cannot execute on an x64 agent: build.js would only
+    # cross-compile the shared libraries and skip every test. Run this cell on
+    # the native ARM64 pool instead. The UWP ARM64 cell stays on x64 - UWP
+    # binaries are not executed by the pipeline on any architecture.
+    UseArm64Pool: true
     # ARM64 "Emulation Compatible" is to run ARM64 Hermes DLL in a x64 app
     # on Windows ARM64 in emulation mode.
     # See: https://learn.microsoft.com/en-us/windows/arm/arm64ec
   - Name: win32_arm64ec
     TargetCPU: arm64ec
     BuildUWP: --no-uwp
+    # ARM64EC code executes natively on Windows on ARM, so the ARM64 pool builds
+    # this cell as a native build: the test binaries are themselves ARM64EC and
+    # load the ARM64EC hermes.dll / hermes-icu.dll that ship in the package.
+    CanRunTest: true
+    UseArm64Pool: true
 
 resources:
   repositories:
@@ -69,8 +80,13 @@ extends:
     settings:
       ${{ if eq(parameters.MustPublish, false) }}:
         skipBuildTagsForGitHubPullRequests: true
+      # fabric-internal-pool-large hosts several images, so the image must be
+      # named explicitly. windows-2025-1espt provides the Visual Studio 2026 and
+      # Clang toolset the build requires. Jobs inherit this pool unless they
+      # declare their own. See .ado/image/README.md.
     pool:
       name: fabric-internal-pool-large
+      demands: ImageOverride -equals windows-2025-1espt
     sdl:
       binskim:
         analyzeTarget: |
@@ -137,6 +153,15 @@ extends:
 
           timeoutInMinutes: 300
 
+          # Cells whose target architecture cannot run on an x64 agent build and
+          # test natively on the ARM64 managed-image pool. windows-2025-1espt-arm64
+          # is a single-image pool, so it takes no ImageOverride demand. All other
+          # cells inherit the top-level fabric-internal-pool-large pool, which
+          # pins the windows-2025-1espt image. See .ado/image/README.md.
+          ${{ if eq(MatrixEntry.UseArm64Pool, true) }}:
+            pool:
+              name: windows-2025-1espt-arm64
+
           variables:
           - name: semanticVersion
             value: $[ dependencies.Set_Versions.outputs['setVersions.semanticVersion'] ]
@@ -162,6 +187,13 @@ extends:
               targetPath: $(Build.StagingDirectory)\out\pkg-staging
 
           steps:
+            # ARM64 agents ship no externals\node10, but the mandatory 1ES
+            # build-retention post-job still runs on the Node 10 handler; shim
+            # node10 to the image's Node so that post-job does not fail. It must
+            # come first, before any work on the agent.
+          - ${{ if eq(MatrixEntry.UseArm64Pool, true) }}:
+            - template: /.ado/ensure-node10-shim.yml@self
+
             # Node.js version >= 22.x is required to handle args in JS scripts.
           - task: UseNode@1
             displayName: Use Node.js 22.x

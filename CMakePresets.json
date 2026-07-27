@@ -54,10 +54,10 @@
       }
     },
     {
-      "name": "base-vs2022-msvc",
+      "name": "base-vs2026-msvc",
       "hidden": true,
       "inherits": "base-common",
-      "generator": "Visual Studio 17 2022"
+      "generator": "Visual Studio 18 2026"
     },
     {
       "name": "ninja-clang-debug",
@@ -100,11 +100,11 @@
       }
     },
     {
-      "name": "vs2022-msvc-x64",
-      "inherits": "base-vs2022-msvc",
-      "displayName": "Visual Studio 2022 + MSVC (x64)",
-      "description": "Visual Studio 2022 generator with MSVC toolset (x64)",
-      "binaryDir": "${sourceDir}/build/vs2022-msvc-x64",
+      "name": "vs2026-msvc-x64",
+      "inherits": "base-vs2026-msvc",
+      "displayName": "Visual Studio 2026 + MSVC (x64)",
+      "description": "Visual Studio 2026 generator with MSVC toolset (x64)",
+      "binaryDir": "${sourceDir}/build/vs2026-msvc-x64",
       "architecture": {
         "value": "x64",
         "strategy": "set"
@@ -117,11 +117,11 @@
       }
     },
     {
-      "name": "vs2022-msvc-x86",
-      "inherits": "base-vs2022-msvc",
-      "displayName": "Visual Studio 2022 + MSVC (x86)",
-      "description": "Visual Studio 2022 generator with MSVC toolset (x86)",
-      "binaryDir": "${sourceDir}/build/vs2022-msvc-x86",
+      "name": "vs2026-msvc-x86",
+      "inherits": "base-vs2026-msvc",
+      "displayName": "Visual Studio 2026 + MSVC (x86)",
+      "description": "Visual Studio 2026 generator with MSVC toolset (x86)",
+      "binaryDir": "${sourceDir}/build/vs2026-msvc-x86",
       "architecture": {
         "value": "x86",
         "strategy": "set"
@@ -134,11 +134,11 @@
       }
     },
     {
-      "name": "vs2022-msvc-arm64",
-      "inherits": "base-vs2022-msvc",
-      "displayName": "Visual Studio 2022 + MSVC (ARM64)",
-      "description": "Visual Studio 2022 generator with MSVC toolset (ARM64)",
-      "binaryDir": "${sourceDir}/build/vs2022-msvc-arm64",
+      "name": "vs2026-msvc-arm64",
+      "inherits": "base-vs2026-msvc",
+      "displayName": "Visual Studio 2026 + MSVC (ARM64)",
+      "description": "Visual Studio 2026 generator with MSVC toolset (ARM64)",
+      "binaryDir": "${sourceDir}/build/vs2026-msvc-arm64",
       "architecture": {
         "value": "ARM64",
         "strategy": "set"
@@ -156,11 +156,11 @@
     { "name": "ninja-clang-release", "configurePreset": "ninja-clang-release" },
     { "name": "ninja-msvc-debug", "configurePreset": "ninja-msvc-debug" },
     { "name": "ninja-msvc-release", "configurePreset": "ninja-msvc-release" },
-    { "name": "vs2022-msvc-x64-debug", "configurePreset": "vs2022-msvc-x64", "configuration": "Debug" },
-    { "name": "vs2022-msvc-x64-release", "configurePreset": "vs2022-msvc-x64", "configuration": "Release" },
-    { "name": "vs2022-msvc-x86-debug", "configurePreset": "vs2022-msvc-x86", "configuration": "Debug" },
-    { "name": "vs2022-msvc-x86-release", "configurePreset": "vs2022-msvc-x86", "configuration": "Release" },
-    { "name": "vs2022-msvc-arm64-debug", "configurePreset": "vs2022-msvc-arm64", "configuration": "Debug" },
-    { "name": "vs2022-msvc-arm64-release", "configurePreset": "vs2022-msvc-arm64", "configuration": "Release" }
+    { "name": "vs2026-msvc-x64-debug", "configurePreset": "vs2026-msvc-x64", "configuration": "Debug" },
+    { "name": "vs2026-msvc-x64-release", "configurePreset": "vs2026-msvc-x64", "configuration": "Release" },
+    { "name": "vs2026-msvc-x86-debug", "configurePreset": "vs2026-msvc-x86", "configuration": "Debug" },
+    { "name": "vs2026-msvc-x86-release", "configurePreset": "vs2026-msvc-x86", "configuration": "Release" },
+    { "name": "vs2026-msvc-arm64-debug", "configurePreset": "vs2026-msvc-arm64", "configuration": "Debug" },
+    { "name": "vs2026-msvc-arm64-release", "configurePreset": "vs2026-msvc-arm64", "configuration": "Release" }
   ]
 }

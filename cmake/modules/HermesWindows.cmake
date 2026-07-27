@@ -236,6 +236,21 @@ function(hermes_windows_configure_build)
     set(HERMES_MSVC_ARM64 ON)
   endif()
 
+  # ARM64EC code can reference x64 SSE intrinsics that the ARM64 CPU cannot
+  # execute directly -- for example _mm_getcsr / _mm_setcsr, which the UCRT
+  # floating-point environment code (_fenvutils.obj, ieee.obj) uses. Those are
+  # emulated by softintrin.lib. MSVC emits a /DEFAULTLIB:softintrin directive
+  # for ARM64EC automatically; Clang does not, so link the library explicitly,
+  # otherwise every link fails with "undefined symbol: _mm_getcsr (EC symbol)".
+  # This goes into CMAKE_*_LINKER_FLAGS rather than HERMES_EXTRA_LINKER_FLAGS
+  # so that CMake's configure-time try_compile checks (for example llvh's
+  # CheckAtomic) link as well.
+  if(HERMES_WINDOWS_TARGET_PLATFORM STREQUAL "arm64ec" AND
+     "${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lsoftintrin")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lsoftintrin")
+  endif()
+
   # Configure compiler flags
   if("${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
     hermes_windows_configure_clang_flags()
@@ -252,6 +267,8 @@ function(hermes_windows_configure_build)
   
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}" PARENT_SCOPE)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" PARENT_SCOPE)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}" PARENT_SCOPE)
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}" PARENT_SCOPE)
   set(HERMES_EXTRA_LINKER_FLAGS "${HERMES_EXTRA_LINKER_FLAGS}" PARENT_SCOPE)
 
   message(STATUS "Hermes Windows build configuration complete")

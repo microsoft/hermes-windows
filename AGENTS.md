@@ -87,7 +87,21 @@ script. Use the `.\dev` PowerShell wrapper from the repository root.
 - `x64` (default) — uses Clang
 - `x86` — uses Clang
 - `arm64` — uses Clang
-- `arm64ec` — uses MSVC (Clang not supported yet)
+- `arm64ec` — uses Clang
+
+All Windows targets build with the Clang that ships in Visual Studio 2026; pass
+`--msvc` to use MSVC instead. Visual Studio 2026 is required (the build script
+locates it with `vswhere -version 18`).
+
+ARM64EC has two toolchain quirks worth knowing:
+
+- It advertises the x64 predefined macros (`__x86_64__`, `_M_X64`, `__SSE2__`,
+  ...) so that x64-targeting source keeps compiling, but Clang generates AArch64
+  code and provides no x86 intrinsics. Code guarded on those macros must also
+  check `!defined(__arm64ec__)`; the NEON path is the right one there.
+- It links `softintrin.lib` (added in `HermesWindows.cmake`) for the x64
+  intrinsics the UCRT references. Without it every link fails with
+  `undefined symbol: _mm_getcsr (EC symbol)`.
 
 ### Build Options
 
@@ -124,6 +138,19 @@ The main build script is `.ado/scripts/build.js`. It handles:
 - Visual Studio environment setup via `vcvarsall.bat`
 - CMake configuration with correct flags per platform
 - Building, testing, packaging, and BinSkim validation
+
+### Continuous Integration
+
+`.ado/build-template.yml` drives both the PR and the CI pipelines. x64, x86 and
+all UWP cells run on the x64 agent image; the `win32_arm64` and `win32_arm64ec`
+cells run on a native ARM64 agent pool so that they build the full target set and
+run their tests instead of only cross-compiling the shared libraries. Both
+architectures run the C++ unit tests, the JS regression tests and the Test262
+Intl tests. See `.ado/image/README.md` for the pool and image mapping.
+
+Because those cells are native builds, they also stage `hermes.exe` and
+`hermesc.exe`, so the NuGet package now carries the tools for every target
+platform instead of only x64 and x86.
 
 ## Code Architecture
 

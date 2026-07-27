@@ -143,7 +143,7 @@ To update any external dependency:
 
 3. **Test compilation**:
    ```powershell
-   cd ../../build/vs2022-msvc-x64
+   cd ../../build/vs2026-msvc-x64
    cmake --build . --target hermesinspector
    ```
 

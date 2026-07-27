@@ -10,7 +10,9 @@
 
 #include <cstdint>
 
-#if defined(__i386__) || defined(__x86_64__)
+// ARM64EC advertises __x86_64__ so that x64-targeting source keeps compiling,
+// but Clang generates AArch64 code there and provides no x86 intrinsics.
+#if (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__)
 #include <x86intrin.h>
 #endif
 
@@ -20,7 +22,7 @@ namespace hermes {
     defined(HERMESVM_PROFILER_OPCODE) || defined(HERMESVM_PROFILER_NATIVECALL)
 
 inline uint64_t rdtsc() {
-#if defined(__i386__) || defined(__x86_64__)
+#if (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__)
   // Use the rdtsc intrinsic to get the cycle count if it's available.
   return __rdtsc();
 #elif defined(__aarch64__)

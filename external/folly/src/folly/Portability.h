@@ -328,7 +328,13 @@ constexpr auto kIsBigEndian = !kIsLittleEndian;
 } // namespace folly
 
 #ifndef FOLLY_SSE
-#if defined(__SSE4_2__)
+// ARM64EC advertises the x64 feature macros (__x86_64__, __SSE2__, ...) so that
+// x64-targeting source keeps compiling, but Clang generates AArch64 code there
+// and provides no x86 intrinsics. Report no SSE and use the NEON paths below.
+#if defined(__arm64ec__)
+#define FOLLY_SSE 0
+#define FOLLY_SSE_MINOR 0
+#elif defined(__SSE4_2__)
 #define FOLLY_SSE 4
 #define FOLLY_SSE_MINOR 2
 #elif defined(__SSE4_1__)
@@ -356,7 +362,7 @@ constexpr auto kIsBigEndian = !kIsLittleEndian;
   (FOLLY_SSE > major || FOLLY_SSE == major && FOLLY_SSE_MINOR >= minor)
 
 #ifndef FOLLY_NEON
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__arm64ec__)
 #define FOLLY_NEON 1
 #endif
 #endif

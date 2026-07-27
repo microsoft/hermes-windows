@@ -404,7 +404,11 @@ static bool isCpuIdSupported() {
 /// the specified arguments.  If we can't run cpuid on the host, return true.
 static bool getX86CpuIDAndInfo(unsigned value, unsigned *rEAX, unsigned *rEBX,
                                unsigned *rECX, unsigned *rEDX) {
-#if defined(__GNUC__) || defined(__clang__)
+// ARM64EC defines __x86_64__ so that x64-targeting source keeps compiling, but
+// the code generated is AArch64 and cannot use x86 register constraints or the
+// cpuid instruction. Fall through to the MSVC intrinsics, which ARM64EC
+// emulates.
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__arm64ec__)
 #if defined(__x86_64__)
   // gcc doesn't know cpuid would clobber ebx/rbx. Preserve it manually.
   // FIXME: should we save this for Clang?
@@ -444,7 +448,8 @@ static bool getX86CpuIDAndInfo(unsigned value, unsigned *rEAX, unsigned *rEBX,
 static bool getX86CpuIDAndInfoEx(unsigned value, unsigned subleaf,
                                  unsigned *rEAX, unsigned *rEBX, unsigned *rECX,
                                  unsigned *rEDX) {
-#if defined(__GNUC__) || defined(__clang__)
+// See the ARM64EC note in getX86CpuIDAndInfo above.
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__arm64ec__)
 #if defined(__x86_64__)
   // gcc doesn't know cpuid would clobber ebx/rbx. Preserve it manually.
   // FIXME: should we save this for Clang?
@@ -479,7 +484,8 @@ static bool getX86CpuIDAndInfoEx(unsigned value, unsigned subleaf,
 
 // Read control register 0 (XCR0). Used to detect features such as AVX.
 static bool getX86XCR0(unsigned *rEAX, unsigned *rEDX) {
-#if defined(__GNUC__) || defined(__clang__)
+// See the ARM64EC note in getX86CpuIDAndInfo above.
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__arm64ec__)
   // Check xgetbv; this uses a .byte sequence instead of the instruction
   // directly because older assemblers do not include support for xgetbv and
   // there is no easy way to conditionally compile based on the assembler used.

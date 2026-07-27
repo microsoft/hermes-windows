@@ -792,7 +792,7 @@ namespace JKJ_NAMESPACE {
                         low_ = stdr::uint_least64_t(result);
                         __builtin_ia32_addcarry_u64(carry, high_, 0, &result);
                         high_ = stdr::uint_least64_t(result);
-    #elif defined(_MSC_VER) && defined(_M_X64)
+    #elif defined(_MSC_VER) && defined(_M_X64) && !defined(__arm64ec__)
                         // On MSVC, uint_least64_t and __int64 must be unsigned long long; see
                         // https://learn.microsoft.com/en-us/cpp/c-runtime-library/standard-types
                         // and https://learn.microsoft.com/en-us/cpp/cpp/int8-int16-int32-int64.
@@ -871,7 +871,7 @@ namespace JKJ_NAMESPACE {
     #if defined(__SIZEOF_INT128__)
                     auto const result = builtin_uint128_t(x) * builtin_uint128_t(y);
                     return {stdr::uint_least64_t(result >> 64), stdr::uint_least64_t(result)};
-    #elif defined(_MSC_VER) && defined(_M_X64)
+    #elif defined(_MSC_VER) && defined(_M_X64) && !defined(__arm64ec__)
                     JKJ_IF_CONSTEVAL {
                         // This redundant variable is to workaround MSVC's codegen bug caused by the
                         // interaction of NRVO and intrinsics.

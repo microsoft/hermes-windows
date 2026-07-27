@@ -164,7 +164,7 @@ For applications that spawn child processes (like NodeApiTests.exe → node-lite
       "name": "Debug NodeApiTests with Child Processes",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/vs2022-msvc-x64/unittests/NodeApi/Debug/NodeApiTests.exe",
+      "program": "${workspaceFolder}/build/vs2026-msvc-x64/unittests/NodeApi/Debug/NodeApiTests.exe",
       "args": ["--gtest_output=xml:${workspaceFolder}/test-results.xml"],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",

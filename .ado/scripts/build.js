@@ -121,7 +121,6 @@ Options:
   --msvc                  Use MSVC compiler instead of Clang (default: ${
     options.msvc.default
   })
-                          [Note: ARM64EC temporarily uses MSVC due to Clang 19.x issue]
   --uwp                   Build for UWP instead of Win32 (default: ${
     options.uwp.default
   })
@@ -217,11 +216,12 @@ const externalIcuVersion = 78;
 
 // BinSkim security validation constants.
 // The CI pipeline uses the internal package (Microsoft.CodeAnalysis.BinSkim.Internal)
-// from a private ADO feed. For local builds we use the public nuget.org package
-// which contains the same analysis engine.
+// from a private ADO feed. For local builds we use the public ADO feed, which
+// serves the same analysis engine and keeps us off the public NuGet API.
 const binskimPackageName = "Microsoft.CodeAnalysis.BinSkim";
 const binskimVersion = "4.4.9";
-const binskimNuGetSource = "https://api.nuget.org/v3/index.json";
+const binskimNuGetSource =
+  "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/nuget/v3/index.json";
 
 main();
 
@@ -230,10 +230,6 @@ function main() {
 
   ensureDir(args["output-path"]);
   args["output-path"] = path.resolve(args["output-path"]);
-
-  // Force MSVC for ARM64EC due to Clang 19.x linker issues (LLVM #113658)
-  // This must be removed when Clang 20 is available
-  const useMsvc = args.msvc || args.platform.includes("arm64ec");
 
   args.hostCpuArch = getHostCpuArch();
 
@@ -251,7 +247,6 @@ function main() {
   console.log(`          clean-tools: ${args["clean-tools"]}`);
   console.log(`            clean-pkg: ${args["clean-pkg"]}`);
   console.log(`                 msvc: ${args.msvc}`);
-  console.log(`              useMsvc: ${useMsvc}`);
   console.log(`                  uwp: ${args.uwp}`);
   console.log(`             platform: ${args.platform}`);
   console.log(`        configuration: ${args.configuration}`);
@@ -309,7 +304,7 @@ function main() {
       };
       const buildParams = {
         ...configParams,
-        msvc: useMsvc,
+        msvc: args.msvc,
         buildPath: getBuildPath(configParams),
         hasCustomTargets: args.targets.length > 0,
         targets: getTargets(args.targets, configParams),
@@ -478,8 +473,11 @@ function cmakeConfigure(buildParams) {
     genArgs.push(`-DHERMES_FILE_VERSION=${args["file-version"]}`);
   }
 
-  // Add cross-compilation target for non-host platforms when using Clang
-  if (platform !== hostCpuArch && !msvc) {
+  // Select the Clang target triple. This is needed whenever the target differs
+  // from the host, and additionally always for ARM64EC: even on an ARM64 host,
+  // Clang's default target is plain ARM64, so the EC target must be requested
+  // explicitly.
+  if (!msvc && (platform !== hostCpuArch || platform === "arm64ec")) {
     let targetTriple = "";
     if (platform === "x86") {
       targetTriple = "i686-pc-windows-msvc";
@@ -552,15 +550,29 @@ function cmakeConfigure(buildParams) {
   // this via CMAKE_C_FLAGS, but shermes uses its own SHERMES_CC_SYSCFLAGS.
   // This applies regardless of the main compiler (Clang or MSVC) because
   // shermes always invokes clang to compile generated C code.
-  if (platform !== hostCpuArch) {
+  // ARM64EC always needs the triple, even on an ARM64 host: Clang's default
+  // target there is plain ARM64, and non-EC objects cannot link against
+  // ARM64EC output.
+  if (platform !== hostCpuArch || platform === "arm64ec") {
     let shermesTarget = "";
     if (platform === "x86") {
       shermesTarget = "i686-pc-windows-msvc";
     } else if (platform === "arm64") {
       shermesTarget = "aarch64-pc-windows-msvc";
+    } else if (platform === "arm64ec") {
+      shermesTarget = "arm64ec-pc-windows-msvc";
     }
     if (shermesTarget) {
       genArgs.push(`-DSHERMES_CC_SYSCFLAGS="-target ${shermesTarget}"`);
+    }
+    // ARM64EC additionally needs softintrin.lib at link time. The C code that
+    // shermes generates and links pulls in the UCRT floating-point helpers
+    // (_fenvutils/ieee), which reference the x64 SSE intrinsics _mm_getcsr /
+    // _mm_setcsr; on ARM64EC those are provided by softintrin.lib. This goes in
+    // SHERMES_CC_SYSLDFLAGS (linker flags) rather than SHERMES_CC_SYSCFLAGS,
+    // since shermes only applies it when it links an executable/shared object.
+    if (platform === "arm64ec") {
+      genArgs.push('-DSHERMES_CC_SYSLDFLAGS="-lsoftintrin"');
     }
   }
 
@@ -675,10 +687,13 @@ function cmakeBuildHermesCompiler(buildParams) {
 }
 
 function runCMakeCommand(command, buildParams) {
-  const { platform, buildPath } = buildParams;
+  const { platform, msvc, buildPath } = buildParams;
 
   const env = { ...process.env };
-  if (platform === "arm64ec") {
+  // MSVC needs an explicit switch to emit ARM64EC code; Clang selects it
+  // through the arm64ec-pc-windows-msvc target triple instead (see
+  // cmakeConfigure), and rejects the MSVC spelling.
+  if (platform === "arm64ec" && msvc) {
     env.CFLAGS = "-arm64EC";
     env.CXXFLAGS = "-arm64EC";
   }
@@ -929,6 +944,10 @@ function packNuGet(runParams) {
   execSync(fatNugetPackCmd, { stdio: "inherit" });
 }
 
+// Locate vcvarsall.bat from the installed Visual Studio.
+// Visual Studio 2026 (product version 18) is required: it provides the MSVC
+// 14.5x toolset and the Clang 22 that this repo builds with, and it is the
+// toolset installed on the CI images. VS 2022 is not supported.
 function getVCVarsAllBat() {
   const vsWhere = path.join(
     process.env["ProgramFiles(x86)"] || process.env["ProgramFiles"],
@@ -941,11 +960,11 @@ function getVCVarsAllBat() {
   }
 
   const versionJson = JSON.parse(
-    execSync(`"${vsWhere}" -format json -version 17`).toString(),
+    execSync(`"${vsWhere}" -format json -version 18`).toString(),
   );
   if (versionJson.length === 0) {
     throw new Error(
-      `No Visual Studio 2022 (version 17) installation found by vswhere: "${vsWhere}"`,
+      `No Visual Studio 2026 (version 18) installation found by vswhere: "${vsWhere}"`,
     );
   }
   if (versionJson.length > 1) {

@@ -26,6 +26,16 @@ function(add_node_api_module MODULE_TARGET)
   target_link_libraries(${MODULE_TARGET} PRIVATE libshared)
   target_compile_definitions(${MODULE_TARGET} PRIVATE ${ARG_DEFINES})
 
+  # These .node addons are MODULE libraries. Unlike the EXE/SHARED targets they
+  # do not pick up the softintrin.lib that HermesWindows adds to the linker
+  # flags (CMAKE_MODULE_LINKER_FLAGS does not reach this scope), so on ARM64EC
+  # they fail to link with "undefined symbol: _mm_getcsr (EC symbol)" -- an x64
+  # SSE intrinsic the UCRT floating-point code references. Link it per target.
+  if(HERMES_WINDOWS_TARGET_PLATFORM STREQUAL "arm64ec" AND
+     "${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
+    target_link_options(${MODULE_TARGET} PRIVATE -lsoftintrin)
+  endif()
+
   set(MODULE_OUTPUT_DIR
     ${CMAKE_CURRENT_BINARY_DIR}/build/$<IF:$<CONFIG:Debug>,Debug,Release>)
   set_target_properties(${MODULE_TARGET} PROPERTIES

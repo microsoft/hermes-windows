@@ -220,16 +220,20 @@ public:
 
     void run() {
         Ctx c{ from };
+#ifndef BOOST_NO_EXCEPTIONS
         try {
+#endif
             // invoke context-function
 #if defined(BOOST_NO_CXX17_STD_INVOKE)
             c = boost::context::detail::invoke( fn_, std::move( c) );
 #else
             c = std::invoke( fn_, std::move( c) );
 #endif
+#ifndef BOOST_NO_EXCEPTIONS
         } catch ( forced_unwind const& ex) {
             c = Ctx{ ex.from };
         }
+#endif
         // this context has finished its task
         from = nullptr;
         ontop = nullptr;
@@ -352,7 +356,11 @@ public:
         detail::fiber_activation_record * ptr = std::exchange( ptr_, nullptr)->resume();
 #endif
         if ( BOOST_UNLIKELY( detail::fiber_activation_record::current()->force_unwind) ) {
+#ifdef BOOST_NO_EXCEPTIONS
+            abort();
+#else
             throw detail::forced_unwind{ ptr};
+#endif
         } else if ( BOOST_UNLIKELY( nullptr != detail::fiber_activation_record::current()->ontop) ) {
             ptr = detail::fiber_activation_record::current()->ontop( ptr);
             detail::fiber_activation_record::current()->ontop = nullptr;
@@ -371,7 +379,11 @@ public:
             std::exchange( ptr_, nullptr)->resume_with< fiber >( std::forward< Fn >( fn) );
 #endif
         if ( BOOST_UNLIKELY( detail::fiber_activation_record::current()->force_unwind) ) {
+#ifdef BOOST_NO_EXCEPTIONS
+            abort();
+#else
             throw detail::forced_unwind{ ptr};
+#endif
         } else if ( BOOST_UNLIKELY( nullptr != detail::fiber_activation_record::current()->ontop) ) {
             ptr = detail::fiber_activation_record::current()->ontop( ptr);
             detail::fiber_activation_record::current()->ontop = nullptr;

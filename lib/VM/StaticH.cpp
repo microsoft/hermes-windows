@@ -117,6 +117,53 @@ extern "C" void _sh_raw_longjmp(jmp_buf, int) {
     "ret\n\t"
   );
 }
+
+#elif defined(_WIN32) && defined(_M_ARM64EC)
+// ARM64EC raw longjmp (Clang).
+//
+// ARM64EC runs AArch64 code but uses the x64 _JUMP_BUFFER layout: setjmp.h has
+// no _M_ARM64EC branch, and _M_ARM64EC also defines _M_X64, so jmp_buf is the
+// x64 SETJMP_FLOAT128[16] (256 bytes). setjmp maps to _setjmpex, whose ARM64EC
+// implementation stores the AArch64 callee-saved registers into the x64-named
+// slots per the fixed ARM64EC x64<->AArch64 register map:
+//   Rbx(+08)=x27  Rsp(+10)=sp   Rbp(+18)=fp/x29
+//   Rsi(+20)=x25  Rdi(+28)=x26
+//   R12(+30)=x19  R13(+38)=x20  R14(+40)=x21  R15(+48)=x22
+//   Rip(+50)=resume address     Xmm6-15(+60..+F0)=q6-q15 (callee-saved here)
+// x23/x24/x28 are never used by ARM64EC codegen, so they are not live across a
+// setjmp and need not be restored. The MxCsr slot (+58) is not restored: it is
+// an x64-format control word that cannot be loaded into AArch64 FPCR, and
+// Hermes never changes the FP control/rounding mode between setjmp and longjmp
+// (matching the minimal Linux _longjmp behavior).
+// ARM64EC calling convention (native AArch64 for intra-module calls):
+// x0=jmp_buf, w1=return_value.
+__attribute__((naked))
+extern "C" void _sh_raw_longjmp(jmp_buf, int) {
+  __asm__ volatile (
+    "mov x2, x0\n\t"
+    "mov w0, w1\n\t"
+    "cbnz w0, 1f\n\t"
+    "mov w0, #1\n"
+    "1:\n\t"
+    "ldr x27, [x2, #0x08]\n\t"       // Rbx
+    "ldr x29, [x2, #0x18]\n\t"       // Rbp -> fp
+    "ldr x25, [x2, #0x20]\n\t"       // Rsi
+    "ldr x26, [x2, #0x28]\n\t"       // Rdi
+    "ldr x19, [x2, #0x30]\n\t"       // R12
+    "ldr x20, [x2, #0x38]\n\t"       // R13
+    "ldr x21, [x2, #0x40]\n\t"       // R14
+    "ldr x22, [x2, #0x48]\n\t"       // R15
+    "ldp q6,  q7,  [x2, #0x60]\n\t"  // Xmm6,  Xmm7
+    "ldp q8,  q9,  [x2, #0x80]\n\t"  // Xmm8,  Xmm9
+    "ldp q10, q11, [x2, #0xA0]\n\t"  // Xmm10, Xmm11
+    "ldp q12, q13, [x2, #0xC0]\n\t"  // Xmm12, Xmm13
+    "ldp q14, q15, [x2, #0xE0]\n\t"  // Xmm14, Xmm15
+    "ldr x30, [x2, #0x50]\n\t"       // Rip -> resume address
+    "ldr x3,  [x2, #0x10]\n\t"       // Rsp
+    "mov sp,  x3\n\t"
+    "ret\n\t"
+  );
+}
 #endif
 
 using namespace hermes;
@@ -456,11 +503,15 @@ extern "C" void _sh_throw_current(SHRuntime *shr) {
     fprintf(stderr, "SH: uncaught exception");
     abort();
   }
-#if defined(_WIN32) && !defined(_M_ARM64EC) && \
-    (defined(_M_X64) || defined(_M_ARM64))
-  // On Windows x64/ARM64, the CRT's longjmp calls RtlUnwindEx to walk the
-  // stack through intermediate frames. This crashes when unwinding across DLL
-  // boundaries (e.g., from hermesvm.dll through a shermes-compiled DLL).
+#if defined(_WIN32) && \
+    (defined(_M_X64) || defined(_M_ARM64) || defined(_M_ARM64EC))
+  // On Windows x64/ARM64/ARM64EC, the CRT's longjmp calls RtlUnwindEx to walk
+  // the stack through intermediate frames. This crashes when unwinding across
+  // DLL boundaries (e.g., from hermesvm.dll through a shermes-compiled DLL); on
+  // ARM64EC it fails RtlUnwindEx's Control Flow Guard longjmp-target check
+  // (FAST_FAIL_INVALID_LONGJUMP_TARGET) because the loaded module's setjmp
+  // continuation is not in a CFG longjmp table when running inside a
+  // CFG-enforced host process.
   // Use a raw longjmp that directly restores registers and jumps, matching
   // Linux _longjmp behavior. This is safe because the VM manages its own
   // cleanup via _sh_catch, not SEH unwind handlers.
