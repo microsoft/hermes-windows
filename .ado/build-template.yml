@@ -45,10 +45,8 @@ parameters:
     TargetCPU: arm64
     BuildUWP: --no-uwp
     CanRunTest: true
-    # ARM64 binaries cannot execute on an x64 agent: build.js would only
-    # cross-compile the shared libraries and skip every test. Run this cell on
-    # the native ARM64 pool instead. The UWP ARM64 cell stays on x64 - UWP
-    # binaries are not executed by the pipeline on any architecture.
+    # On an x64 agent build.js can only cross-compile the shared libraries and
+    # skips the tests. Flag per cell, not per TargetCPU, to keep uwp_arm64 on x64.
     UseArm64Pool: true
     # ARM64 "Emulation Compatible" is to run ARM64 Hermes DLL in a x64 app
     # on Windows ARM64 in emulation mode.
@@ -56,9 +54,8 @@ parameters:
   - Name: win32_arm64ec
     TargetCPU: arm64ec
     BuildUWP: --no-uwp
-    # ARM64EC code executes natively on Windows on ARM, so the ARM64 pool builds
-    # this cell as a native build: the test binaries are themselves ARM64EC and
-    # load the ARM64EC hermes.dll / hermes-icu.dll that ship in the package.
+    # ARM64EC runs natively on Windows on ARM, so the test binaries are ARM64EC
+    # too and exercise the ARM64EC DLLs that ship.
     CanRunTest: true
     UseArm64Pool: true
 
@@ -80,10 +77,8 @@ extends:
     settings:
       ${{ if eq(parameters.MustPublish, false) }}:
         skipBuildTagsForGitHubPullRequests: true
-      # fabric-internal-pool-large hosts several images, so the image must be
-      # named explicitly. windows-2025-1espt provides the Visual Studio 2026 and
-      # Clang toolset the build requires. Jobs inherit this pool unless they
-      # declare their own. See .ado/image/README.md.
+      # fabric-internal-pool-large hosts several images, so the one with VS 2026
+      # must be named explicitly. See .ado/image/README.md.
     pool:
       name: fabric-internal-pool-large
       demands: ImageOverride -equals windows-2025-1espt
@@ -130,9 +125,7 @@ extends:
           value: ${{ parameters.MustPublish }}
 
         steps:
-          # Node.js >= 22 is required to handle args in JS scripts. Use 24.x: it is
-          # the version installed on the build images, so the task resolves it
-          # locally instead of downloading a different one.
+          # 24.x is the version installed on the build images.
         - task: UseNode@1
           displayName: Use Node.js 24.x
           inputs:
@@ -155,11 +148,7 @@ extends:
 
           timeoutInMinutes: 300
 
-          # Cells whose target architecture cannot run on an x64 agent build and
-          # test natively on the ARM64 managed-image pool. windows-2025-1espt-arm64
-          # is a single-image pool, so it takes no ImageOverride demand. All other
-          # cells inherit the top-level fabric-internal-pool-large pool, which
-          # pins the windows-2025-1espt image. See .ado/image/README.md.
+          # Single-image pool, so no ImageOverride demand.
           ${{ if eq(MatrixEntry.UseArm64Pool, true) }}:
             pool:
               name: windows-2025-1espt-arm64
@@ -189,16 +178,11 @@ extends:
               targetPath: $(Build.StagingDirectory)\out\pkg-staging
 
           steps:
-            # ARM64 agents ship no externals\node10, but the mandatory 1ES
-            # build-retention post-job still runs on the Node 10 handler; shim
-            # node10 to the image's Node so that post-job does not fail. It must
-            # come first, before any work on the agent.
+            # Must run before anything else on the agent - see the template.
           - ${{ if eq(MatrixEntry.UseArm64Pool, true) }}:
             - template: /.ado/ensure-node10-shim.yml@self
 
-            # Node.js >= 22 is required to handle args in JS scripts. Use 24.x:
-            # it is the version installed on the build images, so the task
-            # resolves it locally instead of downloading a different one.
+            # 24.x is the version installed on the build images.
           - task: UseNode@1
             displayName: Use Node.js 24.x
             inputs:
@@ -218,9 +202,10 @@ extends:
             displayName: Build binaries
 
             # Show all built files to help debug issues.
-          - script: |
-              ls -R $(Build.StagingDirectory)\out
-            displayName: Show all files in the $$(Build.StagingDirectory)\out directory
+          - pwsh: |
+              Get-ChildItem -LiteralPath "$(Build.StagingDirectory)\out" -Recurse |
+                Select-Object -ExpandProperty FullName
+            displayName: Show all staged files
 
             # Run unit tests after the build is finished.
           - ${{ if eq(MatrixEntry.CanRunTest, true) }}:
@@ -344,9 +329,7 @@ extends:
             artifactName: published-packages
 
         steps:
-          # Node.js >= 22 is required to handle args in JS scripts. Use 24.x: it is
-          # the version installed on the build images, so the task resolves it
-          # locally instead of downloading a different one.
+          # 24.x is the version installed on the build images.
         - task: UseNode@1
           displayName: Use Node.js 24.x
           inputs:
