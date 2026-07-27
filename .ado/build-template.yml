@@ -125,12 +125,6 @@ extends:
           value: ${{ parameters.MustPublish }}
 
         steps:
-          # 24.x is the version installed on the build images.
-        - task: UseNode@1
-          displayName: Use Node.js 24.x
-          inputs:
-            version: 24.x
-
           # Compute the semanticVersion and fileVersion, and then update the build title.
         - script: node .ado\scripts\setVersionNumber.js
           name: setVersions # For output variable prefix
@@ -181,12 +175,6 @@ extends:
             # Must run before anything else on the agent - see the template.
           - ${{ if eq(MatrixEntry.UseArm64Pool, true) }}:
             - template: /.ado/ensure-node10-shim.yml@self
-
-            # 24.x is the version installed on the build images.
-          - task: UseNode@1
-            displayName: Use Node.js 24.x
-            inputs:
-              version: 24.x
 
             # Invoke the build specific for the target platform.
           - script: >
@@ -329,12 +317,6 @@ extends:
             artifactName: published-packages
 
         steps:
-          # 24.x is the version installed on the build images.
-        - task: UseNode@1
-          displayName: Use Node.js 24.x
-          inputs:
-            version: 24.x
-
           # The substitution tags in the nuspec require that we use at least NuGet 4.6.
         - task: NuGetToolInstaller@0
           displayName: Install NuGet tools
