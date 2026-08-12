@@ -1,6 +1,16 @@
 version: 2
+# Resolve npm/yarn updates through the ms/react-native-public feed (a public,
+# anonymous-read proxy of npmjs.org) so regenerated lockfiles stay feed-pinned.
+registries:
+  react-native-public:
+    type: npm-registry
+    url: https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/
+    # Public feed; no credentials needed.
+    replaces-base: true
 updates:
 - package-ecosystem: npm
+  registries:
+  - react-native-public
   directories:
   - "/"
   - "/.ado/scripts"
@@ -13,7 +23,8 @@ updates:
   - "/utils/promise"
   - "/utils/scripts/hermes"
   schedule:
-    interval: daily
+    interval: weekly
+    day: "monday"
     time: "05:00"
     timezone: "America/Los_Angeles"
   labels:

@@ -7,14 +7,17 @@ else()
   set(npm "npm")
 endif()
 
-# copy JS Tools package files
+# copy JS Tools package files. The .npmrc pins the registry to the approved ADO
+# feed so `npm ci` below does not reach registry.npmjs.org.
 add_custom_command(
   OUTPUT
+    ${CMAKE_CURRENT_BINARY_DIR}/.npmrc
     ${CMAKE_CURRENT_BINARY_DIR}/babel.config.js
     ${CMAKE_CURRENT_BINARY_DIR}/package.json
     ${CMAKE_CURRENT_BINARY_DIR}/package-lock.json
     ${CMAKE_CURRENT_BINARY_DIR}/postinstall.mjs
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CMAKE_CURRENT_SOURCE_DIR}/.npmrc
     ${CMAKE_CURRENT_SOURCE_DIR}/babel.config.js
     ${CMAKE_CURRENT_SOURCE_DIR}/package.json
     ${CMAKE_CURRENT_SOURCE_DIR}/package-lock.json
@@ -23,13 +26,14 @@ add_custom_command(
 )
 add_custom_target(copyNodeApiJSToolsFiles)
 
-# run "npm install"
+# run "npm ci" for a deterministic install that fails on lockfile drift
 add_custom_command(
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/node_modules.sha256
   DEPENDS
+    ${CMAKE_CURRENT_BINARY_DIR}/.npmrc
     ${CMAKE_CURRENT_BINARY_DIR}/package.json
     ${CMAKE_CURRENT_BINARY_DIR}/package-lock.json
-  COMMAND ${npm} install
+  COMMAND ${npm} ci
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 add_custom_target(installNodeApiTestJsTools
