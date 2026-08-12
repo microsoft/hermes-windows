@@ -163,6 +163,15 @@ extends:
               value: --sanitize-handles
             ${{ else }}:
               value: --no-sanitize-handles
+            # Route npm through the ms/react-native-public feed (npmjs.org
+            # upstream) so the Node-API test toolchain restores from the feed.
+          - name: NPM_CONFIG_REGISTRY
+            value: https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/
+          - name: NPM_CONFIG_CACHE
+            value: $(Agent.TempDirectory)/.npmCache
+            # Fail instead of letting npx silently fetch a networked tool.
+          - name: NPM_CONFIG_YES
+            value: "false"
 
           templateContext:
             outputs:
