@@ -13,7 +13,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y cmake ninja-build clang-19 build-essential libicu-dev zip python3 git
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@50fbc622fc4ef5163becd7fab6573eac35f8462e # v1.2.0
       - name: Build Release
         run: |
           export CC=clang-19
@@ -22,7 +22,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build --target hermes hermesc
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: hermes-bin
           path: |
@@ -34,7 +34,7 @@ jobs:
             -out benchmark-bytecode/richards.hbc \
             benchmarks/bench-runner/resource/test-suites/v8-v6-perf/v8-richards.js
       - name: Upload benchmark bytecode
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: benchmark-bytecode
           path: benchmark-bytecode/
@@ -44,12 +44,12 @@ jobs:
     runs-on: raspberrypi5-8gb
     steps:
       - name: Download binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: hermes-bin
           path: hermes-bin
       - name: Download benchmark bytecode
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: benchmark-bytecode
           path: benchmark-bytecode
