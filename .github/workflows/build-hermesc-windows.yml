@@ -14,13 +14,13 @@ jobs:
       CMAKE_DIR: 'C:\Program Files\CMake\bin'
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up workspace
         shell: powershell
         run: |
           mkdir -p C:\tmp\hermes\osx-bin
       - name: setup-msbuild
-        uses: microsoft/setup-msbuild@031090342aeefe171e49f3820f3b52110c66e402 # v1.3.2
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
       - name: Set up workspace
         shell: powershell
         run: |
@@ -64,7 +64,7 @@ jobs:
           # Include Windows runtime dependencies
           Copy-Item -Path "$Env:HERMES_WS_DIR\deps\*" -Destination "$Env:HERMES_WS_DIR\win64-bin"
       - name: Upload windows artifacts
-        uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b # v4.3.4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hermes-win64-bin
           path: C:\tmp\hermes\win64-bin\
