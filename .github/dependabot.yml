@@ -2,7 +2,6 @@ version: 2
 updates:
 - package-ecosystem: npm
   directories:
-  - "/"
   - "/.ado/scripts"
   - "/benchmarks/build-helpers/flow-bundler"
   - "/benchmarks/raytracer/original"
@@ -12,21 +11,25 @@ updates:
   - "/unittests/NodeApi/test"
   - "/utils/promise"
   - "/utils/scripts/hermes"
+  groups:
+    all-npm-dependencies:
+      applies-to: version-updates
+      patterns:
+      - "*"
+    all-npm-security-updates:
+      applies-to: security-updates
+      patterns:
+      - "*"
   schedule:
     interval: weekly
-    day: "monday"
-    time: "05:00"
-    timezone: "America/Los_Angeles"
   labels:
   - dependencies
   versioning-strategy: lockfile-only
   commit-message:
     prefix: 📦
   open-pull-requests-limit: 5
-  groups:
-    all-npm-dependencies:
-      patterns:
-      - "*"
+  cooldown:
+    default-days: 8
 - package-ecosystem: "github-actions"
   directory: "/"
   groups:
@@ -34,5 +37,9 @@ updates:
       patterns: ["*"]
   schedule:
     interval: "weekly"
+  labels:
+  - dependencies
+  commit-message:
+    prefix: 🎬
   cooldown:
-    default-days: 7
+    default-days: 8
