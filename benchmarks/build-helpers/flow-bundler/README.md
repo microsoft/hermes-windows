@@ -6,12 +6,11 @@ does not do any lowering so maintains all Flow typing needed for Static Hermes.
 
 ## Usage
 
-First install the needed npm dependencies:
+From the repository root, install the dependencies with the pinned Yarn release:
 
 ```
-yarn install
-// or
-npm install
+node .yarn/releases/yarn-4.13.0.cjs \
+  --cwd benchmarks/build-helpers/flow-bundler install --immutable
 ```
 
 Basic usage:

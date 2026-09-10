@@ -11,11 +11,11 @@ XPLAT="$HG_ROOT/xplat"
 # Call node binary directly to avoid --stack-trace-limit=48 from wrapper
 # (not allowed in Worker execArgv on Node 22+)
 NODE="$XPLAT/third-party/node/bin/node-linux-x64"
-XPLAT_YARN="$XPLAT/third-party/yarn/yarn"
 
 REPO_URI="https://github.com/pieterv/prettier.git"
 HERMES_PARSER_JS="$XPLAT/static_h/tools/hermes-parser/js"
 HERMES_PARSER_DIST="$HERMES_PARSER_JS/hermes-parser/dist"
+HERMES_YARN="$XPLAT/static_h/.yarn/releases/yarn-4.13.0.cjs"
 PRETTIER_DIR="$HERMES_PARSER_JS/prettier-hermes-flow-fork"
 PLUGIN_DIR="$HERMES_PARSER_JS/prettier-plugin-hermes-parser"
 PRETTIER_YARN="$PRETTIER_DIR/.yarn/releases/yarn-4.9.2.cjs"
@@ -23,9 +23,7 @@ GENERATED="generated"
 
 if [ ! -d "$HERMES_PARSER_DIST" ]; then
     echo "$HERMES_PARSER_DIST does not exist, running initial build"
-    pushd "$HERMES_PARSER_JS"
-    $XPLAT_YARN build
-    popd
+    $NODE "$HERMES_YARN" --cwd "$HERMES_PARSER_JS" build
 fi
 
 if [ ! -d "$PRETTIER_DIR" ]; then
@@ -55,17 +53,17 @@ if [ "$COMMITS_BEHIND" -gt 0 ]; then
   exit 1
 fi
 
-echo "
-httpProxy: http://fwdproxy:8080
-httpsProxy: http://fwdproxy:8080" >> .yarnrc.yml
+$NODE "$PRETTIER_YARN" config set npmRegistryServer "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/"
+$NODE "$PRETTIER_YARN" config set httpProxy "http://fwdproxy:8080"
+$NODE "$PRETTIER_YARN" config set httpsProxy "http://fwdproxy:8080"
 
 # Install Deps
 echo "Running yarn install"
-$NODE $PRETTIER_YARN install
+$NODE "$PRETTIER_YARN" install --immutable
 
 # Build prettier
 echo "Building assets"
-$NODE $PRETTIER_YARN build --package=@prettier/plugin-hermes
+$NODE "$PRETTIER_YARN" build --package=@prettier/plugin-hermes
 
 # Copy assets to prettier plugin dir
 echo "Copy assets"

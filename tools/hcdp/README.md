@@ -5,7 +5,7 @@ In the hcdp directory:
 1. Build `hcdp binary` using BUCK or CMake
 2. Install npm packages
 ```
-npm install
+npm ci
 ```
 3. Run `hcdp.js`, passing it the path to the `hcdp binary`, and the script to be debugged.
 e.g.:

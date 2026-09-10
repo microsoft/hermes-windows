@@ -125,7 +125,21 @@ extends:
           value: ${{ parameters.MustPublish }}
 
         steps:
-          # Compute the semanticVersion and fileVersion, and then update the build title.
+        - template: /.ado/ensure-node24.yml@self
+
+        - script: npm ci --ignore-scripts --no-audit --no-fund
+          workingDirectory: .ado/scripts
+          displayName: Install build script dependencies
+
+        - script: npm run test:npm-source-lint
+          workingDirectory: .ado/scripts
+          displayName: Test npm source lint
+
+        - script: npm run npm-source-lint
+          workingDirectory: .ado/scripts
+          displayName: Validate npm package sources
+
+        # Compute the semanticVersion and fileVersion, and then update the build title.
         - script: node .ado\scripts\setVersionNumber.js
           name: setVersions # For output variable prefix
           displayName: Compute version numbers
@@ -185,7 +199,9 @@ extends:
           - ${{ if eq(MatrixEntry.UseArm64Pool, true) }}:
             - template: /.ado/ensure-node10-shim.yml@self
 
-            # Invoke the build specific for the target platform.
+          - template: /.ado/ensure-node24.yml@self
+
+          # Invoke the build specific for the target platform.
           - script: >
               node .ado\scripts\build.js
               --output-path $(Build.StagingDirectory)\out
@@ -326,7 +342,9 @@ extends:
             artifactName: published-packages
 
         steps:
-          # The substitution tags in the nuspec require that we use at least NuGet 4.6.
+        - template: /.ado/ensure-node24.yml@self
+
+        # The substitution tags in the nuspec require that we use at least NuGet 4.6.
         - task: NuGetToolInstaller@0
           displayName: Install NuGet tools
           inputs:

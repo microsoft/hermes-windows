@@ -13,6 +13,15 @@ buck-out
 # Python
 *.pyc
 
+# Node.js and Yarn
+node_modules/
+**/.yarn/*
+!/.yarn/patches/
+!/.yarn/plugins/
+!/.yarn/releases/
+!/.yarn/sdks/
+.pnp.*
+
 # Mac
 .DS_Store
 

@@ -2,12 +2,13 @@
 
 BIN_FOLDER=$(dirname -- "$( readlink -f -- "$0"; )")
 FLOW_BUNDLER_ROOT="$BIN_FOLDER/.."
+YARN_PATH="$FLOW_BUNDLER_ROOT/../../../.yarn/releases/yarn-4.13.0.cjs"
 if [ ! -d "$FLOW_BUNDLER_ROOT/node_modules/" ]; then
   printf "\e[34mNOTE:\e[0m node_modules missing, running yarn install...\n\n"
-  yarn install --cwd "$FLOW_BUNDLER_ROOT/"
+  node "$YARN_PATH" --cwd "$FLOW_BUNDLER_ROOT/" install --immutable
 elif [ "$FLOW_BUNDLER_ROOT/yarn.lock" -nt "$FLOW_BUNDLER_ROOT/node_modules" ]; then
   printf "\e[34mNOTE:\e[0m yarn.lock updated, running yarn install...\n\n"
-  yarn install --cwd "$FLOW_BUNDLER_ROOT/"
+  node "$YARN_PATH" --cwd "$FLOW_BUNDLER_ROOT/" install --immutable
 fi
 
 node \

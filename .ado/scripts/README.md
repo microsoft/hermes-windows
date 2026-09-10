@@ -5,6 +5,7 @@ This folder contains the JavaScript build scripts for Hermes Windows, along with
 ## Files
 
 - `build.js` - Main build script for Hermes Windows
+- `npm-source-lint.ts` - Validates committed npm and Yarn package sources
 - `setVersionNumber.js` - Script to set version numbers
 
 ## Code Quality Tools
@@ -16,7 +17,7 @@ We use **Prettier** and **ESLint** to maintain consistent code style and catch p
 From this directory (`.ado/scripts`), install the dependencies:
 
 ```bash
-npm install
+npm ci
 ```
 
 ### Available Scripts
@@ -26,6 +27,8 @@ npm install
 - `npm run lint` - Run ESLint to check for code issues
 - `npm run lint:fix` - Run ESLint and automatically fix issues
 - `npm run lint:format` - Format with Prettier and then run ESLint with auto-fix
+- `npm run npm-source-lint` - Validate repository package sources
+- `npm run test:npm-source-lint` - Run the source linter's unit tests
 
 ### Usage
 
@@ -45,6 +48,12 @@ To run just the linter:
 
 ```bash
 npm run lint
+```
+
+From the repository root, validate package sources with the supported developer command:
+
+```powershell
+.\dev npm-source-lint
 ```
 
 ## Configuration

@@ -30,6 +30,8 @@ if [ "$1" != "--force" ]; then
 fi
 
 SCRIPT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+REPO_ROOT="${SCRIPT}/.."
+YARN_RELEASE=".yarn/releases/yarn-4.13.0.cjs"
 
 BC_DIR="${SCRIPT}/../lib/InternalJavaScript"
 TMP_DIR=$(mktemp -d)
@@ -62,5 +64,9 @@ cleanup() {
 
 trap cleanup EXIT
 cp -r $PROMISE_DIR $TMP_DIR
-cd $TMP_PROMISE_DIR
-yarn && yarn start && gen && mv $TMP_PROMISE_JS $BC_PROMISE_JS
+mkdir -p "${TMP_DIR}/.yarn/releases"
+cp "${REPO_ROOT}/.yarnrc.yml" "${TMP_DIR}/.yarnrc.yml"
+cp "${REPO_ROOT}/${YARN_RELEASE}" "${TMP_DIR}/${YARN_RELEASE}"
+node "${TMP_DIR}/${YARN_RELEASE}" --cwd "$TMP_PROMISE_DIR" install --immutable && \
+  node "${TMP_DIR}/${YARN_RELEASE}" --cwd "$TMP_PROMISE_DIR" start && \
+  gen && mv $TMP_PROMISE_JS $BC_PROMISE_JS

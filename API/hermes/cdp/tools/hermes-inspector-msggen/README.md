@@ -8,14 +8,12 @@
 yarn add --dev @babel/cli @babel/core @babel/preset-env @babel/preset-flow jest @react-native/hermes-inspector-msggen
 ```
 
-*Note: We're using `yarn` to install deps. Feel free to change commands to use `npm` 3+ and `npx` if you like*
-
 [version-badge]: https://img.shields.io/npm/v/@react-native/hermes-inspector-msggen?style=flat-square
 [package]: https://www.npmjs.com/package/@react-native/hermes-inspector-msggen
 
 ## Testing
 
-To run the tests in this package, run the following commands from the React Native root folder:
+To run the tests in this package, run the following commands from the Hermes repository root:
 
-1. `yarn` to install the dependencies. You just need to run this once
-2. `yarn jest packages/hermes-inspector-msggen`.
+1. `node .yarn/releases/yarn-4.13.0.cjs --cwd API/hermes/cdp/tools/hermes-inspector-msggen install --immutable`
+2. `node .yarn/releases/yarn-4.13.0.cjs --cwd API/hermes/cdp/tools/hermes-inspector-msggen test`

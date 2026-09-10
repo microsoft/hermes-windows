@@ -1,0 +1,15 @@
+steps:
+- pwsh: |
+    $ErrorActionPreference = 'Stop'
+    $node = Get-Command node -CommandType Application -ErrorAction Stop |
+      Select-Object -First 1
+    $version = & $node.Source --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to run Node.js from $($node.Source)."
+    }
+    $match = [regex]::Match($version, '^v(?<major>\d+)\.')
+    if (-not $match.Success -or [int]$match.Groups['major'].Value -lt 24) {
+        throw "Node.js 24 or newer is required; found '$version' at $($node.Source)."
+    }
+    Write-Host "Using Node.js $version from $($node.Source)"
+  displayName: Require Node.js 24 or newer

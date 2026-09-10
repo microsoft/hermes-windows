@@ -7,6 +7,6 @@
     "@babel/plugin-transform-flow-strip-types": "^7.21.0"
   },
   "scripts": {
-    "build": "./node_modules/@babel/cli/bin/babel.js --config-file=./babelrc.json ../widgets.js -o widgets.js"
+    "build": "babel --config-file=./babelrc.json ../widgets.js -o widgets.js"
   }
 }

@@ -1,4 +1,5 @@
 {
+  "name": "raytracer",
   "dependencies": {
     "typescript": "^5.2.2"
   }
