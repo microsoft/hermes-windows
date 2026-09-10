@@ -178,6 +178,15 @@ test("rejects another external HTTP tarball", () => {
   assertViolation(files, /packages\.example\.com/);
 });
 
+test("rejects blocked domains anywhere in a lockfile", () => {
+  const files = validNpmFixture();
+  const lock = JSON.parse(files["project/package-lock.json"]);
+  lock.packages["node_modules/example"].funding =
+    "https://npmjs.com/package/example";
+  files["project/package-lock.json"] = JSON.stringify(lock);
+  assertViolation(files, /npmjs\.com/);
+});
+
 test("rejects a package-lock local source outside the repository", () => {
   const files = validNpmFixture();
   const lock = JSON.parse(files["project/package-lock.json"]);
@@ -297,6 +306,18 @@ test("rejects a package dependency at the repository parent", () => {
   manifest.dependencies.example = "file:../..";
   files["project/package.json"] = JSON.stringify(manifest);
   assertViolation(files, /local path contained within the repository/);
+});
+
+test("accepts a relative package dependency inside the repository", () => {
+  const files = validNpmFixture();
+  files["project/vendor/example/package.json"] = JSON.stringify({
+    name: "example",
+    version: "1.0.0",
+  });
+  const manifest = JSON.parse(files["project/package.json"]);
+  manifest.dependencies.example = "./vendor/example";
+  files["project/package.json"] = JSON.stringify(manifest);
+  assertValid(files);
 });
 
 test("rejects a package dependency that escapes through a symlink", () => {

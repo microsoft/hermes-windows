@@ -280,13 +280,13 @@ function getDependencySourceError(
   if (decodedSource !== source) {
     return getDependencySourceError(root, file, decodedSource);
   }
-  if (hasRemoteReference(source)) {
-    return "a semver, npm alias, workspace:, or repository-local path";
-  }
   const protocol = /^([a-z][a-z0-9+.-]*):(.*)$/i.exec(source);
   if (!protocol) {
     if (/^(?:\.\.?[\\/]|[A-Za-z]:[\\/]|[\\/]{2})/.test(source)) {
       return getLocalPathError(root, file, source);
+    }
+    if (hasRemoteReference(source)) {
+      return "a semver, npm alias, workspace:, or repository-local path";
     }
     return undefined;
   }
