@@ -178,6 +178,26 @@ test("rejects another external HTTP tarball", () => {
   assertViolation(files, /packages\.example\.com/);
 });
 
+test("rejects a package-lock local source outside the repository", () => {
+  const files = validNpmFixture();
+  const lock = JSON.parse(files["project/package-lock.json"]);
+  lock.packages["node_modules/example"].resolved = "file:../../outside";
+  files["project/package-lock.json"] = JSON.stringify(lock);
+  assertViolation(files, /local path contained within the repository/);
+});
+
+test("accepts a package-lock local source inside the repository", () => {
+  const files = validNpmFixture();
+  files["project/vendor/example/package.json"] = JSON.stringify({
+    name: "example",
+    version: "1.0.0",
+  });
+  const lock = JSON.parse(files["project/package-lock.json"]);
+  lock.packages["node_modules/example"].resolved = "file:vendor/example";
+  files["project/package-lock.json"] = JSON.stringify(lock);
+  assertValid(files);
+});
+
 test("rejects missing npm registry configuration", () => {
   assertViolation(
     removeFile(validNpmFixture(), "project/.npmrc"),
@@ -277,6 +297,32 @@ test("rejects a package dependency at the repository parent", () => {
   manifest.dependencies.example = "file:../..";
   files["project/package.json"] = JSON.stringify(manifest);
   assertViolation(files, /local path contained within the repository/);
+});
+
+test("rejects a package dependency that escapes through a symlink", () => {
+  const files = validNpmFixture();
+  const manifest = JSON.parse(files["project/package.json"]);
+  manifest.dependencies.example = "file:./external";
+  files["project/package.json"] = JSON.stringify(manifest);
+  const root = createFixture(files);
+  const outside = fs.mkdtempSync(
+    path.join(os.tmpdir(), "npm-source-lint-outside-"),
+  );
+  try {
+    fs.symlinkSync(
+      outside,
+      path.join(root, "project", "external"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const result = lintRepository(root, { emit: false });
+    assert.match(
+      result.errors.join("\n"),
+      /local path contained within the repository/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test("rejects a wrapped remote Yarn locator", () => {

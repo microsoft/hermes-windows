@@ -327,7 +327,15 @@ function getLocalPathError(
   }
   const manifestDirectory = path.dirname(path.join(root, file));
   const target = path.resolve(manifestDirectory, reference);
-  const relative = path.relative(root, target);
+  let canonicalRoot: string;
+  let canonicalTarget: string;
+  try {
+    canonicalRoot = fs.realpathSync.native(root);
+    canonicalTarget = fs.realpathSync.native(target);
+  } catch {
+    return "an existing local path contained within the repository";
+  }
+  const relative = path.relative(canonicalRoot, canonicalTarget);
   if (
     relative === ".." ||
     relative.startsWith(`..${path.sep}`) ||
@@ -641,16 +649,26 @@ function validateNpmProject(
           required,
         ),
       );
-    } else if (hasRemoteReference(value)) {
-      errors.push(
-        formatError(
-          project.lockfile,
-          undefined,
-          field,
-          value,
-          "a local package source",
-        ),
+    } else {
+      const sourceError = getDependencySourceError(
+        root,
+        joinRelative(project.directory, "package.json"),
+        value,
       );
+      if (sourceError) {
+        errors.push(
+          formatError(
+            project.lockfile,
+            findLine(
+              fs.readFileSync(path.join(root, project.lockfile), "utf8"),
+              value,
+            ),
+            field,
+            value,
+            sourceError,
+          ),
+        );
+      }
     }
   });
 }
