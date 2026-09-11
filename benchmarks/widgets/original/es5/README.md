@@ -3,6 +3,6 @@
 The pre-generated file is `widgets.js`. To regenerate it:
 
 ```
-npm install
+npm ci
 npm run build
 ```

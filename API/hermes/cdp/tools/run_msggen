@@ -3,6 +3,7 @@
 set -e
 
 DIR=$(cd -P "$(dirname "$(readlink "${BASH_SOURCE[0]}" || echo "${BASH_SOURCE[0]}")")" && pwd)
+YARN_PATH="${DIR}/../../../../.yarn/releases/yarn-4.13.0.cjs"
 
 MSGTYPES_PATH="${DIR}/message_types.txt"
 HEADER_PATH="${DIR}/../MessageTypes.h"
@@ -12,10 +13,10 @@ FBSOURCE=$(hg root)
 CLANG_FORMAT="${FBSOURCE}/tools/third-party/clang-format/clang-format"
 SIGNEDSOURCE="${FBSOURCE}/tools/signedsource"
 
-pushd "hermes-inspector-msggen"
+pushd "${DIR}/hermes-inspector-msggen"
 
-yarn install
-yarn build
+node "${YARN_PATH}" install --immutable
+node "${YARN_PATH}" build
 
 node bin/index.js \
   --ignore-experimental \

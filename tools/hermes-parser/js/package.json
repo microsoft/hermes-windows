@@ -1,6 +1,7 @@
 {
   "name": "hermes-parser-packages",
   "private": true,
+  "packageManager": "yarn@4.13.0",
   "devDependencies": {
     "@babel/cli": "7.16.0",
     "@babel/core": "7.16.5",
@@ -42,7 +43,6 @@
     "hermes-transform",
     "babel-plugin-syntax-hermes-parser"
   ],
-  "dependencies": {},
   "resolutions": {
     "lodash": "^4.18.1"
   }

@@ -3,8 +3,11 @@ updates:
 - package-ecosystem: npm
   directories:
   - "/.ado/scripts"
+  - "/API/hermes/cdp/tools/hermes-inspector-msggen"
   - "/benchmarks/build-helpers/flow-bundler"
   - "/benchmarks/raytracer/original"
+  - "/benchmarks/widgets/original/es5"
+  - "/benchmarks/widgets/single-file/es5"
   - "/tools/fork-sync"
   - "/tools/hcdp"
   - "/tools/hermes-parser/js"

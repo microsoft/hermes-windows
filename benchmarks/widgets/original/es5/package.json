@@ -12,6 +12,6 @@
     "webpack-cli": "^3.3.12"
   },
   "scripts": {
-      "build": "./node_modules/webpack/bin/webpack.js --entry ../main.js --output widgets.js"
+      "build": "webpack --entry ../main.js --output widgets.js"
   }
 }

@@ -4,7 +4,7 @@ features removed.
 # Setup
 
 ```
-(cd ~/builds; cmake -S ~/fbsource/xplat/static_h/benchmarks/ -B benchmarksdebug -G Ninja -DHERMES_BUILD=~/builds/shdebug -DHERMES_SRC=~/fbsource/xplat/static_h) && (cd ~/fbsource/xplat/static_h/benchmarks/build-helpers/flow-bundler; yarn install)
+(cd ~/builds; cmake -S ~/fbsource/xplat/static_h/benchmarks/ -B benchmarksdebug -G Ninja -DHERMES_BUILD=~/builds/shdebug -DHERMES_SRC=~/fbsource/xplat/static_h) && (cd ~/fbsource/xplat/static_h; node .yarn/releases/yarn-4.13.0.cjs --cwd benchmarks/build-helpers/flow-bundler install --immutable)
 ```
 
 # Run with Static Hermes

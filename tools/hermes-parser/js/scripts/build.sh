@@ -7,6 +7,11 @@
 set -xe -o pipefail
 
 THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+YARN_PATH="$THIS_DIR/../../../../.yarn/releases/yarn-4.13.0.cjs"
+
+run_yarn() {
+  node "$YARN_PATH" --cwd "$THIS_DIR/.." "$@"
+}
 
 PACKAGES=(
   hermes-estree
@@ -18,7 +23,7 @@ PACKAGES=(
 )
 
 # Yarn install all packages
-yarn install
+run_yarn install --immutable
 
 # Use internal FB build or pass path to WASM parser as first command line argument
 FB_BUILD_WASM_PARSER="$THIS_DIR/facebook/buildWasmParser.sh"
@@ -43,14 +48,14 @@ else
 fi
 
 # Generate the JSON blob used to drive the rest of the JS codegen
-yarn babel-node "$THIS_DIR/genESTreeJSON.js" "$INCLUDE_PATH"
+run_yarn babel-node "$THIS_DIR/genESTreeJSON.js" "$INCLUDE_PATH"
 
 # Generate source code, written into package src directories
-yarn babel-node "$THIS_DIR/genNodeDeserializers.js" "$INCLUDE_PATH"
-yarn babel-node "$THIS_DIR/genParserVisitorKeys.js"
-yarn babel-node "$THIS_DIR/genESTreeVisitorKeys.js"
-yarn babel-node "$THIS_DIR/genPredicateFunctions.js"
-yarn babel-node "$THIS_DIR/genTransformNodeTypes.js"
+run_yarn babel-node "$THIS_DIR/genNodeDeserializers.js" "$INCLUDE_PATH"
+run_yarn babel-node "$THIS_DIR/genParserVisitorKeys.js"
+run_yarn babel-node "$THIS_DIR/genESTreeVisitorKeys.js"
+run_yarn babel-node "$THIS_DIR/genPredicateFunctions.js"
+run_yarn babel-node "$THIS_DIR/genTransformNodeTypes.js"
 
 # Create fresh dist directory for each package, and copy source files in
 for package in "${PACKAGES[@]}"; do
@@ -81,18 +86,18 @@ for package in "${PACKAGES[@]}"; do
 done
 
 # Generate source code that only applies to dist directory
-yarn babel-node "$THIS_DIR/genWasmParser.js" "$WASM_PARSER"
+run_yarn babel-node "$THIS_DIR/genWasmParser.js" "$WASM_PARSER"
 # TODO: Move these to `src` directory, currently causes Flow errors.
-yarn babel-node "$THIS_DIR/genSelectorTypes.js"
-yarn babel-node "$THIS_DIR/genTransformCloneTypes.js"
-yarn babel-node "$THIS_DIR/genTransformModifyTypes.js"
-yarn babel-node "$THIS_DIR/genTransformReplaceNodeTypes.js"
+run_yarn babel-node "$THIS_DIR/genSelectorTypes.js"
+run_yarn babel-node "$THIS_DIR/genTransformCloneTypes.js"
+run_yarn babel-node "$THIS_DIR/genTransformModifyTypes.js"
+run_yarn babel-node "$THIS_DIR/genTransformReplaceNodeTypes.js"
 
 for package in "${PACKAGES[@]}"; do
   PACKAGE_DIST_DIR="$THIS_DIR/../$package/dist"
-  yarn babel --config-file="$THIS_DIR/../babel.config.js" "$PACKAGE_DIST_DIR" --out-dir="$PACKAGE_DIST_DIR"
+  run_yarn babel --config-file="$THIS_DIR/../babel.config.js" "$PACKAGE_DIST_DIR" --out-dir="$PACKAGE_DIST_DIR"
 done
 
 # Validate that the generated flow files are sane
 # We don't bother validating the raw-js files as they are validated by babel first
-yarn eslint "*/dist/**/*.js.flow" --no-ignore
+run_yarn eslint "*/dist/**/*.js.flow" --no-ignore
