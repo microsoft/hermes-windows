@@ -52,8 +52,6 @@ extends:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
         enabled: false
-      suppression:
-        suppressionFile: $(Build.SourcesDirectory)\.ado\guardian\sdl\.gdnsuppress
 
     stages:
     - stage: nuget_publish
