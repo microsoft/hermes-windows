@@ -32,16 +32,12 @@ extends:
       os: windows
     sdl:
       eslint:
-        # This repo does not ship any JavaScript code. All JS/TS files are
-        # test cases, benchmarks, or internal tools. Exclusions are in
-        # .eslintignore at the repo root, so keep exclusions enabled.
         enableExclusions: true
+        exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
         enabled: false
-      suppression:
-        suppressionFile: $(Build.SourcesDirectory)\.ado\guardian\sdl\.gdnsuppress
 
     stages:
     - stage: nuget_publish

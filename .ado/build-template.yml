@@ -90,17 +90,12 @@ extends:
       componentgovernance:
         ignoreDirectories: $(Build.SourcesDirectory)\website
       eslint:
-        # This repo does not ship any JavaScript code. All JS/TS files are test
-        # cases, benchmarks, or internal tools. Exclusions are in .eslintignore
-        # at the repo root. enableExclusions must be true so the Guardian task
-        # does not pass --no-ignore to ESLint (which would bypass .eslintignore).
         enableExclusions: true
+        exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
         enabled: false
-      suppression:
-        suppressionFile: $(Build.SourcesDirectory)\.ado\guardian\sdl\.gdnsuppress
       codeql:
         compiled:
           enabled: true
@@ -314,6 +309,8 @@ extends:
               displayName: Publish symbols
               inputs:
                 SearchPattern: $(Build.StagingDirectory)\out\pkg-staging\**\*.pdb
+                # PublishSymbols@2 cannot source-index GitHub repositories.
+                IndexSources: false
                 SymbolServerType: TeamServices
                 UseNetCoreClientTool: true
 
