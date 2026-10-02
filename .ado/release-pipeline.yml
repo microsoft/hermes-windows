@@ -10,9 +10,6 @@ name: Release $(Date:yyyyMMdd).$(Rev:r)
 trigger: none
 pr: none
 
-variables:
-- template: /.ado/eslint-exclusions.yml@self
-
 resources:
   pipelines:
   - pipeline: CI
@@ -36,7 +33,7 @@ extends:
     sdl:
       eslint:
         enableExclusions: true
-        exclusionsFilePath: $(eslintExclusionsFilePath)
+        exclusionsFilePath: $(Build.SourcesDirectory)/.eslintignore
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
