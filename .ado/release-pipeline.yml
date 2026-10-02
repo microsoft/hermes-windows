@@ -36,7 +36,7 @@ extends:
     sdl:
       eslint:
         enableExclusions: true
-        exclusionsFilePath: ${{ variables.eslintExclusionsFilePath }}
+        exclusionsFilePath: $(eslintExclusionsFilePath)
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
