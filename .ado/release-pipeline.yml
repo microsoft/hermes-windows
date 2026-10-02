@@ -10,6 +10,9 @@ name: Release $(Date:yyyyMMdd).$(Rev:r)
 trigger: none
 pr: none
 
+variables:
+- template: /.ado/eslint-exclusions.yml@self
+
 resources:
   pipelines:
   - pipeline: CI
@@ -32,10 +35,8 @@ extends:
       os: windows
     sdl:
       eslint:
-        # Guardian runs from $(Agent.BuildDirectory), so provide the repository
-        # ignore file explicitly. The file documents why each path is excluded.
         enableExclusions: true
-        exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
+        exclusionsFilePath: ${{ variables.eslintExclusionsFilePath }}
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).

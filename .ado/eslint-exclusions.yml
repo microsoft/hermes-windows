@@ -1,0 +1,5 @@
+# Guardian runs from $(Agent.BuildDirectory), so provide the repository ignore
+# file explicitly. The file documents why each path is excluded.
+variables:
+- name: eslintExclusionsFilePath
+  value: $(Build.SourcesDirectory)\.eslintignore

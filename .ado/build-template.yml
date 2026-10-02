@@ -59,6 +59,9 @@ parameters:
     CanRunTest: true
     UseArm64Pool: true
 
+variables:
+- template: /.ado/eslint-exclusions.yml@self
+
 resources:
   repositories:
     # The repo for the Office compliant build pipeline templates.
@@ -90,10 +93,8 @@ extends:
       componentgovernance:
         ignoreDirectories: $(Build.SourcesDirectory)\website
       eslint:
-        # Guardian runs from $(Agent.BuildDirectory), so provide the repository
-        # ignore file explicitly. The file documents why each path is excluded.
         enableExclusions: true
-        exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
+        exclusionsFilePath: ${{ variables.eslintExclusionsFilePath }}
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
