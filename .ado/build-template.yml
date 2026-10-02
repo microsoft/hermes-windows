@@ -90,22 +90,10 @@ extends:
       componentgovernance:
         ignoreDirectories: $(Build.SourcesDirectory)\website
       eslint:
-        # This repository does not ship JavaScript source. These directories
-        # contain engine tests, benchmarks, third-party code, generated
-        # fixtures, or internal tools. Many intentionally exercise constructs
-        # such as eval() and Function() that SDL correctly flags in production
-        # JavaScript. Guardian runs ESLint from $(Agent.BuildDirectory), so the
-        # exclusions use the s/ checkout prefix.
+        # Guardian runs from $(Agent.BuildDirectory), so provide the repository
+        # ignore file explicitly. The file documents why each path is excluded.
         enableExclusions: true
-        exclusionPatterns: |
-          s/benchmarks/**
-          s/examples/**
-          s/external/**
-          s/lib/**
-          s/test/**
-          s/tools/**
-          s/unittests/**
-          s/utils/**
+        exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
