@@ -82,6 +82,10 @@ extends:
     pool:
       name: fabric-internal-pool-large
       demands: ImageOverride -equals windows-2025-1espt
+    featureFlags:
+      # Incremental analysis removes unchanged production scripts before
+      # ESLint runs and can leave only ignored engine tests in the checkout.
+      incrementalSDLSourceAnalysis: false
     sdl:
       binskim:
         analyzeTarget: |

@@ -30,6 +30,10 @@ extends:
       name: Azure-Pipelines-1ESPT-ExDShared
       vmImage: windows-latest
       os: windows
+    featureFlags:
+      # Incremental analysis removes unchanged production scripts before
+      # ESLint runs and can leave only ignored engine tests in the checkout.
+      incrementalSDLSourceAnalysis: false
     sdl:
       eslint:
         enableExclusions: true
