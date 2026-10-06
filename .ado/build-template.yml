@@ -90,8 +90,11 @@ extends:
       componentgovernance:
         ignoreDirectories: $(Build.SourcesDirectory)\website
       eslint:
-        enableExclusions: true
-        exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
+        # This repo does not ship JavaScript or TypeScript application code.
+        # Its JS/TS files are engine tests, benchmarks, tools, and polyfills.
+        # Excluding them is not sufficient because incremental SDL scans can
+        # leave ESLint with only ignored files, which ESLint treats as an error.
+        enabled: false
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
