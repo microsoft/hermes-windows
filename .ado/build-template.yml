@@ -82,6 +82,10 @@ extends:
     pool:
       name: fabric-internal-pool-large
       demands: ImageOverride -equals windows-2025-1espt
+    featureFlags:
+      # Incremental analysis removes unchanged production scripts before
+      # ESLint runs and can leave only ignored engine tests in the checkout.
+      incrementalSDLSourceAnalysis: false
     sdl:
       binskim:
         analyzeTarget: |
@@ -90,11 +94,8 @@ extends:
       componentgovernance:
         ignoreDirectories: $(Build.SourcesDirectory)\website
       eslint:
-        # This repo does not ship JavaScript or TypeScript application code.
-        # Its JS/TS files are engine tests, benchmarks, tools, and polyfills.
-        # Excluding them is not sufficient because incremental SDL scans can
-        # leave ESLint with only ignored files, which ESLint treats as an error.
-        enabled: false
+        enableExclusions: true
+        exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
       bandit:
         # This repo does not ship any Python code. All .py files are build
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
