@@ -12,9 +12,24 @@
 # and follow the date and revision number.
 name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
 
-# The triggers are overridden by the ADO pipeline definitions.
-trigger: none
+# CI and its downstream release run only from main.
+trigger:
+  batch: true
+  branches:
+    include:
+    - main
 pr: none
+
+# Monthly keep-alive run so ADO does not disable the pipeline for inactivity.
+# It is not used for real releases and its time is not significant.
+# The scheduled CI run also starts the release pipeline.
+schedules:
+- cron: '0 9 1 * *'
+  displayName: Monthly keep-alive
+  branches:
+    include:
+    - main
+  always: true
 
 variables:
   - name: tags

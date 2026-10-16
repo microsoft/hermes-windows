@@ -5,9 +5,22 @@
 # It is an input for the setVersionNumber.js script which then updates the name of the run.
 name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
 
-# The triggers are overridden by the ADO pipeline definitions.
+# PR validation runs only for changes targeting main.
 trigger: none
-pr: none
+pr:
+  branches:
+    include:
+    - main
+
+# Monthly keep-alive run so ADO does not disable the pipeline for inactivity.
+# It is not used for real releases and its time is not significant.
+schedules:
+- cron: '0 9 1 * *'
+  displayName: Monthly keep-alive
+  branches:
+    include:
+    - main
+  always: true
 
 extends:
   template: build-template.yml@self
