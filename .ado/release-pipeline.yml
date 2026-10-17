@@ -6,7 +6,7 @@
 
 name: Release $(Date:yyyyMMdd).$(Rev:r)
 
-# The triggers are overridden by the ADO pipeline definitions.
+# Release runs only after the CI pipeline completes on main.
 trigger: none
 pr: none
 
@@ -15,7 +15,10 @@ resources:
   - pipeline: CI
     project: ISS
     source: microsoft.hermes-windows.ci
-    trigger: none
+    trigger:
+      branches:
+        include:
+        - main
 
   repositories:
   - repository: OfficePipelineTemplates
