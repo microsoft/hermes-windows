@@ -35,27 +35,28 @@ begin {
     Set-StrictMode -Version Latest
 
     $scriptPath = Split-Path -parent $MyInvocation.MyCommand.Definition
-    $timeStamp = [DateTime]::Now.ToString("yyyyMMdd_HHmmss") 
+    . (Join-Path -Path $scriptPath -ChildPath "TracingTools.ps1")
+    $timeStamp = [DateTime]::Now.ToString("yyyyMMdd_HHmmss")
     $etlFileName = "rnw_" + $timeStamp + ".etl"
     $etlFilePath = Join-Path -Path $scriptPath -ChildPath $etlFileName
     $wprArgs = "-stop", $etlFilePath
 }
 
 process{
-    if (!(Get-Command "wpr.exe" -ErrorAction SilentlyContinue)) { 
+    $wprPath = Find-TracingTool -Name "wpr.exe"
+    if (!$wprPath) {
         throw "
     ################################################################
-    wpr.exe (Windows Performance Recorder) unavailable ! 
-    Ensure that WPT (Windows Performance Toolkit) is installed and its tools are added to the path 
+    $(Get-TracingToolNotFoundMessage -Name "wpr.exe")
     ################################################################"
     }
 
-    Write-Host "wpr.exe $wprArgs"
-    & Start-Process -Verb RunAs "wpr.exe" -ArgumentList $wprArgs -PassThru -Wait
+    Write-Host "$wprPath $wprArgs"
+    & Start-Process -Verb RunAs -FilePath $wprPath -ArgumentList $wprArgs -PassThru -Wait
 
-    if (!(Get-Command "wpa.exe" -ErrorAction SilentlyContinue)) { 
-        Write-Host "wpa.exe (Windows Performance Analyzer) unavailable !"
-        Write-Host "Ensure that WPT (Windows Performance Toolkit) is installed and its tools are added to the path "
+    $wpaPath = Find-TracingTool -Name "wpa.exe"
+    if (!$wpaPath) {
+        Write-Host (Get-TracingToolNotFoundMessage -Name "wpa.exe")
     }
 
     if ($NoAnalysis.IsPresent) {
@@ -63,16 +64,15 @@ process{
     }
     else {
 
-        if (!(Get-Command "wpa.exe" -ErrorAction SilentlyContinue)) { 
+        if (!$wpaPath) {
             throw "
             ################################################################
-            wpa.exe (Windows Performance Analyzer) unavailable ! 
-            Ensure that WPT (Windows Performance Toolkit) is installed and its tools are added to the path 
+            $(Get-TracingToolNotFoundMessage -Name "wpa.exe")
             ################################################################"
         }
 
         $wpaArgs = $etlFilePath
-        Write-Host "wpa.exe $wpaArgs"
-        & Start-Process -Verb RunAs "wpa.exe" -ArgumentList $wpaArgs
+        Write-Host "$wpaPath $wpaArgs"
+        & Start-Process -Verb RunAs -FilePath $wpaPath -ArgumentList $wpaArgs
     }
 }
