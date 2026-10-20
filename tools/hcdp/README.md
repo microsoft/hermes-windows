@@ -13,6 +13,20 @@ e.g.:
 node ./hcdp.js ~/hcdp ~/loop.js
 ```
 
+## Security
+
+The debugger WebSocket server listens on `127.0.0.1` only. Browser connections
+are accepted only from the DevTools frontend that `hcdp.js` opens
+(`https://chrome-devtools-frontend.appspot.com`), so other web pages cannot
+connect to the debugger. Native CDP clients that send no `Origin` header are
+allowed. This is not authentication: any program running on the machine can
+still connect.
+
+To test the connection checks (after `npm ci`):
+```
+node --test
+```
+
 # Implementation
 
 The `hcdp` tool carries out Hermes debugging via CDP. There are

@@ -34,6 +34,7 @@ begin {
    Set-StrictMode -Version Latest
 
    $scriptPath = Split-Path -parent $MyInvocation.MyCommand.Definition
+   . (Join-Path -Path $scriptPath -ChildPath "TracingTools.ps1")
    $wprpPath = Join-Path -Path $scriptPath -ChildPath "hermes.wprp"
 
    $wprArgs = "-start", $wprpPath
@@ -45,16 +46,16 @@ begin {
 
 process{
 
-   if (!(Get-Command "wpr.exe" -ErrorAction SilentlyContinue)) { 
+   $wprPath = Find-TracingTool -Name "wpr.exe"
+   if (!$wprPath) {
       throw "
       ################################################################
-      wpr.exe (Windows Performance Recorder) unavailable ! 
-      Ensure that WPT (Windows Performance Toolkit) is installed and its tools are added to the path 
+      $(Get-TracingToolNotFoundMessage -Name "wpr.exe")
       ################################################################"
    }
 
-   Write-Host "wpr.exe $wprArgs -PassThru -Wait"
-   & Start-Process -Verb RunAs "wpr.exe" -ArgumentList $wprArgs -PassThru -Wait
+   Write-Host "$wprPath $wprArgs -PassThru -Wait"
+   & Start-Process -Verb RunAs -FilePath $wprPath -ArgumentList $wprArgs -PassThru -Wait
 
    Write-Host "To stop this trace and start analysis, run .\Stop-Tracing.ps1"
    Write-Host "To stop this trace only, run .\Stop-Tracing.ps1 -NoAnalysis $True"

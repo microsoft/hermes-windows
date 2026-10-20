@@ -10,10 +10,11 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const ChromeLauncher = require('chrome-launcher');
 const {Launcher: EdgeLauncher} = require('chromium-edge-launcher');
+const {DEVTOOLS_FRONTEND_ORIGIN, createServerOptions} = require('./origin');
 
 const port = 9999;
 const devtoolsVersion = "60127beb442528082b3f6eff7392267e145262c3";
-const url = `https://chrome-devtools-frontend.appspot.com/serve_file/@${devtoolsVersion}/js_app.html?ws=127.0.0.1%3A${port}`;
+const url = `${DEVTOOLS_FRONTEND_ORIGIN}/serve_file/@${devtoolsVersion}/js_app.html?ws=127.0.0.1%3A${port}`;
 function openUrl() {
   const options = { startingUrl: url };
   try {
@@ -114,7 +115,7 @@ const childProcess = spawn(binaryPath, [scriptPath]);
 
 // Start a websocket that forwards messages between the debug client
 // and the child process.
-const wss = new WebSocket.Server({ port: port });
+const wss = new WebSocket.Server(createServerOptions(port));
 
 let clientIdCounter = 0;
 const clients = {};
