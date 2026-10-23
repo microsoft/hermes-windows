@@ -22,7 +22,7 @@ jobs:
       - name: Yarn Install Dependencies
         uses: ./.github/actions/yarn-install
       - name: Download slice artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: slice-*-${{ matrix.flavor }}
           path: .
@@ -119,17 +119,17 @@ jobs:
           mkdir -p "$DEST_DIR"
           mv "hermesvm.framework.dSYM" "$DEST_DIR"
       - name: Upload hermes dSYM artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hermes-dSYM-${{ matrix.flavor }}
           path: /tmp/hermes/dSYM/${{ matrix.flavor }}
       - name: Upload hermes Runtime artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hermes-darwin-bin-${{ matrix.flavor }}
           path: /tmp/hermes/hermes-runtime-darwin/hermes-ios-${{ matrix.flavor }}.tar.gz
       - name: Upload hermes osx artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hermes-osx-bin-${{ matrix.flavor }}
           path: /tmp/hermes/osx-bin/${{ matrix.flavor }}
