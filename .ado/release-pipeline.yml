@@ -10,6 +10,13 @@ name: Release $(Date:yyyyMMdd).$(Rev:r)
 trigger: none
 pr: none
 
+parameters:
+- name: enableEsrpNuGetPublishing
+  displayName: Publish NuGet.org packages through ESRP
+  type: boolean
+  # Keep publishing opt-in until the ESRP cutover is validated.
+  default: false
+
 resources:
   pipelines:
   - pipeline: CI
@@ -103,39 +110,97 @@ extends:
           - input: pipelineArtifact
             pipeline: CI
             artifactName: published-packages
-            targetPath: '$(Pipeline.Workspace)/published-packages'
+            targetPath: '$(Pipeline.Workspace)\published-packages'
 
         steps:
         - script: dir /S $(Pipeline.Workspace)\published-packages
           displayName: Show directory contents
 
-        - task: AzureKeyVault@2
-          inputs:
-            azureSubscription: ESRP-JSHost3
-            KeyVaultName: OGX-JSHost-KV
-            SecretsFilter: 'OGX-JSHost-Nuget-org-API-key-Microsoft-JavaScript-NodeApi'
-
         - pwsh: |
-            $nugetOrgApiKey = "$(OGX-JSHost-Nuget-org-API-key-Microsoft-JavaScript-NodeApi)"
-            if ([string]::IsNullOrWhiteSpace($nugetOrgApiKey)) {
-              throw "NuGet.org API key is missing or empty."
+            $ErrorActionPreference = 'Stop'
+            $source = "$(Pipeline.Workspace)\published-packages"
+            $stagingRoot = "$(Agent.TempDirectory)\esrp-nuget"
+            $destination = Join-Path $stagingRoot 'react-native-windows'
+            $expectedIds = @(
+              'Microsoft.JavaScript.Hermes',
+              'Microsoft.JavaScript.Hermes.Fat'
+            )
+            $packages = @(
+              Get-ChildItem -LiteralPath $source -Filter '*.nupkg' -File
+            )
+            if ($packages.Count -ne $expectedIds.Count) {
+              throw "Expected exactly two Hermes NuGet packages."
             }
-            # Set the API key as a secret, so it doesn't get leaked in logs.
-            Write-Host "##vso[task.setsecret]$nugetOrgApiKey"
-            # 1ES.PublishNuGet (NuGetCommand path) reads NUGETKEY from
-            # endpoint auth parameters for this external endpoint.
-            Write-Host "##vso[task.setendpoint id=f15cbb2b-c0a8-4325-a866-960fa0bec9af;field=authParameter;key=nugetkey]$nugetOrgApiKey"
-          displayName: Inject NuGet.org API key into endpoint
+            $packageIds = @()
+            $version = $null
+            foreach ($package in $packages) {
+              $archive = [System.IO.Compression.ZipFile]::OpenRead(
+                $package.FullName
+              )
+              try {
+                $nuspecs = @(
+                  $archive.Entries |
+                    Where-Object { $_.FullName -like '*.nuspec' }
+                )
+                if ($nuspecs.Count -ne 1) {
+                  throw "Expected one nuspec in $($package.Name)."
+                }
+                $reader = [System.IO.StreamReader]::new($nuspecs[0].Open())
+                try {
+                  $metadata = ([xml]$reader.ReadToEnd()).package.metadata
+                } finally {
+                  $reader.Dispose()
+                }
+                $id = [string]$metadata.id
+                $packageVersion = [string]$metadata.version
+                if ($id -notin $expectedIds -or $id -in $packageIds) {
+                  throw "Unexpected or duplicate NuGet package ID: $id"
+                }
+                if ([string]::IsNullOrWhiteSpace($packageVersion)) {
+                  throw "Missing NuGet version in $($package.Name)."
+                }
+                if ($null -ne $version -and $version -cne $packageVersion) {
+                  throw "The Hermes NuGet package versions do not match."
+                }
+                if ($null -eq $archive.GetEntry('.signature.p7s')) {
+                  throw "Missing NuGet signature in $($package.Name)."
+                }
+                $packageIds += $id
+                $version = $packageVersion
+              } finally {
+                $archive.Dispose()
+              }
+            }
+            New-Item -ItemType Directory -Path $destination | Out-Null
+            foreach ($package in $packages) {
+              Copy-Item -LiteralPath $package.FullName -Destination $destination
+              $copy = Join-Path $destination $package.Name
+              $originalHash = (Get-FileHash -LiteralPath $package.FullName).Hash
+              if ($originalHash -ne (Get-FileHash -LiteralPath $copy).Hash) {
+                throw "Staged NuGet package differs: $($package.Name)"
+              }
+            }
+            Write-Host "Prepared two Hermes packages, version $version."
+          displayName: Validate and stage signed Hermes NuGet packages
 
-        - task: 1ES.PublishNuGet@1
-          displayName: NuGet push to nuget.org
+        - task: EsrpRelease@14
+          displayName: ESRP Release to NuGet.org
+          condition: and(succeeded(), eq('${{ parameters.enableEsrpNuGetPublishing }}', 'True'))
           inputs:
-            # Keep this false: DotNetCoreCLI path does not work with this key
-            # wiring for nuget.org in this pipeline.
-            useDotNetTask: false
-            packageParentPath: '$(Pipeline.Workspace)/published-packages'
-            packagesToPush: '$(Pipeline.Workspace)/published-packages/Microsoft.JavaScript.Hermes.*.nupkg'
-            nuGetFeedType: external
-            publishFeedCredentials: 'nuget.org/cxe/hermes-windows'
-            externalEndpoint: 'nuget.org/cxe/hermes-windows'
-            publishPackageMetadata: true
+            connectedservicename: 'ESRP-JSHost3'
+            usemanagedidentity: false
+            keyvaultname: 'OGX-JSHost-KV'
+            authcertname: 'OGX-JSHost-Auth4'
+            signcertname: 'OGX-JSHost-Sign3'
+            clientid: '0a35e01f-eadf-420a-a2bf-def002ba898d'
+            domaintenantid: 'cdc5aeea-15c5-4db6-b079-fcadd2505dc2'
+            intent: 'PackageDistribution'
+            contenttype: 'NuGet'
+            organizationname: 'react-native-windows'
+            contentsource: 'Folder'
+            folderlocation: '$(Agent.TempDirectory)\esrp-nuget\react-native-windows'
+            waitforreleasecompletion: true
+            owners: 'vmorozov@microsoft.com'
+            approvers: 'khosany@microsoft.com'
+            serviceendpointurl: 'https://api.esrp.microsoft.com'
+            mainpublisher: 'ESRPRELPACMAN'
