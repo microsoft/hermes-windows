@@ -60,6 +60,8 @@ extends:
       jobs:
       - job: ms_react_native_nuget_job
         displayName: Publish Nuget to ms/react-native-public
+        # TEMP: Skip other publishing during the ESRP configuration test.
+        condition: eq(1, 0)
 
         templateContext:
           type: releaseJob
@@ -184,7 +186,7 @@ extends:
           displayName: Validate and stage signed Hermes NuGet packages
 
         - task: EsrpRelease@14
-          displayName: ESRP Release to NuGet.org
+          displayName: ESRP Release configuration test (Maven)
           condition: and(succeeded(), eq('${{ parameters.enableEsrpNuGetPublishing }}', 'True'))
           inputs:
             connectedservicename: 'ESRP-JSHost3'
@@ -195,7 +197,8 @@ extends:
             clientid: '0a35e01f-eadf-420a-a2bf-def002ba898d'
             domaintenantid: 'cdc5aeea-15c5-4db6-b079-fcadd2505dc2'
             intent: 'PackageDistribution'
-            contenttype: 'NuGet'
+            # TEMP: Deliberate mismatch for the ESRP configuration test.
+            contenttype: 'Maven'
             organizationname: 'react-native-windows'
             contentsource: 'Folder'
             folderlocation: '$(Agent.TempDirectory)\esrp-nuget\react-native-windows'
