@@ -19,15 +19,11 @@ updates:
       applies-to: version-updates
       patterns:
       - "*"
-    all-npm-security-updates:
-      applies-to: security-updates
-      patterns:
-      - "*"
   schedule:
     interval: weekly
   labels:
   - dependencies
-  versioning-strategy: lockfile-only
+  versioning-strategy: increase-if-necessary
   commit-message:
     prefix: 📦
   open-pull-requests-limit: 5
