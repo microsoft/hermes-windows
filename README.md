@@ -48,6 +48,16 @@ echo 'use strict'; function hello() { print('Hello World'); } hello(); | .\bin\R
 
 For more details on Hermes for Android, see [here](https://github.com/facebook/hermes/blob/master/README.md).
 
+## Automation
+
+GitHub Actions runs Windows PR benchmarks and posts their results. Copilot
+reviews and Dependabot updates are managed by GitHub rather than workflow YAML.
+Keep only the benchmark workflows in `.github/workflows` when syncing upstream.
+
+Windows PR validation, security analysis, CI builds, and NuGet releases use the
+[Azure DevOps pipelines](.ado/). Removing upstream GitHub build and publishing
+workflows does not replace those pipelines.
+
 ## Contributing
 
 The main purpose of this repository is to brings Hermes support to [React Native Windows](https://github.com/microsoft/react-native-windows). We are grateful to the community for contributing bugfixes and improvements. Read below to learn how you can participate.
