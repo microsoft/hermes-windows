@@ -1,7 +1,7 @@
 {
     "packageManager": "yarn@4.13.0",
     "devDependencies": {
-        "shelljs": "^0.8.5",
-        "yargs": "^17.6.2"
+        "shelljs": "^0.10.0",
+        "yargs": "^18.2.0"
     }
 }

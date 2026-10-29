@@ -1,10 +1,10 @@
 {
   "devDependencies": {
-    "@babel/cli": "^7.21.5",
+    "@babel/cli": "^8.0.6",
     "@babel/core": "^7.22.1",
     "@babel/plugin-proposal-class-properties": "^7.18.6",
     "@babel/plugin-transform-classes": "^7.21.0",
-    "@babel/plugin-transform-flow-strip-types": "^7.21.0"
+    "@babel/plugin-transform-flow-strip-types": "^8.0.1"
   },
   "scripts": {
     "build": "babel --config-file=./babelrc.json ../widgets.js -o widgets.js"

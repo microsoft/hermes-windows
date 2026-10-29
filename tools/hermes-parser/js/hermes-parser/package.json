@@ -12,10 +12,10 @@
     "hermes-estree": "0.34.0"
   },
   "devDependencies": {
-    "@babel/parser": "7.7.4",
+    "@babel/parser": "8.0.7",
     "@babel/generator": "7.7.4",
-    "@babel/types": "7.7.4",
-    "espree": "9.3.2"
+    "@babel/types": "8.0.6",
+    "espree": "11.2.0"
   },
   "files": [
     "dist",

@@ -1,7 +1,7 @@
 {
   "packageManager": "yarn@4.13.0",
   "dependencies": {
-    "@rollup/plugin-commonjs": "~15.0.0",
+    "@rollup/plugin-commonjs": "~29.0.3",
     "@rollup/plugin-node-resolve": "~9.0.0",
     "promise": "8.3.0"
   },
@@ -9,6 +9,6 @@
     "start": "rollup --config rollup.config.js index.js"
   },
   "devDependencies": {
-    "rollup": "~2.80.0"
+    "rollup": "~4.64.12"
   }
 }

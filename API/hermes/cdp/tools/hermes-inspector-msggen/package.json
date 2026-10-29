@@ -23,15 +23,15 @@
     "test": "jest"
   },
   "dependencies": {
-    "devtools-protocol": "0.0.1383960",
-    "yargs": "^17.6.2"
+    "devtools-protocol": "0.0.1723477",
+    "yargs": "^18.2.0"
   },
   "devDependencies": {
-    "@babel/cli": "^7.20.0",
+    "@babel/cli": "^8.0.6",
     "@babel/core": "^7.20.0",
     "@babel/preset-env": "^7.20.0",
-    "@babel/preset-flow": "^7.20.0",
-    "jest": "^29.2.1"
+    "@babel/preset-flow": "^8.0.1",
+    "jest": "^30.5.2"
   },
   "jest": {
     "transform": {
