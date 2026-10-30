@@ -94,6 +94,7 @@ declare module 'glob' {
 
     hasMagic(pattern: string, options?: Options): boolean;
     sync(pattern: string, options?: Options): Array<string>;
+    globSync(pattern: string, options?: Options): Array<string>;
   }
 
   declare module.exports: GlobModule;

@@ -12,5 +12,6 @@ declare module 'mkdirp' {
   declare module.exports: {
     (dir: string, cb?: (err: Error, made: ?string) => void): Promise<?string>,
     sync(dir: string): ?string,
+    mkdirpSync(dir: string): ?string,
   };
 }
