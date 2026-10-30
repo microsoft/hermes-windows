@@ -13,5 +13,10 @@
   },
   "scripts": {
       "build": "webpack --entry ../main.js --output widgets.js"
+  },
+  "overrides": {
+    "braces": "^3.0.3",
+    "micromatch": "^4.0.8",
+    "serialize-javascript": "^7.1.3"
   }
 }

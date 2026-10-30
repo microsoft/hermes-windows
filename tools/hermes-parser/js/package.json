@@ -4,7 +4,7 @@
   "packageManager": "yarn@4.13.0",
   "devDependencies": {
     "@babel/cli": "7.16.0",
-    "@babel/core": "7.16.5",
+    "@babel/core": "7.29.7",
     "@babel/node": "^7.15.8",
     "@babel/plugin-proposal-class-properties": "7.16.5",
     "@babel/plugin-syntax-flow": "^7.16.7",
@@ -44,6 +44,7 @@
     "babel-plugin-syntax-hermes-parser"
   ],
   "resolutions": {
-    "lodash": "^4.18.1"
+    "lodash": "^4.18.1",
+    "patch-package/tmp": "^0.2.7"
   }
 }
