@@ -15,7 +15,7 @@ import type {ESTreeJSON} from './utils/scriptUtils';
 import {HermesESTreeJSONFile} from './utils/scriptUtils';
 import {execSync} from 'child_process';
 import fs from 'fs';
-import mkdirp from 'mkdirp';
+import {mkdirpSync} from 'mkdirp';
 import path from 'path';
 
 const TEMPLATE_FILE = path.resolve(
@@ -122,7 +122,7 @@ const formattedContents = execSync('prettier --parser=json', {
   input: JSON.stringify(cleanedJSON, null, 2),
 }).toString();
 
-mkdirp.sync(path.dirname(HermesESTreeJSONFile));
+mkdirpSync(path.dirname(HermesESTreeJSONFile));
 fs.writeFileSync(HermesESTreeJSONFile, formattedContents);
 
 function nullthrows<T>(arg: ?T): T {

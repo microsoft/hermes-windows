@@ -13,7 +13,7 @@
 'use strict';
 
 import fs from 'fs';
-import mkdirp from 'mkdirp';
+import {mkdirpSync} from 'mkdirp';
 import path from 'path';
 import * as prettier from 'prettier';
 import aliasDefs from './aliases';
@@ -144,7 +144,7 @@ async function formatAndWriteArtifact({
 
   // make sure the folder exists first
   const folder = path.resolve(__dirname, '..', '..', pkg, path.dirname(file));
-  mkdirp.sync(folder);
+  mkdirpSync(folder);
   // write to disk
   const artifactPath = path.resolve(folder, path.basename(file));
   fs.writeFileSync(artifactPath, formattedContents);

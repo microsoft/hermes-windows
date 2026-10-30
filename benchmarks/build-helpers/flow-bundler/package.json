@@ -9,7 +9,7 @@
     "@babel/core": "^7.23.3",
     "@babel/generator": "^7.23.5",
     "@babel/preset-env": "^7.23.3",
-    "@babel/preset-flow": "^8.0.1",
+    "@babel/preset-flow": "^7.23.3",
     "@babel/register": "^7.22.15",
     "@babel/types": "^8.0.6",
     "babel-plugin-syntax-hermes-parser": "0.37.0",

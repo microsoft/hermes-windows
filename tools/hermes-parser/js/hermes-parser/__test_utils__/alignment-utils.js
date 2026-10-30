@@ -99,6 +99,7 @@ export function parseBabel(source: string): mixed {
 
   const ast = parseBabelOriginal(sourceTrimmed, {
     attachComment: false,
+    createImportExpressions: false,
     errorRecovery: false,
     plugins: [
       'bigInt',

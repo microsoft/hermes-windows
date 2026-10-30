@@ -282,15 +282,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babel/helper-plugin-utils@npm:^8.0.1":
-  version: 8.0.1
-  resolution: "@babel/helper-plugin-utils@npm:8.0.1"
-  peerDependencies:
-    "@babel/core": ^8.0.0
-  checksum: 10c0/ec56d98187a58dfbc2ce9d75fd5f880d6acacefb314e32fe40c57293c6c65c659fa116c665e430aff8b153b7d0ea63f16ca290e9d2283196e3c7a3dd61bffa94
-  languageName: node
-  linkType: hard
-
 "@babel/helper-remap-async-to-generator@npm:^7.18.9":
   version: 7.22.20
   resolution: "@babel/helper-remap-async-to-generator@npm:7.22.20"
@@ -403,13 +394,6 @@ __metadata:
   version: 7.29.7
   resolution: "@babel/helper-validator-option@npm:7.29.7"
   checksum: 10c0/d2a06c6d0ac40ba4a2f219fc2cab249c7a94bacdb2686273b7f9598571c908809b48468ff588915a346e6cc7296f60b581023d1d498b747fed06f779d335c2cc
-  languageName: node
-  linkType: hard
-
-"@babel/helper-validator-option@npm:^8.0.0":
-  version: 8.0.0
-  resolution: "@babel/helper-validator-option@npm:8.0.0"
-  checksum: 10c0/eb466b464479f75c15ba06f6c53862f10d90740350c9203b3d81c6f33d4193bf0a7b7b89de901f256fb639a1346475b48616734af89906d6b4fcf9a856d9f1f1
   languageName: node
   linkType: hard
 
@@ -679,17 +663,6 @@ __metadata:
   peerDependencies:
     "@babel/core": ^7.0.0-0
   checksum: 10c0/b2e330dd0dc535c7364937ce2b29a06065e60b1d523db75f36ab4fb89e4ba664e2230cbb1937b35712c9a0ebafc3358f323d6e6b22247d5ebad12fdd3e1f6e98
-  languageName: node
-  linkType: hard
-
-"@babel/plugin-syntax-flow@npm:^8.0.1":
-  version: 8.0.1
-  resolution: "@babel/plugin-syntax-flow@npm:8.0.1"
-  dependencies:
-    "@babel/helper-plugin-utils": "npm:^8.0.1"
-  peerDependencies:
-    "@babel/core": ^8.0.0
-  checksum: 10c0/d4502db6c14ac32b055a65eec2fd1b92345c1478fe2956141b02b35316cfaa25345f2d5828fbd8b2924c9d5a427e9a8933273890b8784ffbaaa6e2966e75a070
   languageName: node
   linkType: hard
 
@@ -1007,7 +980,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babel/plugin-transform-flow-strip-types@npm:^7.20.0":
+"@babel/plugin-transform-flow-strip-types@npm:^7.20.0, @babel/plugin-transform-flow-strip-types@npm:^7.29.7":
   version: 7.29.7
   resolution: "@babel/plugin-transform-flow-strip-types@npm:7.29.7"
   dependencies:
@@ -1016,18 +989,6 @@ __metadata:
   peerDependencies:
     "@babel/core": ^7.0.0-0
   checksum: 10c0/083e864a60927cde7bd75822bdf5c6c72de200ee955e48f6ff5923f0d2b0744ab8f1b64c45e74b88ae3796f03721489afffdb0536f25c54d0dd58508a8904f40
-  languageName: node
-  linkType: hard
-
-"@babel/plugin-transform-flow-strip-types@npm:^8.0.1":
-  version: 8.0.1
-  resolution: "@babel/plugin-transform-flow-strip-types@npm:8.0.1"
-  dependencies:
-    "@babel/helper-plugin-utils": "npm:^8.0.1"
-    "@babel/plugin-syntax-flow": "npm:^8.0.1"
-  peerDependencies:
-    "@babel/core": ^8.0.0
-  checksum: 10c0/3f84f68668a945a72b6eb275f718525e33a9519aeb4b68bc489dc21b4c2c7ad8ca29133acf72f7c7fd69be3aa9fda114549c2743177890b0acdf176daf13fea6
   languageName: node
   linkType: hard
 
@@ -1588,16 +1549,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babel/preset-flow@npm:^8.0.1":
-  version: 8.0.1
-  resolution: "@babel/preset-flow@npm:8.0.1"
+"@babel/preset-flow@npm:^7.23.3":
+  version: 7.29.7
+  resolution: "@babel/preset-flow@npm:7.29.7"
   dependencies:
-    "@babel/helper-plugin-utils": "npm:^8.0.1"
-    "@babel/helper-validator-option": "npm:^8.0.0"
-    "@babel/plugin-transform-flow-strip-types": "npm:^8.0.1"
+    "@babel/helper-plugin-utils": "npm:^7.29.7"
+    "@babel/helper-validator-option": "npm:^7.29.7"
+    "@babel/plugin-transform-flow-strip-types": "npm:^7.29.7"
   peerDependencies:
-    "@babel/core": ^8.0.0
-  checksum: 10c0/c0382296b9c392c4b2882182e1ed739d20392ae7073ea52964c664f3d39357aea5fbf1c5ec3398af979315f56afe79fc51507b19787119ea8e4e1a7fbd1e9085
+    "@babel/core": ^7.0.0-0
+  checksum: 10c0/17bb0f3c320fadb631ab64951ec0f6e05a62b15418c7864c181645b3205cabd3a8541dd3f497bf06cb1d0e04a3806f6cffee7675c97a87d4aaa04961f334cdcb
   languageName: node
   linkType: hard
 
@@ -2013,7 +1974,7 @@ __metadata:
     "@babel/core": "npm:^7.23.3"
     "@babel/generator": "npm:^7.23.5"
     "@babel/preset-env": "npm:^7.23.3"
-    "@babel/preset-flow": "npm:^8.0.1"
+    "@babel/preset-flow": "npm:^7.23.3"
     "@babel/register": "npm:^7.22.15"
     "@babel/types": "npm:^8.0.6"
     babel-plugin-syntax-hermes-parser: "npm:0.37.0"

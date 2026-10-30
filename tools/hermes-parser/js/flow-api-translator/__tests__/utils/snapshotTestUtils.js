@@ -10,7 +10,7 @@
 
 import {ExpectedTranslationError} from '../../src/utils/ErrorUtils';
 import fs from 'fs';
-import glob from 'glob';
+import {globSync} from 'glob';
 import path from 'path';
 
 import 'jest-specific-snapshot';
@@ -21,8 +21,7 @@ export function testFixtures(
   // Set this to the path of the test to only run that fixture
   only?: string = '',
 ) {
-  const FIXTURES = glob
-    .sync(`${fixturesDir}/**/spec.{js,ts}`)
+  const FIXTURES = globSync(`${fixturesDir}/**/spec.{js,ts}`)
     .map(file => {
       const parsed = path.parse(file);
       const contents = fs.readFileSync(file, 'utf8');

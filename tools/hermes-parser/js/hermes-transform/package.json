@@ -15,7 +15,7 @@
     "hermes-eslint": "0.34.0",
     "hermes-estree": "0.34.0",
     "hermes-parser": "0.34.0",
-    "string-width": "8.3.0"
+    "string-width": "4.2.3"
   },
   "peerDependencies": {
     "prettier": "^3.0.0",

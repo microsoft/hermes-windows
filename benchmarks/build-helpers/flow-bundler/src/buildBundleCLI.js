@@ -21,7 +21,8 @@ type BundleOpts = {
 
 async function main() {
   const rawArgs = process.argv.slice(2);
-  const cliYargs = yargs(rawArgs)
+  const parser = yargs(rawArgs);
+  const cliYargs = parser
     .usage('Usage: $0 [entrypoint]')
     .scriptName('flow-bundler')
     .option('config', {
@@ -72,7 +73,7 @@ async function main() {
       type: 'string',
       describe: 'Bundle entrypoint files',
     })
-    .wrap(yargs.terminalWidth())
+    .wrap(parser.terminalWidth())
     .parse();
 
   // Build multi bundles

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import yaml from "js-yaml";
+import { load as parseYaml } from "js-yaml";
 
 const APPROVED_REGISTRY =
   "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/";
@@ -380,7 +380,7 @@ function getDependabotDirectories(
   }
   let document: unknown;
   try {
-    document = yaml.load(content);
+    document = parseYaml(content);
   } catch (error) {
     errors.push(`${file}: invalid YAML: ${getErrorMessage(error)}`);
     return [];
@@ -717,7 +717,7 @@ function validateYarnProject(
   }
   let lock: unknown;
   try {
-    lock = yaml.load(content);
+    lock = parseYaml(content);
   } catch (error) {
     errors.push(
       `${project.lockfile}: invalid Yarn lockfile YAML: ${getErrorMessage(error)}`,
@@ -818,7 +818,7 @@ function validateYarnConfig(
   }
   let config: unknown;
   try {
-    config = yaml.load(content);
+    config = parseYaml(content);
   } catch (error) {
     errors.push(`${file}: invalid YAML: ${getErrorMessage(error)}`);
     return;

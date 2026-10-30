@@ -24,13 +24,13 @@
   },
   "dependencies": {
     "devtools-protocol": "0.0.1723477",
-    "yargs": "^18.2.0"
+    "yargs": "^17.6.2"
   },
   "devDependencies": {
-    "@babel/cli": "^8.0.6",
+    "@babel/cli": "^7.20.0",
     "@babel/core": "^7.20.0",
     "@babel/preset-env": "^7.20.0",
-    "@babel/preset-flow": "^8.0.1",
+    "@babel/preset-flow": "^7.20.0",
     "jest": "^30.5.2"
   },
   "jest": {
