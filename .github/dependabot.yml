@@ -19,14 +19,19 @@ updates:
       applies-to: version-updates
       patterns:
       - "*"
+    all-npm-security-updates:
+      applies-to: security-updates
+      patterns:
+      - "*"
   schedule:
     interval: weekly
   labels:
   - dependencies
-  versioning-strategy: increase-if-necessary
+  versioning-strategy: lockfile-only
   commit-message:
     prefix: 📦
   open-pull-requests-limit: 5
+  # Matches npmMinimalAgeGate in .yarnrc.yml: the feed serves new versions after 7 days.
   cooldown:
     default-days: 8
 - package-ecosystem: "github-actions"
