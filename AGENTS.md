@@ -152,6 +152,11 @@ Because those cells are native builds, they also stage `hermes.exe` and
 `hermesc.exe`, so the NuGet package now carries the tools for every target
 platform instead of only x64 and x86.
 
+GitHub code scanning uses CodeQL advanced setup in
+`.github/workflows/codeql.yml`, with no-build analysis and path exclusions in
+`.github/codeql/codeql-config.yml`. Repository default setup must stay
+disabled; otherwise GitHub rejects the workflow's uploads.
+
 ## Code Architecture
 
 The build produces two VM variants: "regular" (full VM with compiler) and "lean" (excludes parser and compiler for smaller binary size).
