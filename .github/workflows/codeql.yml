@@ -28,9 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # C/C++ takes about 30 minutes, so PRs skip it; pushes to main and
-        # the weekly schedule still scan it.
-        language: ${{ fromJSON(github.event_name == 'pull_request' && '["actions", "javascript-typescript", "python"]' || '["actions", "c-cpp", "javascript-typescript", "python"]') }}
+        language: [actions, c-cpp, javascript-typescript, python]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
