@@ -101,6 +101,10 @@ extends:
         # scripts, test utilities, benchmarks, or external tools (LLVM lit).
         enabled: false
       codeql:
+        # TEMPORARY (PR #401): run CodeQL 3000 in PR builds to validate
+        # LGTM_INDEX_FILTERS on a real agent. Revert before merge.
+        ${{ if eq(parameters.MustPublish, false) }}:
+          enabledOnNonDefaultBranches: true
         compiled:
           enabled: true
         runSourceLanguagesInSourceAnalysis: true
