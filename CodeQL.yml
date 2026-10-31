@@ -1,0 +1,17 @@
+# Classifies findings from the CodeQL 3000 scan in the Azure DevOps pipelines.
+# Findings in these paths are not filed as SDL bugs. This file does not change
+# what CodeQL extracts, and GitHub code scanning does not read it; see
+# .github/codeql/codeql-config.yml for that.
+# See https://eng.ms/docs/coreai/devdiv/one-engineering-system-1es/1es-docs/codeql/configuring-codeql3000-ado-pipelines#excluding-external-libraries-test-files-generated-files-docs
+
+path_classifiers:
+  library:
+    # Third-party code vendored into the repository.
+    - external
+    # Upstream JavaScript tooling that this repository does not publish.
+    - tools/hermes-parser
+  test:
+    - test
+    - unittests
+    - benchmarks
+    - utils/testsuite

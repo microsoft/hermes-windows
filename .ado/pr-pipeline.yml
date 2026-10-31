@@ -22,6 +22,9 @@ schedules:
     - main
   always: true
 
+variables:
+  - template: codeql-variables.yml
+
 extends:
   template: build-template.yml@self
   parameters:
