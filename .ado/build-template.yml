@@ -126,13 +126,6 @@ extends:
         steps:
         - template: /.ado/ensure-node24.yml@self
 
-        # TEMPORARY (PR #401): show LGTM_INDEX_FILTERS as job tasks see it.
-        - powershell: |
-            $lines = $env:LGTM_INDEX_FILTERS -split "`n"
-            Write-Host "LGTM_INDEX_FILTERS has $($lines.Count) lines:"
-            $lines | ForEach-Object { Write-Host "[$_]" }
-          displayName: 'TEMPORARY: Show LGTM_INDEX_FILTERS'
-
         - script: npm ci --ignore-scripts --no-audit --no-fund
           workingDirectory: .ado/scripts
           displayName: Install build script dependencies
