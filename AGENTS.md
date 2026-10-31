@@ -156,9 +156,10 @@ GitHub code scanning uses CodeQL advanced setup in
 `.github/workflows/codeql.yml`, with no-build analysis and path exclusions in
 `.github/codeql/codeql-config.yml`. Repository default setup must stay
 disabled; otherwise GitHub rejects the workflow's uploads. The Azure DevOps
-pipelines run CodeQL 3000 through the 1ES templates; `CodeQL.yml` at the
-repository root classifies its third-party and test findings so they are not
-filed as SDL bugs.
+pipelines run CodeQL 3000 through the 1ES templates. `.ado/codeql-variables.yml`
+sets `LGTM_INDEX_FILTERS` to keep the same paths out of its interpreted-language
+database, and `CodeQL.yml` at the repository root classifies third-party and
+test findings so they are not filed as SDL bugs.
 
 ## Code Architecture
 

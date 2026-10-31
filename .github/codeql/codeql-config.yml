@@ -3,7 +3,8 @@ name: hermes-windows CodeQL config
 # Scan first-party code only. Vendored code, test fixtures and benchmarks are
 # excluded: the deeply nested parser fixtures in test/ overflow the JavaScript
 # extractor's stack, and including external/ runs the C/C++ analysis out of
-# memory on a standard runner.
+# memory on a standard runner. Keep the paths in sync with
+# .ado/codeql-variables.yml.
 paths-ignore:
   - external
   - test
