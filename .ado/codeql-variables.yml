@@ -1,0 +1,19 @@
+#
+# Variables for the CodeQL 3000 tasks that the 1ES pipeline templates inject.
+#
+
+variables:
+  # Keeps third-party, test and benchmark code out of the interpreted-language
+  # CodeQL database (JavaScript, Python, Actions). Without it, the deeply
+  # nested expressions in test/Parser overflow the JavaScript extractor's stack
+  # and the whole database fails. The extractors read this variable from the
+  # environment; traced C++ builds ignore it. Keep the paths in sync with
+  # .github/codeql/codeql-config.yml.
+  - name: LGTM_INDEX_FILTERS
+    value: |-
+      exclude:external
+      exclude:test
+      exclude:unittests
+      exclude:benchmarks
+      exclude:.yarn
+      exclude:**/__tests__

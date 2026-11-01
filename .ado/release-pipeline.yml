@@ -26,6 +26,9 @@ resources:
     name: 1ESPipelineTemplates/OfficePipelineTemplates
     ref: refs/tags/release
 
+variables:
+  - template: codeql-variables.yml
+
 extends:
   template: v1/Office.Official.PipelineTemplate.yml@OfficePipelineTemplates
   parameters:
