@@ -6,9 +6,11 @@ variables:
   # Keeps third-party, test and benchmark code out of the interpreted-language
   # CodeQL database (JavaScript, Python, Actions). Without it, the deeply
   # nested expressions in test/Parser overflow the JavaScript extractor's stack
-  # and the whole database fails. The extractors read this variable from the
-  # environment; traced C++ builds ignore it. Keep the paths in sync with
-  # .github/codeql/codeql-config.yml.
+  # and the whole database fails. tools/hermes-parser (upstream Flow-syntax
+  # tooling) and the header and footer fragments only produce parse errors.
+  # The extractors read this variable from the environment; traced C++ builds
+  # ignore it. Keep the paths in sync with .github/codeql/codeql-config.yml
+  # and .github/codeql/codeql-config-javascript.yml.
   - name: LGTM_INDEX_FILTERS
     value: |-
       exclude:external
@@ -17,3 +19,8 @@ variables:
       exclude:benchmarks
       exclude:.yarn
       exclude:**/__tests__
+      exclude:tools/hermes-parser
+      exclude:lib/InternalJavaScript/00-header.js
+      exclude:lib/InternalJavaScript/99-footer.js
+      exclude:API/hermes/extensions/00-header.js
+      exclude:API/hermes/extensions/99-footer.js

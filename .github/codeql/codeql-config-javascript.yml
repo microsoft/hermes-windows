@@ -1,0 +1,23 @@
+name: hermes-windows CodeQL config for JavaScript/TypeScript
+
+# Same as codeql-config.yml, plus `paths`. On Linux runners the JavaScript
+# extractor skips folders whose names start with a dot, except .github, so
+# .ado/scripts must be listed to scan our CI scripts; `.` keeps the rest of the
+# repository in scope. Other languages must not use these `paths`: with them,
+# the C/C++ no-build extractor finds no source files. Keep paths-ignore in sync
+# with codeql-config.yml and .ado/codeql-variables.yml.
+paths:
+  - .
+  - .ado/scripts
+paths-ignore:
+  - external
+  - test
+  - unittests
+  - benchmarks
+  - .yarn
+  - "**/__tests__"
+  - tools/hermes-parser
+  - lib/InternalJavaScript/00-header.js
+  - lib/InternalJavaScript/99-footer.js
+  - API/hermes/extensions/00-header.js
+  - API/hermes/extensions/99-footer.js

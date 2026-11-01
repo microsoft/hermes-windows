@@ -3,7 +3,10 @@ name: hermes-windows CodeQL config
 # Scan first-party code only. Vendored code, test fixtures and benchmarks are
 # excluded: the deeply nested parser fixtures in test/ overflow the JavaScript
 # extractor's stack, and including external/ runs the C/C++ analysis out of
-# memory on a standard runner. Keep the paths in sync with
+# memory on a standard runner. tools/hermes-parser is upstream tooling written
+# in Flow syntax that CodeQL cannot parse, and the header and footer files are
+# fragments that only parse once the build wraps other files with them. Keep
+# the paths in sync with .github/codeql/codeql-config-javascript.yml and
 # .ado/codeql-variables.yml.
 paths-ignore:
   - external
@@ -12,3 +15,8 @@ paths-ignore:
   - benchmarks
   - .yarn
   - "**/__tests__"
+  - tools/hermes-parser
+  - lib/InternalJavaScript/00-header.js
+  - lib/InternalJavaScript/99-footer.js
+  - API/hermes/extensions/00-header.js
+  - API/hermes/extensions/99-footer.js
