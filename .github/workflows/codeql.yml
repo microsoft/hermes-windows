@@ -39,7 +39,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
-          config-file: ./.github/codeql/codeql-config.yml
+          config-file: ./.github/codeql/${{ matrix.language == 'javascript-typescript' && 'codeql-config-javascript.yml' || 'codeql-config.yml' }}
 
       # Keep the default setup's categories so existing alerts carry over.
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
