@@ -102,7 +102,7 @@ void dumpInstruction(
     const regex::MatchNChar8Insn *insn,
     llvh::raw_ostream &OS) {
   OS << "MatchNChar8: '";
-  const char *cPtr = reinterpret_cast<const char *>(insn + sizeof(regex::Insn));
+  const char *cPtr = reinterpret_cast<const char *>(insn + 1);
   for (uint32_t i = 0; i < insn->charCount; i++) {
     char c = *cPtr;
     if (std::isprint(c)) {
@@ -119,7 +119,7 @@ void dumpInstruction(
     const regex::MatchNCharICase8Insn *insn,
     llvh::raw_ostream &OS) {
   OS << "MatchNCharICase8: '";
-  const char *cPtr = reinterpret_cast<const char *>(insn + sizeof(regex::Insn));
+  const char *cPtr = reinterpret_cast<const char *>(insn + 1);
   for (uint32_t i = 0; i < insn->charCount; i++) {
     char c = *cPtr;
     if (std::isprint(c)) {
