@@ -197,6 +197,14 @@ class MallocGC final : public GCBase {
   /// Collect all of the dead objects and symbols in the heap. Also invalidate
   /// weak pointers that point to dead objects.
   void collect(std::string cause, bool canEffectiveOOM = false) override;
+  void collectWithOptions(std::string &&cause, const GCOptions &options)
+      override;
+
+  /// Total number of collections; MallocGC has no separate young generation.
+  /// Requires exclusive runtime access.
+  unsigned getNumYGGCs() const {
+    return getNumGCs();
+  }
 
   /// The minimum allocation size.
   static constexpr uint32_t minAllocationSize() {

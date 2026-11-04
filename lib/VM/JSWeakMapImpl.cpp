@@ -7,6 +7,7 @@
 
 #include "hermes/VM/JSWeakMapImpl.h"
 
+#include "hermes/VM/Callable.h"
 #include "hermes/VM/Casting.h"
 #include "hermes/VM/Runtime-inline.h"
 
@@ -110,6 +111,69 @@ HermesValue JSWeakMapImplBase::getValue(
     return HermesValue::encodeUndefinedValue();
   }
   return it->getMappedValue(runtime.getHeap());
+}
+
+HermesValue JSWeakMapImplBase::getOrInsert(
+    Handle<JSWeakMapImplBase> self,
+    Runtime &runtime,
+    Handle<> key,
+    Handle<> value) {
+  assert(
+      canBeHeldWeakly(runtime, *key) &&
+      "key can only be Object or non-registered Symbol");
+  auto keyObjOrSym = SmallHermesValue::encodeHermesValue(*key, runtime);
+  NoAllocScope noAlloc{runtime};
+  uint32_t hash = runtime.gcStableHashHermesValue(*key);
+  WeakRefLookupKey lookupKey{keyObjOrSym, hash};
+  DenseSetT::iterator it = self->set_.find_as(lookupKey);
+  if (it != self->set_.end()) {
+    return it->getMappedValue(runtime.getHeap());
+  }
+
+  if (self->set_.size() >= self->targetSize_) {
+    self->clearFreeableEntries();
+  }
+  WeakRefKey mapKey{runtime, keyObjOrSym, hash, *value, *self};
+  auto result = self->set_.insert(mapKey);
+  (void)result;
+  assert(result.second && "unable to add a new value to map");
+  return *value;
+}
+
+CallResult<HermesValue> JSWeakMapImplBase::getOrInsertComputed(
+    Handle<JSWeakMapImplBase> self,
+    Runtime &runtime,
+    Handle<> key,
+    Handle<Callable> callback) {
+  assert(
+      canBeHeldWeakly(runtime, *key) &&
+      "key can only be Object or non-registered Symbol");
+
+  {
+    auto keyObjOrSym = SmallHermesValue::encodeHermesValue(*key, runtime);
+    NoAllocScope noAlloc{runtime};
+    uint32_t hash = runtime.gcStableHashHermesValue(*key);
+    WeakRefLookupKey lookupKey{keyObjOrSym, hash};
+    DenseSetT::iterator it = self->set_.find_as(lookupKey);
+    if (it != self->set_.end()) {
+      return it->getMappedValue(runtime.getHeap());
+    }
+  }
+
+  struct : public Locals {
+    PinnedValue<> value;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  CallResult<PseudoHandle<>> callRes = Callable::executeCall1(
+      callback, runtime, Runtime::getUndefinedValue(), key.getHermesValue());
+  if (LLVM_UNLIKELY(callRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  lv.value = std::move(*callRes);
+
+  // The callback may have modified the map, so fall back to setValue.
+  setValue(self, runtime, key, lv.value);
+  return lv.value.getHermesValue();
 }
 
 uint32_t JSWeakMapImplBase::debugFreeSlotsAndGetSize(
@@ -247,13 +311,37 @@ const ObjectVTable JSWeakMapImpl<C>::vt{
 
 template <CellKind C>
 CallResult<PseudoHandle<JSWeakMapImpl<C>>> JSWeakMapImpl<C>::create(
+    Runtime &runtime) {
+  Handle<JSObject> prototype = runtime.weakMapPrototype;
+  Handle<HiddenClass> clazz = runtime.classJSWeakMap;
+  if constexpr (C == CellKind::JSWeakMapKind) {
+    prototype = Handle<JSObject>::vmcast(&runtime.weakMapPrototype);
+    clazz = Handle<HiddenClass>::vmcast(&runtime.classJSWeakMap);
+  } else {
+    static_assert(C == CellKind::JSWeakSetKind, "Unexpected CellKind");
+    prototype = Handle<JSObject>::vmcast(&runtime.weakSetPrototype);
+    clazz = Handle<HiddenClass>::vmcast(&runtime.classJSWeakSet);
+  }
+  auto *cell = runtime.makeAFixed<JSWeakMapImpl<C>, HasFinalizer::Yes>(
+      runtime, prototype, clazz);
+  return JSObjectInit::initToPseudoHandle(runtime, cell);
+}
+
+template <CellKind C>
+CallResult<PseudoHandle<JSWeakMapImpl<C>>> JSWeakMapImpl<C>::create(
     Runtime &runtime,
     Handle<JSObject> parentHandle) {
+  Handle<HiddenClass> clazz = runtime.classJSWeakMap;
+  if constexpr (C == CellKind::JSWeakMapKind) {
+    clazz = runtime.getHiddenClassForPrototype(
+        *parentHandle, runtime.classJSWeakMap);
+  } else {
+    static_assert(C == CellKind::JSWeakSetKind, "Unexpected CellKind");
+    clazz = runtime.getHiddenClassForPrototype(
+        *parentHandle, runtime.classJSWeakSet);
+  }
   auto *cell = runtime.makeAFixed<JSWeakMapImpl<C>, HasFinalizer::Yes>(
-      runtime,
-      parentHandle,
-      runtime.getHiddenClassForPrototype(
-          *parentHandle, numOverlapSlots<JSWeakMapImpl>()));
+      runtime, parentHandle, clazz);
   return JSObjectInit::initToPseudoHandle(runtime, cell);
 }
 

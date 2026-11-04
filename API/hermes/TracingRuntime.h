@@ -16,6 +16,10 @@ namespace facebook {
 namespace hermes {
 namespace tracing {
 
+/// Prepare traceable builtins by installing Math wrappers into both properties
+/// and static builtin slots.
+void installTraceableBuiltinWrappers(jsi::Runtime &runtime);
+
 class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
 #ifdef JSI_UNSTABLE
     ,
@@ -64,6 +68,13 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
   jsi::String createStringFromAscii(const char *str, size_t length) override;
   jsi::String createStringFromUtf8(const uint8_t *utf8, size_t length) override;
   jsi::String createStringFromUtf16(const char16_t *utf16, size_t length)
+      override;
+  /// Parse JSON with the JS-based default implementation in jsi::Runtime
+  /// rather than forwarding to the plain runtime. The default calls back into
+  /// this runtime for global(), getProperty() and call(), so parsing is
+  /// recorded as ordinary records and the returned value gets a def, without
+  /// needing a dedicated record type.
+  jsi::Value createValueFromJsonUtf8(const uint8_t *json, size_t length)
       override;
   std::string utf8(const jsi::PropNameID &) override;
 
@@ -138,6 +149,22 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
   jsi::ArrayBuffer createArrayBuffer(
       std::shared_ptr<jsi::MutableBuffer> buffer) override;
 
+  jsi::Uint8Array createUint8Array(size_t length) override;
+  jsi::Uint8Array createUint8Array(
+      const jsi::ArrayBuffer &buffer,
+      size_t offset,
+      size_t length) override;
+
+  jsi::ArrayBuffer buffer(const jsi::TypedArray &typedArray) override;
+
+  jsi::Value createError(const jsi::String &msg) override;
+  jsi::Value createEvalError(const jsi::String &msg) override;
+  jsi::Value createRangeError(const jsi::String &msg) override;
+  jsi::Value createReferenceError(const jsi::String &msg) override;
+  jsi::Value createSyntaxError(const jsi::String &msg) override;
+  jsi::Value createTypeError(const jsi::String &msg) override;
+  jsi::Value createURIError(const jsi::String &msg) override;
+
   size_t size(const jsi::Array &arr) override;
   size_t size(const jsi::ArrayBuffer &buf) override;
 
@@ -149,6 +176,9 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
       const jsi::Array &arr,
       size_t i,
       const jsi::Value &value) override;
+
+  size_t push(const jsi::Array &arr, const jsi::Value *elements, size_t count)
+      override;
 
   jsi::Function createFunctionFromHostFunction(
       const jsi::PropNameID &name,
@@ -169,14 +199,16 @@ class TracingRuntime : public jsi::RuntimeDecorator<jsi::Runtime>
   void setExternalMemoryPressure(const jsi::Object &obj, size_t amount)
       override;
 
+  std::shared_ptr<jsi::MutableBuffer> tryGetMutableBuffer(
+      const jsi::ArrayBuffer &buffer) override;
   /// @}
 
 #ifdef JSI_UNSTABLE
-  std::shared_ptr<jsi::Serialized> serialize(jsi::Value &value) override;
+  std::shared_ptr<jsi::Serialized> serialize(const jsi::Value &value) override;
   jsi::Value deserialize(
       const std::shared_ptr<jsi::Serialized> &serialized) override;
   std::unique_ptr<jsi::Serialized> serializeWithTransfer(
-      jsi::Value &value,
+      const jsi::Value &value,
       const jsi::Array &transferList) override;
   jsi::Array deserializeWithTransfer(
       std::unique_ptr<jsi::Serialized> &serialized) override;

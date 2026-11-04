@@ -8,8 +8,10 @@
 #include "JSLibInternal.h"
 
 #include "hermes/FrontEndDefs/Builtins.h"
+#include "hermes/FrontEndDefs/Typeof.h"
 #include "hermes/Support/Base64vlq.h"
 #include "hermes/VM/Callable.h"
+#include "hermes/VM/FastArray.h"
 #include "hermes/VM/JSArray.h"
 #include "hermes/VM/JSArrayBuffer.h"
 #include "hermes/VM/JSLib.h"
@@ -20,6 +22,8 @@
 #include "hermes/VM/StringBuilder.h"
 #include "hermes/VM/StringView.h"
 
+#include <algorithm>
+#include <cmath>
 #include <random>
 
 namespace hermes {
@@ -195,6 +199,20 @@ CallResult<HermesValue> hermesBuiltinThrowTypeError(void *, Runtime &runtime) {
   return runtime.raiseTypeError(args.getArgHandle(0));
 }
 
+/// Check that \p value matches the type flags, throw TypeError if not.
+///
+/// \code
+///   HermesBuiltin.checkedTypeCast = function(value, typeFlags) {...}
+/// \endcode
+CallResult<HermesValue> hermesBuiltinCheckedTypeCast(void *, Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  HermesValue value = args.getArg(0);
+  uint16_t flags = static_cast<uint16_t>(args.getArg(1).getNumber());
+  if (LLVM_LIKELY(matchTypeOfIs(value, TypeOfIsTypes(flags))))
+    return value;
+  return runtime.raiseTypeError("Checked cast failed");
+}
+
 /// Throw a reference error with the argument as a message.
 ///
 /// \code
@@ -254,7 +272,7 @@ CallResult<HermesValue> copyDataPropertiesSlowPath_RJS(
     //     1. Set excluded to true.
     if (excludedItems) {
       assert(
-          !excludedItems->isProxyObject() &&
+          !excludedItems->isProxyObject(runtime) &&
           "internal excludedItems object is a proxy");
       ComputedPropertyDescriptor desc;
       CallResult<bool> cr = JSObject::getOwnComputedPrimitiveDescriptor(
@@ -278,7 +296,7 @@ CallResult<HermesValue> copyDataPropertiesSlowPath_RJS(
     //   ii. If desc is not undefined and desc.[[Enumerable]] is true, then
     // TODO(T141997867), move this special case behavior for host objects to
     // getOwnComputedDescriptor.
-    if ((*crb && desc.flags.enumerable) || from->isHostObject()) {
+    if ((*crb && desc.flags.enumerable) || from->isHostObject(runtime)) {
       //     1. Let propValue be ? Get(from, nextKey).
       CallResult<PseudoHandle<>> crv =
           JSObject::getComputed_RJS(from, runtime, lv.nextKeyHandle);
@@ -352,7 +370,7 @@ CallResult<HermesValue> hermesBuiltinCopyDataProperties(
   // propertyKeys
   Handle<JSObject> excludedItems = args.dyncastArg<JSObject>(2);
   assert(
-      (!excludedItems || !excludedItems->isProxyObject()) &&
+      (!excludedItems || !excludedItems->isProxyObject(runtime)) &&
       "excludedItems internal List is a Proxy");
 
   // We cannot use the fast path if the object is a proxy, host object, or when
@@ -360,7 +378,7 @@ CallResult<HermesValue> hermesBuiltinCopyDataProperties(
   // because in order to use JSObject::forEachOwnPropertyWhile, we must not
   // modify the underlying property map or hidden class. However, if we have an
   // accessor, we cannot guarantee that condition, so we use the slow path.
-  if (source->isProxyObject() || source->isHostObject() ||
+  if (source->isProxyObject(runtime) || source->isHostObject(runtime) ||
       source->getClass(runtime)->getMayHaveAccessor()) {
     return copyDataPropertiesSlowPath_RJS(
         runtime, target, source, excludedItems);
@@ -380,7 +398,7 @@ CallResult<HermesValue> hermesBuiltinCopyDataProperties(
 
         if (excludedItems) {
           assert(
-              !excludedItems->isProxyObject() &&
+              !excludedItems->isProxyObject(runtime) &&
               "internal excludedItems object is a proxy");
           ComputedPropertyDescriptor xdesc;
           auto cr = JSObject::getOwnComputedPrimitiveDescriptor(
@@ -455,6 +473,52 @@ CallResult<HermesValue> hermesBuiltinCopyDataProperties(
 }
 
 /// \code
+///   HermesBuiltin.copyRestArgsFast = function (from) {}
+/// \endcode
+/// Same as copyRestArgs, but produces a FastArray. Used by typed-mode rest
+/// parameters declared as Array<T>, where the consuming code expects a
+/// FastArray rather than an ordinary JSArray.
+CallResult<HermesValue> hermesBuiltinCopyRestArgsFast(
+    void *,
+    Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  struct : public Locals {
+    PinnedValue<FastArray> array;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  auto frames = runtime.getStackFrames();
+  auto it = frames.begin();
+  ++it;
+  if (LLVM_UNLIKELY(it == frames.end()))
+    return HermesValue::encodeUndefinedValue();
+
+  if (!args.getArg(0).isNumber())
+    return HermesValue::encodeUndefinedValue();
+  uint32_t from = truncateToUInt32(args.getArg(0).getNumber());
+
+  uint32_t argCount = it->getArgCount();
+  uint32_t length = from <= argCount ? argCount - from : 0;
+
+  auto cr = FastArray::create(runtime, length);
+  if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  lv.array.castAndSetHermesValue<FastArray>(*cr);
+
+  for (uint32_t i = 0; i != length; ++i) {
+    GCScopeMarkerRAII marker{runtime};
+    auto valHandle = runtime.makeHandle(it->getArgRef(from));
+    if (LLVM_UNLIKELY(
+            FastArray::push(lv.array, runtime, valHandle) ==
+            ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    ++from;
+  }
+
+  return lv.array.getHermesValue();
+}
+
+/// \code
 ///   HermesBuiltin.copyRestArgs = function (from) {}
 /// \endcode
 /// Copy the callers parameters starting from index \c from (where the first
@@ -505,14 +569,14 @@ CallResult<HermesValue> hermesBuiltinCopyRestArgs(void *, Runtime &runtime) {
 /// /endcode
 /// ES9.0 12.2.5.2
 /// Iterate the iterable source (as if using a for-of) and copy the values from
-/// the spread source into the target array, starting at `nextIndex`.
+/// the spread source into the target array, starting at `nextIndex`. Then set
+/// the length of the target array to the next empty index.
 /// \return the next empty index in the array to use for additional properties.
 CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   struct : public Locals {
     PinnedValue<> nextValue;
     PinnedValue<> idxHandle;
-    PinnedValue<> nextIndex;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -590,7 +654,7 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
   }
   CheckedIteratorRecord iteratorRecord = *iteratorRecordRes;
 
-  lv.nextIndex = args.getArg(2);
+  auto nextIndex = args.getArg(2).getNumberAs<JSArray::size_type>();
 
   // 4. Repeat,
   for (GCScopeMarkerRAII marker{runtime}; /* nothing */; marker.flush()) {
@@ -603,7 +667,14 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
 
     // b. If next is false, return nextIndex.
     if (!next) {
-      return lv.nextIndex.getHermesValue();
+      // Set the length even if nothing was copied, so that it also covers any
+      // elisions right before the spread.
+      if (LLVM_UNLIKELY(
+              JSArray::setLengthProperty(target, runtime, nextIndex) ==
+              ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      return HermesValue::encodeTrustedNumberValue(nextIndex);
     }
     // c. Let nextValue be ? IteratorValue(next).
     auto nextItemRes = JSObject::getNamed_RJS(
@@ -616,22 +687,17 @@ CallResult<HermesValue> hermesBuiltinArraySpread(void *, Runtime &runtime) {
     // d. Let status be CreateDataProperty(array,
     //    ToString(ToUint32(nextIndex)), nextValue).
     // e. Assert: status is true.
+    // setElementAt is valid here for the same reason as in the fast path. It
+    // doesn't update the length, which is set once the iterator is done.
     if (LLVM_UNLIKELY(
-            JSArray::defineOwnComputed(
-                target,
-                runtime,
-                lv.nextIndex,
-                DefinePropertyFlags::getDefaultNewPropertyFlags(),
-                lv.nextValue) == ExecutionStatus::EXCEPTION)) {
+            JSArray::setElementAt(target, runtime, nextIndex, lv.nextValue) ==
+            ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
 
     // f. Let nextIndex be nextIndex + 1.
-    lv.nextIndex =
-        HermesValue::encodeTrustedNumberValue(lv.nextIndex->getNumber() + 1);
+    ++nextIndex;
   }
-
-  return lv.nextIndex.getHermesValue();
 }
 
 /// \code
@@ -720,9 +786,8 @@ CallResult<HermesValue> hermesBuiltinApplyArguments(void *, Runtime &runtime) {
   Handle<> newTarget = args.getArgHandle(2);
   bool isConstructCall = !newTarget->isUndefined();
   assert(
-      newTarget->isUndefined() ||
-      isConstructor(runtime, *newTarget) &&
-          "new.target can only be undefined or a constructor.");
+      (newTarget->isUndefined() || isConstructor(runtime, *newTarget)) &&
+      "new.target can only be undefined or a constructor.");
 
   Handle<> thisHandle = args.getArgHandle(1);
 
@@ -830,7 +895,7 @@ CallResult<HermesValue> hermesBuiltinExportAll(void *, Runtime &runtime) {
   }
 
   Handle<JSObject> source = args.dyncastArg<JSObject>(1);
-  if (LLVM_UNLIKELY(!source) || LLVM_UNLIKELY(source->isProxyObject())) {
+  if (LLVM_UNLIKELY(!source) || LLVM_UNLIKELY(source->isProxyObject(runtime))) {
     return runtime.raiseTypeError(
         "exportAll() source argument must be non-Proxy object");
   }
@@ -983,7 +1048,8 @@ CallResult<HermesValue> hermesBuiltinSetFunctionName(void *, Runtime &runtime) {
   }
 
   len.add(lv.computedName->getStringLength());
-  auto builderRes = StringBuilder::createStringBuilder(runtime, len);
+  auto builderRes = StringBuilder::createStringBuilder(
+      runtime, len, lv.computedName->isASCII());
   if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
   auto builder = *builderRes;
@@ -1014,6 +1080,100 @@ CallResult<HermesValue> hermesBuiltinSetFunctionName(void *, Runtime &runtime) {
   return HermesValue::encodeUndefinedValue();
 }
 
+/// \code
+///   HermesBuiltin.fastArrayPop = function (array, n) {}
+/// \endcode
+/// Pop the last \p n elements from a FastArray, returning the topmost popped
+/// element or undefined if no element was popped. \p n is expected to be a
+/// non-negative integral number; the SHBuiltin caller is responsible for
+/// providing it. Values that don't fit in uint32_t are clamped to UINT32_MAX,
+/// which will then be clamped to the array length by FastArray::pop.
+CallResult<HermesValue> hermesBuiltinFastArrayPop(void *, Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  auto arr = Handle<FastArray>::vmcast(args.getArgHandle(0));
+  double nDouble = args.getArg(1).getNumber();
+  uint32_t n = nDouble >= (double)UINT32_MAX
+      ? UINT32_MAX
+      : (nDouble > 0 ? (uint32_t)nDouble : 0);
+  return FastArray::pop(arr, runtime, n);
+}
+
+/// \code
+///   HermesBuiltin.fastArraySlice = function (array, n) {}
+/// \endcode
+/// Return a new FastArray containing the elements of \p array starting at
+/// index \p n (i.e., \c array.slice(n) for FastArrays). The result has the
+/// same prototype as \p array. \p n is expected to be a non-negative
+/// integral number; the IRGen caller is responsible for providing it.
+/// Values that exceed the array length yield an empty array.
+CallResult<HermesValue> hermesBuiltinFastArraySlice(void *, Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  struct : public Locals {
+    PinnedValue<FastArray> source;
+    PinnedValue<JSObject> prototype;
+    PinnedValue<FastArray> result;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  lv.source = vmcast<FastArray>(args.getArg(0));
+  double nDouble = args.getArg(1).getNumber();
+  assert(
+      nDouble >= 0 && nDouble == std::floor(nDouble) &&
+      "fastArraySlice: n must be a non-negative integer");
+  uint32_t n = nDouble >= (double)UINT32_MAX ? UINT32_MAX : (uint32_t)nDouble;
+
+  uint32_t srcLen = lv.source->getLengthAsUint32(runtime);
+
+  // Reuse the source's prototype so the result has the same Array<T>
+  // class shape.
+  lv.prototype = lv.source->getParent(runtime);
+
+  // Clamp n to srcLen so FastArray::append's fromIndex is valid even when
+  // the IRGen-supplied index exceeds the source length.
+  uint32_t effN = std::min(n, srcLen);
+  uint32_t resultLen = srcLen - effN;
+
+  auto cr = FastArray::create(runtime, lv.prototype, resultLen);
+  if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  lv.result.castAndSetHermesValue<FastArray>(*cr);
+
+  if (LLVM_UNLIKELY(
+          FastArray::append(lv.result, runtime, lv.source, effN) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+
+  return lv.result.getHermesValue();
+}
+
+/// Typed Object.keys/values/entries: args are the object and the prototype of
+/// the resulting Array<T>, supplied by IRGen.
+/// @{
+CallResult<HermesValue> hermesBuiltinObjectKeys(void *, Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  return objectKeysFastArray(
+      runtime,
+      Handle<JSObject>::vmcast(args.getArgHandle(0)),
+      Handle<JSObject>::vmcast(args.getArgHandle(1)));
+}
+
+CallResult<HermesValue> hermesBuiltinObjectValues(void *, Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  return objectValuesFastArray(
+      runtime,
+      Handle<JSObject>::vmcast(args.getArgHandle(0)),
+      Handle<JSObject>::vmcast(args.getArgHandle(1)));
+}
+
+CallResult<HermesValue> hermesBuiltinObjectEntries(void *, Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  return objectEntriesFastArray(
+      runtime,
+      Handle<JSObject>::vmcast(args.getArgHandle(0)),
+      Handle<JSObject>::vmcast(args.getArgHandle(1)));
+}
+/// @}
+
 void createHermesBuiltins(Runtime &runtime) {
   struct : public Locals {
     PinnedValue<NativeFunction> method;
@@ -1026,13 +1186,10 @@ void createHermesBuiltins(Runtime &runtime) {
                                 uint8_t count = 0) {
     auto methodRes = NativeFunction::create(
         runtime,
-        Handle<JSObject>::vmcast(&runtime.functionPrototype),
-        Runtime::makeNullHandle<Environment>(),
         nullptr /* context */,
         func,
         Predefined::getSymbolID(symID),
-        count,
-        Runtime::makeNullHandle<JSObject>());
+        count);
     lv.method = std::move(*methodRes);
     runtime.registerBuiltin(builtinIndex, *lv.method);
   };
@@ -1077,6 +1234,11 @@ void createHermesBuiltins(Runtime &runtime) {
       hermesBuiltinCopyRestArgs,
       1);
   defineInternMethod(
+      B::HermesBuiltin_copyRestArgsFast,
+      P::copyRestArgsFast,
+      hermesBuiltinCopyRestArgsFast,
+      1);
+  defineInternMethod(
       B::HermesBuiltin_arraySpread,
       P::arraySpread,
       hermesBuiltinArraySpread,
@@ -1103,10 +1265,39 @@ void createHermesBuiltins(Runtime &runtime) {
       P::initRegexNamedGroups,
       hermesBuiltinInitRegexNamedGroups);
   defineInternMethod(
+      B::HermesBuiltin_checkedTypeCast,
+      P::checkedTypeCast,
+      hermesBuiltinCheckedTypeCast,
+      2);
+  defineInternMethod(
       B::HermesBuiltin_setFunctionName,
       P::setFunctionName,
       hermesBuiltinSetFunctionName,
       3);
+
+  defineInternMethod(
+      B::HermesBuiltin_fastArrayPop,
+      P::fastArrayPop,
+      hermesBuiltinFastArrayPop,
+      2);
+  defineInternMethod(
+      B::HermesBuiltin_fastArraySlice,
+      P::fastArraySlice,
+      hermesBuiltinFastArraySlice,
+      2);
+
+  defineInternMethod(
+      B::HermesBuiltin_objectKeys, P::objectKeys, hermesBuiltinObjectKeys, 2);
+  defineInternMethod(
+      B::HermesBuiltin_objectValues,
+      P::objectValues,
+      hermesBuiltinObjectValues,
+      2);
+  defineInternMethod(
+      B::HermesBuiltin_objectEntries,
+      P::objectEntries,
+      hermesBuiltinObjectEntries,
+      2);
 
   // Define the 'requireFast' function, which takes a number argument.
   defineInternMethod(

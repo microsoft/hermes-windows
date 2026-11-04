@@ -255,7 +255,10 @@ void ESTreeIRGen::genVariableDeclarator(
     lref.emitStore(genExpression(declarator->_init, nameHint));
   } else if (kind == kw_.identLet) {
     // "let" declarations without an initializer must be set to undefined.
-    lref.emitStore(Builder.getLiteralUndefined());
+    // This is the placeholder so it isn't narrowed.
+    // NOTE: This narrow flag is a hack because the typed Variable isn't
+    // always properly typed in IR yet.
+    lref.emitStore(Builder.getLiteralUndefined(), /* narrow */ false);
   }
 }
 
@@ -876,9 +879,9 @@ void ESTreeIRGen::genForInStatement(ESTree::ForInStatementNode *ForInStmt) {
 }
 
 void ESTreeIRGen::genForOfStatement(ESTree::ForOfStatementNode *forOfStmt) {
-  if (auto *type = llvh::dyn_cast<flow::ArrayType>(
-          flowContext_.getNodeTypeOrAny(forOfStmt->_right)->info)) {
-    return genForOfFastArrayStatement(forOfStmt, type);
+  flow::Type *rightType = flowContext_.getNodeTypeOrAny(forOfStmt->_right);
+  if (flowContext_.isArrayClassType(rightType)) {
+    return genForOfFastArrayStatement(forOfStmt, rightType);
   }
 
   auto *outerScope = curFunction()->curScope();
@@ -1085,7 +1088,7 @@ void ESTreeIRGen::genAsyncForOfStatement(
 
 void ESTreeIRGen::genForOfFastArrayStatement(
     ESTree::ForOfStatementNode *forOfStmt,
-    flow::ArrayType *type) {
+    flow::Type *arrayType) {
   auto *outerScope = curFunction()->curScope();
 
   // If block scoping is enabled, check if anything in the loop might capture,
@@ -1144,7 +1147,7 @@ void ESTreeIRGen::genForOfFastArrayStatement(
   auto *nextValue = Builder.createFastArrayLoadInst(
       exprValue,
       Builder.createLoadStackInst(idx),
-      flowTypeToIRType(type->getElement()));
+      flowTypeToIRType(flowContext_.getArrayElementType(arrayType)));
   createLRef(forOfStmt->_left, false).emitStore(nextValue);
   // Run the body of the loop.
   genStatement(forOfStmt->_body);

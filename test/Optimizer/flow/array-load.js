@@ -17,21 +17,79 @@ sink(main);
 
 // Auto-generated content below. Please do not modify manually.
 
+// CHECK:scope %VS0 [?Array.prototype: object]
+
 // CHECK:function global(): undefined
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = CreateFunctionInst (:object) empty: any, empty: any, %main(): functionCode
-// CHECK-NEXT:  %1 = TryLoadGlobalPropertyInst (:any) globalObject: object, "sink": string
-// CHECK-NEXT:  %2 = CallInst (:any) %1: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %0: object
+// CHECK-NEXT:  %0 = CreateScopeInst (:environment) %VS0: any, empty: any
+// CHECK-NEXT:  %1 = CreateFunctionInst (:object) empty: any, empty: any, %Array(): functionCode
+// CHECK-NEXT:  %2 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:       StorePropertyStrictInst %2: object, %1: object, "prototype": string
+// CHECK-NEXT:  %4 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 1#"(): functionCode
+// CHECK-NEXT:  %5 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:       StorePropertyStrictInst %5: object, %4: object, "prototype": string
+// CHECK-NEXT:  %7 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 2#"(): functionCode
+// CHECK-NEXT:  %8 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:       StorePropertyStrictInst %8: object, %7: object, "prototype": string
+// CHECK-NEXT:  %10 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 3#"(): functionCode
+// CHECK-NEXT:  %11 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:        StoreFrameInst %0: environment, %11: object, [%VS0.?Array.prototype]: object
+// CHECK-NEXT:        StorePropertyStrictInst %11: object, %10: object, "prototype": string
+// CHECK-NEXT:  %14 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
+// CHECK-NEXT:  %15 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:        StorePropertyStrictInst %15: object, %14: object, "prototype": string
+// CHECK-NEXT:  %17 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
+// CHECK-NEXT:  %18 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:        StorePropertyStrictInst %18: object, %17: object, "prototype": string
+// CHECK-NEXT:  %20 = CreateFunctionInst (:object) %0: environment, %VS0: any, %main(): functionCode
+// CHECK-NEXT:  %21 = TryLoadGlobalPropertyInst (:any) globalObject: object, "sink": string
+// CHECK-NEXT:  %22 = CallInst (:any) %21: any, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %20: object
+// CHECK-NEXT:        ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:function Array(): undefined
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:       ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:function "Array 1#"(): undefined
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:       ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:function "Array 2#"(): undefined
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:       ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:function "Array 3#"(): undefined
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:       ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:base constructor Symbol(): any [typed,noReturn]
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:  %0 = TryLoadGlobalPropertyInst (:any) globalObject: object, "TypeError": string
+// CHECK-NEXT:  %1 = CreateThisInst (:undefined|object) %0: any, %0: any, empty: any
+// CHECK-NEXT:  %2 = CallInst (:any) %0: any, empty: any, false: boolean, empty: any, %0: any, %1: undefined|object, "Symbol is not a constructor": string
+// CHECK-NEXT:  %3 = GetConstructedObjectInst (:object) %1: undefined|object, %2: any
+// CHECK-NEXT:       ThrowInst %3: object
+// CHECK-NEXT:function_end
+
+// CHECK:function Object(): undefined
+// CHECK-NEXT:%BB0:
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
 // CHECK:function main(): number
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = AllocFastArrayInst (:object) 3: number
-// CHECK-NEXT:       FastArrayPushInst 1: number, %0: object
-// CHECK-NEXT:       FastArrayPushInst 2: number, %0: object
-// CHECK-NEXT:       FastArrayPushInst 3: number, %0: object
-// CHECK-NEXT:  %4 = FastArrayLoadInst (:number) %0: object, 0: number
-// CHECK-NEXT:  %5 = FAddInst (:number) %4: number, 1: number
-// CHECK-NEXT:       ReturnInst %5: number
+// CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
+// CHECK-NEXT:  %1 = LoadFrameInst (:object) %0: environment, [%VS0.?Array.prototype]: object
+// CHECK-NEXT:  %2 = AllocFastArrayInst (:object) 3: number, %1: object
+// CHECK-NEXT:       FastArrayPushInst 1: number, %2: object
+// CHECK-NEXT:       FastArrayPushInst 2: number, %2: object
+// CHECK-NEXT:       FastArrayPushInst 3: number, %2: object
+// CHECK-NEXT:  %6 = FastArrayLoadInst (:number) %2: object, 0: number
+// CHECK-NEXT:  %7 = FAddInst (:number) %6: number, 1: number
+// CHECK-NEXT:       ReturnInst %7: number
 // CHECK-NEXT:function_end

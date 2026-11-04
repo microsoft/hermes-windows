@@ -435,10 +435,11 @@ CallResult<HermesValue> stringFromCharCode(void *, Runtime &runtime) {
     char16_t ch = res->getNumber();
     return runtime.getCharacterString(ch).getHermesValue();
   }
-  auto builder = StringBuilder::createStringBuilder(runtime, SafeUInt32{n});
-  if (builder == ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
-  }
+  // Convert every argument first, so the result is allocated once with its
+  // encoding known.
+  llvh::SmallVector<char16_t, 32> codeUnits;
+  codeUnits.reserve(n);
+  bool allASCII = true;
   for (unsigned i = 0; i < n; ++i) {
     // Call a function that may throw, let the runtime record it.
     auto res = toUInt16(runtime, args.getArgHandle(i));
@@ -446,8 +447,16 @@ CallResult<HermesValue> stringFromCharCode(void *, Runtime &runtime) {
       return ExecutionStatus::EXCEPTION;
     }
     char16_t ch = res->getNumber();
-    builder->appendCharacter(ch);
+    allASCII &= ch < 128;
+    codeUnits.push_back(ch);
   }
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, SafeUInt32{n}, allASCII);
+  if (builder == ExecutionStatus::EXCEPTION) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  for (char16_t ch : codeUnits)
+    builder->appendCharacter(ch);
   return HermesValue::encodeStringValue(*builder->getStringPrimitive());
 }
 
@@ -944,7 +953,7 @@ static CallResult<HermesValue> convertCase(
   S->appendUTF16String(buff);
   UTF16Ref str = buff.arrayRef();
 
-  if (!useCurrentLocale) {
+  {
     // Try a fast path for ASCII strings.
     // First, bitwise-or all the characters to see if any one isn't ASCII.
     char16_t mask = 0;
@@ -963,7 +972,13 @@ static CallResult<HermesValue> convertCase(
         noop &= !('A' <= c && c <= 'Z');
       }
     }
-    if (mask <= 127) {
+    // localeAffectsCasing() is only consulted once the scan says the fast
+    // path is otherwise available: the ICU and Java backends query the host
+    // locale on every call (a JNI round trip on Java), and a non-ASCII
+    // string can never take this path, so asking first would charge every
+    // locale-sensitive conversion for an answer it cannot use.
+    if (mask <= 127 &&
+        (!useCurrentLocale || !platform_unicode::localeAffectsCasing())) {
       if (noop) {
         // We don't have to allocate anything.
         return S.getHermesValue();
@@ -984,7 +999,8 @@ static CallResult<HermesValue> convertCase(
       }
 
       SafeUInt32 len(S->getStringLength());
-      auto builder = StringBuilder::createStringBuilder(runtime, len);
+      // Every character is ASCII (mask <= 127), and so is its case mapping.
+      auto builder = StringBuilder::createStringBuilder(runtime, len, true);
       if (builder == ExecutionStatus::EXCEPTION) {
         return ExecutionStatus::EXCEPTION;
       }
@@ -1445,7 +1461,9 @@ CallResult<HermesValue> stringPrototypeRepeat(void *, Runtime &runtime) {
   // It's safe to multiply as the overflow check is done above.
   SafeUInt32 finalLen(strLen * n);
 
-  auto builderRes = StringBuilder::createStringBuilder(runtime, finalLen);
+  // The result is ASCII exactly when S is.
+  auto builderRes =
+      StringBuilder::createStringBuilder(runtime, finalLen, lv.S->isASCII());
   if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1508,9 +1526,9 @@ CallResult<HermesValue> stringPrototypeMatchAll(void *, Runtime &runtime) {
     return ExecutionStatus::EXCEPTION;
   }
 
-  // 2. If regexp is neither undefined nor null, then
+  // 2. If regexp is an Object, then
   auto regexp = args.getArgHandle(0);
-  if (!regexp->isUndefined() && !regexp->isNull()) {
+  if (regexp->isObject()) {
     // a. Let isRegExp be ? IsRegExp(regexp).
     auto isRegExpRes = isRegExp(runtime, regexp);
     if (LLVM_UNLIKELY(isRegExpRes == ExecutionStatus::EXCEPTION)) {
@@ -1787,8 +1805,8 @@ CallResult<HermesValue> stringPrototypeReplaceAll(void *, Runtime &runtime) {
 
   auto searchValue = args.getArgHandle(0);
   auto replaceValue = args.getArgHandle(1);
-  // 2. If searchValue is neither undefined nor null, then
-  if (!searchValue->isUndefined() && !searchValue->isNull()) {
+  // 2. If searchValue is an Object, then
+  if (searchValue->isObject()) {
     // a. Let isRegExp be ? IsRegExp(searchValue).
     auto isRegExpRes = isRegExp(runtime, searchValue);
     if (LLVM_UNLIKELY(isRegExpRes == ExecutionStatus::EXCEPTION)) {
@@ -1997,9 +2015,9 @@ CallResult<HermesValue> stringPrototypeMatch(void *, Runtime &runtime) {
           checkObjectCoercible(runtime, O) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  // 3. If regexp is neither undefined nor null, then
+  // 3. If regexp is an Object, then
   auto regexp = args.getArgHandle(0);
-  if (!regexp->isUndefined() && !regexp->isNull()) {
+  if (regexp->isObject()) {
     // a. Let matcher be GetMethod(regexp, @@match).
     lv.matchSymbol = HermesValue::encodeSymbolValue(
         Predefined::getSymbolID(Predefined::SymbolMatch));
@@ -2126,7 +2144,8 @@ CallResult<HermesValue> stringPrototypePad(void *ctx, Runtime &runtime) {
         runtime.getPredefinedString(Predefined::emptyString));
   }
 
-  auto builderRes = StringBuilder::createStringBuilder(runtime, size);
+  auto builderRes = StringBuilder::createStringBuilder(
+      runtime, size, lv.S->isASCII() && lv.filler->isASCII());
   if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -2183,10 +2202,10 @@ CallResult<HermesValue> stringPrototypeReplace(void *, Runtime &runtime) {
           checkObjectCoercible(runtime, O) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  // 3. If searchValue is neither undefined nor null, then
+  // 3. If searchValue is an Object, then
   auto searchValue = args.getArgHandle(0);
   auto replaceValue = args.getArgHandle(1);
-  if (!searchValue->isUndefined() && !searchValue->isNull()) {
+  if (searchValue->isObject()) {
     // a. Let replacer be GetMethod(searchValue, @@replace).
     lv.replaceSymbol = HermesValue::encodeSymbolValue(
         Predefined::getSymbolID(Predefined::SymbolReplace));
@@ -2333,9 +2352,9 @@ CallResult<HermesValue> stringPrototypeSearch(void *, Runtime &runtime) {
           checkObjectCoercible(runtime, O) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  // 3. If regexp is neither undefined nor null, then
+  // 3. If regexp is an Object, then
   auto regexp = args.getArgHandle(0);
-  if (!regexp->isUndefined() && !regexp->isNull()) {
+  if (regexp->isObject()) {
     // a. Let searcher be GetMethod(regexp, @@search).
     lv.searchSymbol = HermesValue::encodeSymbolValue(
         Predefined::getSymbolID(Predefined::SymbolSearch));
@@ -2661,9 +2680,9 @@ CallResult<HermesValue> stringPrototypeSplit(void *, Runtime &runtime) {
           checkObjectCoercible(runtime, O) == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  // 2. If separator is neither undefined nor null, then
+  // 2. If separator is an Object, then
   auto separator = args.getArgHandle(0);
-  if (!separator->isUndefined() && !separator->isNull()) {
+  if (separator->isObject()) {
     // a. Let splitter be ? GetMethod(separator, @@split).
     lv.splitSymbol = HermesValue::encodeSymbolValue(
         Predefined::getSymbolID(Predefined::SymbolSplit));

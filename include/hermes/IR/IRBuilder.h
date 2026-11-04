@@ -56,6 +56,11 @@ class IRBuilder {
     return M;
   }
 
+  /// \return the TypeContext owned by the Module.
+  TypeContext &getTypeContext() {
+    return M->getTypeContext();
+  }
+
   /// Create a new BasicBlock and add it to a function \p Parent.
   BasicBlock *createBasicBlock(Function *Parent);
 
@@ -532,7 +537,9 @@ class IRBuilder {
       const AllocTypedNonEnumObjectInst::ObjectPropertyMap &propMap,
       Value *parentObject);
 
-  AllocFastArrayInst *createAllocFastArrayInst(LiteralNumber *sizeHint);
+  AllocFastArrayInst *createAllocFastArrayInst(
+      LiteralNumber *sizeHint,
+      Value *prototype);
 
   AllocArrayInst *createAllocArrayInst(
       LiteralNumber *sizeHint,

@@ -53,7 +53,7 @@
         "use unsafe";
 
         let res = _malloc(size);
-        if (res === 0) throw Error("OOM");
+        if ((res: any) === 0) throw Error("OOM");
         return res;
     }
 
@@ -116,7 +116,7 @@
     /// Very simple hack to ensure safety.
     let handles: c_ptr[] = [];
     // FIXME: fast array doesn't support .pop() yet.
-    let closedHandles = Array();
+    let closedHandles = globalThis.Array();
 
     function fopen(path: string, mode: string): number {
         "use unsafe";

@@ -21,7 +21,7 @@ if(WIN32)
       hermesBCP47Parser
       hermesPublic
   )
-  # NOTE: No hermes_link_icu() - ICU is loaded at runtime via GetProcAddress!
+  # ICU providers are selected at runtime; no direct ICU linkage is needed.
 elseif(HERMES_ENABLE_INTL)
   if(HERMES_IS_ANDROID)
     add_hermes_library(hermesPlatformIntl PlatformIntlAndroid.cpp
@@ -39,18 +39,7 @@ elseif(HERMES_ENABLE_INTL)
     set_target_properties(hermesPlatformIntl PROPERTIES UNITY_BUILD false)
     target_compile_options(hermesPlatformIntl_obj PRIVATE -fobjc-arc)
   else()
-    add_hermes_library(hermesPlatformIntl PlatformIntlICU.cpp
-        PlatformIntlShared.cpp
-        impl_icu/Collator.cpp
-        impl_icu/IntlUtils.cpp
-        impl_icu/LocaleConverter.cpp
-        impl_icu/LocaleBCP47Object.cpp
-        impl_icu/LocaleResolver.cpp
-        impl_icu/OptionHelpers.cpp
-        LINK_OBJLIBS
-        hermesBCP47Parser
-        hermesPublic
-    )
-    hermes_link_icu(hermesPlatformIntl)
+    message(FATAL_ERROR
+      "HERMES_ENABLE_INTL is only supported on Windows, Apple and Android.")
   endif()
 endif()

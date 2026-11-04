@@ -193,6 +193,7 @@ CallResult<PseudoHandle<BigIntPrimitive>> deserializeBigInt(
     const uint8_t *&content) {
   uint32_t dataSize = deserializeUInt32(content);
   auto dataBytes = llvh::makeArrayRef(content, dataSize);
+  content += dataSize;
   auto bigIntPrimRes = BigIntPrimitive::fromBytes(runtime, dataBytes);
   if (LLVM_UNLIKELY(bigIntPrimRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -566,6 +567,7 @@ ExecutionStatus serializeMap(
     PinnedValue<> tmp;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
 
   uint32_t mapSize = selfMap->size();
   appendValueToBuffer<uint32_t>(serialized.content, mapSize);
@@ -620,6 +622,7 @@ ExecutionStatus serializeMap(
   // We stored each key-value pair consecutively in the ArrayStorage copy, so we
   // can just iterate over the copy and serialize each value in order.
   for (size_t i = 0, e = lv.copy->size(); i < e; ++i) {
+    marker.flush();
     lv.tmp = lv.copy->at(i);
     auto serializeRes = serializeImpl(runtime, lv.tmp, serialized, memoryMap);
     if (LLVM_UNLIKELY(serializeRes == ExecutionStatus::EXCEPTION)) {
@@ -643,10 +646,12 @@ ExecutionStatus deserializeMapEntries(
     PinnedValue<> value;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
   auto numEntries = deserializeUInt32(content);
   // 1. For each Record { [[Key]], [[Value]] } entry of
   //   serialized.[[MapData]]:
   for (size_t i = 0; i < numEntries; ++i) {
+    marker.flush();
     // 1. Let deserializedKey be ? StructuredDeserialize(entry.[[Key]],
     // targetRealm, memory).
     auto deserializeKeyRes =
@@ -655,6 +660,9 @@ ExecutionStatus deserializeMapEntries(
       return ExecutionStatus::EXCEPTION;
     }
     lv.key = *deserializeKeyRes;
+    // Also free the handles created for the key before recursing, so they
+    // don't accumulate with the nesting depth.
+    marker.flush();
 
     // 2. Let deserializedValue be ? StructuredDeserialize(entry.[[Value]],
     // targetRealm, memory).
@@ -689,6 +697,7 @@ ExecutionStatus serializeSet(
     PinnedValue<> tmp;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
 
   uint32_t setSize = selfSet->size();
   appendValueToBuffer<uint32_t>(serialized.content, setSize);
@@ -725,6 +734,7 @@ ExecutionStatus serializeSet(
 
   // 3. For each entry of copiedList:
   for (size_t i = 0; i < setSize; ++i) {
+    marker.flush();
     lv.tmp = lv.copy->at(i);
     // 1. Let serializedEntry be ? StructuredSerializeInternal(entry,
     //    forStorage, memory).
@@ -750,10 +760,12 @@ ExecutionStatus deserializeSetElements(
     PinnedValue<> tmp;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
   auto numElems = deserializeUInt32(content);
   // 2. Otherwise, if serialized.[[Type]] is "Set", then:
   //   1. For each entry of serialized.[[SetData]]:
   for (size_t i = 0; i < numElems; ++i) {
+    marker.flush();
     // 1. Let deserializedEntry be ? StructuredDeserialize(entry,
     // targetRealm, memory)
     // 2. Append deserializedEntry to value.[[SetData]].
@@ -787,6 +799,7 @@ ExecutionStatus serializeProperties(
     PinnedValue<> tmp;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
 
   // The for-loop below can invoke getters, which can run some arbitrary JS that
   // modifies the number of properties on this object. Thus, write a dummy value
@@ -798,6 +811,7 @@ ExecutionStatus serializeProperties(
                           e = JSArray::getLength(*properties, runtime);
        i < e;
        i++) {
+    marker.flush();
     auto key = properties->at(runtime, i);
     lv.tmp = key.unboxToHV(runtime);
     // 1. If !HasOwnPropertyKey(value, key) is true, then:
@@ -818,6 +832,9 @@ ExecutionStatus serializeProperties(
         return ExecutionStatus::EXCEPTION;
       }
       lv.tmp = std::move(*inputValue);
+      // Also free the handles created in this iteration before recursing, so
+      // they don't accumulate with the nesting depth.
+      marker.flush();
       // 2. Let outputValue be ? StructuredSerializeInternal(inputValue,
       // forStorage, memory)
       // 3. Append {[[Key]]: key, [[Value]]: outputValue} to
@@ -851,6 +868,7 @@ ExecutionStatus serializeArrayProperties(
     PinnedValue<> tmp;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
   // 4. Otherwise, for each key in ! EnumerableOwnProperties(value, key):
   // This will return all the enumerable property key of the array. First, it
   // will list the array indices, as numbers, in numerical value. Then, it will
@@ -871,6 +889,7 @@ ExecutionStatus serializeArrayProperties(
   size_t numIndexPropOffset = serialized.content.size();
   appendValueToBuffer<uint32_t>(serialized.content, numIndexedProp);
   for (JSArray::size_type i = 0; i < keysLength; i++) {
+    marker.flush();
     auto key = lv.propertyKeys->at(runtime, i);
     lv.tmp = key.unboxToHV(runtime);
     // Not an index. Since propertyKeys lists array indices first, then string
@@ -899,7 +918,7 @@ ExecutionStatus serializeArrayProperties(
 
     // Let inputValue be ? value.[[Get]](key, value).
     // Fast-path: Access the index element directly.
-    if (LLVM_LIKELY(selfArray->hasFastIndexProperties())) {
+    if (LLVM_LIKELY(selfArray->hasFastIndexProperties(runtime))) {
       SmallHermesValue shv = selfArray->at(runtime, arrayIndex);
       assert(!shv.isEmpty() && "Accessed empty value while serializing Array");
       lv.tmp = shv.unboxToHV(runtime);
@@ -912,6 +931,9 @@ ExecutionStatus serializeArrayProperties(
       }
       lv.tmp = std::move(*inputValue);
     }
+    // Also free the handles created in this iteration before recursing, so
+    // they don't accumulate with the nesting depth.
+    marker.flush();
     // Serialize the property value
     // 2. Let outputValue be ? StructuredSerializeInternal(inputValue,
     // forStorage, memory)
@@ -958,6 +980,7 @@ ExecutionStatus deserializeProperties(
     PinnedValue<> val;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
   uint32_t numProperties = deserializeUInt32(content);
   // 1. For each Record {[[Key]], [[Value]]} entry of
   // serialized.[[Properties]]:
@@ -968,6 +991,9 @@ ExecutionStatus deserializeProperties(
       return ExecutionStatus::EXCEPTION;
     }
     lv.keyStrPrim = std::move(*deserializeKeyRes);
+    // Free the handles created so far, including any for the key, before
+    // recursing, so they don't accumulate with the nesting depth.
+    marker.flush();
 
     // 1. Let deserializedValue be ?StructuredDeserialize(entry.[[Value]],
     // targetRealm, memory).
@@ -1014,6 +1040,7 @@ ExecutionStatus deserializeArrayProperties(
     PinnedValue<> val;
   } lv;
   LocalsRAII lraii{runtime, &lv};
+  GCScopeMarkerRAII marker{runtime};
 
   // Process the index properties
   uint32_t numIndexProperties = deserializeUInt32(content);
@@ -1041,6 +1068,9 @@ ExecutionStatus deserializeArrayProperties(
     if (LLVM_UNLIKELY(setRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
+    // Flush here rather than at the start of the iteration, so that the last
+    // element's handles are also freed before recursing into named properties.
+    marker.flush();
   }
 
   // Process all other properties
@@ -1370,10 +1400,10 @@ CallResult<PseudoHandle<JSTypedArrayBase>> deserializeTypedArray(
   // [[ByteLength]] internal slot value is serialized.[[ByteLength]], whose
   // [[ByteOffset]] internal slot value is serialized.[[ByteOffset]], and whose
   // [[ArrayLength]] internal slot value is serialized.[[ArrayLength]].
-#define TYPED_ARRAY(name, type)                                      \
-  if (typeTag == SerializedValue::Type::name##Array) {               \
-    lv.self = JSTypedArray<type, CellKind::name##ArrayKind>::create( \
-        runtime, runtime.name##ArrayPrototype);                      \
+#define TYPED_ARRAY(name, type)                                             \
+  if (typeTag == SerializedValue::Type::name##Array) {                      \
+    lv.self = JSTypedArray<type, CellKind::name##ArrayKind>::create(        \
+        runtime, runtime.name##ArrayPrototype, runtime.class##name##Array); \
   }
 #include "hermes/VM/TypedArrays.def"
   uint8_t width = lv.self->getByteWidth();
@@ -1458,7 +1488,7 @@ ExecutionStatus serializeImpl(
   /// Use Handle::vmcast here to assert that the value must be an JS object at
   /// this point.
   auto selfObjHandle = Handle<JSObject>::vmcast(value);
-  if (selfObjHandle->isHostObject()) {
+  if (selfObjHandle->isHostObject(runtime)) {
     return runtime.raiseError("Host Objects are not serializable");
   }
 
@@ -2091,7 +2121,9 @@ std::vector<uint32_t> deserializeTransferList(
   // at 0.
   uint32_t numTransfers =
       serialized.internalBuffers.size() + serialized.externalBuffers.size();
+  GCScopeMarkerRAII marker{runtime};
   for (uint32_t i = 0; i < numTransfers; ++i) {
+    marker.flush();
     auto contentOffset = serialized.offsets[i];
     const uint8_t *curr = serialized.content.data() + contentOffset;
     // 1. Let value be an uninitialized value.
@@ -2235,18 +2267,21 @@ CallResult<PseudoHandle<JSArray>> deserializeWithTransfer(
   // targetRealm, memory).
   // Deserialize the main serialized value, which is located at the front of
   // serialized.content
+
+  // 5. Return { [[Deserialized]]: deserialized, [[TransferredValues]]:
+  // transferredValues }.
+  struct : Locals {
+    PinnedValue<> deserialized;
+    PinnedValue<JSArray> result;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
   const uint8_t *start = serialized.content.data();
   auto valRes = deserializeImpl(runtime, serialized, start, memoryMap);
   if (LLVM_UNLIKELY(valRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-
-  // 5. Return { [[Deserialized]]: deserialized, [[TransferredValues]]:
-  // transferredValues }.
-  struct : Locals {
-    PinnedValue<JSArray> result;
-  } lv;
-  LocalsRAII lraii(runtime, &lv);
+  lv.deserialized = *valRes;
 
   auto transferLen = transferredIds.size();
   auto arrayLen = transferLen + 1;
@@ -2266,7 +2301,7 @@ CallResult<PseudoHandle<JSArray>> deserializeWithTransfer(
       *lv.result,
       runtime,
       0,
-      SmallHermesValue::encodeHermesValue(*valRes, runtime));
+      SmallHermesValue::encodeHermesValue(*lv.deserialized, runtime));
 
   // At this point, all objects are deserialized and the result Array is
   // allocated. No other allocation needs to happen.

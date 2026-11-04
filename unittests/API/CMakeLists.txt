@@ -53,16 +53,29 @@ set(LLVM_ENABLE_RTTI ON)
 
 add_hermes_unittest(APITests ${APITestsSources})
 
+# Pass core extensions flag to C++ code.
+if(HERMES_ENABLE_CORE_EXTENSIONS)
+  target_compile_definitions(APITests PRIVATE HERMES_ENABLE_CORE_EXTENSIONS=1)
+else()
+  target_compile_definitions(APITests PRIVATE HERMES_ENABLE_CORE_EXTENSIONS=0)
+endif()
+
 target_link_libraries(APITests
   compileJS
   traceInterpreter
   timerStats
   hermesvm_a
-  hermesSandboxRuntime
   cdpInternal
   # SegmentTestCompile # Commenting out for now
   hermesNodeApiJsiRuntime
 )
+
+# The sandbox is skipped while its generated sources are absent
+# (see API/CMakeLists.txt).
+if(TARGET hermesSandboxRuntime)
+  target_link_libraries(APITests hermesSandboxRuntime)
+  target_compile_definitions(APITests PRIVATE HERMES_HAS_SANDBOX=1)
+endif()
 
 add_hermes_unittest(APILeanTests APILeanTest.cpp)
 target_link_libraries(APILeanTests hermesvmlean_a)

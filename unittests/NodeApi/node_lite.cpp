@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 
 #include "node_lite.h"
+
+#include "../WindowsTestSupport.h"
 #include "js_runtime_api.h"
 #include <algorithm>
 #include <array>
@@ -1265,6 +1267,7 @@ NodeApiEnvScope& NodeApiEnvScope::operator=(NodeApiEnvScope&& other) noexcept {
 }  // namespace node_api_tests
 
 int main(int argc, char* argv[]) {
+  hermes::testing::disableCrashDialogs();
   node_api_tests::NodeLiteRuntime::Run(
       std::vector<std::string>(argv, argv + argc));
 }

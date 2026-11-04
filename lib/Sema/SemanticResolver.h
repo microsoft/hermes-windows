@@ -292,6 +292,8 @@ class SemanticResolver
   void visit(ESTree::TypeParameterInstantiationNode *node);
   void visit(ESTree::TypeCastExpressionNode *node);
   void visit(ESTree::AsExpressionNode *node);
+  void visit(ESTree::MatchStatementNode *node);
+  void visit(ESTree::MatchExpressionNode *node);
   void visit(
       ESTree::ComponentDeclarationNode *componentDecl,
       ESTree::Node *parent);
@@ -479,6 +481,8 @@ class SemanticResolver
     bool alwaysInline = false;
     /// If a "noinline" directive is found, this is true.
     bool noInline = false;
+    /// If a "builtin" directive is found, this is true.
+    bool builtin = false;
   };
 
   /// Scan the list of directives in the beginning of a program or function.
@@ -487,6 +491,14 @@ class SemanticResolver
   /// \param body list of statements to scan.
   /// \return information about the encountered directives.
   FoundDirectives scanDirectives(ESTree::NodeList &body) const;
+
+  /// Check if a function declaration has a "builtin" directive.
+  bool hasBuiltinDirective(ESTree::FunctionDeclarationNode *funcDecl) const;
+
+  /// Check if a function declaration has a Hermes.builtin decoration attached
+  /// (set up by the typed-mode AST transform that consumes
+  /// `Hermes.decorate(name, Hermes.builtin)` calls).
+  bool hasBuiltinDecoration(ESTree::FunctionDeclarationNode *funcDecl) const;
 
   /// Mark \p scope and every one of its ancestor scopes as users of local
   /// `eval()`.

@@ -54,7 +54,9 @@ const ObjectVTable FastArray::vt{
 void FastArray::staticAsserts() {
   // Add the size of the length property when comparing sizes.
   static_assert(
-      sizeof(FastArray) + sizeof(GCSmallHermesValue) == sizeof(SHFastArray));
+      llvh::alignTo<sizeof(GCSmallHermesValue)>(sizeof(FastArray)) +
+          sizeof(GCSmallHermesValue) ==
+      sizeof(SHFastArray));
   static_assert(
       offsetof(FastArray, indexedStorage_) ==
       offsetof(SHFastArray, indexedStorage));
@@ -63,10 +65,8 @@ void FastArray::staticAsserts() {
 
 Handle<HiddenClass> FastArray::createClass(
     Runtime &runtime,
-    Handle<JSObject> prototypeHandle) {
-  Handle<HiddenClass> classHandle = runtime.getHiddenClassForPrototype(
-      *prototypeHandle, numOverlapSlots<FastArray>());
-
+    Handle<JSObject> prototypeHandle,
+    Handle<HiddenClass> rootClazz) {
   // Add the length property.
   PropertyFlags pf{};
   pf.enumerable = 0;
@@ -74,16 +74,16 @@ Handle<HiddenClass> FastArray::createClass(
   pf.configurable = 0;
 
   auto added = HiddenClass::addProperty(
-      classHandle, runtime, Predefined::getSymbolID(Predefined::length), pf);
+      rootClazz, runtime, Predefined::getSymbolID(Predefined::length), pf);
   assert(
       added != ExecutionStatus::EXCEPTION &&
       "Adding the first properties shouldn't cause overflow");
   assert(
       added->second == lengthPropIndex() &&
       "FastArray.length has invalid index");
-  classHandle = added->first;
+  rootClazz = added->first;
 
-  return classHandle;
+  return rootClazz;
 }
 
 CallResult<HermesValue> FastArray::create(Runtime &runtime, size_t capacity) {
@@ -97,8 +97,38 @@ CallResult<HermesValue> FastArray::create(Runtime &runtime, size_t capacity) {
       runtime.makeAFixed<FastArray>(
           runtime,
           runtime.fastArrayPrototype,
-          Handle<HiddenClass>::vmcast(&runtime.fastArrayClass),
+          runtime.classFastArray,
           GCPointerBase::NoBarriers()));
+
+  auto arrRes = ArrayStorageSmall::create(runtime, capacity);
+  if (arrRes == ExecutionStatus::EXCEPTION)
+    return ExecutionStatus::EXCEPTION;
+
+  lv.self->indexedStorage_.setNonNull(
+      runtime, vmcast<ArrayStorageSmall>(*arrRes), runtime.getHeap());
+
+  auto shv = SmallHermesValue::encodeNumberValue(0, runtime);
+  lv.self->setLength(runtime, shv);
+
+  return lv.self.getHermesValue();
+}
+
+CallResult<HermesValue> FastArray::create(
+    Runtime &runtime,
+    Handle<JSObject> prototype,
+    size_t capacity) {
+  struct : Locals {
+    PinnedValue<FastArray> self;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  auto classHandle =
+      runtime.getHiddenClassForPrototype(*prototype, runtime.classFastArray);
+
+  lv.self = JSObjectInit::initToPointer(
+      runtime,
+      runtime.makeAFixed<FastArray>(
+          runtime, prototype, classHandle, GCPointerBase::NoBarriers()));
 
   auto arrRes = ArrayStorageSmall::create(runtime, capacity);
   if (arrRes == ExecutionStatus::EXCEPTION)
@@ -133,7 +163,8 @@ FastArray::pushSlow(Handle<FastArray> self, Runtime &runtime, Handle<> val) {
 ExecutionStatus FastArray::appendSlow(
     Handle<FastArray> self,
     Runtime &runtime,
-    Handle<FastArray> other) {
+    Handle<FastArray> other,
+    uint32_t fromIndex) {
   struct : public Locals {
     PinnedValue<ArrayStorageSmall> storage;
     PinnedValue<ArrayStorageSmall> otherStorage;
@@ -147,7 +178,8 @@ ExecutionStatus FastArray::appendSlow(
           ArrayStorageSmall::append(
               MutableHandle<ArrayStorageSmall>{lv.storage},
               runtime,
-              lv.otherStorage) == ExecutionStatus::EXCEPTION))
+              lv.otherStorage,
+              fromIndex) == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
   self->indexedStorage_.setNonNull(
       runtime, lv.storage.get(), runtime.getHeap());

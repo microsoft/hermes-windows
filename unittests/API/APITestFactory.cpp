@@ -6,6 +6,9 @@
  */
 
 #include <hermes/hermes.h>
+#ifdef HERMES_HAS_SANDBOX
+#include <hermes_sandbox/HermesSandboxRuntime.h>
+#endif
 #include <jsi/test/testlib.h>
 #include <jsi/threadsafe.h>
 
@@ -27,6 +30,16 @@ std::vector<RuntimeFactory> runtimeGenerators() {
                 .withEnableHermesInternalTestMethods(true)
                 .build());
       }};
+}
+
+/// The factories in runtimeGenerators(), plus HermesSandboxRuntime when the
+/// sandbox is built.
+std::vector<RuntimeFactory> runtimeGeneratorsWithSandBox() {
+  auto factories = runtimeGenerators();
+#ifdef HERMES_HAS_SANDBOX
+  factories.push_back([] { return makeHermesSandboxRuntime(); });
+#endif
+  return factories;
 }
 
 } // namespace facebook::jsi

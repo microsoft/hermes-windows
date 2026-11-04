@@ -15,29 +15,47 @@
 namespace hermes {
 namespace irgen {
 
-Value *ESTreeIRGen::enforceExprType(hermes::Value *value, ESTree::Node *expr) {
-  flow::Type *exprFlowType = flowContext_.findNodeType(expr);
-  if (!exprFlowType)
+Value *ESTreeIRGen::narrowToFlowType(
+    hermes::Value *value,
+    flow::Type *flowType,
+    ESTree::Node *loc) {
+  if (!flowType)
     return value;
 
-  Type exprIRType = flowTypeToIRType(exprFlowType);
+  Type targetIRType = flowTypeToIRType(flowType);
   Type valueType = value->getType();
+  TypeContext &tc = getTypeContext();
   // NOTE: equal sets are subsets of each other, but we want to do the fast
   // check first. In theory, it should catsh 100% of the cases when IRGen is
   // fully typed.
-  if (exprIRType == valueType || valueType.isSubsetOf(exprIRType))
+  if (targetIRType == valueType || tc.isSubsetOf(valueType, targetIRType))
     return value;
 
-  if (!exprIRType.isSubsetOf(valueType)) {
+  if (!tc.isSubsetOf(targetIRType, valueType)) {
     Mod->getContext().getSourceErrorManager().error(
-        expr->getSourceRange(),
+        loc->getSourceRange(),
         "Internal error: Flow expr type is not a subset of value type");
     return value;
   }
 
-  Instruction *cast = Builder.createCheckedTypeCastInst(value, exprIRType);
-  cast->setLocation(expr->getDebugLoc());
+  Instruction *cast = Builder.createCheckedTypeCastInst(value, targetIRType);
+  cast->setLocation(loc->getDebugLoc());
   return cast;
+}
+
+Value *ESTreeIRGen::enforceExprType(hermes::Value *value, ESTree::Node *expr) {
+  return narrowToFlowType(value, flowContext_.findNodeType(expr), expr);
+}
+
+Value *ESTreeIRGen::enforceDeclType(
+    hermes::Value *value,
+    ESTree::IdentifierNode *id) {
+  if (id->isUnresolvable())
+    return value;
+  sema::Decl *decl = semCtx_.getExpressionDecl(id);
+  if (!decl)
+    return value;
+  return narrowToFlowType(value, flowContext_.findDeclType(decl), id);
 }
 
 Value *ESTreeIRGen::genExpression(ESTree::Node *expr, Identifier nameHint) {
@@ -419,22 +437,35 @@ void ESTreeIRGen::genFastArrayPush(Value *array, ESTree::Node &arg) {
   }
 
   auto *spread = llvh::cast<ESTree::SpreadElementNode>(&arg);
-  // TODO: Support spreading non-arrays.
-  assert(
-      llvh::isa<flow::ArrayType>(
-          flowContext_.getNodeTypeOrAny(spread->_argument)->info) &&
-      "Spread argument must be an array.");
+
+  // Array.push() is typed as 'any', so the FlowChecker does not check its
+  // arguments at all and anything can reach us here. Spreading a tuple will
+  // work on its own once push() is a real function instead of a special case.
+  // TODO: Represent Array.push() as a real function.
+  if (!flowContext_.isArrayClassType(
+          flowContext_.getNodeTypeOrAny(spread->_argument))) {
+    Mod->getContext().getSourceErrorManager().error(
+        spread->getSourceRange(), "spread argument must be an array");
+    return;
+  }
 
   auto *elems = genExpression(spread->_argument);
   // Append the elements from the spread argument to the target array.
   Builder.createFastArrayAppendInst(elems, array);
 }
 
-Value *ESTreeIRGen::genFastArrayFromElements(ESTree::NodeList &list) {
+Value *ESTreeIRGen::genFastArrayFromElements(
+    ESTree::NodeList &list,
+    flow::Type *arrayType) {
   // Lower the array literal into creating an empty array followed by a series
   // of push and append.
-  auto *array =
-      Builder.createAllocFastArrayInst(Builder.getLiteralNumber(list.size()));
+
+  // Load Array<T>.prototype from the home object variable for the type.
+  Value *prototype =
+      emitLoadTypedHomeObject(llvh::cast<flow::ClassType>(arrayType->info));
+
+  auto *array = Builder.createAllocFastArrayInst(
+      Builder.getLiteralNumber(list.size()), prototype);
   for (auto &node : list)
     genFastArrayPush(array, node);
   return array;
@@ -453,8 +484,9 @@ Value *ESTreeIRGen::genTupleFromElements(ESTree::NodeList &list) {
 
 Value *ESTreeIRGen::genArrayExpr(ESTree::ArrayExpressionNode *Expr) {
   // If the array literal originates in typed code, produce a fast array.
-  if (llvh::isa<flow::ArrayType>(flowContext_.getNodeTypeOrAny(Expr)->info))
-    return genFastArrayFromElements(Expr->_elements);
+  if (flowContext_.isArrayClassType(flowContext_.getNodeTypeOrAny(Expr)))
+    return genFastArrayFromElements(
+        Expr->_elements, flowContext_.getNodeTypeOrAny(Expr));
   // If the array literal is a tuple, produce a tuple object.
   if (llvh::isa<flow::TupleType>(flowContext_.getNodeTypeOrAny(Expr)->info))
     return genTupleFromElements(Expr->_elements);
@@ -470,6 +502,11 @@ Value *ESTreeIRGen::genCallExpr(ESTree::CallExpressionNode *call) {
     return emitNativeCall(call, natFuncType);
   }
 
+  // Check for known TypedLib builtin method call (e.g., Array map).
+  if (auto *builtinDecl = flowContext_.getBuiltinCallTarget(call)) {
+    return genBuiltinMethodCall(call, builtinDecl);
+  }
+
   // Check for "special calls" -- calls with known special function names.
   if (auto *identNode = llvh::dyn_cast<ESTree::IdentifierNode>(call->_callee)) {
     // Check for a direct call to eval().
@@ -481,18 +518,53 @@ Value *ESTreeIRGen::genCallExpr(ESTree::CallExpressionNode *call) {
   Value *callee;
   Value *target = Builder.getEmptySentinel();
   bool calleeIsAlwaysClosure = false;
+  // Function type of the resolved callee when it differs from the callee
+  // node's type (SH_call dispatch).
+  flow::BaseFunctionType *calleeFuncType = nullptr;
   Value *newTarget = Builder.getLiteralUndefined();
   // If this is nonnull, the call is a super() call, and
   // we should call the field initialization function for the
   // given class type immediately after.
   flow::ClassType *fieldInitClassType = nullptr;
 
-  // Handle MemberExpression expression calls that sets the 'this' property.
-  if (auto *Mem = llvh::dyn_cast<ESTree::MemberExpressionNode>(call->_callee)) {
+  if (auto *consType = llvh::dyn_cast<flow::ClassConstructorType>(
+          flowContext_.getNodeTypeOrAny(call->_callee)->info)) {
+    // A plain call `X(...)` on a typed class dispatches to the class's static
+    // `SH_call` method (the FlowChecker guarantees it exists for this to
+    // type-check).
+    auto *classInfo = consType->getClassTypeInfo();
+    auto *staticInfo = classInfo->getStaticObjectTypeInfo();
+    auto optCall = staticInfo->findPublicField(
+        Identifier::getFromPointer(kw_.identSHCall));
+    const flow::ClassType::Field *field = optCall->getField();
+    sema::Decl *decl = semCtx_.getExpressionDecl(field->staticKeyNode);
+    callee = emitLoadClassMemberVar(decl);
+    target = declFunctions_.lookup(decl);
+    calleeIsAlwaysClosure = target != nullptr;
+    calleeFuncType = llvh::cast<flow::BaseFunctionType>(field->type->info);
+    // `this` for the static method is the class constructor object.
+    thisVal = genExpression(call->_callee);
+  } else if (
+      auto *Mem = llvh::dyn_cast<ESTree::MemberExpressionNode>(call->_callee)) {
+    // Handle MemberExpression expression calls that sets the 'this' property.
     // Check for SHBuiltin.
     if (llvh::isa<ESTree::SHBuiltinNode>(Mem->_object)) {
       return genSHBuiltin(
           call, llvh::cast<ESTree::IdentifierNode>(Mem->_property));
+    }
+
+    // Typed `fn.call(thisArg, args...)` lowers to a direct CallInst, the
+    // same shape that `$SHBuiltin.call` produces. Sema has already verified
+    // the receiver is a function type, so the property `call` is guaranteed
+    // to be Function.prototype.call.
+    if (!Mem->_computed) {
+      if (auto *propId = llvh::dyn_cast<ESTree::IdentifierNode>(Mem->_property);
+          propId && propId->_name == kw_.identCall) {
+        if (llvh::isa<flow::BaseFunctionType>(
+                flowContext_.getNodeTypeOrAny(Mem->_object)->info)) {
+          return genTypedFunctionPrototypeCall(call, Mem);
+        }
+      }
     }
 
     MemberExpressionResult memResult =
@@ -543,8 +615,14 @@ Value *ESTreeIRGen::genCallExpr(ESTree::CallExpressionNode *call) {
     callee = genExpression(call->_callee);
   }
 
-  Value *res =
-      emitCall(call, callee, target, calleeIsAlwaysClosure, thisVal, newTarget);
+  Value *res = emitCall(
+      call,
+      callee,
+      target,
+      calleeIsAlwaysClosure,
+      thisVal,
+      newTarget,
+      calleeFuncType);
   if (fieldInitClassType) {
     emitTypedFieldInitCall(fieldInitClassType);
   }
@@ -671,6 +749,51 @@ Value *ESTreeIRGen::genSHBuiltin(
     return Builder.createFastArrayLengthInst(array);
   }
 
+  // %SHBuiltin.fastArrayPop(arr: Array<T>, n: number): T | void;
+  if (builtin->_name == kw_.identFastArrayPop) {
+    if (call->_arguments.size() != 2) {
+      Mod->getContext().getSourceErrorManager().error(
+          call->getSourceRange(),
+          "fastArrayPop requires exactly two arguments");
+      return Builder.getLiteralUndefined();
+    }
+    auto it = call->_arguments.begin();
+    Value *array = genExpression(&*it++);
+    Value *count = genExpression(&*it);
+    return genBuiltinCall(
+        BuiltinMethod::HermesBuiltin_fastArrayPop, {array, count});
+  }
+
+  // %SHBuiltin.fastArrayLength(arr: Array<T>): number;
+  if (builtin->_name == kw_.identFastArrayLength) {
+    if (call->_arguments.size() != 1) {
+      Mod->getContext().getSourceErrorManager().error(
+          call->getSourceRange(),
+          "fastArrayLength requires exactly one argument");
+      return Builder.getLiteralUndefined();
+    }
+    Value *array = genExpression(&call->_arguments.front());
+    return Builder.createFastArrayLengthInst(array);
+  }
+
+  // %SHBuiltin.objectKeys(o): Array<string>;
+  if (builtin->_name == kw_.identObjectKeys) {
+    return genSHBuiltinObjectProps(
+        call, BuiltinMethod::HermesBuiltin_objectKeys, "objectKeys");
+  }
+
+  // %SHBuiltin.objectValues(o): Array<mixed>;
+  if (builtin->_name == kw_.identObjectValues) {
+    return genSHBuiltinObjectProps(
+        call, BuiltinMethod::HermesBuiltin_objectValues, "objectValues");
+  }
+
+  // %SHBuiltin.objectEntries(o): Array<[string, mixed]>;
+  if (builtin->_name == kw_.identObjectEntries) {
+    return genSHBuiltinObjectProps(
+        call, BuiltinMethod::HermesBuiltin_objectEntries, "objectEntries");
+  }
+
   if (builtin->_name == kw_.identModuleFactory) {
     return genSHBuiltinModuleFactory(call);
   }
@@ -689,33 +812,83 @@ Value *ESTreeIRGen::genSHBuiltin(
 }
 
 Value *ESTreeIRGen::genSHBuiltinCall(ESTree::CallExpressionNode *call) {
-  llvh::SmallVector<Value *, 4> args{};
-  Value *callee = nullptr;
-  Value *thisValue = nullptr;
-
-  for (ESTree::Node &arg : call->_arguments) {
-    Value *argVal = genExpression(&arg);
-    if (!callee) {
-      // First, fill the callee (required).
-      callee = argVal;
-    } else if (!thisValue) {
-      // Then, fill the thisValue (required).
-      thisValue = argVal;
-    } else {
-      // Any remaining args are passed through to the function.
-      args.push_back(argVal);
-    }
-  }
-
-  if (!thisValue) {
+  if (call->_arguments.size() < 2) {
     Mod->getContext().getSourceErrorManager().error(
         call->getSourceRange(),
         "SH builtin 'call' requires at least 2 arguments");
     return Builder.getLiteralUndefined();
   }
 
+  // $SHBuiltin is recognized in untyped code too, where the FlowChecker never
+  // runs, so this must be a diagnostic rather than an assert. The first two
+  // arguments are consumed positionally, so neither the callee nor 'this' may
+  // be a spread.
+  auto it = call->_arguments.begin();
+  ESTree::Node *calleeNode = &*it++;
+  ESTree::Node *thisNode = &*it;
+  if (llvh::isa<ESTree::SpreadElementNode>(calleeNode) ||
+      llvh::isa<ESTree::SpreadElementNode>(thisNode) ||
+      !canEmitTypedCallArguments(call->_arguments)) {
+    Mod->getContext().getSourceErrorManager().error(
+        call->getSourceRange(),
+        "unsupported spread argument in $SHBuiltin.call");
+    return Builder.getLiteralUndefined();
+  }
+
+  Value *callee = genExpression(calleeNode);
+  Value *thisValue = genExpression(thisNode);
+  // Any remaining args are passed through to the function.
+  CallInst::ArgumentList args;
+  emitTypedCallArguments(call->_arguments, /* offset */ 2, args);
+
   return Builder.createCallInst(
       callee, /* newTarget */ Builder.getLiteralUndefined(), thisValue, args);
+}
+
+Value *ESTreeIRGen::genSHBuiltinObjectProps(
+    ESTree::CallExpressionNode *call,
+    BuiltinMethod::Enum builtin,
+    llvh::StringRef name) {
+  if (call->_arguments.size() != 1) {
+    Mod->getContext().getSourceErrorManager().error(
+        call->getSourceRange(), name + " requires exactly one argument");
+    return Builder.getLiteralUndefined();
+  }
+  Value *obj = genExpression(&call->_arguments.front());
+  // The FlowChecker set the result to Array<T>; the builtin needs its
+  // prototype to create the FastArray with the correct shape.
+  flow::Type *arrayType = flowContext_.getNodeTypeOrAny(call);
+  Value *prototype =
+      emitLoadTypedHomeObject(llvh::cast<flow::ClassType>(arrayType->info));
+  Value *res = genBuiltinCall(builtin, {obj, prototype});
+  res->setType(Type::createObject());
+  return res;
+}
+
+Value *ESTreeIRGen::genTypedFunctionPrototypeCall(
+    ESTree::CallExpressionNode *call,
+    ESTree::MemberExpressionNode *mem) {
+  // The 'this' argument is consumed positionally, so it may not be a spread.
+  assert(
+      canEmitTypedCallArguments(call->_arguments) &&
+      (call->_arguments.empty() ||
+       !llvh::isa<ESTree::SpreadElementNode>(&call->_arguments.front())) &&
+      "unexpandable spread should have been rejected by the typechecker");
+
+  Value *callee = genExpression(mem->_object);
+  Value *thisValue = Builder.getLiteralUndefined();
+  uint32_t offset = 0;
+  if (!call->_arguments.empty()) {
+    thisValue = genExpression(&call->_arguments.front());
+    offset = 1;
+  }
+  CallInst::ArgumentList args;
+  emitTypedCallArguments(call->_arguments, offset, args);
+  return Builder.createCallInst(
+      callee,
+      /* newTarget */ Builder.getLiteralUndefined(),
+      thisValue,
+      args);
 }
 
 Value *ESTreeIRGen::genSHBuiltinExternC(ESTree::CallExpressionNode *call) {
@@ -810,25 +983,60 @@ Value *ESTreeIRGen::genSHBuiltinImport(ESTree::CallExpressionNode *call) {
   return genExpression(importExp);
 }
 
+bool ESTreeIRGen::canEmitTypedCallArguments(ESTree::NodeList &arguments) {
+  for (ESTree::Node &arg : arguments) {
+    auto *spread = llvh::dyn_cast<ESTree::SpreadElementNode>(&arg);
+    if (spread &&
+        !llvh::isa<flow::TupleType>(
+            flowContext_.getNodeTypeOrAny(spread->_argument)->info))
+      return false;
+  }
+  return true;
+}
+
+void ESTreeIRGen::emitTypedCallArguments(
+    ESTree::NodeList &arguments,
+    uint32_t offset,
+    CallInst::ArgumentList &args) {
+  auto it = arguments.begin();
+  std::advance(it, offset);
+  for (auto e = arguments.end(); it != e; ++it) {
+    auto *spread = llvh::dyn_cast<ESTree::SpreadElementNode>(&*it);
+    if (!spread) {
+      args.push_back(genExpression(&*it));
+      continue;
+    }
+
+    // A tuple is an object with the properties "0", "1", ..., so read each
+    // element out with a PrLoadInst, exactly as a tuple member access does.
+    // Evaluate the tuple itself exactly once, even if it is empty and
+    // contributes no arguments.
+    auto *tupleType = llvh::cast<flow::TupleType>(
+        flowContext_.getNodeTypeOrAny(spread->_argument)->info);
+    Value *tuple = genExpression(spread->_argument);
+    uint32_t index = 0;
+    for (flow::Type *elemType : tupleType->getTypes()) {
+      args.push_back(Builder.createPrLoadInst(
+          tuple,
+          index,
+          Builder.getLiteralString(llvh::Twine(index)),
+          flowTypeToIRType(elemType)));
+      ++index;
+    }
+  }
+}
+
 Value *ESTreeIRGen::emitCall(
     ESTree::CallExpressionLikeNode *call,
     Value *callee,
     Value *target,
     bool calleeIsAlwaysClosure,
     Value *thisVal,
-    Value *newTarget) {
-  bool hasSpread = false;
-  for (auto &arg : getArguments(call)) {
-    if (llvh::isa<ESTree::SpreadElementNode>(&arg)) {
-      hasSpread = true;
-    }
-  }
-
-  if (!hasSpread) {
+    Value *newTarget,
+    flow::BaseFunctionType *calleeFuncType) {
+  if (canEmitTypedCallArguments(getArguments(call))) {
     CallInst::ArgumentList args;
-    for (auto &arg : getArguments(call)) {
-      args.push_back(genExpression(&arg));
-    }
+    emitTypedCallArguments(getArguments(call), /* offset */ 0, args);
 
     auto *callInst = Builder.createCallInst(
         callee,
@@ -838,18 +1046,25 @@ Value *ESTreeIRGen::emitCall(
         newTarget,
         thisVal,
         args);
-    if (llvh::isa<flow::BaseFunctionType>(
-            flowContext_.getNodeTypeOrAny(getCallee(call))->info)) {
+    auto *baseFunctionType = calleeFuncType
+        ? calleeFuncType
+        : llvh::dyn_cast<flow::BaseFunctionType>(
+              flowContext_.getNodeTypeOrAny(getCallee(call))->info);
+    if (baseFunctionType) {
       // Every BaseFunctionType currently is going to be compiled to a
       // NativeJSFunction, so always set this flag.
       // Eventually we will have bytecode, etc.
       callInst->getAttributesRef(Mod).isNativeJSFunction = true;
+      if (auto *typedFunc =
+              llvh::dyn_cast<flow::TypedFunctionType>(baseFunctionType)) {
+        callInst->setType(flowTypeToIRType(typedFunc->getReturnType()));
+      }
     }
     return callInst;
   }
 
-  // Otherwise, there exists a spread argument, so the number of arguments
-  // is variable.
+  // Otherwise, there exists a spread argument that cannot be expanded
+  // statically, so the number of arguments is variable.
   // Generate IR for this by creating an array and populating it with the
   // arguments.
   auto *args = genArrayFromElements(getArguments(call));
@@ -868,23 +1083,66 @@ Value *ESTreeIRGen::emitNativeCall(
     flow::NativeFunctionType *natFuncType) {
   Value *callee = genExpression(call->_callee);
 
-  llvh::SmallVector<Value *, 4> args{};
-  for (auto &arg : getArguments(call)) {
-    if (llvh::isa<ESTree::SpreadElementNode>(&arg)) {
-      // TODO: this should have been rejected by the typechecker.
-      Mod->getContext().getSourceErrorManager().error(
-          call->getSourceRange(),
-          "spread arguments are not supported for native functions");
-      return Builder.getLiteralUndefined();
-    }
-
-    args.push_back(genExpression(&arg));
-  }
+  CallInst::ArgumentList args;
+  emitTypedCallArguments(getArguments(call), /* offset */ 0, args);
 
   return Builder.createNativeCallInst(
       flowTypeToIRType(natFuncType->getReturnType()),
       callee,
       natFuncType->getSignature(),
+      args);
+}
+
+Value *ESTreeIRGen::genBuiltinMethodCall(
+    ESTree::CallExpressionNode *call,
+    ESTree::FunctionDeclarationNode *builtinDecl) {
+  auto *builtinId = llvh::cast<ESTree::IdentifierNode>(builtinDecl->_id);
+  sema::Decl *decl = semCtx_.getDeclarationDecl(builtinId);
+
+  // Generic builtins don't have Variables created for them, so we can't
+  // generate a direct call.
+  // This should never happen but just report an error and fail gracefully.
+  if (decl->generic) {
+    Mod->getContext().getSourceErrorManager().error(
+        call->getSourceRange(),
+        "invalid AST: cannot call generic method as builtin");
+    return Builder.getLiteralUndefined();
+  }
+
+  // All builtin calls must have a member expression.
+  auto *memExpr = llvh::cast<ESTree::MemberExpressionNode>(call->_callee);
+
+  // Load the closure from the variable.
+  Variable *var = llvh::cast<Variable>(getDeclData(decl));
+  Value *callee = emitLoadClassMemberVar(decl);
+
+  // Generate the arguments.
+  Value *receiver = genExpression(memExpr->_object);
+  CallInst::ArgumentList args;
+  emitTypedCallArguments(call->_arguments, /* offset */ 0, args);
+
+  // Find the function based on the closure creation.
+  Function *func = nullptr;
+  bool found = false;
+  for (auto *varUser : var->getUsers()) {
+    if (auto *closure = llvh::dyn_cast<CreateFunctionInst>(varUser)) {
+      if (found) {
+        found = false;
+        func = nullptr;
+        break;
+      }
+      found = true;
+      func = closure->getFunctionCode();
+    }
+  }
+
+  return Builder.createCallInst(
+      callee,
+      /* target */ found ? (Value *)func : Builder.getEmptySentinel(),
+      /* calleeIsAlwaysClosure */ true,
+      /* env */ Builder.getEmptySentinel(),
+      /* newTarget */ Builder.getLiteralUndefined(),
+      /* thisValue */ receiver,
       args);
 }
 
@@ -901,8 +1159,11 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::genMemberExpression(
           nullptr,
           Builder.getLiteralUndefined()};
     }
-    if (llvh::isa<flow::ClassType>(
-            flowContext_.getNodeTypeOrAny(superNode)->info)) {
+    // A ClassConstructorType here means a static 'super', which resolves
+    // against the superclass's statics rather than its prototype.
+    if (auto *superTypeInfo = flowContext_.getNodeTypeOrAny(superNode)->info;
+        llvh::isa<flow::ClassType>(superTypeInfo) ||
+        llvh::isa<flow::ClassConstructorType>(superTypeInfo)) {
       auto *property = llvh::dyn_cast<ESTree::IdentifierNode>(mem->_property);
       if (!property || mem->_computed) {
         // We can only handle super.foo, where foo is an identifier.
@@ -913,7 +1174,7 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::genMemberExpression(
             nullptr,
             Builder.getLiteralUndefined()};
       }
-      return emitTypedSuperLoad(superNode, property);
+      return emitTypedSuperLoad(mem);
     }
     // Generate `this` value first. This handles the case where we are in a
     // derived constructor but no call to `super` has been made. We must throw
@@ -932,9 +1193,10 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::genMemberExpression(
 
   Value *baseValue = genExpression(mem->_object);
   Value *prop;
-  if (auto *classType = llvh::dyn_cast<flow::ClassType>(
-          flowContext_.getNodeTypeOrAny(mem->_object)->info);
-      classType && !mem->_computed) {
+  auto *objTypeInfo = flowContext_.getNodeTypeOrAny(mem->_object)->info;
+  if ((llvh::isa<flow::ClassType>(objTypeInfo) ||
+       llvh::isa<flow::ClassConstructorType>(objTypeInfo)) &&
+      !mem->_computed) {
     // Named types for typed fields with known layout shouldn't bother
     // with genMemberExpressionProperty, which is intended for untyped code.
     if (auto *privateName =
@@ -962,10 +1224,160 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::genMemberExpression(
   llvm_unreachable("No other kind of member expression");
 }
 
+sema::Decl *ESTreeIRGen::getTypedMemberExpressionDeclIfExists(
+    ESTree::MemberExpressionNode *mem) {
+  if (mem->_computed)
+    return nullptr;
+  // Only applies to typed classes (ClassType for instance access,
+  // ClassConstructorType for static access). Legacy classes use different
+  // mechanisms for private names.
+  auto *objTypeInfo = flowContext_.getNodeTypeOrAny(mem->_object)->info;
+  if (!llvh::isa<flow::ClassType>(objTypeInfo) &&
+      !llvh::isa<flow::ClassConstructorType>(objTypeInfo))
+    return nullptr;
+
+  sema::Decl *decl = nullptr;
+  if (auto *id = llvh::dyn_cast<ESTree::IdentifierNode>(mem->_property)) {
+    decl = semCtx_.getExpressionDecl(id);
+  } else if (
+      auto *pn = llvh::dyn_cast<ESTree::PrivateNameNode>(mem->_property)) {
+    decl =
+        semCtx_.getExpressionDecl(llvh::cast<ESTree::IdentifierNode>(pn->_id));
+  }
+
+  // Only return the Decl if it has customData set (indicating that the field is
+  // stored in a Variable instead of on the object).
+  return decl && decl->customData ? decl : nullptr;
+}
+
+OptValue<flow::ClassType::FieldLookupEntry> ESTreeIRGen::findFieldForMemberProp(
+    ESTree::MemberExpressionNode *mem,
+    flow::ClassType *classType) {
+  assert(!mem->_computed && "expected non-computed member expression");
+  if (auto *pn = llvh::dyn_cast<ESTree::PrivateNameNode>(mem->_property)) {
+    Identifier propIdent = Mod->getContext().getPrivateNameIdentifier(
+        getNameFieldFromID(pn->_id).getUnderlyingPointer());
+    return classType->findPrivateField(propIdent);
+  }
+  Identifier propIdent = getNameFieldFromID(mem->_property);
+  return classType->findPublicField(propIdent);
+}
+
+Value *ESTreeIRGen::emitTypedGetterCall(
+    sema::Decl *decl,
+    Value *thisArg,
+    flow::Type *resultType) {
+  Value *closure = emitLoadClassMemberVar(decl);
+  Value *target = closure;
+  if (auto *func = declFunctions_.lookup(decl))
+    target = func;
+  auto *callInst = Builder.createCallInst(
+      closure,
+      target,
+      /* calleeIsAlwaysClosure */ true,
+      Builder.getEmptySentinel(),
+      Builder.getLiteralUndefined(),
+      thisArg,
+      {});
+  callInst->setType(flowTypeToIRType(resultType));
+  callInst->getAttributesRef(Mod).isNativeJSFunction = true;
+  return callInst;
+}
+
+void ESTreeIRGen::emitTypedSetterCall(
+    sema::Decl *decl,
+    Value *thisArg,
+    Value *storedValue) {
+  Value *closure = emitLoadClassMemberVar(decl);
+  Value *target = closure;
+  if (auto *func = declFunctions_.lookup(decl))
+    target = func;
+  auto *callInst = Builder.createCallInst(
+      closure,
+      target,
+      /* calleeIsAlwaysClosure */ true,
+      Builder.getEmptySentinel(),
+      Builder.getLiteralUndefined(),
+      thisArg,
+      {storedValue});
+  callInst->setType(Type::createUndefined());
+  callInst->getAttributesRef(Mod).isNativeJSFunction = true;
+}
+
+void ESTreeIRGen::emitTypedClassMethodClosureStore(
+    ESTree::MethodDefinitionNode *method,
+    sema::Decl *decl) {
+  auto *funcExpr = llvh::cast<ESTree::FunctionExpressionNode>(method->_value);
+  ESTree::IdentifierNode *id = ESTree::getPropertyIdentifier(method->_key);
+  Identifier name = llvh::isa<ESTree::PrivateNameNode>(method->_key)
+      ? Mod->getContext().getPrivateNameIdentifier(id->_name)
+      : Identifier::getFromPointer(id->_name);
+  Value *function = genFunctionExpression(funcExpr, name);
+  storeClassMemberVar(decl, function);
+  if (auto *CFI = llvh::dyn_cast<CreateFunctionInst>(function)) {
+    // Don't populate nonOverriddenMethods_ here,
+    // because it's only read for methods placed in the vtable.
+    declFunctions_.try_emplace(decl, CFI->getFunctionCode());
+  }
+}
+
 ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitMemberLoad(
     ESTree::MemberExpressionNode *mem,
     Value *baseValue,
     Value *propValue) {
+  // Final methods and static fields/methods are lowered to scope variables.
+  // Getters never have their Decl propagated to the call-site, so they
+  // won't be caught here — they are handled below.
+  if (sema::Decl *decl = getTypedMemberExpressionDeclIfExists(mem)) {
+    Value *val = emitLoadClassMemberVar(decl);
+    return MemberExpressionResult{val, declFunctions_.lookup(decl), baseValue};
+  }
+
+  // Static getter: the Decl is not propagated to the call-site, so
+  // look up the getter on the static type and emit the call.
+  if (auto *consType = llvh::dyn_cast<flow::ClassConstructorType>(
+          flowContext_.getNodeTypeOrAny(mem->_object)->info)) {
+    if (!mem->_computed) {
+      if (sema::Decl *decl = findStaticAccessor(mem, consType).getterDecl) {
+        Value *call = emitTypedGetterCall(
+            decl, baseValue, flowContext_.getNodeTypeOrAny(mem));
+        return MemberExpressionResult{call, nullptr, baseValue};
+      }
+      // `A.prototype` reads the home object, which is stored as a named
+      // property on the constructor closure by genClassDeclaration.
+      // Type it as the home object so that PrLoad on the result is legal.
+      if (auto *id = llvh::dyn_cast<ESTree::IdentifierNode>(mem->_property);
+          id && id->_name == kw_.identPrototype) {
+        auto *load = Builder.createLoadPropertyInst(baseValue, propValue);
+        load->setType(flowTypeToIRType(flowContext_.getNodeTypeOrAny(mem)));
+        return MemberExpressionResult{load, nullptr, baseValue};
+      }
+    }
+  }
+
+  // Check if we are loading from a FastArray, and generate the typed IR.
+  // This must be checked before the general ClassType case because Array<T>
+  // is a ClassType but needs special handling for computed access.
+  // NOTE: This is required for correctness, since a regular property load from
+  // a FastArray will simply return undefined if it is out-of-bounds.
+  if (flowContext_.isArrayClassType(
+          flowContext_.getNodeTypeOrAny(mem->_object))) {
+    flow::TypeInfo *propInfo =
+        flowContext_.getNodeTypeOrAny(mem->_property)->info;
+    // A number or number-literal index uses the typed fast-array path.
+    if (mem->_computed &&
+        (llvh::isa<flow::NumberType>(propInfo) ||
+         llvh::isa<flow::NumberLiteralType>(propInfo))) {
+      return MemberExpressionResult{
+          Builder.createFastArrayLoadInst(
+              baseValue,
+              propValue,
+              flowTypeToIRType(flowContext_.getNodeTypeOrAny(mem))),
+          nullptr,
+          baseValue};
+    }
+  }
+
   if (auto *classType = llvh::dyn_cast<flow::ClassType>(
           flowContext_.getNodeTypeOrAny(mem->_object)->info)) {
     if (!mem->_computed) {
@@ -988,26 +1400,12 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitMemberLoad(
         optFieldLookup = classType->findPublicField(propIdent);
         propName = Builder.getLiteralString(propIdent);
       }
-      if (optFieldLookup) {
-        size_t fieldIndex = optFieldLookup->getField()->layoutSlotIR;
-        Type irType = flowTypeToIRType(optFieldLookup->getField()->type);
-        Instruction *inst;
-        if (irType.canBePrimitive()) {
-          // If the type can be a primitive, it will have a default value that
-          // doesn't need IDZ.
-          inst =
-              Builder.createPrLoadInst(baseValue, fieldIndex, propName, irType);
-        } else {
-          // IDZ needed for object types.
-          inst = Builder.createThrowIfInst(
-              Builder.createPrLoadInst(
-                  baseValue,
-                  fieldIndex,
-                  propName,
-                  Type::unionTy(irType, Type::createUninit())),
-              Type::createUninit());
-        }
-        return MemberExpressionResult{inst, nullptr, baseValue};
+      if (optFieldLookup && optFieldLookup->getField()->isStoredOnObject()) {
+        return MemberExpressionResult{
+            emitTypedFieldLoad(
+                baseValue, *optFieldLookup->getField(), propName),
+            nullptr,
+            baseValue};
       }
       // Failed to find a class field, check the home object for methods.
       if (isPrivate) {
@@ -1015,13 +1413,23 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitMemberLoad(
         OptValue<flow::ClassType::FieldLookupEntry> optMethodLookup =
             classType->getHomeObjectTypeInfo()->findPrivateField(propIdent);
         auto *privateName = llvh::cast<ESTree::PrivateNameNode>(mem->_property);
+        // Getter: use the definition key's Decl (the usage site's Decl
+        // is the SemanticResolver's PrivateGetterSetter Decl, which
+        // doesn't have the Variable stored on it).
+        if (optMethodLookup->getField()->hasGetter()) {
+          auto *methodKey = ESTree::getPropertyIdentifier(
+              optMethodLookup->getField()->method->_key);
+          sema::Decl *getterDecl = semCtx_.getExpressionDecl(methodKey);
+          Value *call = emitTypedGetterCall(
+              getterDecl, baseValue, flowContext_.getNodeTypeOrAny(mem));
+          return MemberExpressionResult{call, nullptr, baseValue};
+        }
         sema::Decl *decl =
             getIDDecl(llvh::cast<ESTree::IdentifierNode>(privateName->_id));
-        Variable *var = llvh::cast<Variable>(getDeclData(decl));
-        Instruction *scope = emitResolveScopeInstIfNeeded(var->getParent());
+        Value *closure = emitLoadClassMemberVar(decl);
         return MemberExpressionResult{
-            Builder.createLoadFrameInst(scope, var),
-            finalMethods_.lookup(optMethodLookup->getField()),
+            closure,
+            nonOverriddenMethods_.lookup(optMethodLookup->getField()),
             baseValue};
       }
 
@@ -1029,7 +1437,24 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitMemberLoad(
           classType->getHomeObjectTypeInfo()->findPublicField(propIdent);
       assert(
           optMethodLookup && "must have typechecked as either method or field");
-      size_t methodIndex = optMethodLookup->getField()->layoutSlotIR;
+      const auto *field = optMethodLookup->getField();
+
+      // Getter: load closure from Variable, call it, return result.
+      if (field->hasGetter()) {
+        auto *methodKey = ESTree::getPropertyIdentifier(field->method->_key);
+        sema::Decl *decl = semCtx_.getExpressionDecl(methodKey);
+        Value *call = emitTypedGetterCall(
+            decl, baseValue, flowContext_.getNodeTypeOrAny(mem));
+        return MemberExpressionResult{call, nullptr, baseValue};
+      }
+
+      // Final methods are handled by the early return above, which
+      // loads the closure from the Decl set on the call-site property.
+      assert(
+          !field->finalMethod &&
+          "final methods should be handled by the Decl early return");
+      assert(field->isStoredOnObject() && "method must be on the home object");
+      size_t methodIndex = *field->layoutSlotIR;
       // Lookup method on the parent, return baseValue in the result to
       // correctly populate 'this' argument.
       return MemberExpressionResult{
@@ -1037,8 +1462,8 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitMemberLoad(
               Builder.createTypedLoadParentInst(baseValue),
               methodIndex,
               propName,
-              flowTypeToIRType(optMethodLookup->getField()->type)),
-          finalMethods_.lookup(optMethodLookup->getField()),
+              flowTypeToIRType(field->type)),
+          nonOverriddenMethods_.lookup(field),
           baseValue};
     }
   }
@@ -1049,40 +1474,72 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitMemberLoad(
       auto propName = Identifier::getFromPointer(
           llvh::cast<ESTree::IdentifierNode>(mem->_property)->_name);
       auto optIndex = objType->findField(propName);
-      assert(optIndex.hasValue() && "Expected field to exist");
-      const auto &field = objType->getFields()[*optIndex];
+      if (optIndex.hasValue()) {
+        const auto &field = objType->getFields()[*optIndex];
+        return MemberExpressionResult{
+            Builder.createPrLoadInst(
+                baseValue,
+                *optIndex,
+                Builder.getLiteralString(propName),
+                flowTypeToIRType(field.type)),
+            nullptr,
+            baseValue};
+      }
+    }
+    // Either a computed access or a dot access with no named field: this is an
+    // indexer read. The dynamic load yields `T | void` (a missing key reads as
+    // `undefined`); narrow it to `T` with a checked cast, so a read of a
+    // missing key throws. The FlowChecker types the member expression as `T`.
+    if (const auto &indexer = objType->getIndexer()) {
+      Type valueIRType = flowTypeToIRType(indexer->valueType);
+      auto *loadProp = Builder.createLoadPropertyInst(baseValue, propValue);
+      loadProp->setType(
+          getTypeContext().unionTy(valueIRType, Type::createUndefined()));
       return MemberExpressionResult{
-          Builder.createPrLoadInst(
-              baseValue,
-              *optIndex,
-              Builder.getLiteralString(propName),
-              flowTypeToIRType(field.type)),
+          Builder.createCheckedTypeCastInst(loadProp, valueIRType),
           nullptr,
           baseValue};
     }
   }
 
-  // Check if we are loading an array element, and generate the typed IR.
-  // NOTE: This is required for correctness, since a regular property load from
-  // a FastArray will simply return undefined if it is out-of-bounds.
-  if (auto *arrayType = llvh::dyn_cast<flow::ArrayType>(
+  // Reading a field common to every arm of an object-literal union.
+  // FlowChecker has verified the field exists in every exact-object arm and
+  // typed the member expression as the union of the per-arm field types.
+  // If the field is the same slot in every arm, use PrLoad, else use
+  // LoadProperty.
+  if (auto *unionType = llvh::dyn_cast<flow::UnionType>(
           flowContext_.getNodeTypeOrAny(mem->_object)->info)) {
-    if (mem->_computed &&
-        llvh::isa<flow::NumberType>(
-            flowContext_.getNodeTypeOrAny(mem->_property)->info)) {
-      return MemberExpressionResult{
-          Builder.createFastArrayLoadInst(
-              baseValue, propValue, flowTypeToIRType(arrayType->getElement())),
-          nullptr,
-          baseValue};
-    }
-
-    // If we are reading the length from a known FastArray, use the a
-    // specialised instruction to load it efficiently.
-    auto *ident = llvh::dyn_cast<ESTree::IdentifierNode>(mem->_property);
-    if (!mem->_computed && ident && ident->_name == kw_.identLength) {
-      return MemberExpressionResult{
-          Builder.createFastArrayLengthInst(baseValue), nullptr, baseValue};
+    if (!mem->_computed) {
+      auto propName = Identifier::getFromPointer(
+          llvh::cast<ESTree::IdentifierNode>(mem->_property)->_name);
+      Type resultTy = flowTypeToIRType(flowContext_.getNodeTypeOrAny(mem));
+      // Determine whether the field lives at the same slot in every arm.
+      OptValue<size_t> commonSlot = llvh::None;
+      bool sameSlot = true;
+      for (flow::Type *arm : unionType->getTypes()) {
+        auto *objType = llvh::cast<flow::ExactObjectType>(arm->info);
+        auto optIndex = objType->findField(propName);
+        assert(optIndex && "FlowChecker guarantees the field in every arm");
+        if (!commonSlot) {
+          commonSlot = *optIndex;
+        } else if (*commonSlot != *optIndex) {
+          sameSlot = false;
+          break;
+        }
+      }
+      if (sameSlot) {
+        return MemberExpressionResult{
+            Builder.createPrLoadInst(
+                baseValue,
+                *commonSlot,
+                Builder.getLiteralString(propName),
+                resultTy),
+            nullptr,
+            baseValue};
+      }
+      auto *loadProp = Builder.createLoadPropertyInst(baseValue, propValue);
+      loadProp->setType(resultTy);
+      return MemberExpressionResult{loadProp, nullptr, baseValue};
     }
   }
 
@@ -1105,7 +1562,32 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitMemberLoad(
     }
     Mod->getContext().getSourceErrorManager().error(
         mem->getSourceRange(), "invalid tuple access");
-  };
+  }
+
+  // Check if we are loading a string property.
+  if (llvh::isa<flow::StringType>(
+          flowContext_.getNodeTypeOrAny(mem->_object)->info) ||
+      llvh::isa<flow::StringLiteralType>(
+          flowContext_.getNodeTypeOrAny(mem->_object)->info)) {
+    if (!mem->_computed) {
+      auto *ident = llvh::cast<ESTree::IdentifierNode>(mem->_property);
+      if (ident->_name == kw_.identLength) {
+        // str.length returns number.
+        auto *loadProp = Builder.createLoadPropertyInst(baseValue, propValue);
+        loadProp->setType(Type::createNumber());
+        return MemberExpressionResult{loadProp, nullptr, baseValue};
+      }
+    } else {
+      auto *loadProp = Builder.createLoadPropertyInst(baseValue, propValue);
+      loadProp->setType(
+          getTypeContext().unionTy(
+              Type::createString(), Type::createUndefined()));
+      auto *cast =
+          Builder.createCheckedTypeCastInst(loadProp, Type::createString());
+      return MemberExpressionResult{cast, nullptr, baseValue};
+    }
+  }
+
   Value *loadProp;
   if (auto *PN = llvh::dyn_cast<ESTree::PrivateNameNode>(getProperty(mem))) {
     loadProp = emitPrivateLookup(baseValue, propValue, PN);
@@ -1115,23 +1597,100 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitMemberLoad(
   return MemberExpressionResult{loadProp, nullptr, baseValue};
 }
 
+ESTreeIRGen::StaticAccessor ESTreeIRGen::findStaticAccessor(
+    ESTree::MemberExpressionNode *mem,
+    flow::ClassConstructorType *consType) {
+  if (mem->_computed)
+    return {};
+  auto *classInfo = llvh::cast<flow::ClassType>(consType->getClassType()->info);
+  auto *staticInfo = classInfo->getStaticObjectTypeInfo();
+  if (!staticInfo)
+    return {};
+  auto optField = findFieldForMemberProp(mem, staticInfo);
+  if (!optField || !optField->getField()->isAccessor())
+    return {};
+  const flow::ClassType::Field *field = optField->getField();
+  // staticKeyNode is the key of whichever half was declared first, so each
+  // Decl has to come from its own MethodDefinitionNode.
+  // Callers pass these Decls straight to emitTypedGetterCall/SetterCall, which
+  // dereference them, so catch a missing Decl here rather than there.
+  auto declFor = [this](ESTree::MethodDefinitionNode *method) {
+    sema::Decl *decl =
+        semCtx_.getExpressionDecl(ESTree::getPropertyIdentifier(method->_key));
+    assert(decl && "static accessor must have a Decl on its key");
+    return decl;
+  };
+  return {
+      field->hasGetter() ? declFor(field->method) : nullptr,
+      field->hasSetter() ? declFor(field->setterMethod) : nullptr};
+}
+
+Value *ESTreeIRGen::emitLoadClassMemberVar(sema::Decl *decl) {
+  Value *val = emitLoad(getDeclData(decl), false);
+  // A class member Variable holds empty until the class declaration stores
+  // its closure, or its initializer runs, so check loads that may come first.
+  // Method closures are always empty until then; fields only when their type
+  // has no representable literal default. Like a TDZ variable, empty is used
+  // rather than uninit so that TDZDedup understands the initial store.
+  if (getTypeContext().canBeEmpty(val->getType()))
+    val = Builder.createThrowIfInst(val, Type::createEmpty());
+  return val;
+}
+
+Value *ESTreeIRGen::emitLoadTypedHomeObject(flow::ClassType *classInfo) {
+  auto it = classConstructors_.find(classInfo);
+  assert(it != classConstructors_.end() && "class not compiled");
+  return Builder.createLoadFrameInst(
+      emitResolveScopeInstIfNeeded(it->second.homeObjectVar->getParent()),
+      it->second.homeObjectVar);
+}
+
 ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitTypedSuperLoad(
-    ESTree::SuperNode *superNode,
-    ESTree::IdentifierNode *property) {
+    ESTree::MemberExpressionNode *mem) {
+  auto *superNode = llvh::cast<ESTree::SuperNode>(mem->_object);
+  auto *property = llvh::cast<ESTree::IdentifierNode>(mem->_property);
+  auto propName = Identifier::getFromPointer(property->_name);
+  Value *thisValue = genThisExpression();
+
+  // Final methods (both generic specializations and non-generic) have a
+  // Decl set on the call-site property by the FlowChecker. Load the
+  // closure from the Variable stored in the Decl's data.
+  if (auto *decl = semCtx_.getExpressionDecl(property)) {
+    Value *closure = emitLoadClassMemberVar(decl);
+    return MemberExpressionResult{
+        closure, declFunctions_.lookup(decl), thisValue};
+  }
+
+  // A static 'super' has no instance to read through: its members are the
+  // superclass's statics, which live in Variables. Only accessors and
+  // 'prototype' reach here, because every other static carries a Decl.
+  if (auto *consType = llvh::dyn_cast<flow::ClassConstructorType>(
+          flowContext_.getNodeTypeOrAny(superNode)->info)) {
+    if (propName.getUnderlyingPointer() == kw_.identPrototype) {
+      return MemberExpressionResult{
+          emitLoadTypedHomeObject(
+              llvh::cast<flow::ClassType>(consType->getClassType()->info)),
+          nullptr,
+          thisValue};
+    }
+    sema::Decl *decl = findStaticAccessor(mem, consType).getterDecl;
+    assert(decl && "static super without a Decl must be a getter");
+    Value *call = emitTypedGetterCall(
+        decl, thisValue, flowContext_.getNodeTypeOrAny(mem));
+    return MemberExpressionResult{call, nullptr, thisValue};
+  }
+
+  // Everything below reads through the superclass instance.
   auto *classType = llvh::cast<flow::ClassType>(
       flowContext_.getNodeTypeOrAny(superNode)->info);
-  auto propName = Identifier::getFromPointer(
-      llvh::cast<ESTree::IdentifierNode>(property)->_name);
-  Value *thisValue = genThisExpression();
-  if (auto optFieldLookup = classType->findPublicField(propName)) {
+  if (auto optFieldLookup = classType->findPublicField(propName);
+      optFieldLookup && optFieldLookup->getField()->isStoredOnObject()) {
     // Found the field on the class, so load it directly from 'this'.
-    size_t fieldIndex = optFieldLookup->getField()->layoutSlotIR;
     return MemberExpressionResult{
-        Builder.createPrLoadInst(
+        emitTypedFieldLoad(
             thisValue,
-            fieldIndex,
-            Builder.getLiteralString(propName),
-            flowTypeToIRType(optFieldLookup->getField()->type)),
+            *optFieldLookup->getField(),
+            Builder.getLiteralString(propName)),
         nullptr,
         thisValue};
   }
@@ -1139,49 +1698,85 @@ ESTreeIRGen::MemberExpressionResult ESTreeIRGen::emitTypedSuperLoad(
   auto optMethodLookup =
       classType->getHomeObjectTypeInfo()->findPublicField(propName);
   assert(optMethodLookup && "must have typechecked as either method or field");
-  size_t methodIndex = optMethodLookup->getField()->layoutSlotIR;
+  const auto *field = optMethodLookup->getField();
+
+  // Getter: load closure from Variable, call it, return result.
+  if (field->hasGetter()) {
+    auto *methodKey = ESTree::getPropertyIdentifier(field->method->_key);
+    sema::Decl *decl = semCtx_.getExpressionDecl(methodKey);
+    Value *call = emitTypedGetterCall(decl, thisValue, field->type);
+    return MemberExpressionResult{call, nullptr, thisValue};
+  }
+
+  // Final methods are handled by the Decl early return above.
+  assert(
+      !field->finalMethod &&
+      "final methods should be handled by the Decl early return");
+  assert(field->isStoredOnObject() && "method must be on the home object");
+  size_t methodIndex = *field->layoutSlotIR;
   // Lookup method on the parent, return thisValue in the result to
   // correctly populate 'this' argument.
-  auto it = classConstructors_.find(classType);
-  auto *RSI =
-      emitResolveScopeInstIfNeeded(it->second.homeObjectVar->getParent());
-  Value *superHomeObject =
-      Builder.createLoadFrameInst(RSI, it->second.homeObjectVar);
+  Value *superHomeObject = emitLoadTypedHomeObject(classType);
   return MemberExpressionResult{
       Builder.createPrLoadInst(
           superHomeObject,
           methodIndex,
           Builder.getLiteralString(propName),
-          flowTypeToIRType(optMethodLookup->getField()->type)),
+          flowTypeToIRType(field->type)),
       nullptr,
       thisValue};
 }
 
+Value *ESTreeIRGen::emitTypedFieldLoad(
+    Value *object,
+    const flow::ClassType::Field &field,
+    Literal *propName) {
+  assert(field.isStoredOnObject() && "field must be stored on the object");
+  TypeContext &tc = getTypeContext();
+  Type irType = flowTypeToIRType(field.type);
+  if (!tc.isIDZType(irType)) {
+    // Has a literal default that doesn't need IDZ.
+    return Builder.createPrLoadInst(
+        object, *field.layoutSlotIR, propName, irType);
+  }
+  // No representable literal default (object types, symbol): the field is
+  // stored uninitialized, so IDZ-check it on load.
+  return Builder.createThrowIfInst(
+      Builder.createPrLoadInst(
+          object,
+          *field.layoutSlotIR,
+          propName,
+          tc.unionTy(irType, Type::createUninit())),
+      Type::createUninit());
+}
+
 void ESTreeIRGen::emitTypedFieldStore(
     flow::ClassType *classType,
-    ESTree::Node *prop,
+    Identifier name,
+    bool isPrivate,
     Value *object,
     Value *value) {
   Literal *propName;
   OptValue<flow::ClassType::FieldLookupEntry> optFieldLookup;
-  if (auto *privateName = llvh::dyn_cast<ESTree::PrivateNameNode>(prop)) {
-    Identifier name = Mod->getContext().getPrivateNameIdentifier(
-        getNameFieldFromID(privateName->_id).getUnderlyingPointer());
-    optFieldLookup = classType->findPrivateField(name);
-    propName = Builder.getLiteralPrivateName(name);
+  if (isPrivate) {
+    Identifier privateName =
+        Mod->getContext().getPrivateNameIdentifier(name.getUnderlyingPointer());
+    optFieldLookup = classType->findPrivateField(privateName);
+    propName = Builder.getLiteralPrivateName(privateName);
   } else {
-    Identifier name = getNameFieldFromID(prop);
     optFieldLookup = classType->findPublicField(name);
     propName = Builder.getLiteralString(name);
   }
   assert(optFieldLookup && "field lookup must succeed after typechecking");
-  size_t fieldIndex = optFieldLookup->getField()->layoutSlotIR;
+  const auto *field = optFieldLookup->getField();
+  assert(field->isStoredOnObject() && "field must be stored on the object");
+  size_t fieldIndex = *field->layoutSlotIR;
   Builder.createPrStoreInst(
       value,
       object,
       fieldIndex,
       propName,
-      flowTypeToIRType(optFieldLookup->getField()->type).isNonPtr());
+      getTypeContext().isNonPtr(flowTypeToIRType(field->type)));
 }
 
 void ESTreeIRGen::emitMemberStore(
@@ -1190,8 +1785,57 @@ void ESTreeIRGen::emitMemberStore(
     Value *baseValue,
     Value *propValue,
     Value *thisValue) {
-  // If \p thisValue is set, this is a store to `super`, so we must set up the
-  // receiver correctly.
+  // Destructuring and for-in/of stores have no ImplicitCheckedCast,
+  // so the stored value is typed wider than it should be.
+  storedValue = enforceExprType(storedValue, mem);
+
+  // Static fields/methods are stored in scope variables, not object properties.
+  if (auto *decl = getTypedMemberExpressionDeclIfExists(mem)) {
+    emitStore(storedValue, getDeclData(decl), false);
+    return;
+  }
+
+  // Static setter case: the Decl is not propagated to the callsite, so
+  // look up the setter on the static type and emit the call. The receiver is
+  // \p baseValue in both forms: createLRef uses 'this' as the object for a
+  // typed 'super', so it already equals \p thisValue there.
+  if (auto *consType = llvh::dyn_cast<flow::ClassConstructorType>(
+          flowContext_.getNodeTypeOrAny(mem->_object)->info)) {
+    if (sema::Decl *decl = findStaticAccessor(mem, consType).setterDecl) {
+      emitTypedSetterCall(decl, baseValue, storedValue);
+      return;
+    }
+  }
+
+  // A named store to a typed class instance, through 'super' or not. In ES a
+  // 'super' store goes to the receiver, and the receiver's layout contains the
+  // superclass's slots, so both cases store through \p baseValue: createLRef
+  // uses 'this' as the object for a typed 'super', so it already equals
+  // \p thisValue there.
+  if (auto *classType = llvh::dyn_cast<flow::ClassType>(
+          flowContext_.getNodeTypeOrAny(mem->_object)->info);
+      classType && !mem->_computed) {
+    // Accessor setters are stored as methods in the home object.
+    auto optMethod =
+        findFieldForMemberProp(mem, classType->getHomeObjectTypeInfo());
+    if (optMethod && optMethod->getField()->hasSetter()) {
+      const auto *field = optMethod->getField();
+      auto *setterKeyId =
+          ESTree::getPropertyIdentifier(field->setterMethod->_key);
+      sema::Decl *decl = semCtx_.getExpressionDecl(setterKeyId);
+      emitTypedSetterCall(decl, baseValue, storedValue);
+      return;
+    }
+    emitTypedFieldStore(
+        classType,
+        getNameFieldFromID(ESTree::getPropertyIdentifier(mem->_property)),
+        llvh::isa<ESTree::PrivateNameNode>(mem->_property),
+        baseValue,
+        storedValue);
+    return;
+  }
+
+  // If \p thisValue is set, this is a store to an untyped `super`.
   if (thisValue) {
     Builder.createStorePropertyWithReceiverInst(
         storedValue,
@@ -1203,10 +1847,19 @@ void ESTreeIRGen::emitMemberStore(
     return;
   }
 
-  if (auto *classType = llvh::dyn_cast<flow::ClassType>(
-          flowContext_.getNodeTypeOrAny(mem->_object)->info)) {
-    if (!mem->_computed) {
-      emitTypedFieldStore(classType, mem->_property, baseValue, storedValue);
+  // Check if we are storing to a FastArray, and generate the specialised
+  // instruction for it. Only computed accesses reach here, because the typed
+  // ClassType case above already handled named ones, and Array<T> is a
+  // ClassType.
+  if (flowContext_.isArrayClassType(
+          flowContext_.getNodeTypeOrAny(mem->_object))) {
+    flow::TypeInfo *propInfo =
+        flowContext_.getNodeTypeOrAny(mem->_property)->info;
+    // A number or number-literal index uses the typed fast-array path.
+    if (mem->_computed &&
+        (llvh::isa<flow::NumberType>(propInfo) ||
+         llvh::isa<flow::NumberLiteralType>(propInfo))) {
+      Builder.createFastArrayStoreInst(storedValue, baseValue, propValue);
       return;
     }
   }
@@ -1217,27 +1870,18 @@ void ESTreeIRGen::emitMemberStore(
       auto propName = Identifier::getFromPointer(
           llvh::cast<ESTree::IdentifierNode>(mem->_property)->_name);
       auto optIndex = objType->findField(propName);
-      assert(optIndex.hasValue() && "Expected field to exist");
-      const auto &field = objType->getFields()[*optIndex];
-      Builder.createPrStoreInst(
-          storedValue,
-          baseValue,
-          *optIndex,
-          Builder.getLiteralString(propName),
-          flowTypeToIRType(field.type).isNonPtr());
-      return;
-    }
-  }
-
-  // Check if we are storing to a FastArray, and generate the specialised
-  // instruction for it.
-  if (llvh::isa<flow::ArrayType>(
-          flowContext_.getNodeTypeOrAny(mem->_object)->info)) {
-    if (mem->_computed &&
-        llvh::isa<flow::NumberType>(
-            flowContext_.getNodeTypeOrAny(mem->_property)->info)) {
-      Builder.createFastArrayStoreInst(storedValue, baseValue, propValue);
-      return;
+      if (optIndex.hasValue()) {
+        const auto &field = objType->getFields()[*optIndex];
+        Builder.createPrStoreInst(
+            storedValue,
+            baseValue,
+            *optIndex,
+            Builder.getLiteralString(propName),
+            getTypeContext().isNonPtr(flowTypeToIRType(field.type)));
+        return;
+      }
+      // No named field: this is an indexer object. Fall through to dynamic
+      // by-name access, the same lowering used for computed indexer access.
     }
   }
 
@@ -1254,7 +1898,8 @@ void ESTreeIRGen::emitMemberStore(
           baseValue,
           ulen,
           Builder.getLiteralString(llvh::Twine(ulen)),
-          flowTypeToIRType(tupleType->getTypes()[ulen]).isNonPtr());
+          getTypeContext().isNonPtr(
+              flowTypeToIRType(tupleType->getTypes()[ulen])));
       return;
     }
     Mod->getContext().getSourceErrorManager().error(
@@ -1414,7 +2059,12 @@ Value *ESTreeIRGen::genObjectExpr(ESTree::ObjectExpressionNode *Expr) {
 
   if (flow::ExactObjectType *objType = llvh::dyn_cast<flow::ExactObjectType>(
           flowContext_.getNodeTypeOrAny(Expr)->info)) {
-    return genTypedObjectExpr(Expr, objType);
+    // Indexer-typed object literals (e.g. produced by spreading a dictionary)
+    // have no fixed slots, so the slot-based typed lowering cannot serve them.
+    // Fall through to the dynamic lowering below, which copies spread sources
+    // with copyDataProperties.
+    if (!objType->hasIndexer())
+      return genTypedObjectExpr(Expr, objType);
   }
 
   /// Store information about a property. Is it an accessor (getter/setter) or
@@ -1794,6 +2444,33 @@ Value *ESTreeIRGen::genTypedObjectExpr(
       storedValues{};
   llvh::SmallVector<char, 32> stringStorage{};
   for (auto &node : Expr->_properties) {
+    if (auto *spread = llvh::dyn_cast<ESTree::SpreadElementNode>(&node)) {
+      // FlowChecker degrades the enclosing object literal to 'any' when
+      // a spread argument has type 'any'. This function is not
+      // run in that case, so the spread type must be ExactObjectType if we're
+      // here.
+      auto *spreadInfo = flowContext_.getNodeTypeOrAny(spread->_argument)->info;
+      assert(
+          llvh::isa<flow::ExactObjectType>(spreadInfo) &&
+          "spread source in typed object literal must be ExactObjectType");
+      auto *srcType = llvh::cast<flow::ExactObjectType>(spreadInfo);
+      Value *src = genExpression(spread->_argument);
+      for (size_t i = 0, e = srcType->getFields().size(); i < e; ++i) {
+        const auto &srcField = srcType->getFields()[i];
+        Value *loaded = Builder.createPrLoadInst(
+            src,
+            i,
+            Builder.getLiteralString(srcField.name),
+            flowTypeToIRType(srcField.type));
+        auto optIndex = type->findField(srcField.name);
+        assert(
+            optIndex.hasValue() &&
+            "Spread field must exist in destination type");
+        storedValues[srcField.name] = {loaded, *optIndex};
+      }
+      continue;
+    }
+
     auto *prop = llvh::cast<ESTree::PropertyNode>(&node);
     assert(
         !prop->_computed && !prop->_method && prop->_kind == kw_.identInit &&
@@ -1855,7 +2532,8 @@ Value *ESTreeIRGen::genTypedObjectExpr(
           result,
           idx,
           name,
-          flowTypeToIRType(type->getFields()[idx].type).isNonPtr());
+          getTypeContext().isNonPtr(
+              flowTypeToIRType(type->getFields()[idx].type)));
     }
   }
 
@@ -2340,7 +3018,8 @@ Value *ESTreeIRGen::genUpdateExpr(ESTree::UpdateExpressionNode *updateExpr) {
 
   // Postfix updates need to convert the original value to numeric before
   // Inc/Dec to ensure the updateExpr has the proper result value.
-  if (!isPrefix && !original->getType().isSubsetOf(Type::createNumeric()))
+  if (!isPrefix &&
+      !getTypeContext().isSubsetOf(original->getType(), Type::createNumeric()))
     original = Builder.createAsNumericInst(original);
 
   // Create the inc or dec.
@@ -2476,7 +3155,8 @@ Value *ESTreeIRGen::genRegExpLiteral(ESTree::RegExpLiteralNode *RE) {
       auto *val = Builder.getLiteralNumber(groupIdx);
       propMap.emplace_back(key, val);
     }
-    auto literalObj = Builder.createAllocObjectLiteralInst(propMap);
+    auto literalObj =
+        Builder.createAllocObjectLiteralInst(propMap, Builder.getLiteralNull());
 
     Value *params[] = {exp, literalObj};
     Builder.createCallBuiltinInst(
@@ -2671,18 +3351,15 @@ Value *ESTreeIRGen::genNewExpr(ESTree::NewExpressionNode *N) {
 
   Value *callee = genExpression(N->_callee);
 
-  bool hasSpread = false;
-  for (auto &arg : N->_arguments) {
-    if (llvh::isa<ESTree::SpreadElementNode>(&arg)) {
-      hasSpread = true;
-    }
-  }
+  bool canEmitTypedArgs = canEmitTypedCallArguments(N->_arguments);
 
   // Is this a statically typed new?
   if (auto *consType = llvh::dyn_cast<flow::ClassConstructorType>(
           flowContext_.getNodeTypeOrAny(N->_callee)->info)) {
     flow::ClassType *classType = consType->getClassTypeInfo();
-    assert(!hasSpread && "statically typed spread is not supported");
+    assert(
+        canEmitTypedArgs &&
+        "unexpandable spread should have been rejected by the typechecker");
 
     // If we know the ClassType but it hasn't been populated in
     // classConstructors_ yet, then it must occur later in the same function.
@@ -2709,21 +3386,17 @@ Value *ESTreeIRGen::genNewExpr(ESTree::NewExpressionNode *N) {
         Builder.createLoadFrameInst(RSI, it->second.homeObjectVar),
         Type::createObject());
     Value *newInst = emitTypedClassAllocation(
-        classType,
-        proto,
-        /* skipPrivateFields */ false,
-        /* propertiesEnumerable */ true);
+        classType, proto, /* propertiesEnumerable */ true);
 
-    // Call the constructor, if necessary.  There is always a constructor,
-    // either explicit or implicit.  We will load an implicit ctor (for
-    // TDZ), but there is no need to invoke it unless it performs field
-    // initializations (which is true iff it is present in the
-    // classFieldInitInfo_ table).
-    if (classType->getConstructorType() ||
+    // Call the constructor, if necessary. There is always a constructor,
+    // either explicit or implicit. We must invoke it if it has an explicit
+    // type, performs field initializations, or has a super class to forward
+    // to. An implicit constructor takes no arguments, so there is nothing to
+    // evaluate when the call is skipped.
+    if (classType->getConstructorType() || classType->getSuperClass() ||
         (classFieldInitInfo_.find(classType) != classFieldInitInfo_.end())) {
       CallInst::ArgumentList args;
-      for (auto &arg : N->_arguments)
-        args.push_back(genExpression(&arg));
+      emitTypedCallArguments(N->_arguments, /* offset */ 0, args);
 
       Function *target = it->second.constructorFunc;
       Builder.createCallInst(
@@ -2738,18 +3411,16 @@ Value *ESTreeIRGen::genNewExpr(ESTree::NewExpressionNode *N) {
     return newInst;
   }
 
-  if (!hasSpread) {
+  if (canEmitTypedArgs) {
     CallInst::ArgumentList args;
-    for (auto &arg : N->_arguments) {
-      args.push_back(genExpression(&arg));
-    }
+    emitTypedCallArguments(N->_arguments, /* offset */ 0, args);
     auto *thisArg = Builder.createCreateThisInst(callee, callee);
     auto *res = Builder.createCallInst(callee, callee, thisArg, args);
     return Builder.createGetConstructedObjectInst(thisArg, res);
   }
 
-  // Otherwise, there exists a spread argument, so the number of arguments
-  // is variable.
+  // Otherwise, there exists a spread argument that cannot be expanded
+  // statically, so the number of arguments is variable.
   // Generate IR for this by creating an array and populating it with the
   // arguments, then calling HermesInternal.apply.
   auto *args = genArrayFromElements(N->_arguments);

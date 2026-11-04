@@ -25,6 +25,8 @@ namespace vm {
 
 // External forward declarations.
 class Runtime;
+class JSArray;
+class HiddenClass;
 struct JSLibStorage;
 
 /// Flags controlling the initialization of the global object.
@@ -104,9 +106,29 @@ enum class TypeErrorKind {
 /// \return whether we can use the fast path for Array methods on \p arr.
 bool arrayFastPathCheck(
     Runtime &runtime,
-    JSArray *arr,
-    HiddenClass *arrayClass,
+    Handle<JSArray> arr,
+    Handle<HiddenClass> arrayClass,
     uint32_t len);
+
+/// Typed-language Object.keys/values/entries. Return a new FastArray with
+/// prototype \p prototype containing the enumerable own string-keyed property
+/// names of \p obj, their values, or [key, value] tuple objects.
+/// Typed objects and FastArrays are read directly; other objects (proxies,
+/// host objects, accessors, indexed storage) use the generic enumeration.
+/// @{
+CallResult<HermesValue> objectKeysFastArray(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    Handle<JSObject> prototype);
+CallResult<HermesValue> objectValuesFastArray(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    Handle<JSObject> prototype);
+CallResult<HermesValue> objectEntriesFastArray(
+    Runtime &runtime,
+    Handle<JSObject> obj,
+    Handle<JSObject> prototype);
+/// @}
 
 } // namespace vm
 } // namespace hermes

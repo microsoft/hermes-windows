@@ -277,6 +277,20 @@ CallResult<HermesValue> hermesInternalGetRuntimeProperties(
     return ExecutionStatus::EXCEPTION;
   }
 
+#ifdef HERMES_RELEASE_CHANNEL
+  auto channelRes =
+      StringPrimitive::create(runtime, createASCIIRef(HERMES_RELEASE_CHANNEL));
+  if (LLVM_UNLIKELY(channelRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  lv.tmpHandle = *channelRes;
+  if (LLVM_UNLIKELY(
+          addProperty(lv.tmpHandle, "Release Channel") ==
+          ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+#endif
+
   lv.tmpHandle =
       HermesValue::encodeBoolValue(runtime.getJITContext().isEnabled());
   if (LLVM_UNLIKELY(
@@ -457,7 +471,7 @@ CallResult<HermesValue> hermesInternalTTRCReached(void *, Runtime &runtime) {
 CallResult<HermesValue> hermesInternalIsProxy(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   Handle<JSObject> obj = args.dyncastArg<JSObject>(0);
-  return HermesValue::encodeBoolValue(obj && obj->isProxyObject());
+  return HermesValue::encodeBoolValue(obj && obj->isProxyObject(runtime));
 }
 
 CallResult<HermesValue> hermesInternalHasPromise(void *, Runtime &runtime) {
@@ -466,6 +480,10 @@ CallResult<HermesValue> hermesInternalHasPromise(void *, Runtime &runtime) {
 
 CallResult<HermesValue> hermesInternalUseEngineQueue(void *, Runtime &runtime) {
   return HermesValue::encodeBoolValue(runtime.hasMicrotaskQueue());
+}
+
+CallResult<HermesValue> hermesInternalTest262Enabled(void *, Runtime &runtime) {
+  return HermesValue::encodeBoolValue(runtime.test262);
 }
 
 /// \code
@@ -640,7 +658,7 @@ CallResult<HermesValue> hermesInternalGetFunctionLocation(
     assert(res != ExecutionStatus::EXCEPTION && "Failed to set fileName");
     (void)res;
   }
-  JSObject::preventExtensions(*lv.resultHandle);
+  JSObject::preventExtensionsNonProxy(lv.resultHandle, runtime);
   return lv.resultHandle.getHermesValue();
 }
 
@@ -869,6 +887,10 @@ HermesValue createHermesInternalObject(
       P::enablePromiseRejectionTracker,
       hermesInternalEnablePromiseRejectionTracker);
   defineInternMethod(P::useEngineQueue, hermesInternalUseEngineQueue);
+  // test262Enabled() reflects the --test262 CLI flag so JS code can branch
+  // on it (e.g. test262 harness wiring). Returns false when the flag is
+  // absent or false.
+  defineInternMethodAndSymbol("test262Enabled", hermesInternalTest262Enabled);
 
 #ifdef HERMES_ENABLE_FUZZILLI
   defineInternMethod(P::fuzzilli, hermesInternalFuzzilli);
@@ -876,7 +898,7 @@ HermesValue createHermesInternalObject(
 
   // All functions are known to be safe can be defined above this flag check.
   if (!flags.enableHermesInternal) {
-    JSObject::preventExtensions(*lv.intern);
+    JSObject::preventExtensionsNonProxy(lv.intern, runtime);
     return lv.intern.getHermesValue();
   }
 
@@ -920,7 +942,7 @@ HermesValue createHermesInternalObject(
     defineInternMethodAndSymbol("getCallStack", hermesInternalGetCallStack, 0);
   }
 
-  JSObject::preventExtensions(*lv.intern);
+  JSObject::preventExtensionsNonProxy(lv.intern, runtime);
 
   return lv.intern.getHermesValue();
 }

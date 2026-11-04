@@ -3646,9 +3646,11 @@ vm::Handle<vm::DecoratedObject> NodeApiEnvironment::createExternalObject(
       runtime_.makeHandle(vm::DecoratedObject::create(
           runtime_,
           vm::Handle<vm::JSObject>::vmcast(&runtime_.objectPrototype),
+          runtime_.getHiddenClassForPrototype(
+              runtime_.objectPrototype.get(),
+              runtime_.classDecoratedObject1Reserved),
           std::make_unique<NodeApiExternalValue>(
-              pendingFinalizers_, nativeData),
-          /*additionalSlotCount:*/ 1));
+              pendingFinalizers_, nativeData)));
 
   // Add a special tag to differentiate from other decorated objects.
   vm::DecoratedObject::setAdditionalSlotValue(
@@ -3923,7 +3925,10 @@ napi_status NodeApiEnvironment::createTypedArray(
         "Invalid typed array length");
   }
   using TypedArray = vm::JSTypedArray<TElement, CellKind>;
-  *result = TypedArray::create(runtime_, TypedArray::getPrototype(runtime_));
+  *result = TypedArray::create(
+      runtime_,
+      TypedArray::getPrototype(runtime_),
+      TypedArray::getRootHiddenClass(runtime_));
   vm::JSTypedArrayBase::setBuffer(
       runtime_,
       result->get(),
@@ -3985,6 +3990,7 @@ napi_status NodeApiEnvironment::createPromise(
   vm::Handle<vm::NativeFunction> executorFunction = vm::NativeFunction::create(
       runtime_,
       vm::Handle<vm::JSObject>::vmcast(&runtime_.functionPrototype),
+      vm::Handle<vm::HiddenClass>::vmcast(&runtime_.classNativeFunction),
       vm::Runtime::makeNullHandle<vm::Environment>(),
       &executorData,
       &ExecutorData::callback,
