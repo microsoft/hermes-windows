@@ -11,7 +11,8 @@
     "format:check": "prettier --check \"*.{js,ts}\"",
     "lint:format": "npm run format && npm run lint:fix",
     "npm-source-lint": "node npm-source-lint.ts",
-    "test:npm-source-lint": "node --test npm-source-lint.test.ts"
+    "test:npm-source-lint": "node --test npm-source-lint.test.ts",
+    "test:exports": "node --test check-exports.test.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.31.0",
