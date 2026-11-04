@@ -164,33 +164,21 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   Value createError(const String& msg) override {
     return plain().createError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createEvalError(const String& msg) override {
     return plain().createEvalError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createRangeError(const String& msg) override {
     return plain().createRangeError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createReferenceError(const String& msg) override {
     return plain().createReferenceError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createSyntaxError(const String& msg) override {
     return plain().createSyntaxError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createTypeError(const String& msg) override {
     return plain().createTypeError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createURIError(const String& msg) override {
     return plain().createURIError(msg);
   }
@@ -448,8 +436,6 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   bool isTypedArray(const Object& o) const override {
     return plain_.isTypedArray(o);
   }
-#endif
-#if JSI_VERSION >= 22
   bool isUint8Array(const Object& o) const override {
     return plain_.isUint8Array(o);
   }
@@ -548,36 +534,24 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
       const jsi::ArrayBuffer& arrayBuffer) override {
     return plain_.tryGetMutableBuffer(arrayBuffer);
   }
-#endif
 
-#if JSI_VERSION >= 22
   ArrayBuffer buffer(const TypedArray& typedArray) override {
     return plain_.buffer(typedArray);
   }
-#endif
-#if JSI_VERSION >= 22
   size_t byteOffset(const TypedArray& typedArray) override {
     return plain_.byteOffset(typedArray);
   }
-#endif
-#if JSI_VERSION >= 22
   size_t byteLength(const TypedArray& typedArray) override {
     return plain_.byteLength(typedArray);
   }
-#endif
-#if JSI_VERSION >= 22
   size_t length(const TypedArray& typedArray) override {
     return plain_.length(typedArray);
   }
-#endif
 
-#if JSI_VERSION >= 22
   Uint8Array createUint8Array(size_t length) override {
     return plain_.createUint8Array(length);
   }
-#endif
 
-#if JSI_VERSION >= 22
   Uint8Array createUint8Array(
       const ArrayBuffer& buffer,
       size_t offset,
@@ -843,38 +817,26 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::createError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createEvalError(const String& msg) override {
     Around around{with_};
     return RD::createEvalError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createRangeError(const String& msg) override {
     Around around{with_};
     return RD::createRangeError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createReferenceError(const String& msg) override {
     Around around{with_};
     return RD::createReferenceError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createSyntaxError(const String& msg) override {
     Around around{with_};
     return RD::createSyntaxError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createTypeError(const String& msg) override {
     Around around{with_};
     return RD::createTypeError(msg);
   }
-#endif
-#if JSI_VERSION >= 22
   Value createURIError(const String& msg) override {
     Around around{with_};
     return RD::createURIError(msg);
@@ -1179,8 +1141,6 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::isTypedArray(o);
   }
-#endif
-#if JSI_VERSION >= 22
   bool isUint8Array(const Object& o) const override {
     Around around{with_};
     return RD::isUint8Array(o);
@@ -1285,40 +1245,28 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::tryGetMutableBuffer(arrayBuffer);
   }
-#endif
 
-#if JSI_VERSION >= 22
   ArrayBuffer buffer(const TypedArray& typedArray) override {
     Around around{with_};
     return RD::buffer(typedArray);
   }
-#endif
-#if JSI_VERSION >= 22
   size_t byteOffset(const TypedArray& typedArray) override {
     Around around{with_};
     return RD::byteOffset(typedArray);
   }
-#endif
-#if JSI_VERSION >= 22
   size_t byteLength(const TypedArray& typedArray) override {
     Around around{with_};
     return RD::byteLength(typedArray);
   }
-#endif
-#if JSI_VERSION >= 22
   size_t length(const TypedArray& typedArray) override {
     Around around{with_};
     return RD::length(typedArray);
   }
-#endif
 
-#if JSI_VERSION >= 22
   Uint8Array createUint8Array(size_t length) override {
     Around around{with_};
     return RD::createUint8Array(length);
   }
-#endif
-#if JSI_VERSION >= 22
   Uint8Array createUint8Array(
       const ArrayBuffer& buffer,
       size_t offset,

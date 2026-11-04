@@ -26,6 +26,9 @@
 /// The built-in print() function is provided by the Hermes VM global object,
 /// so no Node-API registration is needed.
 
+// Windows fork: suppress CRT/WER dialogs in this test host.
+#include "../../unittests/WindowsTestSupport.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -174,6 +177,7 @@ static bool parseArgs(int argc, char **argv, Options &opts) {
 // ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
+  hermes::testing::disableCrashDialogs();
   Options opts;
   if (!parseArgs(argc, argv, opts))
     return 1;

@@ -5,10 +5,17 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// Windows fork: suppress CRT/WER dialogs in this test host.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "../../unittests/WindowsTestSupport.h"
+
 #ifndef HERMES_ENABLE_DEBUGGER
 
 #include <iostream>
 int main(void) {
+  hermes::testing::disableCrashDialogs();
   std::cout << "hdb compiled without Hermes debugger enabled." << std::endl;
   return EXIT_FAILURE;
 }
@@ -761,6 +768,7 @@ struct HDBDebugger : public debugger::EventObserver {
 };
 
 int main(int argc, char **argv) {
+  hermes::testing::disableCrashDialogs();
   Options options = getCommandLineOptions(argc, argv);
 
   HermesRuntime::DebugFlags debugFlags{};

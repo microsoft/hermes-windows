@@ -229,9 +229,7 @@ inline TypedArray Object::getTypedArray(detail::RuntimeInterface& runtime) const
   assert(runtime.isTypedArray(*this));
   return TypedArray(runtime.cloneObject(ptr_));
 }
-#endif
 
-#if JSI_VERSION >= 22
 inline Uint8Array Object::getUint8Array(detail::RuntimeInterface& runtime) const& {
   assert(runtime.isUint8Array(*this));
   return Uint8Array(runtime.cloneObject(ptr_));
