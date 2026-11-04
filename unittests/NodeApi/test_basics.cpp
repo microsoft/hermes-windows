@@ -36,11 +36,17 @@ class BasicsTest : public TestFixtureBase {
 
 #ifdef _WIN32
 TEST_F(BasicsTest, ChildAbortReportsToStderrWithoutDialogs) {
-  ProcessResult result = SpawnSync(test_exe_path_.string(), {"--abort-test-child"});
+  ProcessResult result =
+      SpawnSync(test_exe_path_.string(), {"--abort-test-child"});
   ASSERT_FALSE(result.timed_out) << result.std_error;
-  EXPECT_NE(result.status, 0);
-  EXPECT_TRUE(StringContains(result.std_error, "intentional test child abort"));
-  EXPECT_TRUE(StringContains(result.std_error, "abort() has been called"));
+  EXPECT_EQ(result.status, 3);
+  // Only the debug UCRT emits the abort diagnostic, even with _WRITE_ABORT_MSG.
+#ifdef _DEBUG
+  EXPECT_EQ(result.std_error,
+            "intentional test child abort\nabort() has been called");
+#else
+  EXPECT_EQ(result.std_error, "intentional test child abort\n");
+#endif
 }
 
 // Exercise timeout and normal exit: both must release inherited pipes and kill
@@ -78,7 +84,11 @@ TEST_F(BasicsTest, ChildJobClosesInheritedPipesAndTerminatesGrandchildren) {
       ::CloseHandle(grandchild);
       EXPECT_EQ(wait, WAIT_OBJECT_0) << "Surviving grandchild PID " << pid;
     } else {
-      EXPECT_EQ(::GetLastError(), ERROR_INVALID_PARAMETER) << "PID " << pid;
+      const DWORD error = ::GetLastError();
+      // A protected process may have reused the PID after job cleanup.
+      EXPECT_TRUE(error == ERROR_INVALID_PARAMETER ||
+                  error == ERROR_ACCESS_DENIED)
+          << "PID " << pid << ", error " << error;
     }
   }
 }
