@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <cassert>
 #include <cstdio>
+#include <utility>
 #include "string_utils.h"
 
 #ifndef VerifyElseExit
@@ -58,7 +59,21 @@ struct AutoHandle {
 // STDOUT.
 ProcessResult SpawnSync(std::string_view command,
                         std::vector<std::string> args) {
+  return SpawnSync(command, std::move(args), 60 * 1000);
+}
+
+ProcessResult SpawnSync(std::string_view command,
+                        std::vector<std::string> args,
+                        uint32_t timeout_ms) {
   ProcessResult result{};
+
+  // Own the whole process tree, including descendants inheriting pipe handles.
+  AutoHandle job(::CreateJobObjectW(nullptr, nullptr));
+  VerifyElseExit(job.handle != NULL);
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  VerifyElseExit(::SetInformationJobObject(
+      job.handle, JobObjectExtendedLimitInformation, &limits, sizeof(limits)));
 
   // Set the bInheritHandle flag so pipe handles are inherited.
 
@@ -105,31 +120,44 @@ ProcessResult SpawnSync(std::string_view command,
                      nullptr,  // process security attributes
                      nullptr,  // primary thread security attributes
                      TRUE,     // handles are inherited
-                     CREATE_DEFAULT_ERROR_MODE,  // creation flags
-                     nullptr,                    // use parent's environment
+                     CREATE_DEFAULT_ERROR_MODE | CREATE_SUSPENDED,
+                     nullptr,          // use parent's environment
                      nullptr,          // use parent's current directory
                      &startup_info,    // STARTUPINFO pointer
                      &process_info));  // receives PROCESS_INFORMATION
+  AutoHandle process(process_info.hProcess), thread(process_info.hThread);
+  // Assign before running any child code, so no descendant can escape the job.
+  if (!::AssignProcessToJobObject(job.handle, process.handle)) {
+    const DWORD error = ::GetLastError();
+    // The suspended child is not in the job yet; do not strand it on failure.
+    const BOOL terminated = ::TerminateProcess(process.handle, error);
+    VerifyElseExit(terminated ||
+                   (::GetLastError() == ERROR_ACCESS_DENIED &&
+                    ::WaitForSingleObject(process.handle, 0) == WAIT_OBJECT_0));
+    ::SetLastError(error);
+    ExitOnError("AssignProcessToJobObject");
+  }
+  VerifyElseExit(::ResumeThread(thread.handle) != static_cast<DWORD>(-1));
 
   // Bound the wait so a hung test child cannot hang the entire test suite.
-  constexpr DWORD child_timeout_ms = 60 * 1000;
-  DWORD wait_result =
-      ::WaitForSingleObject(process_info.hProcess, child_timeout_ms);
+  DWORD wait_result = ::WaitForSingleObject(process.handle, timeout_ms);
   if (wait_result == WAIT_TIMEOUT) {
     result.timed_out = true;
-    VerifyElseExit(::TerminateProcess(process_info.hProcess, ERROR_TIMEOUT));
-    wait_result = ::WaitForSingleObject(process_info.hProcess, 5000);
+    const BOOL terminated = ::TerminateJobObject(job.handle, ERROR_TIMEOUT);
+    // The process may exit between the timed wait and termination.
+    VerifyElseExit(terminated ||
+                   (::GetLastError() == ERROR_ACCESS_DENIED &&
+                    ::WaitForSingleObject(process.handle, 0) == WAIT_OBJECT_0));
+    wait_result = ::WaitForSingleObject(process.handle, 5000);
   }
   VerifyElseExit(wait_result == WAIT_OBJECT_0);
 
   DWORD exit_code;
-  VerifyElseExit(::GetExitCodeProcess(process_info.hProcess, &exit_code));
+  VerifyElseExit(::GetExitCodeProcess(process.handle, &exit_code));
 
-  // Close handles to the child process and its primary thread.
-  // Some applications might keep these handles to monitor the status
-  // of the child process, for example.
-  ::CloseHandle(process_info.hProcess);
-  ::CloseHandle(process_info.hThread);
+  // Close before reading: even an exited child may leave descendants holding
+  // the write ends open. KILL_ON_JOB_CLOSE also covers the normal-exit path.
+  job.Close();
 
   // Close handles to the stdin and stdout pipes no longer needed by the child
   // process. If they are not explicitly closed, there is no way to recognize
@@ -145,7 +173,8 @@ ProcessResult SpawnSync(std::string_view command,
       ReplaceAll(ReadFromPipe(err_read_handle.handle), "\r\n", "\n");
 
   if (result.timed_out) {
-    result.std_error += "Child process timed out after 60 seconds\n";
+    result.std_error += "Child process timed out after " +
+                        std::to_string(timeout_ms) + " milliseconds\n";
   }
   return result;
 }
@@ -168,8 +197,7 @@ std::string ReadFromPipe(HANDLE pipeHandle) {
   return result;
 }
 
-// Format a readable error message, display a message box,
-// and exit from the application.
+// Report a readable error to stderr, never a modal dialog, then exit.
 void ExitOnError(const char* message) {
   LPVOID lpMsgBuf;
   LPVOID lpDisplayBuf;

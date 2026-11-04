@@ -150,15 +150,15 @@ using ThreadRunner = std::function<void(std::function<void()>)>;
   /* Increase compliance with test262 (stricter checks at runtime). */ \
   F(constexpr, bool, Test262, false)                                   \
                                                                        \
-  /* Wrap execution of the JSI finalizer worker thread. */             \
-  /* HostObject, HostFunction and NativeState destructors run */       \
-  /* there, and like the runner itself they must not throw. */         \
-  /* std::nullopt, the default, selects the platform default, which */ \
-  /* on Android wraps the thread in a JNI ThreadScope. Setting an */   \
-  /* empty ThreadRunner suppresses that and leaves the thread */       \
-  /* unwrapped -- note that this must be spelled */                    \
-  /* withFinalizerThreadRunner(ThreadRunner{}), since a bare {} is */  \
-  /* nullopt and so selects the platform default instead. */           \
+  /* Fork divergence: nullopt preserves inline VM finalization, */     \
+  /* with no executor or worker. Destructors run on whichever */       \
+  /* thread finalizes: the mutator, Hades background sweep, or */      \
+  /* runtime teardown. HostObject, HostFunction and NativeState */     \
+  /* destructors must not throw in either mode. An explicit runner */  \
+  /* opts into upstream worker destruction and must not throw. */      \
+  /* An empty ThreadRunner leaves the worker unwrapped, including */   \
+  /* on Android. Use withFinalizerThreadRunner(ThreadRunner{}); */     \
+  /* bare {} is nullopt. */                                            \
   F(HERMES_NON_CONSTEXPR,                                              \
     std::optional<ThreadRunner>,                                       \
     FinalizerThreadRunner,                                             \

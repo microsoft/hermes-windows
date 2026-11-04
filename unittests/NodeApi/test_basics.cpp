@@ -3,10 +3,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include "child_process.h"
 #include "test_main.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -36,6 +41,46 @@ TEST_F(BasicsTest, ChildAbortReportsToStderrWithoutDialogs) {
   EXPECT_NE(result.status, 0);
   EXPECT_TRUE(StringContains(result.std_error, "intentional test child abort"));
   EXPECT_TRUE(StringContains(result.std_error, "abort() has been called"));
+}
+
+// Exercise timeout and normal exit: both must release inherited pipes and kill
+// the grandchild. The PID proves cleanup, not just return from the pipe read.
+TEST_F(BasicsTest, ChildJobClosesInheritedPipesAndTerminatesGrandchildren) {
+  for (bool timeout : {false, true}) {
+    SCOPED_TRACE(timeout);
+    ProcessResult result =
+        SpawnSync(test_exe_path_.string(),
+                  {timeout ? "--job-test-timeout" : "--job-test-exit"},
+                  2000);
+    EXPECT_EQ(result.timed_out, timeout);
+    EXPECT_EQ(result.status, timeout ? ERROR_TIMEOUT : 0);
+    char* end = nullptr;
+    const DWORD pid = std::strtoul(result.std_output.c_str(), &end, 10);
+    ASSERT_NE(end, result.std_output.c_str()) << result.std_error;
+    ASSERT_NE(pid, 0);
+    HANDLE grandchild = ::OpenProcess(
+        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (grandchild) {
+      DWORD wait = ::WaitForSingleObject(grandchild, 5000);
+      if (wait == WAIT_TIMEOUT) {
+        char image[MAX_PATH];
+        DWORD imageSize = MAX_PATH;
+        const BOOL queried =
+            ::QueryFullProcessImageNameA(grandchild, 0, image, &imageSize);
+        // Exited processes may no longer have an image to query.
+        if (::WaitForSingleObject(grandchild, 0) == WAIT_OBJECT_0 ||
+            (queried && fs::path(std::string(image, imageSize)).filename() !=
+                            test_exe_path_.filename())) {
+          wait = WAIT_OBJECT_0;
+        }
+      }
+      // Do not terminate by PID: it may have been reused after job cleanup.
+      ::CloseHandle(grandchild);
+      EXPECT_EQ(wait, WAIT_OBJECT_0) << "Surviving grandchild PID " << pid;
+    } else {
+      EXPECT_EQ(::GetLastError(), ERROR_INVALID_PARAMETER) << "PID " << pid;
+    }
+  }
 }
 #endif
 

@@ -194,6 +194,48 @@ int main(int argc, char** argv) {
     std::fputs("intentional test child abort\n", stderr);
     std::abort();
   }
+#ifdef _WIN32
+  if (argc == 2 && std::string_view(argv[1]) == "--job-test-grandchild") {
+    // The job must kill this process; bound its lifetime if cleanup fails.
+    HANDLE event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!event) return 2;
+    ::WaitForSingleObject(event, 60000);
+    ::CloseHandle(event);
+    return 0;
+  }
+  if (argc == 2 && (std::string_view(argv[1]) == "--job-test-timeout" ||
+                    std::string_view(argv[1]) == "--job-test-exit")) {
+    STARTUPINFOA startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = ::GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = ::GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION process{};
+    std::string command =
+        "\"" + std::string(argv[0]) + "\" --job-test-grandchild";
+    if (!::CreateProcessA(nullptr,
+                          command.data(),
+                          nullptr,
+                          nullptr,
+                          TRUE,
+                          CREATE_DEFAULT_ERROR_MODE,
+                          nullptr,
+                          nullptr,
+                          &startup,
+                          &process))
+      return 2;
+    // Preserve inherited pipe handles in a live grandchild on both paths.
+    std::printf("%lu\n", process.dwProcessId);
+    std::fflush(stdout);
+    if (std::string_view(argv[1]) == "--job-test-timeout") {
+      ::WaitForSingleObject(process.hProcess, INFINITE);
+    }
+    ::CloseHandle(process.hThread);
+    ::CloseHandle(process.hProcess);
+    return 0;
+  }
+#endif
   node_api_tests::TestFixtureBase::InitializeGlobals(argv[0]);
   ::testing::InitGoogleTest(&argc, argv);
   node_api_tests::NodeApiTestFixture::RegisterNodeApiTests();

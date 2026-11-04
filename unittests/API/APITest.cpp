@@ -9,6 +9,7 @@
 #include <hermes/BCGen/HBC/BytecodeFileFormat.h>
 #include <hermes/CompileJS.h>
 #include <hermes/Public/JSOutOfMemoryError.h>
+#include <hermes/VM/Runtime.h>
 #include <hermes/VM/TimeLimitMonitor.h>
 #include <hermes/VM/VMExperiments.h>
 #include <hermes/VM/sh_config.h>
@@ -18,6 +19,7 @@
 #include <jsi/instrumentation.h>
 #include <jsi/test/testlib.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -113,11 +115,8 @@ TEST(HermesRuntimeConfigTest, FinalizerThreadRunner) {
 }
 
 TEST(HermesRuntimeConfigTest, EmptyFinalizerThreadRunner) {
-  // An empty runner is not the same as an unset one: it suppresses the
-  // platform default instead of selecting it. Nothing platform independent
-  // observes the difference, so this only checks that the runtime still
-  // finalizes; the Android behavior it controls is covered by
-  // HostObjectJniTest.
+  // Fork divergence: an empty runner opts into an unwrapped worker, while
+  // an unset runner finalizes inline. Thread affinity is checked below too.
   std::atomic<bool> finalized{false};
 
   class TestHostObject final : public HostObject {
@@ -147,6 +146,134 @@ TEST(HermesRuntimeConfigTest, EmptyFinalizerThreadRunner) {
 
   EXPECT_TRUE(finalized);
 }
+
+/// Observations outlive runtime teardown, including worker drain/join.
+struct OwnerFinalization {
+  std::atomic<size_t> count{0};
+  std::atomic<std::thread::id> thread{std::thread::id{}};
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES
+  // Only inline owners may consult the GC; workers can outlive the heap.
+  ::hermes::vm::GC *gc{nullptr};
+  std::atomic<bool> onGCBackgroundThread{false};
+#endif
+};
+
+/// Releases both strong and weak JSI slots without reentering the VM.
+class FinalizedOwner final : public HostObject, public NativeState {
+ public:
+  FinalizedOwner(Runtime &runtime, OwnerFinalization &observation)
+      : observation_(observation),
+        strong_(String::createFromAscii(runtime, "retained")),
+        weak_(runtime, Object(runtime)) {}
+
+  ~FinalizedOwner() override {
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES
+    if (observation_.gc) {
+      observation_.onGCBackgroundThread =
+          observation_.gc->calledByBackgroundThread();
+    }
+#endif
+    observation_.thread = std::this_thread::get_id();
+    ++observation_.count;
+  }
+
+ private:
+  OwnerFinalization &observation_;
+  String strong_;
+  WeakObject weak_;
+};
+
+/// Cross all runner policies with GC collection and still-rooted shutdown.
+class OwnerFinalizationTest : public ::testing::TestWithParam<int> {};
+
+TEST_P(OwnerFinalizationTest, OwnersFinalizeOnceOnSelectedThreadSynchronously) {
+  const int runnerMode = GetParam() / 2;
+  const bool collect = GetParam() % 2;
+  const auto callerThread = std::this_thread::get_id();
+  std::array<OwnerFinalization, 3> observations;
+  std::atomic<size_t> runnerEntries{0};
+  auto builder = ::hermes::vm::RuntimeConfig::Builder();
+  if (runnerMode == 1) {
+    builder.withFinalizerThreadRunner(::hermes::vm::ThreadRunner{});
+  } else if (runnerMode == 2) {
+    builder.withFinalizerThreadRunner([&](std::function<void()> run) {
+      ++runnerEntries;
+      run();
+    });
+  }
+  auto runtime = makeHermesRuntime(builder.build());
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES
+  // Per-allocation GC can promote these owners and sweep them concurrently.
+  // Recognize the actual GC thread, never an arbitrary finalizer worker.
+  if (runnerMode == 0) {
+    auto *vmRuntime =
+        static_cast<::hermes::vm::Runtime *>(runtime->getVMRuntimeUnsafe());
+    for (auto &observation : observations) {
+      observation.gc = &vmRuntime->getHeap();
+    }
+  }
+#endif
+  {
+    auto host = Object::createFromHostObject(
+        *runtime, std::make_shared<FinalizedOwner>(*runtime, observations[0]));
+    auto function = Function::createFromHostFunction(
+        *runtime,
+        PropNameID::forAscii(*runtime, "hostFunction"),
+        0,
+        [owner = std::make_shared<FinalizedOwner>(*runtime, observations[1])](
+            Runtime &, const Value &, const Value *, size_t) {
+          return Value::undefined();
+        });
+    Object native(*runtime);
+    native.setNativeState(
+        *runtime, std::make_shared<FinalizedOwner>(*runtime, observations[2]));
+    if (!collect) {
+      runtime->global().setProperty(*runtime, "host", host);
+      runtime->global().setProperty(*runtime, "function", function);
+      runtime->global().setProperty(*runtime, "native", native);
+    }
+  }
+  const auto expectInlineThread = [&](const OwnerFinalization &observation) {
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES
+    EXPECT_TRUE(
+        observation.thread.load() == callerThread ||
+        observation.onGCBackgroundThread.load());
+#else
+    EXPECT_EQ(observation.thread.load(), callerThread);
+#endif
+  };
+  for (const auto &observation : observations) {
+    EXPECT_EQ(observation.count.load(), 0);
+  }
+  if (collect) {
+    runtime->instrumentation().collectGarbage("owner finalization");
+    if (runnerMode == 0) {
+      for (const auto &observation : observations) {
+        EXPECT_EQ(observation.count.load(), 1);
+        expectInlineThread(observation);
+      }
+    }
+    // A second collection must not finalize an owner twice. Worker completion
+    // is synchronized by runtime teardown below, never by polling or sleeps.
+    runtime->instrumentation().collectGarbage("owner finalization again");
+  }
+  runtime.reset();
+  for (const auto &observation : observations) {
+    EXPECT_EQ(observation.count.load(), 1);
+    if (runnerMode == 0) {
+      expectInlineThread(observation);
+    } else {
+      EXPECT_NE(observation.thread.load(), callerThread);
+    }
+  }
+  EXPECT_EQ(runnerEntries.load(), runnerMode == 2 ? 1 : 0);
+}
+
+// Each policy must cover unreachable owners and owners rooted until shutdown.
+INSTANTIATE_TEST_CASE_P(
+    RunnerPolicies,
+    OwnerFinalizationTest,
+    ::testing::Values(0, 1, 2, 3, 4, 5));
 
 #if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
 /// Event-loop control whose queued work runs only when requested by a test.
@@ -1252,16 +1379,9 @@ TEST_P(HermesRuntimeTest, NativeStateTest) {
       ++*dtors;
     }
   };
-  // Destructors run on the finalizer thread, so use atomics.
+  // Default finalization runs inline on the thread performing the GC.
   std::atomic<int> dtors1 = 0;
   std::atomic<int> dtors2 = 0;
-  auto waitForDtors = [](std::atomic<int> &dtor, int expected) {
-    for (int i = 0; i < 200; ++i) {
-      if (dtor.load() == expected)
-        return;
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-  };
   {
     Object obj = eval("({one: 1})").getObject(*rt);
     ASSERT_FALSE(obj.hasNativeState<C>(*rt));
@@ -1280,11 +1400,8 @@ TEST_P(HermesRuntimeTest, NativeStateTest) {
       EXPECT_EQ(ptr->dtors, &dtors2);
     }
   } // closing scope -> obj unreachable
-  // should finalize both. NativeState destructors are cleaned up by the
-  // finalizer thread, not the GC thread, so we need to wait.
+  // Both states must be finalized before the synchronous GC returns.
   eval("gc()");
-  waitForDtors(dtors1, 1);
-  waitForDtors(dtors2, 1);
   EXPECT_EQ(1, dtors1.load());
   EXPECT_EQ(1, dtors2.load());
 
@@ -1293,12 +1410,16 @@ TEST_P(HermesRuntimeTest, NativeStateTest) {
   // {
   //   Object frozen = eval("Object.freeze({one: 1})").getObject(*rt);
   //   ASSERT_THROW(
-  //       frozen.setNativeState(*rt, std::make_shared<C>(&dtors1)), JSIException);
+  //       frozen.setNativeState(*rt, std::make_shared<C>(&dtors1)),
+  //       JSIException);
   // }
   // Make sure any NativeState cells are finalized before leaving, since they
   // point to local variables. Otherwise ASAN will complain.
+  // The frozen-object case above is disabled, so each counter still has
+  // one owner.
   eval("gc()");
-  waitForDtors(dtors1, 2);
+  EXPECT_EQ(1, dtors1.load());
+  EXPECT_EQ(1, dtors2.load());
 }
 
 TEST(HermesRuntimeConfigTest, NativeStateWeakObjectFinalization) {
@@ -1329,10 +1450,21 @@ TEST(HermesRuntimeConfigTest, NativeStateWeakObjectFinalization) {
     FinalizationState &state_;
   };
 
-  // Keep the counters alive until runtime teardown has joined the finalizer.
-  auto runtime = makeHermesRuntime();
+  // Keep this race regression on the opt-in worker, and counters alive until
+  // runtime teardown has joined it.
+  auto runtime = makeHermesRuntime(
+      ::hermes::vm::RuntimeConfig::Builder()
+          .withFinalizerThreadRunner(::hermes::vm::ThreadRunner{})
+          .build());
+#if HERMESVM_SANITIZE_HANDLES != 0
+  // GC on every allocation makes each rooted batch quadratic; retain
+  // worker races.
+  constexpr size_t kNumBatches = 4;
+  constexpr size_t kStatesPerBatch = 128;
+#else
   constexpr size_t kNumBatches = 32;
   constexpr size_t kStatesPerBatch = 16384;
+#endif
   for (size_t batch = 0; batch < kNumBatches; ++batch) {
     {
       Array owners(*runtime, kStatesPerBatch);

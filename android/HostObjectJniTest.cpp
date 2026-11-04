@@ -17,6 +17,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <utility>
 
 namespace facebook::hermes::test {
@@ -32,6 +33,8 @@ struct ReleaseState {
   bool released{false};
   /// Whether the thread that ran the destructor was attached to the JVM.
   bool attachedToJvm{false};
+  /// Thread that ran the destructor.
+  std::thread::id destructorThread;
 };
 
 /// Host object owning a JNI global reference, so its destructor requires the
@@ -73,6 +76,7 @@ class AttachmentProbeHostObject final : public jsi::HostObject {
     {
       std::lock_guard<std::mutex> lock(releaseState_->mutex);
       releaseState_->attachedToJvm = attached;
+      releaseState_->destructorThread = std::this_thread::get_id();
       releaseState_->released = true;
     }
     releaseState_->condition.notify_one();
@@ -119,13 +123,14 @@ TEST(HostObjectJniTest, HostObjectCanOwnJniGlobalRef) {
   // inside fbjni.
   ASSERT_TRUE(jni::Environment::isGlobalJvmAvailable());
 
-  // No runner is configured, so hermes.cpp installs the default JNI
-  // ThreadScope wrapper.
+  // Fork divergence: the unset runner finalizes inline. Attach the caller
+  // that performs this synchronous collection, not a finalizer worker.
+  const jni::ThreadScope scope;
   auto runtime = facebook::hermes::makeHermesRuntime();
   EXPECT_TRUE(finalizeGlobalRefHostObject(*runtime));
 }
 
-TEST(HostObjectJniTest, ConfiguredFinalizerThreadRunnerOverridesDefault) {
+TEST(HostObjectJniTest, ConfiguredFinalizerThreadRunnerWrapsWorker) {
   ASSERT_TRUE(jni::Environment::isGlobalJvmAvailable());
 
   std::atomic<bool> ranUnderConfiguredRunner{false};
@@ -143,9 +148,11 @@ TEST(HostObjectJniTest, ConfiguredFinalizerThreadRunnerOverridesDefault) {
   EXPECT_TRUE(ranUnderConfiguredRunner);
 }
 
-TEST(HostObjectJniTest, DefaultFinalizerThreadRunnerAttachesToJvm) {
+TEST(HostObjectJniTest, UnsetFinalizerThreadRunnerFinalizesInline) {
   ASSERT_TRUE(jni::Environment::isGlobalJvmAvailable());
 
+  // Fork divergence: no implicit JNI worker; collection finalizes inline.
+  const jni::ThreadScope scope;
   auto runtime = facebook::hermes::makeHermesRuntime();
 
   auto releaseState = std::make_shared<ReleaseState>();
@@ -154,13 +161,14 @@ TEST(HostObjectJniTest, DefaultFinalizerThreadRunnerAttachesToJvm) {
       std::make_shared<AttachmentProbeHostObject>(releaseState),
       *releaseState));
   EXPECT_TRUE(releaseState->attachedToJvm);
+  EXPECT_EQ(releaseState->destructorThread, std::this_thread::get_id());
 }
 
-TEST(HostObjectJniTest, EmptyFinalizerThreadRunnerSuppressesTheDefault) {
+TEST(HostObjectJniTest, EmptyFinalizerThreadRunnerLeavesWorkerUnattached) {
   ASSERT_TRUE(jni::Environment::isGlobalJvmAvailable());
 
-  // An explicitly empty runner means "leave the thread unwrapped", unlike an
-  // unset one, which selects the ThreadScope default exercised above.
+  // Fork divergence: an explicitly empty runner opts into an unwrapped
+  // worker, unlike the unset runner's inline finalization above.
   auto runtime = facebook::hermes::makeHermesRuntime(
       ::hermes::vm::RuntimeConfig::Builder()
           .withFinalizerThreadRunner(::hermes::vm::ThreadRunner{})
