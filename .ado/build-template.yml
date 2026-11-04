@@ -134,6 +134,10 @@ extends:
           workingDirectory: .ado/scripts
           displayName: Test npm source lint
 
+        - script: npm run test:exports
+          workingDirectory: .ado/scripts
+          displayName: Test hermes.dll export gate
+
         - script: npm run npm-source-lint
           workingDirectory: .ado/scripts
           displayName: Validate npm package sources
@@ -207,7 +211,7 @@ extends:
               --file-version "$(fileVersion)"
               $(fakeBuildArg)
               $(sanitizeHandlesArg)
-            displayName: Build binaries
+            displayName: Build binaries and check C-only exports (built and staged)
 
             # Show all built files to help debug issues.
           - pwsh: |
