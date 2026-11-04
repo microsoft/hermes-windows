@@ -111,8 +111,16 @@ ProcessResult SpawnSync(std::string_view command,
                      &startup_info,    // STARTUPINFO pointer
                      &process_info));  // receives PROCESS_INFORMATION
 
-  VerifyElseExit(WAIT_OBJECT_0 ==
-                 ::WaitForSingleObject(process_info.hProcess, INFINITE));
+  // Bound the wait so a hung test child cannot hang the entire test suite.
+  constexpr DWORD child_timeout_ms = 60 * 1000;
+  DWORD wait_result =
+      ::WaitForSingleObject(process_info.hProcess, child_timeout_ms);
+  if (wait_result == WAIT_TIMEOUT) {
+    result.timed_out = true;
+    VerifyElseExit(::TerminateProcess(process_info.hProcess, ERROR_TIMEOUT));
+    wait_result = ::WaitForSingleObject(process_info.hProcess, 5000);
+  }
+  VerifyElseExit(wait_result == WAIT_OBJECT_0);
 
   DWORD exit_code;
   VerifyElseExit(::GetExitCodeProcess(process_info.hProcess, &exit_code));
@@ -136,6 +144,9 @@ ProcessResult SpawnSync(std::string_view command,
   result.std_error =
       ReplaceAll(ReadFromPipe(err_read_handle.handle), "\r\n", "\n");
 
+  if (result.timed_out) {
+    result.std_error += "Child process timed out after 60 seconds\n";
+  }
   return result;
 }
 

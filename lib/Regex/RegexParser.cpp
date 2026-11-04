@@ -54,7 +54,7 @@ class Parser {
   constants::ErrorType error_ = constants::ErrorType::None;
 
   // Flags for the regex.
-  const SyntaxFlags flags_;
+  SyntaxFlags curFlags_;
 
   // See comment --DecimalEscape--.
   const uint32_t backRefLimit_;
@@ -192,6 +192,9 @@ class Parser {
       // Negative lookbehind (?<!)
       LookAround,
 
+      /// We are parsing a modifier group: (?ims-ims:).
+      ModifierGroup,
+
     } type;
 
     /// The splice point.
@@ -219,6 +222,9 @@ class Parser {
 
     // True if this lookaround is a lookahead. Ignored for non-lookarounds.
     bool forwardLookaround{false};
+
+    /// Saved flags to restore when closing a ModifierGroup.
+    SyntaxFlags savedFlags{};
 
     explicit ParseStackElement(Type type) : type(type) {}
   };
@@ -299,6 +305,95 @@ class Parser {
     stack.push_back(std::move(elem));
   }
 
+  /// Consume modifiers after '(?' has been consumed:
+  // (?setFlags:pattern)
+  // (?setFlags-clearFlags:pattern)
+  // Note that pattern isn't consumed here, only up to the flags. The allowed
+  // flags are: i,m, and s.
+  /// \return the new SyntaxFlags, or None if there was an error.
+  Optional<SyntaxFlags> consumeModifiers() {
+    SyntaxFlags newFlags = curFlags_;
+    // Keep track of the flags we've seen so far. No flag should ever appear
+    // twice.
+    SyntaxFlags seenFlags{};
+    bool parsingNegativeFlags = false;
+    bool hasModifierChar = false;
+
+    /// Get and set modifier flags on a SyntaxFlags by character.
+    auto getFlag = [](const SyntaxFlags &flags, CharT c) -> bool {
+      switch (c) {
+        case 'i':
+          return flags.ignoreCase;
+        case 'm':
+          return flags.multiline;
+        case 's':
+          return flags.dotAll;
+        default:
+          llvm_unreachable("invalid flag");
+      }
+    };
+    auto setFlagValue = [](SyntaxFlags &flags, CharT c, bool value) {
+      switch (c) {
+        case 'i':
+          flags.ignoreCase = value;
+          break;
+        case 'm':
+          flags.multiline = value;
+          break;
+        case 's':
+          flags.dotAll = value;
+          break;
+        default:
+          llvm_unreachable("invalid flag");
+      }
+    };
+
+    // Iterate until all modifiers are parsed. Any break out of this
+    // loop is treated as an error.
+    while (current_ != end_) {
+      CharT c = *current_;
+      if (c == 'i' || c == 'm' || c == 's') {
+        if (getFlag(seenFlags, c)) {
+          // Error, duplicate flags.
+          break;
+        }
+        setFlagValue(seenFlags, c, 1);
+        setFlagValue(newFlags, c, parsingNegativeFlags ? 0 : 1);
+        hasModifierChar = true;
+        consume(c);
+      } else if (tryConsume('-')) {
+        if (parsingNegativeFlags) {
+          // Error, can't have `-` twice.
+          break;
+        } else {
+          parsingNegativeFlags = true;
+        }
+      } else if (tryConsume(':')) {
+        if (!hasModifierChar) {
+          // Error, ending the modifiers with no flags specified.
+          break;
+        }
+        return newFlags;
+      } else {
+        // Error, unexpected character.
+        break;
+      }
+    }
+    setError(constants::ErrorType::InvalidFlags);
+    return llvh::None;
+  }
+
+  /// Open a modifier group, pushing it onto \p stack.
+  /// \p newFlags are the flags to use inside the group.
+  void openModifierGroup(ParseStack &stack, SyntaxFlags newFlags) {
+    ParseStackElement elem(ParseStackElement::ModifierGroup);
+    elem.quant = prepareQuantifier();
+    elem.splicePoint = re_->currentNode();
+    elem.savedFlags = curFlags_;
+    curFlags_ = newFlags;
+    stack.push_back(std::move(elem));
+  }
+
   /// Open a lookaround, pushing it onto \p stack.
   void openLookaround(ParseStack &stack, bool negate, bool forwards) {
     ParseStackElement elem(ParseStackElement::LookAround);
@@ -331,12 +426,16 @@ class Parser {
       case ParseStackElement::NonCapturingGroup:
         break;
 
+      case ParseStackElement::ModifierGroup:
+        curFlags_ = elem.savedFlags;
+        break;
+
       case ParseStackElement::LookAround: {
         bool negate = elem.negateLookaround;
         bool forwards = elem.forwardLookaround;
         // ES11 Annex B.1.4 extends RegExp to allow quantifiers for
         // lookaheads when unicode is disabled.
-        quantifierAllowed = !(flags_.unicode) && forwards;
+        quantifierAllowed = !(curFlags_.unicode) && forwards;
         auto mexpStart = elem.mexp;
         auto mexpEnd = re_->markedCount();
         auto expr = re_->spliceOut(elem.splicePoint);
@@ -395,6 +494,15 @@ class Parser {
             openNamedCapturingGroup(stack);
           } else if (tryConsume("(?:")) {
             openNonCapturingGroup(stack);
+          } else if (tryConsume("(?")) {
+            // This must be the beginning of a modifier group
+            if (auto newFlags = consumeModifiers()) {
+              openModifierGroup(stack, *newFlags);
+              break;
+            } else {
+              assert(error_ != constants::ErrorType::None);
+              return;
+            }
           } else {
             consume('(');
             openCapturingGroup(stack);
@@ -433,13 +541,13 @@ class Parser {
       const CharT c = *current_;
       switch (c) {
         case '^':
-          re_->pushLeftAnchor();
+          re_->pushLeftAnchor(curFlags_.multiline);
           consume('^');
           quantifierAllowed = false;
           break;
 
         case '$':
-          re_->pushRightAnchor();
+          re_->pushRightAnchor(curFlags_.multiline);
           consume('$');
           quantifierAllowed = false;
           break;
@@ -451,7 +559,8 @@ class Parser {
             setError(constants::ErrorType::EscapeIncomplete);
             return;
           } else if (*current_ == 'b' || *current_ == 'B') {
-            re_->pushWordBoundary(*current_ == 'B' /* invert */);
+            re_->pushWordBoundary(
+                *current_ == 'B' /* invert */, curFlags_.ignoreCase);
             consume(*current_);
             quantifierAllowed = false;
           } else {
@@ -462,7 +571,7 @@ class Parser {
 
         case '.': {
           consume('.');
-          re_->pushMatchAny();
+          re_->pushMatchAny(curFlags_.dotAll);
           break;
         }
 
@@ -486,11 +595,11 @@ class Parser {
           if (tryConsumeQuantifier(&tmp)) {
             setError(constants::ErrorType::InvalidRepeat);
             return;
-          } else if (flags_.unicode) {
+          } else if (curFlags_.unicode) {
             setError(constants::ErrorType::InvalidQuantifierBracket);
             return;
           }
-          re_->pushChar(consume('{'));
+          re_->pushChar(consume('{'), curFlags_.ignoreCase);
           break;
         }
 
@@ -509,7 +618,7 @@ class Parser {
           // ExtendedPatternCharacter production of ES9 Annex B 1.4.
           // However they are disallowed under Unicode, where Annex B does not
           // apply.
-          if (flags_.unicode) {
+          if (curFlags_.unicode) {
             setError(
                 c == '}' ? constants::ErrorType::InvalidQuantifierBracket
                          : constants::ErrorType::UnbalancedBracket);
@@ -521,9 +630,9 @@ class Parser {
         default: {
           // Ordinary character or surrogate pair.
           if (auto cp = tryConsumeSurrogatePair()) {
-            re_->pushChar(*cp);
+            re_->pushChar(*cp, curFlags_.ignoreCase);
           } else {
-            re_->pushChar(consume(c));
+            re_->pushChar(consume(c), curFlags_.ignoreCase);
           }
           break;
         }
@@ -542,7 +651,7 @@ class Parser {
 
   /// If Unicode is set, try to consume a surrogate pair.
   Optional<CodePoint> tryConsumeSurrogatePair() {
-    if (!(flags_.unicode))
+    if (!(curFlags_.unicode))
       return llvh::None;
     auto saved = current_;
     auto hi = consumeCharIf(isHighSurrogate);
@@ -717,9 +826,9 @@ class Parser {
   /// ES6 21.2.2.13 CharacterClass.
   void consumeCharacterClass() {
     consume('[');
-    bool unicode = flags_.unicode;
+    bool unicode = curFlags_.unicode;
     bool negate = tryConsume('^');
-    auto bracket = re_->startBracketList(negate);
+    auto bracket = re_->startBracketList(negate, curFlags_.ignoreCase);
 
     // Helper to add a ClassAtom to our bracket.
     auto addClassAtom = [&bracket](const ClassAtom &atom) {
@@ -842,7 +951,7 @@ class Parser {
 #ifdef HERMES_ENABLE_UNICODE_REGEXP_PROPERTY_ESCAPES
           case 'p':
           case 'P': {
-            if (flags_.unicode) {
+            if (curFlags_.unicode) {
               consume(ec);
               std::string propertyName;
               std::string propertyValue;
@@ -878,7 +987,7 @@ class Parser {
           case '-':
             // ES6 21.2.1 ClassEscape: \- escapes -, in Unicode expressions
             // only.
-            if ((flags_.unicode) && tryConsume('-')) {
+            if ((curFlags_.unicode) && tryConsume('-')) {
               return ClassAtom('-');
             }
             [[fallthrough]];
@@ -910,7 +1019,7 @@ class Parser {
     //   ZeroToThree OctalDigit OctalDigit
     // We implement this more directly.
     // Note this is forbidden in Unicode.
-    if (flags_.unicode) {
+    if (curFlags_.unicode) {
       setError(constants::ErrorType::EscapeInvalid);
       return 0;
     }
@@ -1076,7 +1185,7 @@ class Parser {
   /// ES6 21.2.1 IdentityEscape
   CodePoint identityEscape(CharT c) {
     // In Unicode regexps, only syntax characters and '/' may be escaped.
-    if (flags_.unicode) {
+    if (curFlags_.unicode) {
       if (c == 0 || c > 127 || !strchr("^$\\.*+?()[]{}|/", c)) {
         setError(constants::ErrorType::EscapeInvalid);
       }
@@ -1094,7 +1203,7 @@ class Parser {
     }
 
     // Non-unicode path only supports \uABCD style escapes.
-    if (!overrideUnicodeFlag && !(flags_.unicode)) {
+    if (!overrideUnicodeFlag && !(curFlags_.unicode)) {
       if (auto ret = tryConsumeHexDigits(4)) {
         return *ret;
       }
@@ -1182,7 +1291,7 @@ class Parser {
       std::string &propertyName,
       std::string &propertyValue) {
     assert(
-        flags_.unicode &&
+        curFlags_.unicode &&
         "Non-unicode regexps do not support property escapes");
 
     // Unicode path.
@@ -1212,25 +1321,31 @@ class Parser {
       case 'd':
       case 'D':
         consume(c);
-        re_->pushCharClass({CharacterClass::Digits, c == 'D' /* invert */});
+        re_->pushCharClass(
+            {CharacterClass::Digits, c == 'D' /* invert */},
+            curFlags_.ignoreCase);
         break;
 
       case 's':
       case 'S':
         consume(c);
-        re_->pushCharClass({CharacterClass::Spaces, c == 'S' /* invert */});
+        re_->pushCharClass(
+            {CharacterClass::Spaces, c == 'S' /* invert */},
+            curFlags_.ignoreCase);
         break;
 
       case 'w':
       case 'W':
         consume(c);
-        re_->pushCharClass({CharacterClass::Words, c == 'W' /* invert */});
+        re_->pushCharClass(
+            {CharacterClass::Words, c == 'W' /* invert */},
+            curFlags_.ignoreCase);
         break;
 
 #ifdef HERMES_ENABLE_UNICODE_REGEXP_PROPERTY_ESCAPES
       case 'p':
       case 'P': {
-        if (flags_.unicode) {
+        if (curFlags_.unicode) {
           consume(c);
           std::string propertyName;
           std::string propertyValue;
@@ -1240,19 +1355,19 @@ class Parser {
             setError(constants::ErrorType::InvalidPropertyName);
             return;
           }
-          auto bracket = re_->startBracketList(c == 'P' /* invert */);
+          auto bracket = re_->startBracketList(false, curFlags_.ignoreCase);
           auto codePointRanges =
               unicodePropertyRanges(propertyName, propertyValue);
           if (codePointRanges.empty()) {
             setError(constants::ErrorType::InvalidPropertyName);
             return;
           }
-          bracket->addCodePointRanges(codePointRanges);
+          bracket->addCodePointRanges(codePointRanges, c == 'P');
           break;
         } else {
           // When not in Unicode mode, this is just a regular `p` or `P`
           // (unnecessary) escape.
-          re_->pushChar(consumeCharacterEscape());
+          re_->pushChar(consumeCharacterEscape(), curFlags_.ignoreCase);
         }
         break;
       }
@@ -1274,34 +1389,35 @@ class Parser {
         // if its value is octal. Otherwise it is IdentityEscape.
         auto saved = current_;
         uint32_t decimal = consumeDecimalIntegerLiteral();
-        bool unicode = flags_.unicode;
+        bool unicode = curFlags_.unicode;
         if (unicode || decimal <= backRefLimit_) {
           // Backreference.
           maxBackRef_ = std::max(maxBackRef_, decimal);
           // Subtract 1 so the marked subexpression index starts at zero, to
           // line up with other instructions.
-          re_->pushBackRef(decimal - 1);
+          re_->pushBackRef(decimal - 1, curFlags_.ignoreCase);
         } else if (c < '8' && !unicode) {
           // Octal.
           current_ = saved;
-          re_->pushChar(consumeLegacyOctalEscapeSequence());
+          re_->pushChar(
+              consumeLegacyOctalEscapeSequence(), curFlags_.ignoreCase);
         } else {
           // IdentityEscape.
           current_ = saved;
-          re_->pushChar(identityEscape(consume(c)));
+          re_->pushChar(identityEscape(consume(c)), curFlags_.ignoreCase);
         }
         break;
       }
 
       case 'k': {
-        if (flags_.unicode || hasNamedGroups_) {
+        if (curFlags_.unicode || hasNamedGroups_) {
           consume('k');
           GroupName refIdentifer;
           if (!tryConsume('<') || !tryConsumeGroupName(refIdentifer)) {
             setError(constants::ErrorType::InvalidNamedReference);
             return;
           }
-          re_->pushNamedBackRef(std::move(refIdentifer));
+          re_->pushNamedBackRef(std::move(refIdentifer), curFlags_.ignoreCase);
           break;
         }
         re_->sawNamedBackrefBeforeGroup();
@@ -1310,7 +1426,7 @@ class Parser {
         [[fallthrough]];
       }
       default: {
-        re_->pushChar(consumeCharacterEscape());
+        re_->pushChar(consumeCharacterEscape(), curFlags_.ignoreCase);
         break;
       }
     }
@@ -1330,7 +1446,7 @@ class Parser {
       : re_(re),
         current_(start),
         end_(end),
-        flags_(flags),
+        curFlags_(flags),
         backRefLimit_(backRefLimit),
         hasNamedGroups_(hasNamedGroups) {}
 

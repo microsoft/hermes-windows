@@ -29,6 +29,16 @@ class BasicsTest : public TestFixtureBase {
   fs::path basics_js_dir_;
 };
 
+#ifdef _WIN32
+TEST_F(BasicsTest, ChildAbortReportsToStderrWithoutDialogs) {
+  ProcessResult result = SpawnSync(test_exe_path_.string(), {"--abort-test-child"});
+  ASSERT_FALSE(result.timed_out) << result.std_error;
+  EXPECT_NE(result.status, 0);
+  EXPECT_TRUE(StringContains(result.std_error, "intentional test child abort"));
+  EXPECT_TRUE(StringContains(result.std_error, "abort() has been called"));
+}
+#endif
+
 TEST_F(BasicsTest, TestHello) {
   ProcessResult result = RunScript("hello.js");
   ASSERT_TRUE(StringContains(result.std_output, "Hello"));

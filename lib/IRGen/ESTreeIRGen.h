@@ -279,7 +279,7 @@ class FunctionContext {
 
   /// Generate a unique string that represents a temporary value. The string
   /// \p hint appears in the name.
-  Identifier genAnonymousLabelName(llvh::StringRef const hint);
+  Identifier genAnonymousLabelName(const llvh::Twine &hint);
 
   /// Initialize an empty goto label. All labels in JavaScript a structured, so
   /// a label is guaranteed to be visited and initialized before it is used.
@@ -416,7 +416,13 @@ class LReference {
   }
 
   Value *emitLoad();
-  void emitStore(Value *value);
+
+  /// Store \p value into the reference.
+  /// \param narrow whether to narrow \p value to a variable target's declared
+  ///   Flow type. Member targets are always narrowed. Pass false only for
+  ///   values that aren't user-provided, like the `undefined` placeholder of
+  ///   TDZ, which lives outside the Flow-checked type.
+  void emitStore(Value *value, bool narrow = true);
 
   /// \return the AST node associated with this LReference.
   ESTree::Node *getNode() const {
@@ -607,9 +613,19 @@ class ESTreeIRGen {
   /// the class.
   llvh::DenseMap<flow::ClassType *, ClassFieldInitInfo> classFieldInitInfo_{};
 
+  /// Handles any methods that were not overridden on typed classes.
+  /// This includes @Hermes.final annotated methods, as well as methods that
+  /// simply have no known overrides.
+  ///
   /// Map from a field on the home object to the IR function that it is
   /// guaranteed to be, if any.
-  llvh::DenseMap<const flow::ClassType::Field *, Function *> finalMethods_{};
+  llvh::DenseMap<const flow::ClassType::Field *, Function *>
+      nonOverriddenMethods_{};
+
+  /// Map from a Variable-backed method Decl to the Function.
+  /// Used for direct call optimization, because closures will not live on the
+  /// home object and will instead have an associated Variable and Decl.
+  llvh::DenseMap<sema::Decl *, Function *> declFunctions_{};
 
   /// Internal variables created during legacy class compilation.
   /// These need to be cached so they can be reused when the same class
@@ -648,7 +664,7 @@ class ESTreeIRGen {
 
   /// Generate a unique string that represents a temporary value. The string \p
   /// hint appears in the name.
-  Identifier genAnonymousLabelName(llvh::StringRef hint) {
+  Identifier genAnonymousLabelName(const llvh::Twine &hint) {
     return curFunction()->genAnonymousLabelName(hint);
   }
 
@@ -669,6 +685,11 @@ class ESTreeIRGen {
       sema::SemContext &semCtx,
       flow::FlowContext &flowContext,
       ESTree::Node *root);
+
+  /// \return the TypeContext owned by the Module.
+  TypeContext &getTypeContext() {
+    return Mod->getTypeContext();
+  }
 
   /// Perform IRGeneration for the whole module.
   /// \param topLevelFunctionName the name of the top-level function.
@@ -734,7 +755,7 @@ class ESTreeIRGen {
   void genForOfStatement(ESTree::ForOfStatementNode *forOfStmt);
   void genForOfFastArrayStatement(
       ESTree::ForOfStatementNode *forOfStmt,
-      flow::ArrayType *type);
+      flow::Type *arrayType);
   void genAsyncForOfStatement(ESTree::ForOfStatementNode *forOfStmt);
   void genWhileLoop(ESTree::WhileStatementNode *loop);
   void genDoWhileLoop(ESTree::DoWhileStatementNode *loop);
@@ -847,29 +868,51 @@ class ESTreeIRGen {
       const Identifier &className,
       ESTree::Node *superClassNode);
 
-  /// Emit code to allocate an empty instance of the specified class and return
-  /// it.
+  /// Emit code to allocate an empty instance or home object of the specified
+  /// class and return it.
   /// \param parent the parent object of the newly allocated class, nullptr to
   /// default to the Object prototype.
-  /// \param skipPrivateFields whether to skip the private fields.
-  ///   Set to true when the private fields represent methods on the home
-  ///   object which never change and are emitted as Variables, meaning they
-  ///   aren't stored in objects and we shouldn't allocate slots for them at
-  ///   object creation time.
   /// \param propertiesEnumerable whether properties are enumerable. Set to
   ///   false for home objects (class prototypes with methods).
   Value *emitTypedClassAllocation(
       flow::ClassType *classType,
       Value *parent,
-      bool skipPrivateFields,
       bool propertiesEnumerable);
 
   /// Return the default init value for the specified type.
   Value *getDefaultInitValue(flow::Type *type);
 
-  /// Convert a Flow type into an IR type.
-  static Type flowTypeToIRType(flow::TypeInfo *flowType);
-  static Type flowTypeToIRType(flow::Type *flowType) {
+  /// \return the initial value for a class member Variable of \p type, and
+  ///   the IR type the Variable must have. Types with no representable literal
+  ///   default start out empty and are checked on load, so their Variable type
+  ///   is widened with empty.
+  std::pair<Value *, Type> getClassMemberVarInit(flow::Type *type);
+
+  /// Store \p init into the Variable backing class member \p decl, creating it
+  /// in the current scope with name \p name and type \p type if needed.
+  /// \return the Variable
+  Variable *defineClassMemberVar(
+      sema::Decl *decl,
+      Identifier name,
+      Type type,
+      Value *init);
+
+  /// Store \p value into the existing Variable backing class member \p decl.
+  /// \return the Variable.
+  Variable *storeClassMemberVar(sema::Decl *decl, Value *value);
+
+  /// Create all Variables backing the members of the typed class \p classDecl
+  /// that live in Variables (static elements, final/private/accessor methods,
+  /// generic method specializations), initialize them to their defaults, and
+  /// bind them to their Decls. The closures themselves are stored later, when
+  /// the class declaration is emitted.
+  /// Must be called at the top of the enclosing scope.
+  void declareTypedClassMemberVars(sema::Decl *classDecl);
+
+  /// Convert a Flow type into an IR type. Non-static because it needs the
+  /// Module's TypeContext to construct unions.
+  Type flowTypeToIRType(flow::TypeInfo *flowType);
+  Type flowTypeToIRType(flow::Type *flowType) {
     return flowTypeToIRType(flowType->info);
   }
 
@@ -879,11 +922,23 @@ class ESTreeIRGen {
   /// @name expressions
   /// @{
 
+  /// Optionally emit a checked cast if the IR value type does not match
+  /// \p flowType. \p loc supplies the location for the cast and any
+  /// diagnostic.
+  Value *
+  narrowToFlowType(Value *value, flow::Type *flowType, ESTree::Node *loc);
+
   /// Optionally emit a checked cast if the IR value type does not match the
   /// Flow type of the specified expression.
   /// This is called automatically by genExpression() but may need to be used
   /// manually in some rare cases.
   Value *enforceExprType(Value *value, ESTree::Node *expr);
+
+  /// Optionally emit a checked cast if the IR value type does not match the
+  /// Flow type of the variable \p id refers to. Used for stores that have no
+  /// RHS expression node of their own (destructuring, for-in/of), where
+  /// enforceExprType has nothing to narrow against.
+  Value *enforceDeclType(Value *value, ESTree::IdentifierNode *id);
 
   /// Generate IR for the expression \p Expr. Emit a checked cast if the Flow
   /// type of the expression doesn't match the compiled IR type.
@@ -917,7 +972,10 @@ class ESTreeIRGen {
 
   /// Convert the given list of elements in \p list into an array, spreading
   /// SpreadElements as needed.
-  Value *genFastArrayFromElements(ESTree::NodeList &list);
+  /// \p arrayType is the flow::Type of the array, used to find the prototype.
+  Value *genFastArrayFromElements(
+      ESTree::NodeList &list,
+      flow::Type *arrayType);
 
   /// Convert the given list of elements in \p list into an object with
   /// properties at the element indices given by the tuple type, so PrLoad can
@@ -938,6 +996,12 @@ class ESTreeIRGen {
 
   Value *genArrayExpr(ESTree::ArrayExpressionNode *Expr);
   Value *genCallExpr(ESTree::CallExpressionNode *call);
+
+  /// Generate a direct call to a TypedLib builtin function.
+  Value *genBuiltinMethodCall(
+      ESTree::CallExpressionNode *call,
+      ESTree::FunctionDeclarationNode *builtinDecl);
+
   Value *emitNativeCall(
       ESTree::CallExpressionNode *call,
       flow::NativeFunctionType *natFuncType);
@@ -960,9 +1024,29 @@ class ESTreeIRGen {
   /// Calls \c fn with \c thisVal and the specified args.
   Value *genSHBuiltinCall(ESTree::CallExpressionNode *call);
 
+  /// Emit a typed `fn.call(thisArg, arg1, arg2, ...)` invocation as a direct
+  /// CallInst, bypassing the property load. \p mem is the
+  /// MemberExpression `fn.call` extracted from \c call->_callee.
+  Value *genTypedFunctionPrototypeCall(
+      ESTree::CallExpressionNode *call,
+      ESTree::MemberExpressionNode *mem);
+
   /// $SHBuiltin.externC({}, function fopen(path: c_ptr, mode: c_ptr): c_ptr)
   /// Import an external C function.
   Value *genSHBuiltinExternC(ESTree::CallExpressionNode *call);
+
+  /// $SHBuiltin.objectKeys/objectValues/objectEntries(o)
+  /// Emit a call to \p builtin, passing the object and the prototype of the
+  /// resulting Array<T>, which the builtin needs to create the FastArray.
+  /// \p name is the builtin name, used for error messages.
+  /// These cover only the *enumerable own* properties of the object, as
+  /// Object.keys/values/entries do. Other ways of listing properties (own
+  /// non-enumerable, symbols, the prototype chain) do not share this setup
+  /// and need their own builtins.
+  Value *genSHBuiltinObjectProps(
+      ESTree::CallExpressionNode *call,
+      BuiltinMethod::Enum builtin,
+      llvh::StringRef name);
 
   /// $SHBuiltin.moduleFactory(modId, factoryFunction)
   /// Process \p factoryFunction as a module initialization function,
@@ -973,9 +1057,31 @@ class ESTreeIRGen {
   /// For now, this just evaluates to the third argument of \p call.
   Value *genSHBuiltinImport(ESTree::CallExpressionNode *call);
 
+  /// \return true if every spread element in \p arguments spreads a tuple, and
+  ///   so the argument list can be expanded statically by
+  ///   emitTypedCallArguments(). Note that a list without any spread element
+  ///   trivially satisfies this.
+  bool canEmitTypedCallArguments(ESTree::NodeList &arguments);
+
+  /// Generate the values of \p arguments into \p args, skipping the first
+  /// \p offset arguments. A spread of a tuple is expanded statically into one
+  /// PrLoadInst per tuple element; this is the only form of spread supported,
+  /// since a tuple is the only spreadable value whose width is known at
+  /// compile time.
+  /// \pre every argument at or after \p offset that is a spread element
+  ///   spreads a tuple, and none of the first \p offset arguments is a spread
+  ///   element, since those are consumed positionally by the caller.
+  void emitTypedCallArguments(
+      ESTree::NodeList &arguments,
+      uint32_t offset,
+      CallInst::ArgumentList &args);
+
   /// Emits the actual call for \p call, and is used as a helper function for
   /// genCallExpr and genOptionalCallExpr.
   /// \param newTarget the new.target, undefined if not a constructor call.
+  /// \param calleeFuncType the resolved callee's function type, when it differs
+  ///   from the callee node's type (e.g. an SH_call dispatch, where the callee
+  ///   node is the class constructor). nullptr to use the callee node's type.
   /// \return the result value of the call.
   Value *emitCall(
       ESTree::CallExpressionLikeNode *call,
@@ -983,7 +1089,8 @@ class ESTreeIRGen {
       Value *target,
       bool calleeIsAlwaysClosure,
       Value *thisVal,
-      Value *newTarget);
+      Value *newTarget,
+      flow::BaseFunctionType *calleeFuncType = nullptr);
 
   struct MemberExpressionResult {
     /// Value of the looked up property.
@@ -1008,6 +1115,13 @@ class ESTreeIRGen {
       ESTree::MemberExpressionNode *Mem,
       MemberExpressionOperation op);
 
+  /// If the member expression on a typed class refers to a final method,
+  /// static field/method, or private method that has been lowered to a scope
+  /// variable, return the Decl for it. Only applies to typed classes
+  /// (ClassType and ClassConstructorType), returns null for legacy classes.
+  sema::Decl *getTypedMemberExpressionDeclIfExists(
+      ESTree::MemberExpressionNode *mem);
+
   /// Try to perform a typed member access, if the information is available.
   MemberExpressionResult emitMemberLoad(
       ESTree::MemberExpressionNode *mem,
@@ -1022,23 +1136,80 @@ class ESTreeIRGen {
       Value *propValue,
       Value *thisValue);
 
+  /// Load the typed class field \p field out of \p object, IDZ-checking it
+  /// when its type has no representable literal default and it is therefore
+  /// stored uninitialized.
+  /// \param propName the field name, as a string or private name literal.
+  Value *emitTypedFieldLoad(
+      Value *object,
+      const flow::ClassType::Field &field,
+      Literal *propName);
+
   /// emitMemberStore for the specific case where the member is a typed class
   /// field.
   /// \param classType the class containing the field
-  /// \param prop the name of the field, assumed to be an IdentifierNode.
+  /// \param name the field name, without the leading '#' for private fields
+  /// \param isPrivate whether the field is a private name
   /// \param object to store into
   /// \param value to store.
   void emitTypedFieldStore(
       flow::ClassType *classType,
-      ESTree::Node *prop,
+      Identifier name,
+      bool isPrivate,
       Value *object,
       Value *value);
 
+  /// Look up a field for the given (non-computed) member expression property
+  /// in \p classType. Handles both public and private names.
+  OptValue<flow::ClassType::FieldLookupEntry> findFieldForMemberProp(
+      ESTree::MemberExpressionNode *mem,
+      flow::ClassType *classType);
+
+  /// Emit a call to a typed getter method. Loads the closure from \p decl,
+  /// calls it with \p thisArg, and sets the result type to \p resultType.
+  Value *
+  emitTypedGetterCall(sema::Decl *decl, Value *thisArg, flow::Type *resultType);
+
+  /// Emit a call to a typed setter method. Loads the closure from \p decl,
+  /// calls it with \p thisArg and \p storedValue.
+  void
+  emitTypedSetterCall(sema::Decl *decl, Value *thisArg, Value *storedValue);
+
+  /// Emit a typed class method closure, store it in the Variable backing
+  /// \p decl, and register it for direct call optimization.
+  void emitTypedClassMethodClosureStore(
+      ESTree::MethodDefinitionNode *method,
+      sema::Decl *decl);
+
   /// Load a member property from a super.property expression inside a typed
-  /// class method.
-  MemberExpressionResult emitTypedSuperLoad(
-      ESTree::SuperNode *superNode,
-      ESTree::IdentifierNode *property);
+  /// class member, i.e. a method or a field initializer.
+  /// \p mem must be non-computed with an identifier property.
+  /// \pre mem is a typed 'super' load.
+  MemberExpressionResult emitTypedSuperLoad(ESTree::MemberExpressionNode *mem);
+
+  /// The Decls holding the accessor closures of a static accessor. Both null
+  /// if the property isn't a static accessor.
+  struct StaticAccessor {
+    /// Null if the accessor has no getter.
+    sema::Decl *getterDecl = nullptr;
+    /// Null if the accessor has no setter.
+    sema::Decl *setterDecl = nullptr;
+  };
+
+  /// Look up an accessor for \p mem on the statics of the class wrapped by
+  /// \p consType. Static accessors don't have their Decl propagated to the
+  /// access site, so they must be found on the static type instead.
+  StaticAccessor findStaticAccessor(
+      ESTree::MemberExpressionNode *mem,
+      flow::ClassConstructorType *consType);
+
+  /// Load the value of the class member backed by \p decl's Variable,
+  /// checking it if the Variable's type admits empty.
+  Value *emitLoadClassMemberVar(sema::Decl *decl);
+
+  /// \return the home object of \p classInfo, loaded from the Variable that
+  ///   genClassDeclaration stored it in.
+  Value *emitLoadTypedHomeObject(flow::ClassType *classInfo);
 
   /// \return an instruction that is the currently visible scope described by
   /// \p targetVarScope, emitting a ResolveScopeInst if necessary.
@@ -1299,12 +1470,30 @@ class ESTreeIRGen {
       Variable *homeObject = nullptr,
       ESTree::Node *parentNode = nullptr);
 
+  /// Create the inner function of a generator or an async function, and emit
+  /// a CreateGeneratorInst for it in the current (outer) function.
+  /// \param innerName the name of the inner function.
+  /// \param functionNode the ESTree function node of the original function.
+  /// \param parentScope the VariableScope of the outer function's parent,
+  ///   which becomes the parent of the inner function.
+  /// \param capturedState forwarded to the body of an async arrow; for any
+  ///   other function only its homeObject is used.
+  /// \return the CreateGeneratorInst.
+  CreateGeneratorInst *emitCreateGenerator(
+      Identifier innerName,
+      ESTree::FunctionLikeNode *functionNode,
+      VariableScope *parentScope,
+      const CapturedState &capturedState);
+
   /// Generate the IR for an async function: it desugars async function to a
-  /// generator function wrapped in a call to the JS builtin `spawnAsync` and
-  /// return the result. To visualize it,
+  /// generator object passed to the JS builtin `spawnAsync`, and returns the
+  /// result. To visualize it,
   ///   async function<name>(<args>)<body>
   /// is effectively lowered to
-  ///   function<name>(){return spawnAsync(function*()<body>, this, arguments)}
+  ///   function<name>(){return spawnAsync(<generator object for
+  ///     function*(<args>)<body>, with this function's this and arguments>)}
+  /// The async function is the outer function of the generator: it runs
+  /// CreateGenerator on the inner function directly.
   /// \param originalName is the original non-unique name specified by the user
   ///   or inferred according to the rules of ES6.
   /// \param functionNode is the ESTree function node (declaration, expression,
@@ -1408,14 +1597,14 @@ class ESTreeIRGen {
   ///   instead.
   void emitFunctionEpilogue(Value *returnValue);
 
-  /// Generates (if necessary) the field init function for the class
-  /// of the current class context.  This function performs any
-  /// necessary field initializations for that class.  (This should
-  /// only be called by emitCreateFieldInitFunction, below.)
+  /// Generates (if necessary) the instance or static field init function for
+  /// the class of the current typed class context.
   ///
+  /// \param staticElements true to generate the static elements initializer,
+  ///   false for the instance one.
   /// \return the generated function, or else nullptr if the class has no field
   /// initializers.
-  Function *genFieldInitFunction();
+  Function *genFieldInitFunction(bool staticElements);
 
   /// If there is a field init function associated with the class of
   /// the current class context, emits the instruction for creating
@@ -1442,7 +1631,7 @@ class ESTreeIRGen {
       ESTree::BlockStatementNode *bodyBlock,
       VariableScope *parentVarScope,
       ExtraKey extraKey,
-      const CapturedState &capturedState = {});
+      const CapturedState &capturedState);
 
   /// Invoked after IR for a function has been emitted to perform any needed
   /// adjustments. Specifically, it updates all catch targets.
@@ -1614,7 +1803,8 @@ class ESTreeIRGen {
   IteratorRecord emitGetIterator(Value *obj);
 
   /// Emit the IteratorNextInst for \p iteratorRecord, which may alter the
-  /// iteratorRecord to indicate completion.
+  /// iteratorRecord to indicate completion. Returns undefined without advancing
+  /// the iterator if it is already complete.
   Value *emitIteratorNext(IteratorRecord iteratorRecord) {
     auto *LSI = Builder.createLoadStackInst(iteratorRecord.sourceOrNext);
     return Builder.createIteratorNextInst(iteratorRecord.iterStorage, LSI);
@@ -1661,6 +1851,17 @@ class ESTreeIRGen {
       flow::TupleType *type,
       Value *source);
 
+  /// Generate code for destructuring assignment to ArrayPattern from a typed
+  /// Array<T> (FastArray). Uses indexed FastArrayLoadInst for prefix elements
+  /// and a CallBuiltinInst to HermesBuiltin.fastArraySlice for the optional
+  /// trailing rest element.
+  /// \p arrayClassType must satisfy flowContext_.isArrayClassType().
+  void emitDestructuringTypedArray(
+      bool declInit,
+      ESTree::ArrayPatternNode *targetPat,
+      flow::Type *arrayClassType,
+      Value *source);
+
   /// A record used by to describe a shared exception handler. Every individual
   /// stores the caught exception in the specified location and branches to the
   /// specified block.
@@ -1677,7 +1878,6 @@ class ESTreeIRGen {
       bool declInit,
       ESTree::RestElementNode *rest,
       IteratorRecord iteratorRecord,
-      AllocStackInst *iteratorDone,
       SharedExceptionHandler *handler);
 
   /// Emit an operation guarded by try with a shared exception handler.
@@ -1688,6 +1888,15 @@ class ESTreeIRGen {
   void emitDestructuringObject(
       bool declInit,
       ESTree::ObjectPatternNode *target,
+      Value *source);
+
+  /// Generate code for destructuring assignment to ObjectPattern from a typed
+  /// exact object. Uses PrLoad for each named property and builds the rest
+  /// object (if any) with the correct typed layout using PrLoad/PrStore.
+  void emitDestructuringTypedObject(
+      bool declInit,
+      ESTree::ObjectPatternNode *target,
+      flow::ExactObjectType *srcType,
       Value *source);
 
   /// Generate code for assigning to the "rest" property in an object
@@ -1716,15 +1925,14 @@ class ESTreeIRGen {
   /// \return the instruction performing the load.
   Instruction *emitLoad(Value *from, bool inhibitThrow);
 
-  /// Emit an instruction to a store a value into the specified location.
+  /// Emit IR to store a value into the specified location.
   /// \param storedValue value to store
   /// \param ptr location to store into, either a Variable or
   ///     GlobalObjectProperty.
   /// \param declInit whether this is a declaration initializer, so the TDZ
   /// check
   ///     should be skipped.
-  /// \return the instruction performing the store.
-  Instruction *emitStore(Value *storedValue, Value *ptr, bool declInit);
+  void emitStore(Value *storedValue, Value *ptr, bool declInit);
 
   /// Emit IR to load a private name.
   /// \param from value to perform the lookup on.

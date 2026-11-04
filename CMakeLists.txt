@@ -102,10 +102,27 @@ endif()
 
 # Project options.
 
+# All in-repo C++ producers and clients must use the DLL's JSI epoch.
+# External consumers still get the public header's fallback version 21.
+add_compile_definitions(JSI_VERSION=22)
+
+# Windows ships the fork's Node-API implementation, not upstream API/napi.
+if(WIN32)
+  set(HERMES_ENABLE_NAPI OFF CACHE BOOL "Build Node-API support" FORCE)
+else()
+  set(HERMES_ENABLE_NAPI ON CACHE BOOL "Build Node-API support")
+endif()
+
 set(HERMES_IS_ANDROID OFF CACHE BOOL
   "Building for Android")
 
-set(HERMES_IS_MOBILE_BUILD ${HERMES_IS_ANDROID} CACHE BOOL
+if(HERMES_IS_ANDROID OR HERMES_APPLE_TARGET_PLATFORM MATCHES "iphone|appletv")
+  set(_HERMES_IS_MOBILE_BUILD_DEFAULT ON)
+else()
+  set(_HERMES_IS_MOBILE_BUILD_DEFAULT OFF)
+endif()
+
+set(HERMES_IS_MOBILE_BUILD ${_HERMES_IS_MOBILE_BUILD_DEFAULT} CACHE BOOL
   "Building for a mobile device")
 
 set(HERMESVM_GCKIND HADES
@@ -231,9 +248,6 @@ set(HERMES_HARDENED OFF CACHE BOOL
 set(HERMES_STATIC_LINK OFF CACHE BOOL
   "Link Hermes statically. May only work on GNU/Linux.")
 
-set(HERMES_USE_STATIC_ICU OFF CACHE BOOL
-  "Force static linking of ICU. May only work on GNU/Linux.")
-
 set(HERMES_UNICODE_LITE OFF CACHE BOOL
   "Enable to use internal no-op unicode functionality instead of relying on underlying system libraries")
 
@@ -343,6 +357,12 @@ set(QEMU_RUN_PREFIX "" CACHE STRING
 
 set(JSI_UNSTABLE ON CACHE BOOL "Enable the JSI unstable APIs.")
 
+# Build the VM for the wasm2c-based sandbox in API/hermes_sandbox. This compiles
+# out the setjmp/longjmp that shermes-compiled code and the JIT use for
+# exceptions, since neither can run in the sandbox.
+set(HERMES_SANDBOX_WASM OFF CACHE BOOL
+  "Build the VM for the sandbox in API/hermes_sandbox.")
+
 if (NOT QEMU_RUN_PREFIX STREQUAL "")
   add_definitions(-DQEMU_MODE)
 endif()
@@ -382,9 +402,17 @@ if (HERMESVM_INTERNAL_JAVASCRIPT_NATIVE)
   add_definitions(-DHERMESVM_INTERNAL_JAVASCRIPT_NATIVE)
 endif()
 
+if (HERMES_SANDBOX_WASM)
+  if (NOT EMSCRIPTEN OR HERMESVM_INTERNAL_JAVASCRIPT_NATIVE OR
+      NOT HERMESVM_ALLOW_JIT EQUAL 0)
+    message(FATAL_ERROR "HERMES_SANDBOX_WASM requires Emscripten, "
+      "HERMESVM_INTERNAL_JAVASCRIPT_NATIVE=OFF and HERMESVM_ALLOW_JIT=0")
+  endif()
+  add_definitions(-DHERMES_SANDBOX_WASM)
+endif()
+
 if (HERMES_STATIC_LINK)
   append("-static" CMAKE_EXE_LINKER_FLAGS)
-  set(HERMES_USE_STATIC_ICU ON)
   set(CMAKE_FIND_LIBRARY_SUFFIXES "${CMAKE_STATIC_LIBRARY_SUFFIX}")
 endif()
 
@@ -658,75 +686,6 @@ endif()
 # to analyze the source code of the project.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Don't need ICU on Apple, Emscripten, and Android.
-if (APPLE OR EMSCRIPTEN OR HERMES_IS_ANDROID OR HERMES_UNICODE_LITE)
-  set(ICU_FOUND 1)
-endif()
-
-if (NOT ICU_FOUND)
-  set(CMAKE_FIND_LIBRARY_SUFFIXES_OLD "${CMAKE_FIND_LIBRARY_SUFFIXES}")
-  if (HERMES_USE_STATIC_ICU)
-    add_definitions(-DU_STATIC_IMPLEMENTATION)
-    set(CMAKE_FIND_LIBRARY_SUFFIXES "${CMAKE_STATIC_LIBRARY_SUFFIX}")
-  endif()
-
-  if (HERMES_ENABLE_INTL)
-    # Attempt to locate a system-installed ICU. A minimum version of 65 is
-    # required because our ICU-based Intl implementation relies on APIs introduced
-    # in version 65.
-    # Include 'uc' twice for static libraries that depend on each other.
-    find_global_package(ICU 65 COMPONENTS uc i18n data uc)
-  else()
-    # Include 'uc' twice for static libraries that depend on each other.
-    find_global_package(ICU 52 COMPONENTS uc i18n data uc)
-  endif()
-
-  set(CMAKE_FIND_LIBRARY_SUFFIXES "${CMAKE_FIND_LIBRARY_SUFFIXES_OLD}")
-
-  if (ICU_FOUND)
-    foreach(LIB_FILE ${ICU_LIBRARIES})
-      get_filename_component(LIB_DIR ${LIB_FILE} DIRECTORY)
-      list(APPEND ICU_RPATH ${LIB_DIR})
-    endforeach(LIB_FILE)
-    list(REMOVE_DUPLICATES ICU_RPATH)
-    message("icu dir: ${ICU_RPATH}")
-    include_directories(${ICU_INCLUDE_DIRS})
-  endif()
-endif()
-
-## Windows ICU: loaded at runtime via impl_win/IcuProvider*.cpp.
-## No link-time ICU dependency needed for Intl on Windows.
-
-# If we have no ICU, then error out (except on Windows where ICU is
-# loaded at runtime via impl_win/IcuProvider*.cpp).
-if (NOT ICU_FOUND AND NOT WIN32)
-  message(FATAL_ERROR "Unable to find ICU.")
-endif()
-
-# Declare a function that links ICU for the given target.
-# This adds the correct -rpath link flag as necessary.
-function(hermes_link_icu target_name)
-  if(ICU_LIBRARIES)
-    get_target_property(target_type ${target_name} TYPE)
-    target_link_libraries(${target_name} ${ICU_LIBRARIES})
-
-    if (HERMES_USE_STATIC_ICU)
-      if ((NOT EMSCRIPTEN) AND target_type MATCHES "EXECUTABLE|STATIC_LIBRARY")
-        target_link_libraries(${target_name} dl pthread)
-      elseif(target_type MATCHES "MODULE_LIBRARY|SHARED_LIBRARY")
-        message(WARNING "ICU cannot be statically linked against shared library target ${target_name}")
-      endif()
-    endif()
-
-    if (ICU_RPATH)
-      set_property(TARGET ${target_name} APPEND PROPERTY
-                    INSTALL_RPATH ${ICU_RPATH})
-      set_property(TARGET ${target_name} PROPERTY
-                    BUILD_WITH_INSTALL_RPATH TRUE)
-    endif()
-  endif()
-endfunction()
-
 if (APPLE)
   find_library(CORE_FOUNDATION CoreFoundation)
   find_library(FOUNDATION Foundation)
@@ -854,6 +813,20 @@ if(HERMES_ENABLE_TEST_SUITE)
     hermes_rt
     )
 
+  if(HERMES_ENABLE_NAPI)
+    list(APPEND HERMES_TEST_DEPS
+      napi-runner
+    )
+    if(NOT WIN32)
+      list(APPEND HERMES_TEST_DEPS
+        napi_test_addon
+        napi_ref_addon
+        napi_text_encoder_addon
+        napi_async_work_addon
+      )
+    endif()
+  endif()
+
   set(coverage_directory "")
   if (HERMES_ENABLE_CODE_COVERAGE)
     set(coverage_directory ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/coverage)
@@ -864,6 +837,7 @@ if(HERMES_ENABLE_TEST_SUITE)
     unittests_dir=${CMAKE_CURRENT_BINARY_DIR}/unittests
     debugger_enabled=${HERMES_ENABLE_DEBUGGER}
     jit_enabled=${HERMESVM_ALLOW_JIT}
+    jit_arch=${CMAKE_SYSTEM_PROCESSOR}
     intl_enabled=${HERMES_ENABLE_INTL}
     regexp_unicode_properties_enabled=${HERMES_ENABLE_UNICODE_REGEXP_PROPERTY_ESCAPES}
     hbc_deltaprep=${HERMES_TOOLS_OUTPUT_DIR}/hbc-deltaprep
@@ -888,14 +862,24 @@ if(HERMES_ENABLE_TEST_SUITE)
     unicode_lite=${HERMES_UNICODE_LITE}
     core_extensions_enabled=${HERMES_ENABLE_CORE_EXTENSIONS}
     contrib_extensions_enabled=${HERMES_ENABLE_CONTRIB_EXTENSIONS}
+    jsi_unstable=${JSI_UNSTABLE}
     qemu_run_prefix=${QEMU_RUN_PREFIX}
     hermes_rt=${HERMES_TOOLS_OUTPUT_DIR}/hermes_rt
+    napi_enabled=${HERMES_ENABLE_NAPI}
+    python=${Python_EXECUTABLE}
     )
 
   if(NOT "${HERMES_EXTERNAL_ICU_DIR}" STREQUAL "")
     list(APPEND HERMES_LIT_TEST_PARAMS_BASE
       external_icu_dir=${HERMES_EXTERNAL_ICU_DIR}
       external_icu_version=${HERMES_EXTERNAL_ICU_VERSION})
+  endif()
+
+  if(HERMES_ENABLE_NAPI)
+    list(APPEND HERMES_LIT_TEST_PARAMS_BASE
+      napi_runner=${HERMES_TOOLS_OUTPUT_DIR}/napi-runner
+      napi_addon_dir=${CMAKE_CURRENT_BINARY_DIR}/unittests/napi
+    )
   endif()
 
   set(HERMES_LIT_TEST_PARAMS
@@ -918,6 +902,9 @@ if(HERMES_ENABLE_TEST_SUITE)
     ARGS ${HERMES_TEST_EXTRA_ARGS}
     )
   set_target_properties(check-hermes PROPERTIES FOLDER "Hermes regression tests")
+  if(HERMES_ENABLE_NAPI)
+    add_dependencies(check-hermes check-napi)
+  endif()
 
   list(APPEND SHERMES_TEST_DEPS shermes-dep)
   add_lit_testsuite(check-shermes "Running the Static Hermes regression tests"

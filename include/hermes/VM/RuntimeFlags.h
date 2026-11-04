@@ -241,6 +241,14 @@ struct VMOnlyRuntimeFlags {
       llvh::cl::desc("maximum size for JIT code (in bytes)"),
       llvh::cl::init(32u << 20)};
 
+  llvh::cl::opt<uint32_t> JITHCIdLimit{
+      "Xjit-hc-id-limit",
+      llvh::cl::Hidden,
+      llvh::cl::cat(RuntimeCategory),
+      llvh::cl::desc(
+          "largest lazy JIT id assignable to a HiddenClass (testing only)"),
+      llvh::cl::init(0xFFFF)};
+
   /// To get the value of this CLI option, use the method below.
   llvh::cl::opt<unsigned> DumpJITCode{
       "Xdump-jitcode",
@@ -289,6 +297,15 @@ struct VMOnlyRuntimeFlags {
       llvh::cl::init(true)
 #endif
   };
+
+  llvh::cl::opt<bool> JITEmitTypeAsserts{
+      "Xjit-emit-type-asserts",
+      llvh::cl::Hidden,
+      llvh::cl::cat(RuntimeCategory),
+      llvh::cl::desc(
+          "(default false) Whether to verify FR type assumptions in JIT "
+          "compiled code"),
+      llvh::cl::init(false)};
 
   llvh::cl::opt<bool> JITEmitCounters{
       "Xjit-emit-counters",

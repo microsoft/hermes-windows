@@ -8,6 +8,7 @@
 #ifndef HERMES_VM_JSTYPEDARRAY_H
 #define HERMES_VM_JSTYPEDARRAY_H
 
+#include "hermes/Support/Conversions.h"
 #include "hermes/VM/GCPointer.h"
 #include "hermes/VM/JSArrayBuffer.h"
 
@@ -81,7 +82,7 @@ class JSTypedArrayBase : public JSObject {
   /// storage, or null if this TypedArray doesn't have a corresponding
   /// ArrayBuffer. May be called even if the underlying buffer is detached.
   JSArrayBuffer *getBuffer(Runtime &runtime) const {
-    return buffer_.get(runtime);
+    return buffer_.getNonNull(runtime);
   }
 
   uint8_t *data(PointerBase &base) {
@@ -112,9 +113,20 @@ class JSTypedArrayBase : public JSObject {
   inline static HermesValue
   polyReadNoAlloc(JSTypedArrayBase *self, Runtime &runtime, size_type index);
 
+  /// Polymorphic write to the data in the TypedArray. This function never
+  /// allocates.
+  /// \pre self->attached() is true and index is within bound.
+  static void polyWriteNoAlloc(
+      JSTypedArrayBase *self,
+      Runtime &runtime,
+      size_type index,
+      HermesValue value);
+
   /// \return Whether this JSTypedArrayBase is attached to some buffer.
   bool attached(PointerBase &base) const {
-    return buffer_ && buffer_.getNonNull(base)->attached();
+    assert(
+        buffer_ && "buffer_ can only be null in partial initialization status");
+    return buffer_.getNonNull(base)->attached();
   }
 
   /// \return The offset from the beginning of the buffer this typed array
@@ -260,6 +272,9 @@ inline HermesValue JSTypedArrayBase::polyReadMayAlloc(
     case CellKind::Uint32ArrayKind:
       return HermesValue::encodeTrustedNumberValue(
           reinterpret_cast<uint32_t *>(dataPtr)[index]);
+    case CellKind::Float16ArrayKind:
+      return HermesValue::encodeUntrustedNumberValue(
+          float16ToDouble(reinterpret_cast<uint16_t *>(dataPtr)[index]));
     case CellKind::Float32ArrayKind:
       return HermesValue::encodeUntrustedNumberValue(
           reinterpret_cast<float *>(dataPtr)[index]);
@@ -325,7 +340,8 @@ inline HermesValue JSTypedArrayBase::polyReadNoAlloc(
           CellKind::Uint16ArrayKind < CellKind::Int16ArrayKind &&
           CellKind::Int16ArrayKind < CellKind::Uint32ArrayKind &&
           CellKind::Uint32ArrayKind < CellKind::Int32ArrayKind &&
-          CellKind::Int32ArrayKind < CellKind::Float32ArrayKind &&
+          CellKind::Int32ArrayKind < CellKind::Float16ArrayKind &&
+          CellKind::Float16ArrayKind < CellKind::Float32ArrayKind &&
           CellKind::Float32ArrayKind < CellKind::Float64ArrayKind,
       "CellKind ordering is not correct");
   // Assert that signed and unsigned versions of the same size have different
@@ -374,8 +390,11 @@ inline HermesValue JSTypedArrayBase::polyReadNoAlloc(
             ((unsigned)kind & 1) == uBitValue ? (double)u : (double)s);
       }
     } else {
-      // Float32 or Float64
-      if (kind == CellKind::Float32ArrayKind) {
+      // Float16, Float32, or Float64
+      if (kind == CellKind::Float16ArrayKind) {
+        return HermesValue::encodeUntrustedNumberValue(
+            float16ToDouble(reinterpret_cast<uint16_t *>(dataPtr)[index]));
+      } else if (kind == CellKind::Float32ArrayKind) {
         return HermesValue::encodeUntrustedNumberValue(
             reinterpret_cast<float *>(dataPtr)[index]);
       } else {
@@ -405,7 +424,8 @@ class JSTypedArray final : public JSTypedArrayBase {
 
   static PseudoHandle<JSTypedArray<T, C>> create(
       Runtime &runtime,
-      Handle<JSObject> prototype);
+      Handle<JSObject> prototype,
+      Handle<HiddenClass> clazz);
 
   T *begin(PointerBase &base) {
     return reinterpret_cast<T *>(data(base));
@@ -426,6 +446,7 @@ class JSTypedArray final : public JSTypedArrayBase {
   }
 
   static Handle<JSObject> getPrototype(const Runtime &runtime);
+  static Handle<HiddenClass> getRootHiddenClass(const Runtime &runtime);
   static Handle<Callable> getConstructor(const Runtime &runtime);
   static SymbolID getName(Runtime &runtime);
 
@@ -484,6 +505,12 @@ JSTypedArray<uint8_t, CellKind::Uint8ClampedArrayKind>::toDestType(
 }
 
 template <>
+inline uint16_t JSTypedArray<uint16_t, CellKind::Float16ArrayKind>::toDestType(
+    const HermesValue &numeric) {
+  return doubleToFloat16(numeric.getNumber());
+}
+
+template <>
 inline float JSTypedArray<float, CellKind::Float32ArrayKind>::toDestType(
     const HermesValue &numeric) {
   // This can overflow a float, but float overflow goes to Infinity
@@ -506,6 +533,16 @@ uint64_t JSTypedArray<uint64_t, CellKind::BigUint64ArrayKind>::toDestType(
     const HermesValue &numeric);
 
 /// @}
+
+/// Specialization declaration for Float16Array's _getOwnIndexedImpl. Must be
+/// declared because it has an explicit instantiation.
+template <>
+HermesValue
+JSTypedArray<uint16_t, CellKind::Float16ArrayKind>::_getOwnIndexedImpl(
+    PseudoHandle<JSObject> self,
+    Runtime &runtime,
+    uint32_t index);
+
 #define TYPED_ARRAY(name, type) \
   using name##Array = JSTypedArray<type, CellKind::name##ArrayKind>;
 #include "hermes/VM/TypedArrays.def"

@@ -159,9 +159,6 @@ vm::Handle<vm::SymbolID> toHandle(HermesABISymbol sym) {
 vm::Handle<vm::SymbolID> toHandle(HermesABIPropNameID sym) {
   return toHandle<vm::SymbolID>(sym.pointer);
 }
-vm::Handle<vm::JSArray> toHandle(HermesABIArray arr) {
-  return toHandle<vm::JSArray>(arr.pointer);
-}
 vm::Handle<vm::BigIntPrimitive> toHandle(HermesABIBigInt bi) {
   return toHandle<vm::BigIntPrimitive>(bi.pointer);
 }
@@ -706,7 +703,7 @@ HermesABIVoidOrError set_object_external_memory_pressure(
   auto &rt = *hart->rt;
   vm::GCScope gcScope(rt);
   auto objHandle = toHandle(obj);
-  if (objHandle->isProxyObject()) {
+  if (objHandle->isProxyObject(rt)) {
     hart->nativeExceptionMessage = "Cannot set external memory on Proxy";
     return abi::createVoidOrError(HermesABIErrorCodeNativeException);
   }
@@ -732,6 +729,11 @@ HermesABIVoidOrError set_object_external_memory_pressure(
         vm::JSObject::getNamedSlotValueUnsafe(*objHandle, rt, desc)
             .getObject(rt));
   } else {
+    // An object without the property implicitly has no external memory, so
+    // setting it to 0 is a no-op.
+    if (amt == 0)
+      return abi::createVoidOrError();
+
     auto debitMem = [](vm::GC &gc, vm::NativeState *ns) {
       auto amt = reinterpret_cast<uintptr_t>(ns->context());
       gc.debitExternalMemory(ns, amt);
@@ -763,6 +765,10 @@ HermesABIVoidOrError set_object_external_memory_pressure(
 
   auto curAmt = reinterpret_cast<uintptr_t>(ns->context());
   assert(llvh::isUInt<32>(curAmt) && "Amount is too large.");
+
+  // Nothing to do if the amount is unchanged.
+  if (amt == curAmt)
+    return abi::createVoidOrError();
 
   // The GC does not support adding more than a 32 bit amount.
   if (!llvh::isUInt<32>(amt)) {
@@ -797,10 +803,39 @@ HermesABIArrayOrError create_array(HermesABIRuntime *abiRt, size_t length) {
   return hart->createArrayOrError(result->getHermesValue());
 }
 
-size_t get_array_length(HermesABIRuntime *abiRt, HermesABIArray arr) {
+HermesABISizeTOrError get_array_length(
+    HermesABIRuntime *abiRt,
+    HermesABIArray arr) {
   auto *hart = impl(abiRt);
   auto &runtime = *hart->rt;
-  return vm::JSArray::getLength(*toHandle(arr), runtime);
+  auto objHandle = toHandle<vm::JSObject>(arr.pointer);
+  if (LLVM_LIKELY(vm::vmisa<vm::JSArray>(*objHandle))) {
+    return abi::createSizeTOrError(
+        vm::JSArray::getLength(vm::vmcast<vm::JSArray>(*objHandle), runtime));
+  }
+
+  // The array may be a Proxy, so read and convert its length property.
+  vm::GCScope gcScope(runtime);
+  struct : public vm::Locals {
+    vm::PinnedValue<> lenProp;
+  } lv;
+  vm::LocalsRAII lraii(runtime, &lv);
+  auto getRes = vm::JSObject::getNamed_RJS(
+      objHandle, runtime, vm::Predefined::getSymbolID(vm::Predefined::length));
+  if (LLVM_UNLIKELY(getRes == vm::ExecutionStatus::EXCEPTION))
+    return abi::createSizeTOrError(HermesABIErrorCodeJSError);
+  lv.lenProp = std::move(*getRes);
+  auto lenRes = vm::toLength(runtime, lv.lenProp);
+  if (LLVM_UNLIKELY(lenRes == vm::ExecutionStatus::EXCEPTION))
+    return abi::createSizeTOrError(HermesABIErrorCodeJSError);
+
+  // The length may be up to 2^53 - 1, which does not fit in a 32-bit size_t.
+  double len = lenRes->getNumber();
+  if (LLVM_UNLIKELY(len > (double)std::numeric_limits<size_t>::max())) {
+    hart->nativeExceptionMessage = "Array length does not fit in size_t.";
+    return abi::createSizeTOrError(HermesABIErrorCodeNativeException);
+  }
+  return abi::createSizeTOrError(static_cast<size_t>(len));
 }
 
 HermesABIArrayBufferOrError create_arraybuffer_from_external_data(
@@ -944,17 +979,20 @@ HermesABIValueOrError call_as_constructor(
   vm::GCScope gcScope(runtime);
 
   struct : public vm::Locals {
-    vm::PinnedValue<vm::JSObject> objHandle;
+    vm::PinnedValue<> thisArg;
   } lv;
   vm::LocalsRAII lraii(runtime, &lv);
 
   vm::Handle<vm::Callable> funcHandle = toHandle(fn);
 
   // Create the new object for the constructor call and save it in case the
-  // function does not return an object.
+  // function does not return an object. This is undefined for functions that
+  // create their own this, like native constructors.
   auto thisRes =
       vm::Callable::createThisForConstruct_RJS(funcHandle, runtime, funcHandle);
-  lv.objHandle.castAndSetHermesValue<vm::JSObject>(thisRes->getHermesValue());
+  if (LLVM_UNLIKELY(thisRes == vm::ExecutionStatus::EXCEPTION))
+    return abi::createValueOrError(HermesABIErrorCodeJSError);
+  lv.thisArg = std::move(*thisRes);
 
   // Set up the call frame and create space for the arguments.
   vm::ScopedNativeCallFrame newFrame{
@@ -962,7 +1000,7 @@ HermesABIValueOrError call_as_constructor(
       static_cast<uint32_t>(count),
       funcHandle.getHermesValue(),
       funcHandle.getHermesValue(),
-      lv.objHandle.getHermesValue()};
+      lv.thisArg.getHermesValue()};
   if (LLVM_UNLIKELY(newFrame.overflowed())) {
     (void)runtime.raiseStackOverflow(
         ::hermes::vm::Runtime::StackOverflowKind::NativeStack);
@@ -981,7 +1019,7 @@ HermesABIValueOrError call_as_constructor(
   // If the result is not an object, return the this parameter.
   auto res = callRes->get();
   return hart->createValueOrError(
-      res.isObject() ? res : lv.objHandle.getHermesValue());
+      res.isObject() ? res : lv.thisArg.getHermesValue());
 }
 
 /// A wrapper that holds the HermesABIRuntime and HostFunction, to allow the
@@ -1194,7 +1232,7 @@ HermesABINativeState *get_native_state(
   auto h = toHandle(obj);
 
   // Proxy and HostObject cannot have native state.
-  if (h->isProxyObject() || h->isHostObject())
+  if (h->isProxyObject(runtime) || h->isHostObject(runtime))
     return nullptr;
 
   // Check if the internal property exists, and if so retrieve its descriptor.
@@ -1242,10 +1280,10 @@ HermesABIVoidOrError set_native_state(
   lv.ns = vm::NativeState::create(runtime, abiState, finalize);
 
   auto h = toHandle(obj);
-  if (h->isProxyObject()) {
+  if (h->isProxyObject(runtime)) {
     hart->nativeExceptionMessage = "Native state is unsupported on Proxy";
     return abi::createVoidOrError(HermesABIErrorCodeNativeException);
-  } else if (h->isHostObject()) {
+  } else if (h->isHostObject(runtime)) {
     hart->nativeExceptionMessage = "Native state is unsupported on HostObject";
     return abi::createVoidOrError(HermesABIErrorCodeNativeException);
   }
@@ -1267,8 +1305,17 @@ HermesABIVoidOrError set_native_state(
   return abi::createVoidOrError();
 }
 
-bool object_is_array(HermesABIRuntime *, HermesABIObject object) {
-  return vm::vmisa<vm::JSArray>(*toHandle(object));
+HermesABIBoolOrError object_is_array(
+    HermesABIRuntime *abiRt,
+    HermesABIObject object) {
+  auto objHandle = toHandle(object);
+  if (LLVM_LIKELY(vm::vmisa<vm::JSArray>(*objHandle)))
+    return abi::createBoolOrError(true);
+  // Look through Proxy objects, like Array.isArray.
+  auto res = vm::isArray(*impl(abiRt)->rt, *objHandle);
+  if (LLVM_UNLIKELY(res == vm::ExecutionStatus::EXCEPTION))
+    return abi::createBoolOrError(HermesABIErrorCodeJSError);
+  return abi::createBoolOrError(*res);
 }
 bool object_is_arraybuffer(HermesABIRuntime *, HermesABIObject object) {
   return vm::vmisa<vm::JSArrayBuffer>(*toHandle(object));
@@ -1420,7 +1467,9 @@ HermesABIBoolOrError drain_microtasks(HermesABIRuntime *abiRt, int) {
   runtime.clearKeptObjects();
 
   // Run the callback for dead registered targets.
-  runtime.cleanUpFinalizationCallbacks();
+  auto cleanupRes = runtime.cleanUpFinalizationCallbacks();
+  if (cleanupRes == vm::ExecutionStatus::EXCEPTION)
+    return abi::createBoolOrError(HermesABIErrorCodeJSError);
 
   // drainJobs currently drains the entire queue, unless there is an exception,
   // so always return true.

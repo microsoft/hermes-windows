@@ -1255,6 +1255,9 @@ function runBinSkim(buildParams) {
 }
 
 function setupJSTestEnvPaths() {
+  // LIT and test262 diagnostics can contain characters outside the Windows ACP.
+  process.env.PYTHONIOENCODING = "utf-8";
+
   console.log("Setting up environment paths...");
 
   // Helper function to find executable path using 'where'

@@ -99,7 +99,11 @@ class ASTPrinter {
     os_ << "Id '" << V->_name->str() << '\'';
 
     sema::Decl *declD = semCtx_.getDeclarationDecl(V);
-    sema::Decl *exprD = semCtx_.getExpressionDecl(V);
+    // getExpressionDecl() requires that the identifier is not marked
+    // "unresolvable" (identifiers inside `with` are unresolvable when
+    // resolving on behalf of a parser). The " UNR" flag is printed below.
+    sema::Decl *exprD =
+        V->isUnresolvable() ? nullptr : semCtx_.getExpressionDecl(V);
     if (declD || exprD) {
       os_ << " [";
       if (!declD || declD == exprD) {
@@ -257,15 +261,20 @@ void semDump(
     SemContext &semCtx,
     flow::FlowContext *flowContext,
     ESTree::Node *root) {
+  // If the root is a function-like node, start the dump from its FunctionInfo.
+  const FunctionInfo *rootFunc = nullptr;
+  if (auto *funcNode = llvh::dyn_cast<ESTree::FunctionLikeNode>(root))
+    rootFunc = funcNode->getSemInfo();
+
   if (!flowContext) {
     SemContextDumper semDumper;
-    semDumper.printSemContext(os, semCtx);
+    semDumper.printSemContext(os, semCtx, rootFunc);
     os << '\n';
     ASTPrinter ap(os, semCtx, semDumper);
     ap.run(root);
   } else {
     flow::FlowTypesDumper flowDumper{};
-    flowDumper.printAllTypes(os, *flowContext);
+    flowDumper.printAllTypes(os, *flowContext, root);
     os << '\n';
     if (!astContext.getNativeContext().getAllExterns().empty()) {
       flowDumper.printNativeExterns(os, astContext.getNativeContext());
@@ -280,7 +289,7 @@ void semDump(
           }
         });
 
-    semDumper.printSemContext(os, semCtx);
+    semDumper.printSemContext(os, semCtx, rootFunc);
     os << '\n';
     ASTPrinter ap(os, semCtx, semDumper, &flowDumper, flowContext);
     ap.run(root);

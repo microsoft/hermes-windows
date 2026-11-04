@@ -78,7 +78,7 @@ static llvh::Optional<Handle<JSError>> getErrorFromStackTarget(
       return Handle<JSError>::vmcast(targetHandle);
     }
 
-    if (LLVM_UNLIKELY(targetHandle->isProxyObject())) {
+    if (LLVM_UNLIKELY(targetHandle->isProxyObject(runtime))) {
       return llvh::None;
     }
 
@@ -205,26 +205,23 @@ CallResult<HermesValue> errorStackSetter(void *, Runtime &runtime) {
 
 PseudoHandle<JSError> JSError::create(
     Runtime &runtime,
-    Handle<JSObject> parentHandle) {
-  return create(runtime, parentHandle, /*catchable*/ true);
+    Handle<JSObject> prototype) {
+  auto *cell = runtime.makeAFixed<JSError, HasFinalizer::Yes>(
+      runtime,
+      prototype,
+      runtime.getHiddenClassForPrototype(*prototype, runtime.classJSError),
+      /* catchable */ true);
+  return JSObjectInit::initToPseudoHandle(runtime, cell);
 }
 
 PseudoHandle<JSError> JSError::createUncatchable(
     Runtime &runtime,
     Handle<JSObject> parentHandle) {
-  return create(runtime, parentHandle, /*catchable*/ false);
-}
-
-PseudoHandle<JSError> JSError::create(
-    Runtime &runtime,
-    Handle<JSObject> parentHandle,
-    bool catchable) {
   auto *cell = runtime.makeAFixed<JSError, HasFinalizer::Yes>(
       runtime,
       parentHandle,
-      runtime.getHiddenClassForPrototype(
-          *parentHandle, numOverlapSlots<JSError>()),
-      catchable);
+      runtime.getHiddenClassForPrototype(*parentHandle, runtime.classJSError),
+      /* catchable */ false);
   return JSObjectInit::initToPseudoHandle(runtime, cell);
 }
 
@@ -296,8 +293,8 @@ CallResult<Handle<StringPrimitive>> JSError::toString(
   SafeUInt32 length{nameStr->getStringLength()};
   length.add(2);
   length.add(msgStr->getStringLength());
-  CallResult<StringBuilder> builderRes =
-      StringBuilder::createStringBuilder(runtime, length);
+  CallResult<StringBuilder> builderRes = StringBuilder::createStringBuilder(
+      runtime, length, nameStr->isASCII() && msgStr->isASCII());
   if (LLVM_UNLIKELY(builderRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -670,8 +667,8 @@ ExecutionStatus JSError::constructStackTraceString_RJS(
     if (LLVM_UNLIKELY(max > PRINT_HEAD + PRINT_TAIL)) {
       if (index == PRINT_HEAD) {
         stack.append("\n    ... skipping ");
-        numberToString(max - PRINT_HEAD - PRINT_TAIL, buf, sizeof(buf));
-        stack.append(buf);
+        stack.append(
+            numberToString(max - PRINT_HEAD - PRINT_TAIL, buf, sizeof(buf)));
         stack.append(" frames");
         continue;
       }
@@ -774,13 +771,11 @@ void JSError::appendBytecodeFrame(
   }
   stack.push_back(u':');
 
-  numberToString(lineNo, buf, NUMBER_TO_STRING_BUF_SIZE);
-  stack.append(buf);
+  stack.append(numberToString(lineNo, buf, NUMBER_TO_STRING_BUF_SIZE));
 
   stack.push_back(u':');
 
-  numberToString(columnNo, buf, NUMBER_TO_STRING_BUF_SIZE);
-  stack.append(buf);
+  stack.append(numberToString(columnNo, buf, NUMBER_TO_STRING_BUF_SIZE));
 
   stack.push_back(u')');
 }
@@ -804,13 +799,11 @@ void JSError::appendNativeFrame(
     int32_t lineNo = loc.line;
     int32_t columnNo = loc.column;
 
-    numberToString(lineNo, buf, NUMBER_TO_STRING_BUF_SIZE);
-    stack.append(buf);
+    stack.append(numberToString(lineNo, buf, NUMBER_TO_STRING_BUF_SIZE));
 
     stack.push_back(u':');
 
-    numberToString(columnNo, buf, NUMBER_TO_STRING_BUF_SIZE);
-    stack.append(buf);
+    stack.append(numberToString(columnNo, buf, NUMBER_TO_STRING_BUF_SIZE));
   } else {
     stack.append(u"native");
   }

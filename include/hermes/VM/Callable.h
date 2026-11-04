@@ -724,66 +724,72 @@ class NativeFunction : public Callable {
   }
 #endif
 
+  /// Run \p body, which takes no arguments and returns
+  /// CallResult<HermesValue>, as the body of a call of \p self: inside the
+  /// native depth check and the frame setup and teardown that every call of
+  /// a NativeFunction performs. The caller has pushed the frame (callee
+  /// \p self, this and arguments), as for _nativeCall.
+  template <typename Body>
+  static inline CallResult<PseudoHandle<>>
+  runNativeCallBody(NativeFunction *self, Runtime &runtime, const Body &body);
+
   /// This is a lightweight and unsafe wrapper intended to be used only by the
   /// interpreter. Its purpose is to avoid needlessly exposing the private
   /// fields.
   static CallResult<PseudoHandle<>> _nativeCall(
       NativeFunction *self,
       Runtime &runtime) {
-    ScopedNativeDepthTracker depthTracker{runtime};
-    if (LLVM_UNLIKELY(depthTracker.overflowed())) {
-      return runtime.raiseStackOverflow(
-          Runtime::StackOverflowKind::NativeStack);
-    }
+    NativeFunctionPtr functionPtr = self->functionPtr_;
+    void *context = self->context_;
+    return runNativeCallBody(self, runtime, [functionPtr, context, &runtime]() {
+      return functionPtr(context, runtime);
+    });
+  }
 
-    // Ensure the IP was correctly saved before we create the new frame.
-    runtime.validateSavedIPBeforeCall();
-    auto newFrame = runtime.setCurrentFrameToTopOfStack();
-    // We don't need to allocate CalleeExtraRegistersAtStart here because the
-    // only register is DebugEnvironment, which is not useful in a
-    // NativeFunction.
-    static_assert(
-        StackFrameLayout::FirstLocal - 1 ==
-            StackFrameLayout::DebugEnvironment &&
-        StackFrameLayout::CalleeExtraRegistersAtStart == 1);
-
-#ifdef HERMESVM_PROFILER_NATIVECALL
-    auto t1 = HERMESVM_RDTSC();
-#endif
-
-    auto res = self->functionPtr_(self->context_, runtime);
-
-#ifdef HERMESVM_PROFILER_NATIVECALL
-    self->callDuration_ = HERMESVM_RDTSC() - t1;
-    ++self->callCount_;
-#endif
-    runtime.restoreStackAndPreviousFrame(newFrame);
-    if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    return createPseudoHandle(*res);
+  /// Create an instance of NativeFunction with Function.prototype as the parent
+  /// and the default HiddenClass.
+  ///
+  /// \param context the context to be passed to the function
+  /// \param functionPtr the native function
+  /// \param name the name property of the function.
+  /// \param paramCount number of parameters (excluding `this`)
+  static Handle<NativeFunction> create(
+      Runtime &runtime,
+      void *context,
+      NativeFunctionPtr functionPtr,
+      SymbolID name,
+      unsigned paramCount) {
+    return create(
+        runtime,
+        runtime.functionPrototype,
+        runtime.classNativeFunction,
+        Runtime::makeNullHandle<Environment>(),
+        context,
+        functionPtr,
+        name,
+        paramCount,
+        Runtime::makeNullHandle<JSObject>());
   }
 
   /// Create an instance of NativeFunction.
   /// \param parentHandle object to use as [[Prototype]].
+  /// \param clazz the HiddenClass for the result object.
   /// \param parentEnvHandle the parent environment
   /// \param context the context to be passed to the function
   /// \param functionPtr the native function
   /// \param name the name property of the function.
   /// \param paramCount number of parameters (excluding `this`)
   /// \param prototypeObjectHandle if non-null, set as prototype property.
-  /// \param additionalSlotCount internal slots to reserve within the
-  /// object (defaults to zero).
   static Handle<NativeFunction> create(
       Runtime &runtime,
       Handle<JSObject> parentHandle,
+      Handle<HiddenClass> clazz,
       Handle<Environment> parentEnvHandle,
       void *context,
       NativeFunctionPtr functionPtr,
       SymbolID name,
       unsigned paramCount,
-      Handle<JSObject> prototypeObjectHandle,
-      unsigned additionalSlotCount = 0);
+      Handle<JSObject> prototypeObjectHandle);
 
   /// \return the value in an additional slot.
   /// \param index must be less than the \c additionalSlotCount passed to
@@ -834,6 +840,48 @@ class NativeFunction : public Callable {
   static HermesValue _jitCallImpl(Runtime *runtime, JSObject *self);
 };
 
+template <typename Body>
+inline CallResult<PseudoHandle<>> NativeFunction::runNativeCallBody(
+    NativeFunction *self,
+    Runtime &runtime,
+    const Body &body) {
+  ScopedNativeDepthTracker depthTracker{runtime};
+  if (LLVM_UNLIKELY(depthTracker.overflowed())) {
+    return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
+  }
+
+  // Ensure the IP was correctly saved before we create the new frame.
+  runtime.validateSavedIPBeforeCall();
+  auto newFrame = runtime.setCurrentFrameToTopOfStack();
+  // We don't need to allocate CalleeExtraRegistersAtStart here because the
+  // only register is DebugEnvironment, which is not useful in a
+  // NativeFunction.
+  static_assert(
+      StackFrameLayout::FirstLocal - 1 == StackFrameLayout::DebugEnvironment &&
+      StackFrameLayout::CalleeExtraRegistersAtStart == 1);
+
+#ifdef HERMESVM_PROFILER_NATIVECALL
+  auto t1 = HERMESVM_RDTSC();
+#endif
+
+  CallResult<HermesValue> res = body();
+
+#ifdef HERMESVM_PROFILER_NATIVECALL
+  // body() may have moved the heap, so \p self may be stale. Reload the
+  // callee from the frame's callee slot, which the GC updates.
+  self = vmcast<NativeFunction>(newFrame.getCalleeClosureOrCBRef());
+  self->callDuration_ = HERMESVM_RDTSC() - t1;
+  ++self->callCount_;
+#else
+  (void)self;
+#endif
+  runtime.restoreStackAndPreviousFrame(newFrame);
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  return createPseudoHandle(*res);
+}
+
 /// A NativeFunction to be used as a constructor for native objects other than
 /// Object.
 class NativeConstructor final : public NativeFunction {
@@ -866,30 +914,8 @@ class NativeConstructor final : public NativeFunction {
         runtime,
         parentHandle,
         runtime.getHiddenClassForPrototype(
-            *parentHandle, numOverlapSlots<NativeConstructor>()),
+            *parentHandle, runtime.classNativeConstructor),
         Runtime::makeNullHandle<Environment>(),
-        context,
-        functionPtr);
-    return JSObjectInit::initToPseudoHandle(runtime, cell);
-  }
-
-  /// Create an instance of NativeConstructor.
-  /// \param parentHandle object to use as [[Prototype]].
-  /// \param parentEnvHandle the parent environment
-  /// \param context the context to be passed to the function
-  /// \param functionPtr the native function
-  static PseudoHandle<NativeConstructor> create(
-      Runtime &runtime,
-      Handle<JSObject> parentHandle,
-      Handle<Environment> parentEnvHandle,
-      void *context,
-      NativeFunctionPtr functionPtr) {
-    auto *cell = runtime.makeAFixed<NativeConstructor>(
-        runtime,
-        parentHandle,
-        runtime.getHiddenClassForPrototype(
-            *parentHandle, numOverlapSlots<NativeConstructor>()),
-        parentEnvHandle,
         context,
         functionPtr);
     return JSObjectInit::initToPseudoHandle(runtime, cell);
@@ -1112,6 +1138,7 @@ static CallResult<std::pair<Callable *, JSObject *>> createClass(
     PinnedValue<JSObject> homeObject;
   } lv;
   LocalsRAII lraii(runtime, &lv);
+  GCScopeMarkerRAII marker{runtime};
 
   // ES2023 15.7.14 RS: ClassDefinitionEvaluation
   // 7. If ClassHeritageopt is not present, then

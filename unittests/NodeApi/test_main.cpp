@@ -2,9 +2,13 @@
 // Licensed under the MIT license.
 #include "test_main.h"
 
+#include "../WindowsTestSupport.h"
+
 #include <gtest/gtest.h>
 #include <gtest/internal/gtest-internal.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string_view>
 #include "child_process.h"
@@ -14,6 +18,7 @@ namespace fs = std::filesystem;
 
 namespace node_api_tests {
 
+/*static*/ std::filesystem::path TestFixtureBase::test_exe_path_;
 /*static*/ std::filesystem::path TestFixtureBase::node_lite_path_;
 /*static*/ std::filesystem::path TestFixtureBase::js_root_dir_;
 
@@ -22,6 +27,7 @@ std::filesystem::path ResolveNodeLitePath(const std::filesystem::path& exePath);
 /*static*/ void TestFixtureBase::InitializeGlobals(
     const char* test_exe_path) noexcept {
   fs::path exePath = fs::canonical(test_exe_path);
+  TestFixtureBase::test_exe_path_ = exePath;
 
   fs::path nodeLitePath =
       ResolveNodeLitePath(fs::path(test_exe_path));
@@ -183,6 +189,11 @@ void NodeApiTestFixture::RegisterNodeApiTests() {
 }  // namespace node_api_tests
 
 int main(int argc, char** argv) {
+  hermes::testing::disableCrashDialogs();
+  if (argc == 2 && std::string_view(argv[1]) == "--abort-test-child") {
+    std::fputs("intentional test child abort\n", stderr);
+    std::abort();
+  }
   node_api_tests::TestFixtureBase::InitializeGlobals(argv[0]);
   ::testing::InitGoogleTest(&argc, argv);
   node_api_tests::NodeApiTestFixture::RegisterNodeApiTests();

@@ -18,11 +18,13 @@
 #include "hermes/IRGen/IRGen.h"
 #include "hermes/Optimizer/PassManager/PassManager.h"
 #include "hermes/Optimizer/PassManager/Pipeline.h"
+#include "hermes/Parser/JSParser.h"
 #include "hermes/Runtime/Libhermes.h"
 #include "hermes/Sema/SemContext.h"
 #include "hermes/Sema/SemResolve.h"
 #include "hermes/SourceMap/SourceMapTranslator.h"
 #include "hermes/Support/OSCompat.h"
+#include "hermes/TypedLib/TypedLib.h"
 #include "hermes/Utils/CompilerRuntimeFlags.h"
 
 #include "llvh/ADT/ScopeExit.h"
@@ -353,7 +355,7 @@ cl::opt<bool> MetroRequireOpt(
 
 cl::opt<bool> Typed(
     "typed",
-    cl::desc("Enable typed mode"),
+    cl::desc("Enable typed mode (use -help-typed to learn more)"),
     cl::init(false),
     cl::cat(CompilerCategory));
 
@@ -368,6 +370,13 @@ CLFlag StdGlobals(
     "std-globals",
     true,
     "registration of standard globals",
+    CompilerCategory);
+
+CLFlag DumpWrappedSema(
+    'f',
+    "dump-wrapped-sema",
+    false,
+    "dumping of full wrapped AST in sema output",
     CompilerCategory);
 
 cl::opt<unsigned> ErrorLimit(
@@ -509,6 +518,12 @@ cl::opt<std::string> XNativeTarget(
     "Xnative-target",
     cl::desc("Specify the native target triple"),
     cl::Hidden,
+    cl::cat(CompilerCategory));
+
+cl::opt<bool> HelpTyped(
+    "help-typed",
+    cl::desc("Print the Typed language documentation and exit"),
+    cl::init(false),
     cl::cat(CompilerCategory));
 
 } // namespace cli
@@ -810,14 +825,39 @@ ESTree::NodePtr parseJS(
   }
 #endif
 
-  parsedAST = llvh::cast<ESTree::ProgramNode>(
-      hermes::transformASTForCompilation(*context, parsedAST));
+  parsedAST = llvh::cast_or_null<ESTree::ProgramNode>(
+      hermes::transformASTForCompilation(
+          *context, /* typed */ flowContext != nullptr, parsedAST));
   if (!parsedAST)
     return nullptr;
 
+  ESTree::ProgramNode *prelude = nullptr;
+
+  // Parse TypedLib prelude if std-globals is enabled.
+  if (shouldWrapInIIFE && cli::StdGlobals) {
+    auto typedLibBuf = llvh::MemoryBuffer::getMemBuffer(
+        getTypedLibSource(), "TypedLib", false);
+    parser::JSParser jsParser(*context, std::move(typedLibBuf));
+    auto optPrelude = jsParser.parse();
+    if (!optPrelude) {
+      return nullptr;
+    }
+    // Apply the same AST transforms (e.g. typed-mode Hermes.decorate
+    // rewriting) to the TypedLib prelude that we applied to user code.
+    auto *transformedPrelude = hermes::transformASTForCompilation(
+        *context, /* typed */ flowContext != nullptr, optPrelude.getValue());
+    if (!transformedPrelude) {
+      return nullptr;
+    }
+    prelude = llvh::cast<ESTree::ProgramNode>(transformedPrelude);
+  }
+
   // If we are executing in typed mode and not script, then wrap the program.
+  ESTree::FunctionExpressionNode *originalFunc = nullptr;
   if (shouldWrapInIIFE) {
-    parsedAST = wrapInIIFE(context, parsedAST);
+    auto [wrappedAST, innerFunc] = wrapInIIFE(context, parsedAST, prelude);
+    parsedAST = wrappedAST;
+    originalFunc = innerFunc;
     // In case this API decides it can fail in the future, check for a
     // nullptr.
     if (!parsedAST) {
@@ -861,7 +901,10 @@ ESTree::NodePtr parseJS(
                                : ESTreeRawProp::Exclude);
   }
   if (cli::OutputLevel == OutputLevelKind::Sema) {
-    sema::semDump(llvh::outs(), *context, semCtx, flowContext, parsedAST);
+    ESTree::Node *semaRoot = (originalFunc && !cli::DumpWrappedSema)
+        ? static_cast<ESTree::Node *>(originalFunc)
+        : static_cast<ESTree::Node *>(parsedAST);
+    sema::semDump(llvh::outs(), *context, semCtx, flowContext, semaRoot);
   }
 
   return parsedAST;
@@ -1072,6 +1115,11 @@ int main(int argc, char **argv) {
   llvh::cl::AddExtraVersionPrinter(
       [](llvh::raw_ostream &OS) { OS << "Static Hermes JS Compiler v0.0\n"; });
   llvh::cl::ParseCommandLineOptions(argc, argv, "Static Hermes\n");
+
+  if (cli::HelpTyped) {
+    llvh::outs() << getTypedLanguageDoc();
+    return 0;
+  }
 
   if (!compileFromCommandLineOptions())
     return 1;

@@ -218,7 +218,7 @@ bool isAsync(FunctionLikeNode *node) {
       return cast<FunctionDeclarationNode>(node)->_async;
 #if HERMES_PARSE_FLOW
     case NodeKind::ComponentDeclaration:
-      return false;
+      return cast<ComponentDeclarationNode>(node)->_async;
     case NodeKind::HookDeclaration:
       return cast<HookDeclarationNode>(node)->_async;
 #endif
@@ -243,7 +243,9 @@ IdentifierNode *getClassID(ClassLikeNode *node) {
       return llvh::dyn_cast_or_null<IdentifierNode>(
           cast<ClassExpressionNode>(node)->_id);
     case NodeKind::ClassDeclaration:
-      return dyn_cast<IdentifierNode>(cast<ClassDeclarationNode>(node)->_id);
+      // ClassDeclaration has an optional id due to 'export default class'.
+      return llvh::dyn_cast_or_null<IdentifierNode>(
+          cast<ClassDeclarationNode>(node)->_id);
     default:
       break;
   }
@@ -272,6 +274,34 @@ ESTree::NodeList &getDecorators(ClassLikeNode *node) {
       break;
   }
   llvm_unreachable("invalid ClassLikeNode");
+}
+
+IdentifierNode *getPropertyIdentifier(Node *node) {
+  switch (node->getKind()) {
+    case NodeKind::Identifier:
+      return cast<IdentifierNode>(node);
+    case NodeKind::PrivateName:
+      return cast<IdentifierNode>(cast<PrivateNameNode>(node)->_id);
+    default:
+      break;
+  }
+  llvm_unreachable(
+      "invalid property key node, expected Identifier or PrivateName");
+}
+
+Node *getPatternTypeAnnotation(Node *node) {
+  switch (node->getKind()) {
+    case NodeKind::ObjectPattern:
+      return cast<ObjectPatternNode>(node)->_typeAnnotation;
+    case NodeKind::ArrayPattern:
+      return cast<ArrayPatternNode>(node)->_typeAnnotation;
+    case NodeKind::RestElement:
+      // Rest elements annotation is on the inner argument.
+      return nullptr;
+    default:
+      break;
+  }
+  llvm_unreachable("invalid Pattern node");
 }
 
 } // namespace ESTree

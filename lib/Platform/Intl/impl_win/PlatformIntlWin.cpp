@@ -16,6 +16,8 @@
  * Phase 2: Full Collator, NumberFormat, locale resolution implementations.
  */
 
+#include <cstdlib>
+
 #include "IcuProviderRegistry.h"
 #include "PlatformIntlWinGlob.h"
 #include "WinIntlUtils.h"
@@ -530,6 +532,9 @@ vm::CallResult<std::u16string> toLocaleLowerCase(
     if (LLVM_UNLIKELY(conv == vm::ExecutionStatus::EXCEPTION))
       return vm::ExecutionStatus::EXCEPTION;
     locale8 = std::move(conv.getValue());
+  } else if (const char *testLocale = std::getenv("_HERMES_TEST_LOCALE")) {
+    // Match the explicit test locale supported by the other Intl backends.
+    locale8 = testLocale;
   }
 
   UErrorCode err = U_ZERO_ERROR;
@@ -574,6 +579,9 @@ vm::CallResult<std::u16string> toLocaleUpperCase(
     if (LLVM_UNLIKELY(conv == vm::ExecutionStatus::EXCEPTION))
       return vm::ExecutionStatus::EXCEPTION;
     locale8 = std::move(conv.getValue());
+  } else if (const char *testLocale = std::getenv("_HERMES_TEST_LOCALE")) {
+    // Match the explicit test locale supported by the other Intl backends.
+    locale8 = testLocale;
   }
 
   UErrorCode err = U_ZERO_ERROR;

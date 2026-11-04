@@ -10,13 +10,18 @@
 /// ES7 22.2 TypedArray
 //===----------------------------------------------------------------------===//
 #include "JSLibInternal.h"
+#include "hermes/Support/FastArraySearch.h"
+#include "hermes/VM/ArrayStorage.h"
 #include "hermes/VM/JSArrayBuffer.h"
+#include "hermes/VM/JSLib.h"
 #include "hermes/VM/JSLib/Base64Util.h"
 #include "hermes/VM/JSLib/Sorting.h"
 #include "hermes/VM/JSTypedArray.h"
 #include "hermes/VM/Operations.h"
 #include "hermes/VM/StringBuilder.h"
 #include "hermes/VM/StringView.h"
+
+#include <type_traits>
 
 namespace hermes {
 namespace vm {
@@ -25,6 +30,84 @@ namespace {
 
 /// @name Abstract Operations and Helper functions
 /// @{
+
+/// Copies an array whose iterator and iterator-next methods are unmodified.
+CallResult<HermesValue> iterableToArrayLikeFastPath(
+    Runtime &runtime,
+    Handle<JSArray> sourceArray) {
+  struct : public Locals {
+    PinnedValue<> nextValue;
+    PinnedValue<JSArray> A;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+  GCScope gcScope{runtime};
+
+  uint32_t length = JSArray::getLength(*sourceArray, runtime);
+  if (arrayFastPathCheck(
+          runtime,
+          sourceArray,
+          Runtime::makeNullHandle<HiddenClass>(),
+          length)) {
+    auto arrRes = JSArray::create(runtime, length, 0);
+    if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    lv.A = std::move(*arrRes);
+    if (length == 0) {
+      return lv.A.getHermesValue();
+    }
+
+    auto newLength = SmallHermesValue::encodeNumberValue(length, runtime);
+    NoAllocScope noAllocScope{runtime};
+    auto *srcStorage = sourceArray->getIndexedStorageNullable(runtime);
+    auto *destStorage = lv.A->getIndexedStorageNullable(runtime);
+    assert(srcStorage && destStorage && "storage should not be null");
+    destStorage->appendWithinCapacity(runtime, srcStorage);
+    lv.A->setElemCountUnsafe(length);
+    JSArray::putLengthUnsafe(lv.A.get(), runtime, newLength);
+    for (uint32_t k = 0; k < length; ++k) {
+      if (LLVM_UNLIKELY(destStorage->at(k).isEmpty())) {
+        destStorage->set(
+            k, SmallHermesValue::encodeUndefinedValue(), runtime.getHeap());
+      }
+    }
+    return lv.A.getHermesValue();
+  }
+
+  auto arrRes = JSArray::create(runtime, 0, 0);
+  if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  lv.A = std::move(*arrRes);
+
+  uint32_t k = 0;
+  while (k < JSArray::getLength(*sourceArray, runtime)) {
+    GCScopeMarkerRAII marker{gcScope};
+
+    lv.nextValue = sourceArray->at(runtime, k).unboxToHV(runtime);
+    if (LLVM_UNLIKELY(lv.nextValue->isEmpty())) {
+      auto valueRes = getIndexed_RJS(runtime, sourceArray, k);
+      if (LLVM_UNLIKELY(valueRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.nextValue = std::move(*valueRes);
+    }
+
+    if (LLVM_UNLIKELY(
+            JSArray::setElementAt(lv.A, runtime, k, lv.nextValue) ==
+            ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    ++k;
+  }
+
+  if (LLVM_UNLIKELY(
+          JSArray::setLengthProperty(lv.A, runtime, k) ==
+          ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  return lv.A.getHermesValue();
+}
 
 /// ES7 22.2.2.1.1 IterableToArrayLike
 /// If items has an @@iterator method, iterate through it and collect
@@ -54,6 +137,34 @@ CallResult<HermesValue> iterableToArrayLike(Runtime &runtime, Handle<> items) {
     return toObject(runtime, items);
   }
 
+  // Avoid allocating iterator and iterator-result objects for ordinary arrays.
+  // Both methods must be unmodified because the generic iterator protocol
+  // observes each of them.
+  auto sourceArray = Handle<JSArray>::dyn_vmcast(items);
+  if (sourceArray && lv.usingIterator->isObject() &&
+      lv.usingIterator->getObject() == *runtime.arrayPrototypeValues) {
+    auto iteratorPrototype =
+        Handle<JSObject>::vmcast(&runtime.arrayIteratorPrototype);
+    NamedPropertyDescriptor desc;
+    JSObject *propObj = JSObject::getNamedDescriptorPredefined(
+        iteratorPrototype, runtime, Predefined::next, desc);
+    if (LLVM_LIKELY(propObj) && LLVM_LIKELY(!desc.flags.accessor) &&
+        LLVM_LIKELY(!desc.flags.proxyObject) &&
+        LLVM_LIKELY(!desc.flags.hostObject)) {
+      SmallHermesValue nextMethod =
+          JSObject::getNamedSlotValueUnsafe(propObj, runtime, desc);
+      auto *nativeNext = nextMethod.isObject()
+          ? dyn_vmcast<NativeFunction>(nextMethod.getObject(runtime))
+          : nullptr;
+      if (LLVM_LIKELY(nativeNext) &&
+          LLVM_LIKELY(
+              nativeNext->getFunctionPtr() == arrayIteratorPrototypeNext) &&
+          LLVM_LIKELY(nativeNext->getContext() == nullptr)) {
+        return iterableToArrayLikeFastPath(runtime, sourceArray);
+      }
+    }
+  }
+
   // 3. Let iteratorRecord be ? GetIterator(items, sync, usingIterator).
   auto iterRes = getCheckedIterator(
       runtime, items, Handle<Callable>::vmcast(&lv.usingIterator));
@@ -74,14 +185,15 @@ CallResult<HermesValue> iterableToArrayLike(Runtime &runtime, Handle<> items) {
   while (true) {
     GCScopeMarkerRAII marker{gcScope};
 
-    // Get next iterator result.
-    auto next = iteratorStep(runtime, iteratorRecord);
-    if (LLVM_UNLIKELY(next == ExecutionStatus::EXCEPTION)) {
+    // Get the next value. As in IteratorToList, errors from next(), done or
+    // value propagate without closing the iterator.
+    auto stepRes = iteratorStepValue(runtime, iteratorRecord, &lv.nextValue);
+    if (LLVM_UNLIKELY(stepRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
 
     // If done, return the array.
-    if (!next.getValue()) {
+    if (!*stepRes) {
       if (LLVM_UNLIKELY(
               JSArray::setLengthProperty(lv.A, runtime, k) ==
               ExecutionStatus::EXCEPTION)) {
@@ -89,14 +201,6 @@ CallResult<HermesValue> iterableToArrayLike(Runtime &runtime, Handle<> items) {
       }
       return lv.A.getHermesValue();
     }
-
-    // Get the value from the iterator result.
-    auto valueRes = JSObject::getNamed_RJS(
-        *next, runtime, Predefined::getSymbolID(Predefined::value));
-    if (LLVM_UNLIKELY(valueRes == ExecutionStatus::EXCEPTION)) {
-      return iteratorCloseAndRethrow(runtime, iteratorRecord.iterator);
-    }
-    lv.nextValue = std::move(*valueRes);
 
     // Check for overflow before appending.
     if (LLVM_UNLIKELY(k == UINT32_MAX)) {
@@ -178,12 +282,28 @@ CallResult<HermesValue> typedArrayConstructorFromLength(
   return self.getHermesValue();
 }
 
+/// \return true if \p kind is a BigInt typed array.
+static bool isBigIntTypedArrayKind(CellKind kind) {
+  return kind == CellKind::BigInt64ArrayKind ||
+      kind == CellKind::BigUint64ArrayKind;
+}
+
 // ES6 22.2.1.3
 template <typename T, CellKind C>
 CallResult<HermesValue> typedArrayConstructorFromTypedArray(
     Runtime &runtime,
     Handle<JSTypedArray<T, C>> self,
     Handle<JSTypedArrayBase> other) {
+  if (!other->attached(runtime)) {
+    return runtime.raiseTypeError(
+        "Cannot construct a TypedArray from a detached TypedArray");
+  }
+  // If srcArray.[[ContentType]] is not O.[[ContentType]], throw a TypeError
+  // exception. The internal property [[ContentType]] is defined to be either
+  // BigInt for BigInt64Array/BigUint64Array or Number for all other types.
+  if (isBigIntTypedArrayKind(C) != isBigIntTypedArrayKind(other->getKind())) {
+    return runtime.raiseTypeError("Cannot mix BigInt and other types");
+  }
   if (JSTypedArray<T, C>::createBuffer(runtime, self, other->getLength()) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -196,7 +316,8 @@ CallResult<HermesValue> typedArrayConstructorFromTypedArray(
   return self.getHermesValue();
 }
 
-// ES6 22.2.1.5
+/// ES 2025 23.2.5.1.3 InitializeTypedArrayFromArrayBuffer ( O, buffer,
+/// byteOffset, length )
 template <typename T, CellKind C>
 CallResult<HermesValue> typedArrayConstructorFromArrayBuffer(
     Runtime &runtime,
@@ -204,23 +325,35 @@ CallResult<HermesValue> typedArrayConstructorFromArrayBuffer(
     Handle<JSArrayBuffer> buffer,
     Handle<> byteOffset,
     Handle<> length) {
-  // This differs from step 7 of the spec, which requires `ToInteger` instead
-  // of `ToIndex`; however, we have to bound offset to be fittable into a
-  // 64-bit integer to avoid overflow or loss of precision
+  // 1. Let elementSize be TypedArrayElementSize(O). This is sizeof(T).
+  // 2. Let offset be ? ToIndex(byteOffset).
   auto res = toIndex(runtime, byteOffset);
   if (res == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
   uint64_t offset = res->getNumberAs<uint64_t>();
+  // 3. If offset modulo elementSize ≠ 0, throw a RangeError exception.
   if (offset % sizeof(T) != 0) {
     return runtime.raiseRangeError(
         "new TypedArray(buffer, [byteOffset], "
         "[length]): if byteOffset is specified, it "
         "must be evenly divisible by the element size");
   }
+  // 4. Resizable ArrayBuffer case: unsupported.
+  // 7. Let bufferByteLength be ArrayBufferByteLength(buffer, seq-cst).
+  // 8. Resizable ArrayBuffer case: unsupported.
   auto bufferByteLength = buffer->size();
   uint64_t newByteLength = 0;
   if (length->isUndefined()) {
+    // 6. If IsDetachedBuffer(buffer) is true, throw a TypeError exception.
+    if (!buffer->attached()) {
+      return runtime.raiseTypeError(
+          "Cannot construct a TypedArray from a detached ArrayBuffer");
+    }
+    // 9a. If length is undefined, then
+    //   i. If bufferByteLength modulo elementSize ≠ 0, throw a RangeError
+    //   exception. ii. Let newByteLength be bufferByteLength - offset. iii. If
+    //   newByteLength < 0, throw a RangeError exception.
     if (bufferByteLength % sizeof(T) != 0) {
       return runtime.raiseRangeError(
           "new TypedArray(buffer, [byteOffset], "
@@ -235,10 +368,21 @@ CallResult<HermesValue> typedArrayConstructorFromArrayBuffer(
     }
     newByteLength = bufferByteLength - offset;
   } else {
-    auto res2 = toLength(runtime, length);
+    // 5. If length is not undefined, then
+    //   a. Let newLength be ? ToIndex(length).
+    auto res2 = toIndex(runtime, length);
     if (res2 == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
+    // 6. If IsDetachedBuffer(buffer) is true, throw a TypeError exception.
+    if (!buffer->attached()) {
+      return runtime.raiseTypeError(
+          "Cannot construct a TypedArray from a detached ArrayBuffer");
+    }
+    // 9b. Else,
+    //   i. Let newByteLength be newLength × elementSize.
+    //   ii. If offset + newByteLength > bufferByteLength, throw a RangeError
+    //   exception.
     uint64_t newLength = res2->getNumberAs<uint64_t>();
     newByteLength = newLength * sizeof(T);
     if (offset + newByteLength > bufferByteLength) {
@@ -321,7 +465,8 @@ CallResult<HermesValue> typedArrayConstructor(
     Runtime &runtime,
     NativeArgs args,
     const PinnedValue<NativeConstructor> *arrayConstructor,
-    const PinnedValue<JSObject> *arrayPrototype) {
+    const PinnedValue<JSObject> *arrayPrototype,
+    const PinnedValue<HiddenClass> *arrayClazz) {
   // 1. If NewTarget is undefined, throw a TypeError exception.
   if (!args.isConstructorCall()) {
     return runtime.raiseTypeError(
@@ -330,6 +475,7 @@ CallResult<HermesValue> typedArrayConstructor(
 
   struct : public Locals {
     PinnedValue<JSObject> selfParent;
+    PinnedValue<HiddenClass> clazz;
     PinnedValue<JSTypedArray<T, C>> self;
   } lv;
   LocalsRAII lraii(runtime, &lv);
@@ -337,6 +483,7 @@ CallResult<HermesValue> typedArrayConstructor(
           args.getNewTarget().getRaw() ==
           arrayConstructor->getHermesValue().getRaw())) {
     lv.selfParent = *arrayPrototype;
+    lv.clazz = *arrayClazz;
   } else {
     CallResult<PseudoHandle<JSObject>> thisParentRes =
         NativeConstructor::parentForNewThis_RJS(
@@ -347,9 +494,10 @@ CallResult<HermesValue> typedArrayConstructor(
       return ExecutionStatus::EXCEPTION;
     }
     lv.selfParent = std::move(*thisParentRes);
+    lv.clazz = runtime.getHiddenClassForPrototype(*lv.selfParent, *arrayClazz);
   }
-  lv.self = JSTypedArray<T, C>::create(runtime, lv.selfParent);
-
+  assert(*lv.clazz && "must have a hidden class");
+  lv.self = JSTypedArray<T, C>::create(runtime, lv.selfParent, lv.clazz);
   if (args.getArgCount() == 0) {
     // ES6 22.2.1.1
     if (JSTypedArray<T, C>::createBuffer(runtime, lv.self, 0) ==
@@ -466,6 +614,10 @@ CallResult<HermesValue> mapFilterLoop(
 }
 
 /// Sort model for TypedArray.prototype.sort with a user-provided compareFn.
+/// For TypedArray of BigInt64/BigUint64, we should construct it with an
+/// ArrayStorage; for TypedArray of other kinds, we should pass a
+/// JSTypedArrayBase. Note that we could make it templated on the input type,
+/// but it does not worth the extra binary size.
 class TypedArraySortModel : public SortModel {
  protected:
   /// Runtime to sort in.
@@ -477,12 +629,17 @@ class TypedArraySortModel : public SortModel {
   /// JS comparison function, return -1 for less, 0 for equal, 1 for greater.
   Handle<Callable> compareFn_;
 
-  /// Object to sort.
-  Handle<JSTypedArrayBase> self_;
+  /// Captured elements to sort. It should be either a JSTypedArrayBase or
+  /// ArrayStorage.
+  Handle<> items_;
+
+  /// Whether \c items_ is a JSTypedArrayBase.
+  bool inputIsTypedArray_;
 
   struct : Locals {
     PinnedValue<> a;
     PinnedValue<> b;
+    PinnedValue<> callResult;
   } lv_;
   LocalsRAII lraii_;
 
@@ -490,32 +647,57 @@ class TypedArraySortModel : public SortModel {
   /// can be flushed.
   GCScope::Marker gcMarker_;
 
+  /// Get the element at index from items_. This does not allocate.
+  HermesValue getElement(uint32_t index) const {
+    if (inputIsTypedArray_) {
+      JSTypedArrayBase *typedArray = vmcast<JSTypedArrayBase>(items_.get());
+      return JSTypedArrayBase::polyReadNoAlloc(typedArray, runtime_, index);
+    }
+    ArrayStorage *arrStorage = vmcast<ArrayStorage>(items_.get());
+    return arrStorage->at(index);
+  }
+
+  /// Set the element at index of items_ to \p value. This does not allocate.
+  void setElement(uint32_t index, HermesValue value) {
+    if (inputIsTypedArray_) {
+      JSTypedArrayBase *typedArray = vmcast<JSTypedArrayBase>(items_.get());
+      return JSTypedArrayBase::polyWriteNoAlloc(
+          typedArray, runtime_, index, value);
+    }
+    ArrayStorage *arrStorage = vmcast<ArrayStorage>(items_.get());
+    return arrStorage->set(index, value, runtime_.getHeap());
+  }
+
  public:
   TypedArraySortModel(
       Runtime &runtime,
-      Handle<JSTypedArrayBase> obj,
+      Handle<> items,
       Handle<Callable> compareFn)
       : runtime_(runtime),
         gcScope_(runtime),
         compareFn_(compareFn),
-        self_(obj),
+        items_(items),
         lraii_(runtime, &lv_),
-        gcMarker_(gcScope_.createMarker()) {}
+        gcMarker_(gcScope_.createMarker()) {
+    inputIsTypedArray_ = vmisa<JSTypedArrayBase>(items_.get());
+    assert(inputIsTypedArray_ || vmisa<ArrayStorage>(items_.get()));
+#ifndef NDEBUG
+    if (inputIsTypedArray_) {
+      auto *typedArray = vmcast<JSTypedArrayBase>(*items_);
+      assert(
+          (typedArray->getKind() != CellKind::BigInt64ArrayKind &&
+           typedArray->getKind() != CellKind::BigUint64ArrayKind) &&
+          "Use ArrayStorage for BigInt64/BigUint64 typed array");
+    }
+#endif
+  }
 
   // Swap elements at indices a and b.
   virtual ExecutionStatus swap(uint32_t a, uint32_t b) override {
-    lv_.a =
-        JSObject::getOwnIndexed(createPseudoHandle(self_.get()), runtime_, a);
-    lv_.b =
-        JSObject::getOwnIndexed(createPseudoHandle(self_.get()), runtime_, b);
-    if (JSObject::setOwnIndexed(self_, runtime_, a, lv_.b) ==
-        ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    if (JSObject::setOwnIndexed(self_, runtime_, b, lv_.a) ==
-        ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
-    }
+    NoAllocScope noAlloc{runtime_};
+    HermesValue tmp = getElement(a);
+    setElement(a, getElement(b));
+    setElement(b, tmp);
     return ExecutionStatus::RETURNED;
   }
 
@@ -523,38 +705,21 @@ class TypedArraySortModel : public SortModel {
   virtual CallResult<int> compare(uint32_t a, uint32_t b) override {
     GCScopeMarkerRAII gcMarker{gcScope_, gcMarker_};
 
-    struct : public Locals {
-      PinnedValue<> aVal;
-      PinnedValue<> callResult;
-    } lv;
-    LocalsRAII lraii(runtime_, &lv);
-
-    CallResult<PseudoHandle<HermesValue>> callRes{ExecutionStatus::EXCEPTION};
-    {
-      lv.aVal =
-          JSObject::getOwnIndexed(createPseudoHandle(self_.get()), runtime_, a);
-      HermesValue bVal =
-          JSObject::getOwnIndexed(createPseudoHandle(self_.get()), runtime_, b);
-      HermesValue aVal = lv.aVal.getHermesValue();
-
-      // ES7 22.2.3.26 2a.
-      // Let v be toNumber_RJS(Call(comparefn, undefined, x, y)).
-      callRes = Callable::executeCall2(
-          compareFn_, runtime_, Runtime::getUndefinedValue(), aVal, bVal);
-    }
-
+    lv_.a = getElement(a);
+    lv_.b = getElement(b);
+    auto callRes = Callable::executeCall2(
+        compareFn_,
+        runtime_,
+        Runtime::getUndefinedValue(),
+        lv_.a.getHermesValue(),
+        lv_.b.getHermesValue());
     if (callRes == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
     }
-    lv.callResult = std::move(*callRes);
-    auto intRes = toNumber_RJS(runtime_, lv.callResult);
+    lv_.callResult = std::move(*callRes);
+    auto intRes = toNumber_RJS(runtime_, lv_.callResult);
     if (intRes == ExecutionStatus::EXCEPTION) {
       return ExecutionStatus::EXCEPTION;
-    }
-    // ES7 22.2.3.26 2b.
-    // If IsDetachedBuffer(buffer) is true, throw a TypeError exception.
-    if (LLVM_UNLIKELY(!self_->attached(runtime_))) {
-      return runtime_.raiseTypeError("Callback to sort() detached the array");
     }
     // Cannot return intRes's value directly because it can be NaN
     auto res = intRes->getNumber();
@@ -564,26 +729,33 @@ class TypedArraySortModel : public SortModel {
 
 namespace {
 
-/// ::qsort comparator for typed array elements.
 template <typename T>
+int compareFloat(T va, T vb) {
+  // NaN sorts after everything.
+  bool aNaN = std::isnan(va);
+  bool bNaN = std::isnan(vb);
+  if (LLVM_UNLIKELY(aNaN)) {
+    if (LLVM_UNLIKELY(bNaN))
+      return 0;
+    return 1;
+  } else if (LLVM_UNLIKELY(bNaN)) {
+    return -1;
+  }
+  // -0 < +0.
+  if (LLVM_UNLIKELY(va == 0 && vb == 0))
+    return std::signbit(vb) - std::signbit(va);
+  return (va > vb) - (va < vb);
+}
+
+/// ::qsort comparator for typed array elements.
+template <typename T, CellKind C>
 int qsortComparator(const void *a, const void *b) {
-  if constexpr (std::is_floating_point_v<T>) {
-    T va = *static_cast<const T *>(a);
-    T vb = *static_cast<const T *>(b);
-    // NaN sorts after everything.
-    bool aNaN = std::isnan(va);
-    bool bNaN = std::isnan(vb);
-    if (LLVM_UNLIKELY(aNaN)) {
-      if (LLVM_UNLIKELY(bNaN))
-        return 0;
-      return 1;
-    } else if (LLVM_UNLIKELY(bNaN)) {
-      return -1;
-    }
-    // -0 < +0.
-    if (LLVM_UNLIKELY(va == 0 && vb == 0))
-      return std::signbit(vb) - std::signbit(va);
-    return (va > vb) - (va < vb);
+  if constexpr (C == CellKind::Float16ArrayKind) {
+    return compareFloat(
+        float16ToDouble(*static_cast<const uint16_t *>(a)),
+        float16ToDouble(*static_cast<const uint16_t *>(b)));
+  } else if constexpr (std::is_floating_point_v<T>) {
+    return compareFloat(*static_cast<const T *>(a), *static_cast<const T *>(b));
   } else {
     T va = *static_cast<const T *>(a);
     T vb = *static_cast<const T *>(b);
@@ -598,9 +770,13 @@ void typedArraySortDirect(
     JSTypedArrayBase::size_type len) {
   assert(data && "data must be non-null");
   switch (kind) {
-#define TYPED_ARRAY(name, type)                              \
-  case CellKind::name##ArrayKind:                            \
-    ::qsort(data, len, sizeof(type), qsortComparator<type>); \
+#define TYPED_ARRAY(name, type)                            \
+  case CellKind::name##ArrayKind:                          \
+    ::qsort(                                               \
+        data,                                              \
+        len,                                               \
+        sizeof(type),                                      \
+        qsortComparator<type, CellKind::name##ArrayKind>); \
     break;
 #include "hermes/VM/TypedArrays.def"
     default:
@@ -748,11 +924,16 @@ CallResult<HermesValue> typedArrayBaseConstructor(void *, Runtime &runtime) {
 
 /// @}
 
-#define TYPED_ARRAY(name, type)                                               \
-  CallResult<HermesValue> name##ArrayConstructor(void *ctx, Runtime &rt) {    \
-    NativeArgs args = rt.getCurrentFrame().getNativeArgs();                   \
-    return typedArrayConstructor<type, CellKind::name##ArrayKind>(            \
-        ctx, rt, args, &rt.name##ArrayConstructor, &rt.name##ArrayPrototype); \
+#define TYPED_ARRAY(name, type)                                            \
+  CallResult<HermesValue> name##ArrayConstructor(void *ctx, Runtime &rt) { \
+    NativeArgs args = rt.getCurrentFrame().getNativeArgs();                \
+    return typedArrayConstructor<type, CellKind::name##ArrayKind>(         \
+        ctx,                                                               \
+        rt,                                                                \
+        args,                                                              \
+        &rt.name##ArrayConstructor,                                        \
+        &rt.name##ArrayPrototype,                                          \
+        &rt.class##name##Array);                                           \
   }
 #include "hermes/VM/TypedArrays.def"
 #undef TYPED_ARRAY
@@ -1295,10 +1476,6 @@ CallResult<HermesValue> typedArrayPrototypeForEach(void *, Runtime &runtime) {
   GCScope gcScope(runtime);
   auto marker = gcScope.createMarker();
   for (JSTypedArrayBase::size_type i = 0; i < len; ++i) {
-    // The callback function can detach the TypedArray.
-    if (!self->attached(runtime)) {
-      return runtime.raiseTypeError("Detached the ArrayBuffer in the callback");
-    }
     HermesValue val =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
     if (Callable::executeCall3(
@@ -1315,22 +1492,159 @@ CallResult<HermesValue> typedArrayPrototypeForEach(void *, Runtime &runtime) {
   return HermesValue::encodeUndefinedValue();
 }
 
+namespace {
+
 enum class IndexOfMode { includes, indexOf, lastIndexOf };
+
+/// Encode a search result as a HermesValue.
+/// For includes mode, returns a boolean. For indexOf/lastIndexOf, returns
+/// the index (or -1 if not found).
+HermesValue
+indexOfResult(IndexOfMode mode, bool found = false, double index = -1) {
+  if (mode == IndexOfMode::includes)
+    return HermesValue::encodeBoolValue(found);
+  return HermesValue::encodeTrustedNumberValue(index);
+}
+
+/// Dispatch to the correct SIMD search function based on UType.
+/// Uses if constexpr to select the right function, avoiding macro
+/// token-pasting.
+template <typename UType>
+int64_t
+fastSearch(llvh::ArrayRef<UType> arr, size_t start, size_t end, UType target) {
+  if constexpr (std::is_same_v<UType, uint8_t>) {
+    return searchU8(arr, start, end, target);
+  } else if constexpr (std::is_same_v<UType, uint16_t>) {
+    return searchU16(arr, start, end, target);
+  } else if constexpr (std::is_same_v<UType, uint32_t>) {
+    return searchU32(arr, start, end, target);
+  } else {
+    static_assert(std::is_same_v<UType, uint64_t>, "unexpected unsigned type");
+    return searchU64(arr, start, end, target);
+  }
+}
+
+/// Dispatch to the correct reverse SIMD search function.
+template <typename UType>
+int64_t fastSearchReverse(
+    llvh::ArrayRef<UType> arr,
+    size_t start,
+    size_t end,
+    UType target) {
+  if constexpr (std::is_same_v<UType, uint8_t>) {
+    return searchReverseU8(arr, start, end, target);
+  } else if constexpr (std::is_same_v<UType, uint16_t>) {
+    return searchReverseU16(arr, start, end, target);
+  } else if constexpr (std::is_same_v<UType, uint32_t>) {
+    return searchReverseU32(arr, start, end, target);
+  } else {
+    static_assert(std::is_same_v<UType, uint64_t>, "unexpected unsigned type");
+    return searchReverseU64(arr, start, end, target);
+  }
+}
+
+/// Search an integer typed array for \p searchNum using SIMD.
+/// Converts searchNum to element type T, checking that it is exactly
+/// representable, then delegates to the appropriate SIMD search function.
+template <typename T>
+CallResult<HermesValue> tryFastIntSearch(
+    T *typedData,
+    double searchNum,
+    size_t start,
+    size_t end,
+    bool isReverse,
+    IndexOfMode mode) {
+  // Integer arrays cannot contain NaN, so NaN never matches.
+  if (std::isnan(searchNum))
+    return indexOfResult(mode);
+  // Check range before casting to avoid UB for out-of-range values.
+  if (searchNum < static_cast<double>(std::numeric_limits<T>::min()) ||
+      searchNum > static_cast<double>(std::numeric_limits<T>::max())) {
+    return indexOfResult(mode);
+  }
+  T intVal = static_cast<T>(searchNum);
+  if (static_cast<double>(intVal) != searchNum) {
+    // searchNum is not exactly representable as T, so no match.
+    return indexOfResult(mode);
+  }
+
+  // Reinterpret as the corresponding unsigned type for SIMD search.
+  using UType = std::make_unsigned_t<T>;
+  UType raw = static_cast<UType>(intVal);
+  llvh::ArrayRef<UType> arr(reinterpret_cast<const UType *>(typedData), end);
+  int64_t result = isReverse ? fastSearchReverse(arr, 0, start + 1, raw)
+                             : fastSearch(arr, start, end, raw);
+  if (result >= 0)
+    return indexOfResult(mode, true, result);
+  return indexOfResult(mode);
+}
+
+/// Search a floating-point typed array for \p searchNum using SIMD.
+/// Handles NaN (includes vs indexOf), +0/-0, narrowing check,
+/// and SIMD raw-bit search for normal values.
+/// \p FType is float or double. UType is deduced as the same-size unsigned int.
+template <typename FType>
+CallResult<HermesValue> tryFastFloatSearch(
+    uint8_t *data,
+    double searchNum,
+    size_t start,
+    size_t end,
+    bool isReverse,
+    IndexOfMode mode) {
+  using UType = std::conditional_t<sizeof(FType) == 4, uint32_t, uint64_t>;
+  auto *fdata = reinterpret_cast<FType *>(data);
+  if (std::isnan(searchNum)) {
+    // indexOf/lastIndexOf: NaN !== NaN, so no match.
+    if (mode != IndexOfMode::includes)
+      return indexOfResult(mode);
+    // includes: NaN includes NaN, scalar scan.
+    for (size_t i = start; i < end; ++i) {
+      if (std::isnan(fdata[i]))
+        return indexOfResult(mode, true, i);
+    }
+    return indexOfResult(mode);
+  }
+  if (searchNum == 0) {
+    // +0/-0 match each other in JS. Scan for both bit patterns.
+    constexpr UType posZeroBits = 0;
+    constexpr UType negZeroBits = UType(1) << (sizeof(UType) * 8 - 1);
+    auto *rawData = reinterpret_cast<const UType *>(fdata);
+    if (isReverse) {
+      for (size_t i = start + 1; i-- > 0;) {
+        UType bits = rawData[i];
+        if (bits == posZeroBits || bits == negZeroBits)
+          return indexOfResult(mode, true, i);
+      }
+    } else {
+      for (size_t i = start; i < end; ++i) {
+        UType bits = rawData[i];
+        if (bits == posZeroBits || bits == negZeroBits)
+          return indexOfResult(mode, true, i);
+      }
+    }
+    return indexOfResult(mode);
+  }
+  // Convert to FType and verify round-trip (no-op for double).
+  FType fval = static_cast<FType>(searchNum);
+  if (static_cast<double>(fval) != searchNum)
+    return indexOfResult(mode);
+  UType raw;
+  memcpy(&raw, &fval, sizeof(raw));
+  llvh::ArrayRef<UType> arr(reinterpret_cast<const UType *>(fdata), end);
+  int64_t result = isReverse ? fastSearchReverse(arr, 0, start + 1, raw)
+                             : fastSearch(arr, start, end, raw);
+  if (result >= 0)
+    return indexOfResult(mode, true, result);
+  return indexOfResult(mode);
+}
+
+} // namespace
+
 CallResult<HermesValue> typedArrayPrototypeIndexOf(
     void *ctx,
     Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   const auto indexOfMode = *reinterpret_cast<const IndexOfMode *>(&ctx);
-  // indexOfMode stores Whether this call is "includes", "indexOf", or
-  // "lastIndexOf".
-  auto ret = [indexOfMode](bool x = false, double y = -1) {
-    switch (indexOfMode) {
-      case IndexOfMode::includes:
-        return HermesValue::encodeBoolValue(x);
-      default:
-        return HermesValue::encodeTrustedNumberValue(y);
-    }
-  };
   if (JSTypedArrayBase::validateTypedArray(runtime, args.getThisHandle()) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -1338,12 +1652,16 @@ CallResult<HermesValue> typedArrayPrototypeIndexOf(
   auto self = args.vmcastThis<JSTypedArrayBase>();
   double len = self->getLength();
   if (len == 0) {
-    return ret();
+    return indexOfResult(indexOfMode);
   }
   auto searchElement = args.getArgHandle(0);
-  if (!searchElement->isNumber() && !searchElement->isBigInt()) {
-    // If it's not a number, nothing will match.
-    return ret();
+  if (indexOfMode != IndexOfMode::includes && !searchElement->isNumber() &&
+      !searchElement->isBigInt()) {
+    // For "indexOf"/"lastIndexOf", if it's not a number, nothing will match.
+    // However, for "includes", ES2026 23.2.3.16 step 11 uses `SameValueZero`
+    // for comparison. This means that "undefined" can match if the TypedArray
+    // becomes detached while in the loop below.
+    return indexOfResult(indexOfMode);
   }
   double fromIndex = 0;
   if (args.getArgCount() < 2) {
@@ -1357,11 +1675,6 @@ CallResult<HermesValue> typedArrayPrototypeIndexOf(
       return ExecutionStatus::EXCEPTION;
     }
     fromIndex = res->getNumber();
-    if (LLVM_UNLIKELY(!self->attached(runtime))) {
-      // If the ToInteger call detached this TypedArray, raise a TypeError and
-      // don't continue.
-      return runtime.raiseTypeError("Detached the TypedArray in the callback");
-    }
   }
   // Negative zero case.
   if (fromIndex == 0) {
@@ -1381,6 +1694,83 @@ CallResult<HermesValue> typedArrayPrototypeIndexOf(
       return k < len;
     }
   };
+  // SIMD fast path for numeric typed arrays (not BigInt).
+  // Typed arrays have contiguous raw buffers, so we can search directly.
+  // Check that k is in range before entering the fast path (k can be
+  // out of range when fromIndex is extreme).
+  // Also check that the buffer is still attached, since toIntegerOrInfinity
+  // above can execute user code (e.g. valueOf) that detaches the buffer.
+  if (searchElement->isNumber() && inRange(k, len) && self->attached(runtime)) {
+    const CellKind kind = self->getKind();
+    double searchNum = searchElement->getNumber();
+    NoAllocScope noAllocs{runtime};
+    uint8_t *data = self->data(runtime);
+    size_t start = static_cast<size_t>(k);
+    size_t end = static_cast<size_t>(len);
+    bool isReverse = (indexOfMode == IndexOfMode::lastIndexOf);
+
+    switch (kind) {
+      case CellKind::Int8ArrayKind:
+        return tryFastIntSearch(
+            reinterpret_cast<int8_t *>(data),
+            searchNum,
+            start,
+            end,
+            isReverse,
+            indexOfMode);
+      case CellKind::Uint8ArrayKind:
+      case CellKind::Uint8ClampedArrayKind:
+        return tryFastIntSearch(
+            reinterpret_cast<uint8_t *>(data),
+            searchNum,
+            start,
+            end,
+            isReverse,
+            indexOfMode);
+      case CellKind::Int16ArrayKind:
+        return tryFastIntSearch(
+            reinterpret_cast<int16_t *>(data),
+            searchNum,
+            start,
+            end,
+            isReverse,
+            indexOfMode);
+      case CellKind::Uint16ArrayKind:
+        return tryFastIntSearch(
+            reinterpret_cast<uint16_t *>(data),
+            searchNum,
+            start,
+            end,
+            isReverse,
+            indexOfMode);
+      case CellKind::Int32ArrayKind:
+        return tryFastIntSearch(
+            reinterpret_cast<int32_t *>(data),
+            searchNum,
+            start,
+            end,
+            isReverse,
+            indexOfMode);
+      case CellKind::Uint32ArrayKind:
+        return tryFastIntSearch(
+            reinterpret_cast<uint32_t *>(data),
+            searchNum,
+            start,
+            end,
+            isReverse,
+            indexOfMode);
+      case CellKind::Float32ArrayKind:
+        return tryFastFloatSearch<float>(
+            data, searchNum, start, end, isReverse, indexOfMode);
+      case CellKind::Float64ArrayKind:
+        return tryFastFloatSearch<double>(
+            data, searchNum, start, end, isReverse, indexOfMode);
+      default:
+        // BigInt typed arrays: fall through to slow path.
+        break;
+    }
+  }
+
   for (; inRange(k, len); k += delta) {
     HermesValue curr =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, k);
@@ -1390,10 +1780,10 @@ CallResult<HermesValue> typedArrayPrototypeIndexOf(
         ? isSameValueZero(curr, *searchElement)
         : strictEqualityTest(curr, *searchElement);
     if (comp) {
-      return ret(true, k);
+      return indexOfResult(indexOfMode, true, k);
     }
   }
-  return ret();
+  return indexOfResult(indexOfMode);
 }
 
 CallResult<HermesValue> typedArrayPrototypeIterator(
@@ -1536,6 +1926,8 @@ CallResult<HermesValue> typedArrayPrototypeJoin(void *, Runtime &runtime) {
   // Final size of the resultant string.
   // Its safe to multiply as overflow check is done above
   SafeUInt32 size(sepLength * (len - 1));
+  // Whether the separator, if used, and every element string are ASCII.
+  bool allASCII = len < 2 || lv.sep->isASCII();
 
   // Storage for the strings for each element.
   auto arrRes = JSArray::create(runtime, len, 0);
@@ -1552,13 +1944,19 @@ CallResult<HermesValue> typedArrayPrototypeJoin(void *, Runtime &runtime) {
       lv.elem =
           JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
 
-      auto res2 = toString_RJS(runtime, lv.elem);
-      if (LLVM_UNLIKELY(res2 == ExecutionStatus::EXCEPTION)) {
-        return ExecutionStatus::EXCEPTION;
+      if (LLVM_UNLIKELY(lv.elem->isUndefined())) {
+        lv.elem = HermesValue::encodeStringValue(
+            runtime.getPredefinedString(Predefined::emptyString));
+      } else {
+        auto res2 = toString_RJS(runtime, lv.elem);
+        if (LLVM_UNLIKELY(res2 == ExecutionStatus::EXCEPTION)) {
+          return ExecutionStatus::EXCEPTION;
+        }
+        lv.elem = std::move(*res2);
       }
-      lv.elem = std::move(*res2);
       auto stringPtr = vmcast<StringPrimitive>(lv.elem.getHermesValue());
       size.add(stringPtr->getStringLength());
+      allASCII &= stringPtr->isASCII();
       if (LLVM_UNLIKELY(
               JSArray::setElementAt(
                   lv.strings,
@@ -1571,7 +1969,7 @@ CallResult<HermesValue> typedArrayPrototypeJoin(void *, Runtime &runtime) {
   }
 
   // Allocate the complete result.
-  auto builder = StringBuilder::createStringBuilder(runtime, size);
+  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1634,11 +2032,6 @@ CallResult<HermesValue> typedArrayPrototypeReduce(void *ctx, Runtime &runtime) {
   GCScope scope(runtime);
   auto marker = scope.createMarker();
   for (; inRange(i, len); i += right ? -1 : 1) {
-    if (!self->attached(runtime)) {
-      // If the callback detached this TypedArray, raise a TypeError and don't
-      // continue.
-      return runtime.raiseTypeError("Detached the TypedArray in the callback");
-    }
     HermesValue val =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
     auto callRes = Callable::executeCall4(
@@ -1695,12 +2088,6 @@ CallResult<HermesValue> typedArrayPrototypeReverse(void *, Runtime &runtime) {
 /// ES7 22.2.3.26
 CallResult<HermesValue> typedArrayPrototypeSort(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  if (JSTypedArrayBase::validateTypedArray(runtime, args.getThisHandle()) ==
-      ExecutionStatus::EXCEPTION) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  auto self = args.vmcastThis<JSTypedArrayBase>();
-  const JSTypedArrayBase::size_type len = self->getLength();
 
   // Null if not a callable compareFn.
   auto compareFn = Handle<Callable>::dyn_vmcast(args.getArgHandle(0));
@@ -1708,12 +2095,74 @@ CallResult<HermesValue> typedArrayPrototypeSort(void *, Runtime &runtime) {
     return runtime.raiseTypeError("TypedArray sort argument must be callable");
   }
 
+  if (JSTypedArrayBase::validateTypedArray(runtime, args.getThisHandle()) ==
+      ExecutionStatus::EXCEPTION) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  auto self = args.vmcastThis<JSTypedArrayBase>();
+  const JSTypedArrayBase::size_type len = self->getLength();
+
   if (compareFn) {
-    // Fallback to SortModel when a compareFn is provided, since the
-    // callback can invoke arbitrary JS.
-    TypedArraySortModel sm(runtime, self, compareFn);
-    if (LLVM_UNLIKELY(quickSort(&sm, 0, len) == ExecutionStatus::EXCEPTION))
-      return ExecutionStatus::EXCEPTION;
+    // If this array is BigUint64 or BigInt64 typed array, we copy the source
+    // to an ArrayStorage. Otherwise, we copy the source to another TypedArray.
+    // The reason is that to encode BigUint64/BigInt64 value into a HermesValue,
+    // we need to allocate BigIntPrimitive for every compareFn call, which would
+    // be very expensive.
+    if (self->getKind() == CellKind::BigUint64ArrayKind ||
+        self->getKind() == CellKind::BigInt64ArrayKind) {
+      struct : public Locals {
+        PinnedValue<ArrayStorage> arrStorage;
+        PinnedValue<> value;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+
+      auto itemsRes = ArrayStorage::create(runtime, len, 0);
+      if (LLVM_UNLIKELY(itemsRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.arrStorage.castAndSetHermesValue<ArrayStorage>(*itemsRes);
+
+      // ES16 23.1.3.30.1 SortIndexedProperties, we need to copy the values into
+      // an internal list.
+      for (JSTypedArrayBase::size_type i = 0; i < len; ++i) {
+        lv.value = JSTypedArrayBase::polyReadMayAlloc(self.get(), runtime, i);
+        lv.arrStorage->pushWithinCapacity(runtime, *lv.value);
+      }
+      TypedArraySortModel sm(runtime, lv.arrStorage, compareFn);
+      if (LLVM_UNLIKELY(quickSort(&sm, 0, len) == ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+
+      if (self->attached(runtime)) {
+        for (JSTypedArrayBase::size_type i = 0; i < len; ++i) {
+          HermesValue value = lv.arrStorage->at(i);
+          JSTypedArrayBase::polyWriteNoAlloc(*self, runtime, i, value);
+        }
+      }
+    } else {
+      struct : public Locals {
+        PinnedValue<JSTypedArrayBase> newTypedArray;
+      } lv;
+      LocalsRAII lraii(runtime, &lv);
+
+      auto newTypedArrayRes = self->allocate(runtime, len);
+      if (LLVM_UNLIKELY(newTypedArrayRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.newTypedArray = *newTypedArrayRes;
+      // This should just call setToCopyOfBytes() and should not throw
+      // exception.
+      [[maybe_unused]] auto status = JSTypedArrayBase::setToCopyOfTypedArray(
+          runtime, lv.newTypedArray, 0, self, 0, len);
+      assert(status == ExecutionStatus::RETURNED);
+      TypedArraySortModel sm(runtime, lv.newTypedArray, compareFn);
+      if (LLVM_UNLIKELY(quickSort(&sm, 0, len) == ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+      if (self->attached(runtime)) {
+        status = JSTypedArrayBase::setToCopyOfTypedArray(
+            runtime, self, 0, lv.newTypedArray, 0, len);
+        assert(status == ExecutionStatus::RETURNED);
+      }
+    }
   } else if (len > 0) {
     typedArraySortDirect(self->data(runtime), self->getKind(), len);
   }
@@ -1883,6 +2332,8 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
 
   // Final size of the result string. Initialize to account for the separators.
   SafeUInt32 size(len - 1);
+  // Whether every element string is ASCII; the separator is.
+  bool allASCII = true;
 
   struct : public Locals {
     PinnedValue<JSArray> strings;
@@ -1905,6 +2356,15 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
   for (JSTypedArrayBase::size_type i = 0; i < len; ++i) {
     lv.storage =
         JSObject::getOwnIndexed(createPseudoHandle(self.get()), runtime, i);
+    if (lv.storage.getHermesValue().isUndefined() ||
+        lv.storage.getHermesValue().isNull()) {
+      if (LLVM_UNLIKELY(
+              JSArray::setElementAt(lv.strings, runtime, i, emptyString) ==
+              ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+      continue;
+    }
+
     auto objRes = toObject(runtime, lv.storage);
     if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
@@ -1941,13 +2401,14 @@ CallResult<HermesValue> typedArrayPrototypeToLocaleString(
               ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       size.add(lv.elementStr->getStringLength());
+      allASCII &= lv.elementStr->isASCII();
     } else {
       return runtime.raiseTypeError("toLocaleString() not callable");
     }
     gcScope.flushToMarker(marker);
   }
 
-  auto builder = StringBuilder::createStringBuilder(runtime, size);
+  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }

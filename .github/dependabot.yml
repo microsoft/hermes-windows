@@ -12,6 +12,7 @@ updates:
   - "/benchmarks/raytracer/original"
   - "/benchmarks/widgets/original/es5"
   - "/benchmarks/widgets/single-file/es5"
+  - "/external/node-api-cts"
   - "/tools/fork-sync"
   - "/tools/hcdp"
   - "/tools/hermes-parser/js"

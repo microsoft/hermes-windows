@@ -414,13 +414,18 @@ void SemContext::setExpressionDecl(ESTree::IdentifierNode *node, Decl *decl) {
 
 void SemContextDumper::printSemContext(
     llvh::raw_ostream &os,
-    const SemContext &semCtx) {
+    const SemContext &semCtx,
+    const FunctionInfo *rootFunc) {
+  // Use the provided root function, or fall back to the first function.
+  if (!rootFunc)
+    rootFunc = &semCtx.functions_[0];
+
   os << "SemContext\n";
   std::map<const FunctionInfo *, llvh::SmallVector<const FunctionInfo *, 2>>
       children;
 
   for (const auto &F : semCtx.functions_) {
-    if (&F == &semCtx.functions_[0])
+    if (&F == rootFunc)
       continue;
     children[F.parentFunction].push_back(&F);
   }
@@ -438,10 +443,7 @@ void SemContextDumper::printSemContext(
           dumpFunction(childFunc, level + 1);
       };
 
-  dumpFunction(&semCtx.functions_[0], 0);
-  assert(
-      processedCount == semCtx.functions_.size() &&
-      "not all scopes were visited");
+  dumpFunction(rootFunc, 0);
 }
 
 void SemContextDumper::printFunction(
@@ -449,7 +451,10 @@ void SemContextDumper::printFunction(
     const FunctionInfo &f,
     unsigned level) {
   os << ind(level) << (f.isStaticBlock ? "StaticBlock " : "Func ")
-     << (f.strict ? "strict" : "loose") << "\n";
+     << (f.strict ? "strict" : "loose")
+     << (f.mayReachImplicitReturn ? " mayReachImplicitReturn"
+                                  : " noImplicitReturn")
+     << "\n";
   std::map<const LexicalScope *, llvh::SmallVector<const LexicalScope *, 2>>
       children;
 
@@ -488,8 +493,15 @@ void SemContextDumper::printScope(
     os << '\n';
   }
   for (const auto *fd : s->hoistedFunctions) {
-    os << ind(level + 1) << "hoistedFunction "
-       << llvh::cast<ESTree::IdentifierNode>(fd->_id)->_name->str() << "\n";
+    os << ind(level + 1) << "hoistedFunction ";
+    // An anonymous `export default function` is only rewritten to a
+    // FunctionExpression when compiling, so when resolving on behalf of a
+    // parser (resolveASTForParser) a hoisted function may have no name.
+    if (fd->_id)
+      os << llvh::cast<ESTree::IdentifierNode>(fd->_id)->_name->str();
+    else
+      os << "*default*";
+    os << "\n";
   }
 }
 
@@ -515,6 +527,7 @@ void SemContextDumper::printDecl(llvh::raw_ostream &os, const Decl *d) {
     CASE(ES5Catch)
     CASE(FunctionExprName)
     CASE(ClassExprName)
+    CASE(TypedBuiltin)
     CASE(ScopedFunction)
     CASE(Var)
     CASE(Parameter)

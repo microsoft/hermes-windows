@@ -439,7 +439,11 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::parseValue() {
           }
         } else {
           // Slowpath
-          lv.newObject = JSObject::create(runtime_, numElements);
+          lv.newObject = JSObject::create(
+              runtime_,
+              runtime_.objectPrototype,
+              runtime_.classJSObject,
+              numElements);
           for (size_t i = 0; i < numElements; i++) {
             gcScope.flushToMarker(marker);
             size_t propIdx = beginPropIdx + i;
@@ -583,6 +587,11 @@ CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
       remainingDepth_, remainingDepth_ - 1};
   if (remainingDepth_ <= 0) {
     return runtime_.raiseStackOverflow(Runtime::StackOverflowKind::JSONParser);
+  }
+  // The reviver is only called after the children have been walked, so check
+  // the native stack here, at every level of the walk.
+  if (LLVM_UNLIKELY(runtime_.isStackOverflowing())) {
+    return runtime_.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
   }
 
   struct : public Locals {

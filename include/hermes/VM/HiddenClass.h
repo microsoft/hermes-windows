@@ -11,12 +11,14 @@
 #include "hermes/Support/OptValue.h"
 #include "hermes/VM/ArrayStorage.h"
 #include "hermes/VM/DictPropertyMap.h"
-#include "hermes/VM/GCPointer-inline.h"
 #include "hermes/VM/JIT/Config.h"
 #include "hermes/VM/PropertyDescriptor.h"
 #include "hermes/VM/WeakValueMap.h"
+#include "hermes/VM/WeakValueObjectMap.h"
+#include "hermes/VM/sh_mirror.h"
 
 #include <functional>
+#include <memory>
 #include "llvh/ADT/ArrayRef.h"
 
 namespace hermes {
@@ -27,41 +29,115 @@ using PropStorage = ArrayStorageSmall;
 
 /// Flags associated with a hidden class.
 struct ClassFlags {
-  /// This class is in dictionary mode, meaning that adding and removing fields
-  /// doesn't cause transitions but simply updates the property map.  (We may
-  /// still change hidden classes; see dictionaryNoCacheMode, below).
-  uint8_t dictionaryMode : 1;
+  /// Size of parentChangeCounter below in the bitfield.
+  static constexpr size_t kParentChangeCounterSize = 2;
 
-  /// If dictionaryMode is set, this indicates whether the hidden class can
-  /// be used as the key in property caches.  If we delete properties, or update
-  /// properties, we create a new hidden class for the owning object
-  /// (to invalidate any property caches referencing the old hidden
-  /// class).  We may decide to limit the number of hidden classes
-  /// created this way (currently we allow just one).  To do this, we
-  /// set this property of the hidden class property, so that the new
-  /// hidden class is never added to an property cache.
-  uint8_t dictionaryNoCacheMode : 1;
+  union {
+    struct {
+      /// This class is in dictionary mode, meaning that adding and removing
+      /// fields doesn't cause transitions but simply updates the property map.
+      /// (We may still change hidden classes; see dictionaryNoCacheMode,
+      /// below).
+      uint16_t dictionaryMode : 1;
 
-  /// Set when we have index-like named properties (e.g. "0", "1", etc) defined
-  /// using defineOwnProperty. Array accesses will have to check the named
-  /// properties first. The absence of this flag is important as it indicates
-  /// that named properties whose name is an integer index don't need to be
-  /// searched for - they don't exist.
-  uint8_t hasIndexLikeProperties : 1;
+      /// If dictionaryMode is set, this indicates whether the hidden class can
+      /// be used as the key in property caches.  If we delete properties, or
+      /// update properties, we create a new hidden class for the owning object
+      /// (to invalidate any property caches referencing the old hidden
+      /// class).  We may decide to limit the number of hidden classes
+      /// created this way (currently we allow just one).  To do this, we
+      /// set this property of the hidden class property, so that the new
+      /// hidden class is never added to an property cache.
+      uint16_t dictionaryNoCacheMode : 1;
 
-  /// There may be a accessor property somewhere in the entire chain of leading
-  /// up to this HiddenClass. Set when a property is an accessor, and can never
-  /// be unset. That means this is a pessimistic flag: if a getter/setter
-  /// property is set and then deleted, this will still be set to true.
-  uint8_t mayHaveAccessor : 1;
+      /// Set when we have index-like named properties (e.g. "0", "1", etc)
+      /// defined using defineOwnProperty. Array accesses will have to check the
+      /// named properties first. The absence of this flag is important as it
+      /// indicates that named properties whose name is an integer index don't
+      /// need to be searched for - they don't exist.
+      uint16_t hasIndexLikeProperties : 1;
 
-  /// This is not in dictionary mode, but it is a class allocated
-  /// for a typed object, which means it doesn't have any transitions and the
-  /// property map must never be null.
-  uint8_t typed : 1;
+      /// There may be a accessor property somewhere in the entire chain of
+      /// leading up to this HiddenClass. Set when a property is an accessor,
+      /// and can never be unset. That means this is a pessimistic flag: if a
+      /// getter/setter property is set and then deleted, this will still be set
+      /// to true.
+      uint16_t mayHaveAccessor : 1;
+
+      /// This is not in dictionary mode, but it is a class allocated
+      /// for a typed object, which means it doesn't have any transitions and
+      /// the property map must never be null.
+      uint16_t typed : 1;
+
+      /// New properties cannot be added.
+      uint16_t noExtend : 1;
+
+      /// \c Object.seal() has been invoked on this object, marking all
+      /// properties as non-configurable. When \c Sealed is set, \c NoExtend is
+      /// always set too.
+      ///
+      /// NOTE: It is possible for this flag to be 'false' but for the
+      /// JSObject::isSealed() function to return true, because this flag is set
+      /// lazily in cases like preventExtensions. If JSObject::isSealed() is
+      /// called and returns true, this flag will be set by that call.
+      uint16_t sealed : 1;
+
+      /// \c Object.freeze() has been invoked on this object, marking all
+      /// properties as non-configurable and non-writable. When \c Frozen is
+      /// set, \c Sealed and must \c NoExtend are always set too.
+      ///
+      /// NOTE: It is possible for this flag to be 'false' but for the
+      /// JSObject::isFrozen() function to return true, because this flag is set
+      /// lazily in cases like preventExtensions. If JSObject::isFrozen() is
+      /// called and returns true, this flag will be set by that call.
+      uint16_t frozen : 1;
+
+      /// This flag indicates this is a special object whose properties are
+      /// managed by C++ code, and not via the standard property storage
+      /// mechanisms.
+      uint16_t hostObject : 1;
+
+      /// This is lazily created object that must be initialized before it can
+      /// be used. Note that lazy objects must have no properties defined on
+      /// them.
+      uint16_t lazyObject : 1;
+
+      /// This flag indicates this is a proxy exotic Object
+      uint16_t proxyObject : 1;
+
+      /// This object has indexed storage. This flag will not change at runtime,
+      /// it is set at construction and its value never changes. It is not a
+      /// state.
+      uint16_t indexedStorage : 1;
+
+      /// This flag is set when any object using this HiddenClass (or any object
+      /// in its parent chain) is cached in the AddPropertyCache.
+      /// If the flag is set, then changing the parent or HiddenClass of objects
+      /// with this class in their parent chain will increment the
+      /// parentCacheEpoch in Runtime.
+      uint16_t isCachedUsingEpoch : 1;
+
+      /// The number of times the parent of the object has been changed.
+      /// If this counter maxes out, the HiddenClass changes to dictionary mode
+      /// to avoid an infinite chain.
+      uint16_t parentChangeCounter : kParentChangeCounterSize;
+
+      /// Unused bits, tracked explicitly for convenience.
+      uint16_t unusedPadding : 1;
+    };
+
+    uint16_t _flags;
+  };
 
   ClassFlags() {
-    ::memset(this, 0, sizeof(*this));
+    _flags = 0;
+  }
+
+  bool operator==(ClassFlags f) const {
+    return _flags == f._flags;
+  }
+  bool operator!=(ClassFlags f) const {
+    return _flags != f._flags;
   }
 };
 
@@ -139,17 +215,22 @@ namespace detail {
 /// a llvh::DenseMapInfo<> trait for it.
 class Transition {
  public:
+  /// The name for the property being modified.
+  /// Empty and Deleted are reserved for use by the DenseMapInfo.
   SymbolID symbolID;
   PropertyFlags propertyFlags;
+  ClassFlags classFlags;
 
-  /// An explicit constructor for creating DenseMap sentinel values.
-  explicit Transition(SymbolID symbolID)
-      : symbolID(symbolID), propertyFlags() {}
+  /// Construct a transition with default property flags. Used for DenseMap
+  /// sentinel values and internal-property transitions.
+  explicit Transition(SymbolID symbolID, ClassFlags classFlags)
+      : symbolID(symbolID), propertyFlags(), classFlags(classFlags) {}
   Transition(SymbolID symbolID, PropertyFlags flags)
       : symbolID(symbolID), propertyFlags(flags) {}
 
   bool operator==(const Transition &a) const {
-    return symbolID == a.symbolID && propertyFlags == a.propertyFlags;
+    return symbolID == a.symbolID && propertyFlags == a.propertyFlags &&
+        classFlags == a.classFlags;
   }
 };
 
@@ -256,7 +337,7 @@ class TransitionMap {
     return u.large_;
   }
 
-  Transition smallKey_{SymbolID::empty()};
+  Transition smallKey_{SymbolID::empty(), ClassFlags{}};
   union U {
     U() : smallValue_((WeakRefSlot *)nullptr) {}
     WeakRef<HiddenClass> smallValue_;
@@ -283,6 +364,9 @@ class HiddenClass final : public GCCell {
   /// one keyed on \c symbolID_+propertyFlags_. It can be null if there is no
   /// parent.
   GCPointer<HiddenClass> parent_;
+
+  /// The JSObject which is the parent of the object.
+  GCPointer<JSObject> objectParent_{nullptr};
 
   /// Cache that contains for-in property names for objects of this class.
   /// Never used in dictionary mode.
@@ -314,6 +398,11 @@ class HiddenClass final : public GCCell {
   /// keyed on the property being added (or updated) and its flags.
   detail::TransitionMap transitionMap_;
 
+  /// This hash table encodes the transitions from this class to child classes
+  /// keyed on the new object parent. Null until the first parent change,
+  /// because the vast majority of classes never see one.
+  std::unique_ptr<WeakValueObjectMap<HiddenClass>> parentTransitionMap_;
+
  public:
   using Transition = detail::Transition;
   /// Adding more than this number of properties will switch to "dictionary
@@ -322,20 +411,14 @@ class HiddenClass final : public GCCell {
 
   static const VTable vt;
 
-  HiddenClass(
+  inline HiddenClass(
       Runtime &runtime,
       ClassFlags flags,
       Handle<HiddenClass> parent,
+      Handle<JSObject> objectParent,
       SymbolID symbolID,
       PropertyFlags propertyFlags,
-      unsigned numProperties)
-      : parent_(runtime, *parent, runtime.getHeap()),
-        symbolID_(symbolID),
-        propertyFlags_(propertyFlags),
-        numProperties_(numProperties),
-        flags_(flags) {
-    assert(propertyFlags.isValid() && "propertyFlags must be valid");
-  }
+      unsigned numProperties);
 
   static constexpr CellKind getCellKind() {
     return CellKind::HiddenClassKind;
@@ -351,14 +434,19 @@ class HiddenClass final : public GCCell {
 
   /// Create a "root" hidden class - one that doesn't define any properties, but
   /// is a starting point for a hierarchy.
-  static HiddenClass *createRoot(Runtime &runtime);
+  static HiddenClass *
+  createRoot(Runtime &runtime, Handle<JSObject> objectParent, ClassFlags flags);
 
   /// Create a "root" hidden class for a typed object - one that doesn't define
-  /// any properties yet but reserves space for a property map.
+  /// any properties yet but reserves space for a property map. The class is
+  /// created frozen, sealed and noExtend.
   /// \param capacity the number of properties in the typed object,
   ///  used to reserve space in the property map.
   /// \pre capacity < maxNumProperties().
-  static HiddenClass *createForTypedObject(Runtime &runtime, uint32_t capacity);
+  static HiddenClass *createForTypedObject(
+      Runtime &runtime,
+      Handle<JSObject> objectParent,
+      uint32_t capacity);
 
   /// \return true if this hidden class is guaranteed to be a leaf.
   /// It can return false negatives, so it should only be used for stats
@@ -376,16 +464,63 @@ class HiddenClass final : public GCCell {
   }
 #endif
 
+  /// \return the object's parent. May be nullptr.
+  const GCPointer<JSObject> &getObjectParentGCPtr() const {
+    return objectParent_;
+  }
+
+  /// \return the object's parent. May be nullptr.
+  inline JSObject *getObjectParent(PointerBase &pb) const;
+
   /// \return the number of own properties described by this hidden class.
   /// This corresponds to the size of the property map, if it is initialized.
   unsigned getNumProperties() const {
     return numProperties_;
   }
 
+  ClassFlags getFlags() const {
+    return flags_;
+  }
+
   /// \return true if this class is in "dictionary mode" - i.e. changes to it
   /// don't (normally) result in creation of new classes.
   bool isDictionary() const {
     return flags_.dictionaryMode;
+  }
+
+  /// \return true if new properties can be added to the class.
+  bool isExtensible() const {
+    return !flags_.noExtend;
+  }
+
+  /// \return true if the class is sealed.
+  bool isSealed() const {
+    return flags_.sealed;
+  }
+
+  /// \return true if the class is frozen.
+  bool isFrozen() const {
+    return flags_.frozen;
+  }
+
+  /// \return true if the class is for a lazy object.
+  bool isLazyObject() const {
+    return flags_.lazyObject;
+  }
+
+  /// \return true if the class is for a HostObject.
+  bool isHostObject() const {
+    return flags_.hostObject;
+  }
+
+  /// \return true if the class is for a JS Proxy.
+  bool isProxyObject() const {
+    return flags_.proxyObject;
+  }
+
+  /// \return true if the class is frozen.
+  bool hasIndexedStorage() const {
+    return flags_.indexedStorage;
   }
 
   /// \return true if this class is in "non-cacheable dictionary mode"
@@ -409,6 +544,30 @@ class HiddenClass final : public GCCell {
 
   bool isTyped() const {
     return flags_.typed;
+  }
+
+  /// \return true if this HiddenClass is used by objects cached using the
+  /// parent cache epoch mechanism.
+  bool getIsCachedUsingEpoch() const {
+    return flags_.isCachedUsingEpoch;
+  }
+
+  /// Mark this HiddenClass as being used by objects cached using the parent
+  /// cache epoch mechanism.
+  /// \return the resulting class
+  static HiddenClass *markAsCachedUsingEpoch(
+      Handle<HiddenClass> selfHandle,
+      Runtime &runtime) {
+    // A dictionary is owned by a single object and the flag doesn't affect
+    // property lookup, so set it in place. Going through updateClassFlags
+    // would permanently make a cacheable dictionary non-cacheable.
+    if (selfHandle->isDictionary()) {
+      selfHandle->flags_.isCachedUsingEpoch = 1;
+      return *selfHandle;
+    }
+    ClassFlags newFlags = selfHandle->flags_;
+    newFlags.isCachedUsingEpoch = 1;
+    return HiddenClass::updateClassFlags(selfHandle, runtime, newFlags);
   }
 
   /// \return The for-in cache if one has been set, otherwise nullptr.
@@ -544,17 +703,70 @@ class HiddenClass final : public GCCell {
     return newSlot;
   }
 
+  /// Update the object's parent and return the resulting class.
+  /// If the parent has changed more than parentChangeCounter can handle,
+  /// the resulting HiddenClass will be in dictionary mode.
+  /// \param newParent may be null if the parent is being deleted.
+  static inline HiddenClass *updateObjectParent(
+      Handle<HiddenClass> selfHandle,
+      Runtime &runtime,
+      PseudoHandle<JSObject> newParent);
+
+  /// The slow path for updating the object parent.
+  /// Only called if the parent actually needs to be updated.
+  static HiddenClass *updateObjectParentSlowPath(
+      Handle<HiddenClass> selfHandle,
+      Runtime &runtime,
+      PseudoHandle<JSObject> newParent);
+
+  /// Update the ClassFlags and return the new HiddenClass.
+  /// Updates the transition table to cache the new HiddenClass.
+  static HiddenClass *updateClassFlags(
+      Handle<HiddenClass> selfHandle,
+      Runtime &runtime,
+      ClassFlags newFlags);
+
   /// Mark all properties as non-configurable.
   /// \return the resulting class
-  static Handle<HiddenClass> makeAllNonConfigurable(
+  static HiddenClass *seal(Handle<HiddenClass> selfHandle, Runtime &runtime);
+
+  /// Mark the HiddenClass as being sealed.
+  /// \return the resulting class
+  static HiddenClass *markAsSealed(
       Handle<HiddenClass> selfHandle,
-      Runtime &runtime);
+      Runtime &runtime) {
+    ClassFlags sealedFlags = selfHandle->flags_;
+    sealedFlags.noExtend = 1;
+    sealedFlags.sealed = 1;
+    return HiddenClass::updateClassFlags(selfHandle, runtime, sealedFlags);
+  }
 
   /// Mark all properties as non-writable and non-configurable.
   /// \return the resulting class
-  static Handle<HiddenClass> makeAllReadOnly(
+  static HiddenClass *freeze(Handle<HiddenClass> selfHandle, Runtime &runtime);
+
+  /// Mark the HiddenClass as being frozen (which implies sealed and
+  /// non-extensible).
+  /// \return the resulting class
+  static HiddenClass *markAsFrozen(
       Handle<HiddenClass> selfHandle,
-      Runtime &runtime);
+      Runtime &runtime) {
+    ClassFlags frozenFlags = selfHandle->flags_;
+    frozenFlags.noExtend = 1;
+    frozenFlags.frozen = 1;
+    frozenFlags.sealed = 1;
+    return HiddenClass::updateClassFlags(selfHandle, runtime, frozenFlags);
+  }
+
+  /// Mark the HiddenClass as being non-extensible.
+  /// \return the resulting class
+  static HiddenClass *markNoExtend(
+      Handle<HiddenClass> selfHandle,
+      Runtime &runtime) {
+    ClassFlags noExtendFlags = selfHandle->flags_;
+    noExtendFlags.noExtend = 1;
+    return HiddenClass::updateClassFlags(selfHandle, runtime, noExtendFlags);
+  }
 
   /// Update the flags for the properties in the list \p props with \p
   /// flagsToClear and \p flagsToSet. If in dictionary mode, the properties are
@@ -592,12 +804,17 @@ class HiddenClass final : public GCCell {
   /// \return true if all properties are non-writable and non-configurable
   static bool areAllReadOnly(Handle<HiddenClass> selfHandle, Runtime &runtime);
 
+  /// Verify that the mirror struct SHHiddenClass has the correct layout.
+  /// This function is never called - it only exists to contain static asserts.
+  static void staticAsserts();
+
  private:
   /// Allocate a new hidden class instance with the supplied parameters.
   static HiddenClass *create(
       Runtime &runtime,
       ClassFlags flags,
       Handle<HiddenClass> parent,
+      Handle<JSObject> objectParent,
       SymbolID symbolID,
       PropertyFlags propertyFlags,
       unsigned numProperties);
@@ -751,6 +968,59 @@ inline OptValue<HiddenClass::PropertyPos> HiddenClass::findProperty(
   }
 }
 
+inline void HiddenClass::staticAsserts() {
+  static_assert(sizeof(PropertyFlags) == 2);
+  static_assert(sizeof(ClassFlags) == 2);
+  static_assert(sizeof(detail::Transition) == sizeof(SHTransition));
+  static_assert(sizeof(detail::Transition) == sizeof(SHTransition));
+  static_assert(sizeof(detail::TransitionMap) == sizeof(SHTransitionMap));
+  static_assert(sizeof(ClassFlags) == 2);
+
+  static_assert(sizeof(HiddenClass) == sizeof(SHHiddenClass));
+  static_assert(
+      offsetof(HiddenClass, propertyMap_) ==
+      offsetof(SHHiddenClass, propertyMap));
+  static_assert(
+      offsetof(HiddenClass, parent_) == offsetof(SHHiddenClass, parent));
+  static_assert(
+      offsetof(HiddenClass, objectParent_) ==
+      offsetof(SHHiddenClass, objectParent));
+  static_assert(
+      offsetof(HiddenClass, forInCache_) ==
+      offsetof(SHHiddenClass, forInCache));
+  static_assert(
+      offsetof(HiddenClass, symbolID_) == offsetof(SHHiddenClass, symbolID));
+  static_assert(
+      offsetof(HiddenClass, propertyFlags_) ==
+      offsetof(SHHiddenClass, propertyFlags));
+  static_assert(
+      offsetof(HiddenClass, numProperties_) ==
+      offsetof(SHHiddenClass, numProperties));
+#if HERMESVM_JIT
+  static_assert(
+      offsetof(HiddenClass, lazyJITId_) == offsetof(SHHiddenClass, lazyJITId));
+#endif
+  static_assert(
+      offsetof(HiddenClass, flags_) == offsetof(SHHiddenClass, flags));
+  static_assert(sizeof(SHHiddenClass::flags) == sizeof(ClassFlags));
+  static_assert(
+      offsetof(HiddenClass, transitionMap_) ==
+      offsetof(SHHiddenClass, transitionMap));
+  static_assert(
+      offsetof(HiddenClass, parentTransitionMap_) ==
+      offsetof(SHHiddenClass, parentTransitionMap));
+  llvm_unreachable("staticAsserts must never be called.");
+}
+
+/// The key of a class in its parent's parentTransitionMap_ is its object
+/// parent. It never changes, because classes in the map are not dictionaries,
+/// and only dictionaries update their object parent in place.
+template <>
+struct WeakValueObjectMapKey<HiddenClass> {
+  /// \return the object parent of \p clazz, which may be null.
+  static JSObject *get(HiddenClass *clazz, Runtime &runtime);
+};
+
 } // namespace vm
 } // namespace hermes
 
@@ -762,11 +1032,11 @@ using namespace hermes::vm;
 template <>
 struct DenseMapInfo<HiddenClass::Transition> {
   static inline HiddenClass::Transition getEmptyKey() {
-    return HiddenClass::Transition(SymbolID::empty());
+    return HiddenClass::Transition(SymbolID::empty(), ClassFlags{});
   }
 
   static inline HiddenClass::Transition getTombstoneKey() {
-    return HiddenClass::Transition(SymbolID::deleted());
+    return HiddenClass::Transition(SymbolID::deleted(), ClassFlags{});
   }
 
   static inline unsigned getHashValue(HiddenClass::Transition transition) {

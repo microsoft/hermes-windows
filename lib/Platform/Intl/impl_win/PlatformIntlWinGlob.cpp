@@ -22,6 +22,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 
+#include <cstdlib>
+
 #include "PlatformIntlWinGlob.h"
 #include "WinIntlUtils.h"
 
@@ -122,6 +124,15 @@ const std::vector<std::u16string> &getAvailableLocales() {
 
 std::u16string getDefaultLocale() {
   wchar_t buf[LOCALE_NAME_MAX_LENGTH] = {0};
+  if (const char *testLocale = std::getenv("_HERMES_TEST_LOCALE")) {
+    int length = MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, testLocale, -1,
+        buf, LOCALE_NAME_MAX_LENGTH);
+    if (length > 0) {
+      return std::u16string(
+          reinterpret_cast<const char16_t *>(buf), length - 1);
+    }
+  }
   int ret = GetUserDefaultLocaleName(buf, LOCALE_NAME_MAX_LENGTH);
   if (ret <= 0)
     return u"en-US";

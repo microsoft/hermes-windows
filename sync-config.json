@@ -1,9 +1,9 @@
 {
   "repo": "https://github.com/facebook/hermes",
   "branch": "static_h",
-  "commit": "6abc4a3efd82ad37eb4a4e9e79e6e9500e28aa39",
+  "commit": "26fbb82fad39d9d06901adb1d6d630dacc84c877",
   "fetchMode": "snapshot",
   "keepLocalDeletions": true,
   "tag": "",
-  "lastSync": "2026-03-31T17:22:57.582Z"
+  "lastSync": "2026-11-03T00:27:09.144Z"
 }

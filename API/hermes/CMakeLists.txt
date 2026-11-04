@@ -36,6 +36,7 @@ if(HERMES_ENABLE_DEBUGGER)
     cdp/ConsoleMessage.cpp
     cdp/DebuggerDomainAgent.cpp
     cdp/DebuggerDomainCoordinator.cpp
+    cdp/EvaluatedScriptSources.cpp
     cdp/HeapProfilerDomainAgent.cpp
     cdp/ProfilerDomainAgent.cpp
     cdp/RemoteObjectConverters.cpp
@@ -85,9 +86,14 @@ if(HERMES_THREAD_SAFETY_ANALYSIS)
   endif()
 endif()
 
+if(HERMES_IS_ANDROID)
+  # hermes.cpp may wrap the finalizer worker thread in an fbjni ThreadScope.
+  set(API_JNI_DEPS fbjni::fbjni)
+endif()
+
 add_hermes_library(hermesapi
   ${api_sources}
-  LINK_OBJLIBS hermesPublic LINK_LIBS jsi ${CDP_DEPS}
+  LINK_OBJLIBS hermesPublic LINK_LIBS jsi ${CDP_DEPS} ${API_JNI_DEPS}
   )
 target_include_directories(hermesapi_obj PUBLIC ..)
 

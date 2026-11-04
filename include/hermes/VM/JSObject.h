@@ -274,13 +274,12 @@ struct ObjectVTable : public VTable {
 /// available.
 class JSObject : public GCCell {
   friend void JSObjectBuildMeta(const GCCell *cell, Metadata::Builder &mb);
+  /// Runtime needs setEmptyClassUnsafe to bootstrap Object.prototype.
+  friend class Runtime;
 
  protected:
   /// Flags affecting the entire object.
   SHObjectFlags flags_{};
-
-  /// The prototype of this object.
-  GCPointer<JSObject> parent_;
 
   /// The dynamically derived "class" of the object, describing its fields in
   /// order.
@@ -301,13 +300,15 @@ class JSObject : public GCCell {
       JSObject *parent,
       HiddenClass *clazz,
       NeedsBarriers needsBarriers)
-      : parent_(runtime, parent, runtime.getHeap(), needsBarriers),
-        clazzDoNotAccessDirectly_(
+      : clazzDoNotAccessDirectly_(
             runtime,
             clazz,
             runtime.getHeap(),
             needsBarriers),
         propStorage_(nullptr) {
+    assert(
+        parent == clazz->getObjectParentGCPtr().get(runtime) &&
+        "creation failed");
     // Direct property slots are initialized by initDirectPropStorage.
   }
 
@@ -317,13 +318,15 @@ class JSObject : public GCCell {
       Handle<JSObject> parent,
       Handle<HiddenClass> clazz,
       NeedsBarriers needsBarriers)
-      : parent_(runtime, *parent, runtime.getHeap(), needsBarriers),
-        clazzDoNotAccessDirectly_(
+      : clazzDoNotAccessDirectly_(
             runtime,
             *clazz,
             runtime.getHeap(),
             needsBarriers),
         propStorage_(nullptr) {
+    assert(
+        *parent == clazz->getObjectParentGCPtr().get(runtime) &&
+        "creation failed");
     // Direct property slots are initialized by initDirectPropStorage.
   }
 
@@ -332,6 +335,9 @@ class JSObject : public GCCell {
   /// (defaulting to NoBarriers).
   JSObject(Runtime &runtime, JSObject *parent, HiddenClass *clazz)
       : JSObject(runtime, parent, clazz, GCPointerBase::NoBarriers()) {
+    assert(
+        parent == clazz->getObjectParentGCPtr().get(runtime) &&
+        "creation failed");
     // Direct property slots are initialized by initDirectPropStorage.
   }
 
@@ -381,7 +387,7 @@ class JSObject : public GCCell {
   /// Attempts to allocate a JSObject with the standard Object prototype.
   /// If allocation fails, the GC declares an OOM.
   static PseudoHandle<JSObject> create(Runtime &runtime) {
-    return create(runtime, Handle<JSObject>::vmcast(&runtime.objectPrototype));
+    return create(runtime, runtime.objectPrototype, runtime.classJSObject);
   }
 
   /// Attempts to allocate a JSObject with the standard Object prototype and
@@ -390,6 +396,8 @@ class JSObject : public GCCell {
   /// \param propertyCount number of property storage slots preallocated.
   static PseudoHandle<JSObject> create(
       Runtime &runtime,
+      Handle<JSObject> parentHandle,
+      Handle<HiddenClass> clazz,
       unsigned propertyCount);
 
   /// Allocates a JSObject with the given hidden class and prototype.
@@ -397,7 +405,9 @@ class JSObject : public GCCell {
   static PseudoHandle<JSObject> create(
       Runtime &runtime,
       Handle<JSObject> parentHandle,
-      Handle<HiddenClass> clazz);
+      Handle<HiddenClass> clazz) {
+    return create(runtime, parentHandle, clazz, clazz->getNumProperties());
+  }
 
   ~JSObject() = default;
 
@@ -415,30 +425,34 @@ class JSObject : public GCCell {
   }
 
   /// ES9 9.1 O.[[Extensible]] internal slot
-  bool isExtensible() const {
-    return !flags_.noExtend;
+  bool isExtensible(PointerBase &pb) const {
+    return getClass(pb)->isExtensible();
   }
 
   /// true if this a lazy object that must be initialized prior to use.
-  bool isLazy() const {
-    return flags_.lazyObject;
+  bool isLazy(PointerBase &pb) const {
+    return getClass(pb)->isLazyObject();
   }
 
   /// \return true if this is a HostObject.
-  bool isHostObject() const {
-    return flags_.hostObject;
+  bool isHostObject(PointerBase &pb) const {
+    return getClass(pb)->isHostObject();
   }
 
   /// \return true if this is a proxy exotic object.
-  bool isProxyObject() const {
-    return flags_.proxyObject;
+  bool isProxyObject(PointerBase &pb) const {
+    return getClass(pb)->isProxyObject();
   }
 
   /// Record that this object is being used in a form of caching optimisation
   /// such that any change to its hidden class or parent must update the epoch
   /// in the runtime.
-  void setCachedUsingEpoch() {
-    flags_.isCachedUsingEpoch = true;
+  static void setCachedUsingEpoch(Handle<JSObject> self, Runtime &runtime);
+
+  /// \return true if this object's HiddenClass is marked as being cached using
+  /// the epoch mechanism.
+  bool isCachedUsingEpoch(PointerBase &pb) const {
+    return getClass(pb)->getIsCachedUsingEpoch();
   }
 
   /// Returns whether the object has any of properties set in \p flags.
@@ -450,20 +464,29 @@ class JSObject : public GCCell {
 
   /// \return true if this object has fast indexed storage, meaning no property
   ///   checks need to be made when reading an indexed value.
-  bool hasFastIndexProperties() const {
-    return flags_.fastIndexProperties;
+  bool hasFastIndexProperties(PointerBase &pb) const {
+    auto *clazz = getClass(pb);
+    return clazz->hasIndexedStorage() && !clazz->getHasIndexLikeProperties();
   }
 
   /// \return the `__proto__` internal property, which may be nullptr.
   JSObject *getParent(PointerBase &runtime) const {
-    return getParentGCPtr().get(runtime);
+    return getParentGCPtr(runtime).get(runtime);
+  }
+
+  /// Faster than getParent() because it skips the null check.
+  /// \pre the parent is non-null.
+  /// \return the `__proto__` internal property, which must be non-null.
+  JSObject *getParentNonNull(PointerBase &runtime) const {
+    return getParentGCPtr(runtime).getNonNull(runtime);
   }
 
   /// \return the `__proto__` internal property, which may be nullptr.
-  const GCPointer<JSObject> &getParentGCPtr() const {
+  const GCPointer<JSObject> &getParentGCPtr(PointerBase &runtime) const {
     assert(
-        !flags_.proxyObject && "getParent cannot be used with proxy objects");
-    return parent_;
+        !isProxyObject(runtime) &&
+        "getParent cannot be used with proxy objects");
+    return getClass(runtime)->getObjectParentGCPtr();
   }
 
   /// \return the hidden class of this object.
@@ -620,13 +643,12 @@ class JSObject : public GCCell {
       PointerBase &runtime,
       NamedPropertyDescriptor desc) {
     assert(
-        desc.flags.privateName ||
-        !self->flags_.proxyObject && !desc.flags.proxyObject &&
-            "getNamedSlotValueUnsafe called on a Proxy");
+        (desc.flags.privateName ||
+         (!self->isProxyObject(runtime) && !desc.flags.proxyObject)) &&
+        "getNamedSlotValueUnsafe called on a Proxy");
     assert(
-        desc.flags.privateName ||
-        !desc.flags.hostObject &&
-            "getNamedSlotValueUnsafe called on a HostObject");
+        (desc.flags.privateName || !desc.flags.hostObject) &&
+        "getNamedSlotValueUnsafe called on a HostObject");
     return getNamedSlotValueUnsafe(self, runtime, desc.slot);
   }
 
@@ -1063,6 +1085,10 @@ class JSObject : public GCCell {
         selfHandle, runtime, index, value);
   }
 
+  /// Calls ObjectVTable::haveOwnIndexed.
+  static bool
+  haveOwnIndexed(Handle<JSObject> selfHandle, Runtime &runtime, uint32_t index);
+
   /// Calls ObjectVTable::deleteOwnIndexed.
   static bool deleteOwnIndexed(
       Handle<JSObject> selfHandle,
@@ -1198,7 +1224,9 @@ class JSObject : public GCCell {
   /// ES5.1 15.2.3.10.
   /// Set [[Extensible]] slot on an ordinary object to false, preventing adding
   /// more properties.
-  static void preventExtensions(JSObject *self);
+  static void preventExtensionsNonProxy(
+      Handle<JSObject> self,
+      Runtime &runtime);
   /// ES9 [[PreventExtensons]] internal method.  This works on Proxy
   /// objects and ordinary objects. If opFlags.getThrowOnError() is
   /// true, then this will throw an appropriate TypeError if the
@@ -1207,14 +1235,6 @@ class JSObject : public GCCell {
       Handle<JSObject> selfHandle,
       Runtime &runtime,
       PropOpFlags opFlags = PropOpFlags());
-
-  /// Mark this object as having been created from typed code.
-  /// \pre object was allocated with a typed HiddenClass.
-  void markAsTyped() {
-    flags_.frozen = 1;
-    flags_.sealed = 1;
-    flags_.noExtend = 1;
-  }
 
   /// ES9 9.1.3 [[IsExtensible]] internal method
   /// No properties are can be added.  This also handles the Proxy case.
@@ -1230,6 +1250,12 @@ class JSObject : public GCCell {
   /// No data properties (not accessors) are writable.
   /// [[Extensible]] is false.
   static bool isFrozen(PseudoHandle<JSObject> self, Runtime &runtime);
+
+  /// \return true if the object has indexed storage (based on the HiddenClass
+  /// flag).
+  bool hasIndexedStorage(PointerBase &pb) const {
+    return getClass(pb)->hasIndexedStorage();
+  }
 
   /// Update the property flags in the list \p props on \p selfHandle,
   /// with provided \p flagsToClear and \p flagsToSet, and if it is not
@@ -1420,14 +1446,41 @@ class JSObject : public GCCell {
   /// \param clazz the new class, must not be null.
   void updateClass(Runtime &runtime, HiddenClass *clazz) {
     assert(clazz && "clazz cannot be null");
+
     clazzDoNotAccessDirectly_.setNonNull(runtime, clazz, runtime.getHeap());
 
     // Changing the HiddenClass may result in adding a setter/readonly property
     // in the parent chain that would prevent adding the property to the cached
     // HiddenClass.
     // We must break the cache, so increment the epoch.
-    if (LLVM_UNLIKELY(flags_.isCachedUsingEpoch))
+    if (LLVM_UNLIKELY(isCachedUsingEpoch(runtime)))
       runtime.incParentCacheEpoch();
+  }
+
+  /// Replace the class of \p self with \p clazz without going through a
+  /// transition.
+  /// SAFETY: \p self must have no properties, and \p clazz must have no
+  /// properties and the same parent as \p self. Otherwise the object's slots
+  /// no longer match its class, or its parent silently changes.
+  static void
+  setEmptyClassUnsafe(JSObject *self, Runtime &runtime, HiddenClass *clazz);
+
+  /// Update the hidden class of this object to \p clazz,
+  /// but ignore the parent cache epoch.
+  /// SAFETY: this function must only be used when we know that the
+  /// class change doesn't introduce any setter/readonly properties that require
+  /// incrementing the epoch, for example just setting the isCachedUsingEpoch
+  /// flag on the HiddenClass.
+  /// This does not allocate indirect property storage, it is an internal API.
+  ///
+  /// \param clazz the new class, must not be null.
+  void updateClassIgnoringEpochUnsafe(Runtime &runtime, HiddenClass *clazz) {
+    assert(clazz && "clazz cannot be null");
+    assert(
+        clazz->getNumProperties() ==
+            clazzDoNotAccessDirectly_.getNonNull(runtime)->getNumProperties() &&
+        "Do not change the number of properties without incrementing the epoch");
+    clazzDoNotAccessDirectly_.setNonNull(runtime, clazz, runtime.getHeap());
   }
 
   /// Allocate storage for a new slot after the slot index itself has been
@@ -1473,7 +1526,7 @@ class JSObject : public GCCell {
   /// Try to cache property addition.
   /// May fail if unable to allocate an AddPropertyCacheEntry, e.g.
   /// On success, sets isCachedUsingEpoch flag for the parent of \p self
-  /// and all parents transitively.
+  /// and all parents transitively, which may allocate.
   /// \param self the object the property is added to
   /// \param runtimeModule the runtimeModule in which to allocate an
   ///   AddPropertyCacheEntry.
@@ -1487,14 +1540,14 @@ class JSObject : public GCCell {
   /// \pre If writeCacheEntry is non-null, at least one of runtimeModule and
   ///   unit is non-null.
   static void tryCacheAddProperty(
-      JSObject *self,
+      Handle<JSObject> self,
       Runtime &runtime,
       RuntimeModule *runtimeModule,
       SHUnit *unit,
       WritePropertyCacheEntry *writeCacheEntry,
-      HiddenClass *startClazz,
+      Handle<HiddenClass> startClazz,
       SlotIndex slot,
-      HiddenClass *resultClazz);
+      Handle<HiddenClass> resultClazz);
 
   /// ES5.1 8.12.9.
   static CallResult<bool> updateOwnProperty(
@@ -1602,6 +1655,10 @@ class JSObject : public GCCell {
     auto excess = (aligned - directPropsOffset()) / sizeof(GCSmallHermesValue);
     return std::min<size_t>(excess, DIRECT_PROPERTY_SLOTS);
   }
+
+  /// Dynamically dispatches to the correct numOverlapSlots<> template.
+  /// \return the number of overlap slots for the given cell kind \p k.
+  static size_t numOverlapSlotsForCellKind(CellKind k);
 };
 
 /// Convenience class for accessing the direct property slots of a JSObject.
@@ -1820,8 +1877,14 @@ inline T *JSObject::initDirectPropStorage(Runtime &runtime, T *self) {
           nullptr);
       [[fallthrough]];
     case 5:
+      new (&self->directProps()[5]) GCSmallHermesValue(
+          SmallHermesValue::encodeRawZeroValueUnsafe(),
+          runtime.getHeap(),
+          nullptr);
+      [[fallthrough]];
+    case 6:
       static_assert(
-          DIRECT_PROPERTY_SLOTS == 5,
+          DIRECT_PROPERTY_SLOTS == 6,
           "Must update this switch if we add or remove direct properties");
       break;
   }
@@ -1957,7 +2020,7 @@ inline CallResult<PseudoHandle<>> JSObject::getComputedSlotValue(
     ComputedPropertyDescriptor desc) {
   if (LLVM_LIKELY(desc.flags.indexed)) {
     assert(
-        self->flags_.indexedStorage &&
+        self->getClass(runtime)->hasIndexedStorage() &&
         "indexed flag set but no indexed storage");
     return createPseudoHandle(
         getOwnIndexed(std::move(self), runtime, desc.slot));
@@ -1983,7 +2046,7 @@ inline HermesValue JSObject::getComputedSlotValueUnsafe(
     ComputedPropertyDescriptor desc) {
   if (LLVM_LIKELY(desc.flags.indexed)) {
     assert(
-        self->flags_.indexedStorage &&
+        self->getClass(runtime)->hasIndexedStorage() &&
         "indexed flag set but no indexed storage");
     return getOwnIndexed(std::move(self), runtime, desc.slot);
   }
@@ -2000,7 +2063,7 @@ inline CallResult<bool> JSObject::setComputedSlotValue(
     Handle<> value) {
   if (LLVM_LIKELY(desc.flags.indexed)) {
     assert(
-        selfHandle->flags_.indexedStorage &&
+        selfHandle->getClass(runtime)->hasIndexedStorage() &&
         "indexed flag set but no indexed storage");
     return setOwnIndexed(selfHandle, runtime, desc.slot, value);
   }
@@ -2027,7 +2090,7 @@ inline ExecutionStatus JSObject::setComputedSlotValueUnsafe(
     Handle<> value) {
   if (LLVM_LIKELY(desc.flags.indexed)) {
     assert(
-        selfHandle->flags_.indexedStorage &&
+        selfHandle->getClass(runtime)->hasIndexedStorage() &&
         "indexed flag set but no indexed storage");
     return setOwnIndexed(selfHandle, runtime, desc.slot, value).getStatus();
   }
@@ -2056,9 +2119,9 @@ inline OptValue<bool> JSObject::tryGetOwnNamedDescriptorFast(
 
 inline OptValue<SmallHermesValue>
 JSObject::tryGetNamedNoAlloc(JSObject *self, PointerBase &base, SymbolID name) {
-  for (JSObject *curr = self; curr; curr = curr->parent_.get(base)) {
-    if (LLVM_UNLIKELY(curr->isProxyObject()) ||
-        LLVM_UNLIKELY(curr->isHostObject())) {
+  for (JSObject *curr = self; curr; curr = curr->getParent(base)) {
+    if (LLVM_UNLIKELY(curr->isProxyObject(base)) ||
+        LLVM_UNLIKELY(curr->isHostObject(base))) {
       // Fail if there is a proxy or host object in the chain,
       // because walking the prototype chain without allocating can't be done.
       return llvh::None;
@@ -2147,6 +2210,13 @@ inline std::pair<uint32_t, uint32_t> JSObject::getOwnIndexedRange(
   return self->getVT()->getOwnIndexedRange(self, runtime);
 };
 
+inline bool JSObject::haveOwnIndexed(
+    Handle<JSObject> selfHandle,
+    Runtime &runtime,
+    uint32_t index) {
+  return haveOwnIndexed(selfHandle.get(), runtime, index);
+}
+
 inline bool
 JSObject::haveOwnIndexed(JSObject *self, Runtime &runtime, uint32_t index) {
   return self->getVT()->haveOwnIndexed(self, runtime, index);
@@ -2167,14 +2237,16 @@ inline OptValue<HiddenClass::PropertyPos> JSObject::findProperty(
   auto ret = HiddenClass::findProperty(
       createPseudoHandle(selfHandle->getClass(runtime)), runtime, name, desc);
   assert(
-      (desc.flags.privateName || !(selfHandle->flags_.proxyObject && ret)) &&
+      (desc.flags.privateName ||
+       !(selfHandle->isProxyObject(runtime) && ret)) &&
       "Proxy objects should never have own non-private properties");
   return ret;
 }
 
 inline bool JSObject::shouldCacheForIn(Runtime &runtime) const {
-  return !getClass(runtime)->isDictionary() && !flags_.indexedStorage &&
-      !flags_.hostObject && !flags_.proxyObject;
+  return !getClass(runtime)->isDictionary() &&
+      !getClass(runtime)->hasIndexedStorage() && !isHostObject(runtime) &&
+      !isProxyObject(runtime);
 }
 
 /// Attempt to get the value of an indexed property from an object cheaply,

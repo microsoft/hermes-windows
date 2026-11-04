@@ -45,13 +45,10 @@ TEST_F(FinalizationRegistryTest, RegisterAndUnregisterTest) {
 
   lv.callable = *NativeFunction::create(
       runtime,
-      Handle<JSObject>::vmcast(&runtime.functionPrototype),
-      Runtime::makeNullHandle<Environment>(),
       nullptr,
       noopCallback,
       Predefined::getSymbolID(Predefined::emptyString),
-      0,
-      Runtime::makeNullHandle<JSObject>());
+      0);
 
   auto frRes = JSFinalizationRegistry::create(
       runtime, runtime.arrayPrototype, lv.callable);
@@ -150,7 +147,7 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
   }
 
   runtime.collect("test");
-  runtime.cleanUpFinalizationCallbacks();
+  ASSERT_EQ(runtime.cleanUpFinalizationCallbacks(), ExecutionStatus::RETURNED);
   // The first 2 records (objects) will be cleaned up.
   ASSERT_EQ(getCounter(), 2);
 
@@ -164,7 +161,7 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
   }
 
   runtime.collect("test");
-  runtime.cleanUpFinalizationCallbacks();
+  ASSERT_EQ(runtime.cleanUpFinalizationCallbacks(), ExecutionStatus::RETURNED);
   // The first 2 symbol targets will be cleaned up.
   ASSERT_EQ(getCounter(), 5);
 
@@ -182,7 +179,7 @@ TEST_F(FinalizationRegistryTest, CleanupTest) {
   ASSERT_TRUE(lv.fr->unregisterCells(runtime, lv.unregisterToken));
 
   runtime.collect("test");
-  runtime.cleanUpFinalizationCallbacks();
+  ASSERT_EQ(runtime.cleanUpFinalizationCallbacks(), ExecutionStatus::RETURNED);
   // The last target is unregistered. All previous target are cleaned up.
   ASSERT_EQ(getCounter(), 6);
 }
@@ -259,7 +256,8 @@ TEST_F(FinalizationRegistryTest, IndexReuseTest) {
 
     runtime.collect("test");
     // Should shrink unused entries.
-    runtime.cleanUpFinalizationCallbacks();
+    ASSERT_EQ(
+        runtime.cleanUpFinalizationCallbacks(), ExecutionStatus::RETURNED);
     // All registered cells have been unregistered.
     ASSERT_EQ(getCounter(), 0);
 
@@ -327,7 +325,7 @@ TEST_F(FinalizationRegistryTest, IndexReuseTest) {
 
   // Verify no cleanup happened (all were unregistered, none died).
   runtime.collect("test");
-  runtime.cleanUpFinalizationCallbacks();
+  ASSERT_EQ(runtime.cleanUpFinalizationCallbacks(), ExecutionStatus::RETURNED);
   ASSERT_EQ(getCounter(), 0);
 }
 

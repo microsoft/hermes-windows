@@ -134,7 +134,6 @@ target_link_libraries(hermesinspector
   hermesPublic
   jsi
 )
-hermes_link_icu(hermesinspector)
 
 # Export the required header directory
 target_include_directories(hermesinspector PUBLIC

@@ -9,6 +9,11 @@
 
 #include "asmjit/a64.h"
 
+#include "JitEmitter.h"
+
+#include <deque>
+#include <vector>
+
 namespace hermes::vm::arm64 {
 
 class JITContext::Impl {
@@ -20,6 +25,20 @@ class JITContext::Impl {
   uint16_t prevHCId{0};
 
   static constexpr uint16_t kHCIdOverflow = 0xFFFF;
+
+  /// The largest id assignable to a hidden class. Lowered only by tests, so
+  /// that the exhaustion path can be reached without interning 65535 hidden
+  /// classes; the true ceiling is the width of HiddenClass::lazyJITId_.
+  uint16_t hcIdLimit{kHCIdOverflow};
+
+  /// Type assert site tables, one per function compiled with
+  /// -Xjit-emit-type-asserts. Each table's address is baked into that
+  /// function's failure tail, so entries must keep their addresses as more
+  /// functions are compiled; a deque never moves an existing element. Empty
+  /// unless the flag is set. A function whose compilation is abandoned
+  /// leaves its table behind, which costs a little memory but does not
+  /// outlive the runtime.
+  std::deque<std::vector<TypeAssertSite>> typeAssertSites{};
 
   /// Hidden classes that we used by the emitted JIT code. Since we never
   /// throw away code, they can never be freed.

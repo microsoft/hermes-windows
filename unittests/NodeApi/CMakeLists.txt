@@ -82,6 +82,9 @@ add_executable(node_lite
   string_utils.h
 )
 target_link_libraries(node_lite PRIVATE libshared)
+# Use the same hybrid CRT as hermes.dll and the other test executables so CRT
+# report settings apply to failures inside the DLL as well as the test host.
+target_link_options(node_lite PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 if(UNIX AND NOT APPLE)
   target_link_libraries(node_lite PRIVATE dl)
 endif()
