@@ -20,7 +20,7 @@
 // JSI version defines set of features available in the API.
 // Each significant API change must be under a new version.
 // The JSI_VERSION can be provided as a parameter to compiler
-// or in the optional "jsi_version.h" file.
+// or in the optional "jsi-version.h" file.
 
 #ifndef JSI_VERSION
 #if defined(__has_include) && __has_include(<jsi/jsi-version.h>)
@@ -29,7 +29,7 @@
 #endif
 
 #ifndef JSI_VERSION
-// Use the latest version by default
+// Keep version 21 as the public header fallback.
 #define JSI_VERSION 21
 #endif
 
