@@ -71,10 +71,6 @@
 #include <jsi/instrumentation.h>
 #include <jsi/threadsafe.h>
 
-#ifdef __ANDROID__
-#include <fbjni/fbjni.h>
-#endif
-
 #ifdef HERMESVM_LLVM_PROFILE_DUMP
 extern "C" {
 int __llvm_profile_dump(void);
@@ -255,40 +251,6 @@ namespace {
 using EventLoopCallback = const std::function<void()>;
 using ScheduleCallbackFunc = std::function<void(EventLoopCallback)>;
 
-/// Return the runner to install on the finalizer worker thread when the
-/// embedder did not configure one: a JNI ThreadScope wrapper on Android, and
-/// an empty runner, which leaves the thread unwrapped, everywhere else.
-vm::ThreadRunner makeDefaultFinalizerThreadRunner() {
-#ifdef __ANDROID__
-  return [](std::function<void()> run) {
-    // Finalizers may release JNI references, which requires the thread to be
-    // attached to the JVM. ThreadScope's constructor throws when fbjni has no
-    // JavaVM. Nothing may escape into SerialExecutor, which is compiled
-    // without exceptions, so report any failure as a Hermes fatal error
-    // instead of letting it terminate the process without a diagnostic.
-    try {
-      const facebook::jni::ThreadScope scope;
-      run();
-    } catch (const std::exception &e) {
-      ::hermes::hermes_fatal(
-          std::string("Exception on the JSI finalizer thread: ") + e.what());
-    } catch (...) {
-      ::hermes::hermes_fatal("Unknown exception on the JSI finalizer thread");
-    }
-  };
-#else
-  return {};
-#endif
-}
-
-/// Return the embedder's finalizer thread runner, falling back to the platform
-/// default when none was configured. A configured runner is used as-is, so an
-/// explicitly empty one suppresses the platform default.
-vm::ThreadRunner finalizerThreadRunner(const vm::RuntimeConfig &runtimeConfig) {
-  auto runner = runtimeConfig.getFinalizerThreadRunner();
-  return runner ? std::move(*runner) : makeDefaultFinalizerThreadRunner();
-}
-
 class HermesRuntimeImpl final : public HermesRuntime,
                                 private IHermesTestHelpers,
                                 private InstallHermesFatalErrorHandler,
@@ -307,11 +269,14 @@ class HermesRuntimeImpl final : public HermesRuntime,
         rt_(::hermes::vm::Runtime::create(runtimeConfig)),
         runtime_(*rt_),
         vmExperimentFlags_(runtimeConfig.getVMExperimentFlags()),
-        finalizerExecutor_(
-            0,
-            ::hermes::SerialExecutor::kDefaultTimeout,
-            finalizerThreadRunner(runtimeConfig)),
         mutatorScope{*this} {
+    // Fork divergence: an unset runner preserves pre-sync inline finalization.
+    // Only an explicitly supplied runner (even an empty one) opts into a
+    // worker.
+    if (auto runner = runtimeConfig.getFinalizerThreadRunner()) {
+      finalizerExecutor_.emplace(
+          0, ::hermes::SerialExecutor::kDefaultTimeout, std::move(*runner));
+    }
 #ifdef HERMES_ENABLE_DEBUGGER
     compileFlags_.debug = true;
 #endif
@@ -979,8 +944,11 @@ class HermesRuntimeImpl final : public HermesRuntime,
         : rt_(rt), ho_(ho) {}
 
     ~JsiProxy() {
-      rt_.finalizerExecutor_.add(
-          [ho = std::move(ho_)]() mutable { ho.reset(); });
+      // Fork divergence: otherwise ho_ is destroyed inline, as before sync.
+      if (rt_.finalizerExecutor_) {
+        rt_.finalizerExecutor_->add(
+            [ho = std::move(ho_)]() mutable { ho.reset(); });
+      }
     }
 
     vm::CallResult<vm::HermesValue> get(vm::SymbolID id) override {
@@ -1143,7 +1111,12 @@ class HermesRuntimeImpl final : public HermesRuntime,
 
     static void finalize(void *context) {
       auto *hfc = reinterpret_cast<HFContext *>(context);
-      hfc->hermesRuntimeImpl.finalizerExecutor_.add([hfc]() { delete hfc; });
+      // Fork divergence: preserve the pre-sync VM-finalizer destruction point.
+      if (auto &executor = hfc->hermesRuntimeImpl.finalizerExecutor_) {
+        executor->add([hfc]() { delete hfc; });
+      } else {
+        delete hfc;
+      }
     }
 
     jsi::HostFunctionType hostFunction;
@@ -1162,7 +1135,12 @@ class HermesRuntimeImpl final : public HermesRuntime,
     /// finalize the NativeState object.
     static void finalize(vm::GC &, vm::NativeState *ns) {
       auto *context = reinterpret_cast<NativeStateContext *>(ns->context());
-      context->runtime.finalizerExecutor_.add([context]() { delete context; });
+      // Fork divergence: preserve the pre-sync VM-finalizer destruction point.
+      if (auto &executor = context->runtime.finalizerExecutor_) {
+        executor->add([context]() { delete context; });
+      } else {
+        delete context;
+      }
     }
   };
 
@@ -1407,12 +1385,12 @@ class HermesRuntimeImpl final : public HermesRuntime,
       UUIDInfo>
       dataMap_;
 
-  /// Executor used to finalize NativeState, HostFunction, and HostObjects on
-  /// a background thread so that GC collection is not blocked by potentially
-  /// expensive clean-up work. The destructor explicitly calls rt_.reset()
-  /// before this member is destroyed to ensure all clean-up tasks are queued
-  /// before the executor drains and joins.
-  ::hermes::SerialExecutor finalizerExecutor_;
+  /// Fork divergence: absent unless a finalizer runner was explicitly supplied.
+  /// Finalize NativeState, HostFunction, and HostObjects on a background thread
+  /// so GC collection is not blocked by expensive clean-up work. The destructor
+  /// explicitly calls rt_.reset() before this member is destroyed to ensure all
+  /// clean-up tasks are queued before the executor drains and joins.
+  std::optional<::hermes::SerialExecutor> finalizerExecutor_;
 
   /// Provided by the integrator for the Runtime to schedule a task. This is
   /// called whenever the Hermes Runtime wants to run a task, but should not

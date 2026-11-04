@@ -87,7 +87,7 @@ if(HERMES_THREAD_SAFETY_ANALYSIS)
 endif()
 
 if(HERMES_IS_ANDROID)
-  # hermes.cpp may wrap the finalizer worker thread in an fbjni ThreadScope.
+  # Retain fbjni linkage for Android API consumers and explicit JNI runners.
   set(API_JNI_DEPS fbjni::fbjni)
 endif()
 
