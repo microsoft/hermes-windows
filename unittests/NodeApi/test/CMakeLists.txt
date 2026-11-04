@@ -7,7 +7,18 @@ else()
   set(npm "npm")
 endif()
 
-# Copy JS tools and the .npmrc selecting the anonymous PackageFeedProxy.
+# The committed .npmrc names no registry because Dependabot reads it, so pass
+# the registry to "npm ci" explicitly.
+set(HERMES_NPM_REGISTRY "https://packagefeedproxy.microsoft.io/npm/"
+  CACHE STRING
+  "npm registry for the Node-API test tools; empty uses the npm configuration")
+if(HERMES_NPM_REGISTRY)
+  set(npmRegistryArgs --registry "${HERMES_NPM_REGISTRY}")
+else()
+  set(npmRegistryArgs)
+endif()
+
+# Copy JS tools and their npm configuration.
 add_custom_command(
   OUTPUT
     ${CMAKE_CURRENT_BINARY_DIR}/.npmrc
@@ -33,7 +44,7 @@ add_custom_command(
     ${CMAKE_CURRENT_BINARY_DIR}/.npmrc
     ${CMAKE_CURRENT_BINARY_DIR}/package.json
     ${CMAKE_CURRENT_BINARY_DIR}/package-lock.json
-  COMMAND ${npm} ci
+  COMMAND ${npm} ci ${npmRegistryArgs}
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 add_custom_target(installNodeApiTestJsTools

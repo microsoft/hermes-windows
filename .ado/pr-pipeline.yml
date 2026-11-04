@@ -24,6 +24,7 @@ schedules:
 
 variables:
   - template: codeql-variables.yml
+  - template: npm-variables.yml
 
 extends:
   template: build-template.yml@self

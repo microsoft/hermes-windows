@@ -1,0 +1,12 @@
+#
+# Package registry variables for the npm and Yarn restores in the pipelines.
+#
+
+variables:
+  # Route npm and Yarn through the anonymous PackageFeedProxy. The committed
+  # .npmrc and .yarnrc.yml files name no registry because Dependabot reads them
+  # and cannot reach the proxy. See "Package feeds" in .ado/scripts/README.md.
+  - name: NPM_CONFIG_REGISTRY
+    value: https://packagefeedproxy.microsoft.io/npm/
+  - name: YARN_NPM_REGISTRY_SERVER
+    value: https://packagefeedproxy.microsoft.io/npm/

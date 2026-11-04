@@ -176,9 +176,6 @@ extends:
               value: --sanitize-handles
             ${{ else }}:
               value: --no-sanitize-handles
-            # Use the anonymous PackageFeedProxy for npm restores.
-          - name: NPM_CONFIG_REGISTRY
-            value: https://packagefeedproxy.microsoft.io/npm/
           - name: NPM_CONFIG_CACHE
             value: $(Agent.TempDirectory)/.npmCache
             # Fail instead of letting npx silently fetch a networked tool.

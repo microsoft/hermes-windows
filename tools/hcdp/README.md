@@ -3,7 +3,8 @@
 In the hcdp directory:
 
 1. Build `hcdp binary` using BUCK or CMake
-2. Install npm packages
+2. Install npm packages after configuring the
+   [package feed](../../.ado/scripts/README.md#package-feeds)
 ```
 npm ci
 ```

@@ -13,7 +13,9 @@ yarn add --dev @babel/cli @babel/core @babel/preset-env @babel/preset-flow jest 
 
 ## Testing
 
-To run the tests in this package, run the following commands from the Hermes repository root:
+To run the tests in this package, configure the
+[package feed](../../../../../.ado/scripts/README.md#package-feeds), then run
+the following commands from the Hermes repository root:
 
 1. `node .yarn/releases/yarn-4.13.0.cjs --cwd API/hermes/cdp/tools/hermes-inspector-msggen install --immutable`
 2. `node .yarn/releases/yarn-4.13.0.cjs --cwd API/hermes/cdp/tools/hermes-inspector-msggen test`
