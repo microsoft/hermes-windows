@@ -1,4 +1,6 @@
 version: 2
+# Keep lockfiles registry-independent; do not declare anonymous registries here.
+# npm/Yarn restore sources are configured in .npmrc and .yarnrc.yml.
 updates:
 - package-ecosystem: npm
   directories:
@@ -31,7 +33,7 @@ updates:
   commit-message:
     prefix: 📦
   open-pull-requests-limit: 5
-  # Matches npmMinimalAgeGate in .yarnrc.yml: the feed serves new versions after 7 days.
+  # Matches npmMinimalAgeGate: PackageFeedProxy has a roughly 7-day cooldown.
   cooldown:
     default-days: 8
 - package-ecosystem: "github-actions"

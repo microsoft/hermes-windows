@@ -53,7 +53,7 @@ if [ "$COMMITS_BEHIND" -gt 0 ]; then
   exit 1
 fi
 
-$NODE "$PRETTIER_YARN" config set npmRegistryServer "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/"
+$NODE "$PRETTIER_YARN" config set npmRegistryServer "https://packagefeedproxy.microsoft.io/npm/"
 $NODE "$PRETTIER_YARN" config set httpProxy "http://fwdproxy:8080"
 $NODE "$PRETTIER_YARN" config set httpsProxy "http://fwdproxy:8080"
 

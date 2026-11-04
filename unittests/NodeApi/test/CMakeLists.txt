@@ -7,8 +7,7 @@ else()
   set(npm "npm")
 endif()
 
-# copy JS Tools package files. The .npmrc pins the registry to the approved ADO
-# feed so `npm ci` below does not reach registry.npmjs.org.
+# Copy JS tools and the .npmrc selecting the anonymous PackageFeedProxy.
 add_custom_command(
   OUTPUT
     ${CMAKE_CURRENT_BINARY_DIR}/.npmrc
@@ -16,6 +15,7 @@ add_custom_command(
     ${CMAKE_CURRENT_BINARY_DIR}/package.json
     ${CMAKE_CURRENT_BINARY_DIR}/package-lock.json
     ${CMAKE_CURRENT_BINARY_DIR}/postinstall.mjs
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/.npmrc
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${CMAKE_CURRENT_SOURCE_DIR}/.npmrc
     ${CMAKE_CURRENT_SOURCE_DIR}/babel.config.js

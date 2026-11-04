@@ -8,7 +8,8 @@ Tests exception stack traces.
 
 Note: make sure each function occupies a separate line so that line numbers
 in the symbolicated traces will match the original trace.
-Then, run `uglify` (can be installed via `npm install -g uglify-js`)
+Then, run `uglify` (install it with
+`npm install -g uglify-js --registry=https://packagefeedproxy.microsoft.io/npm/`).
 For example:
 ```
 uglifyjs throw.js --source-map -o throw.min.js
@@ -28,5 +29,6 @@ To update this test, run:
 
 ## prog2/ directory.
 
-Tests automatic source map detection. To regenerate, from within that directory run `npm install` as
-needed and run `./gen.sh`
+Tests automatic source map detection. To regenerate, from within that directory
+run `npm install --registry=https://packagefeedproxy.microsoft.io/npm/` as needed
+and run `./gen.sh`.
