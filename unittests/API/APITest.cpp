@@ -151,7 +151,8 @@ TEST(HermesRuntimeConfigTest, EmptyFinalizerThreadRunner) {
 struct OwnerFinalization {
   std::atomic<size_t> count{0};
   std::atomic<std::thread::id> thread{std::thread::id{}};
-#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES && \
+    !defined(NDEBUG)
   // Only inline owners may consult the GC; workers can outlive the heap.
   ::hermes::vm::GC *gc{nullptr};
   std::atomic<bool> onGCBackgroundThread{false};
@@ -167,7 +168,8 @@ class FinalizedOwner final : public HostObject, public NativeState {
         weak_(runtime, Object(runtime)) {}
 
   ~FinalizedOwner() override {
-#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES && \
+    !defined(NDEBUG)
     if (observation_.gc) {
       observation_.onGCBackgroundThread =
           observation_.gc->calledByBackgroundThread();
@@ -202,7 +204,8 @@ TEST_P(OwnerFinalizationTest, OwnersFinalizeOnceOnSelectedThreadSynchronously) {
     });
   }
   auto runtime = makeHermesRuntime(builder.build());
-#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES && \
+    !defined(NDEBUG)
   // Per-allocation GC can promote these owners and sweep them concurrently.
   // Recognize the actual GC thread, never an arbitrary finalizer worker.
   if (runnerMode == 0) {
@@ -235,9 +238,16 @@ TEST_P(OwnerFinalizationTest, OwnersFinalizeOnceOnSelectedThreadSynchronously) {
   }
   const auto expectInlineThread = [&](const OwnerFinalization &observation) {
 #if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES
+#ifdef NDEBUG
+  // This configuration checks exactly-once finalization only: release builds
+  // cannot identify the Hades background thread, and concurrent sweeping may
+  // finalize off the caller. Debug-sanitize and non-sanitize builds prove
+  // inline-thread identity.
+#else
     EXPECT_TRUE(
         observation.thread.load() == callerThread ||
         observation.onGCBackgroundThread.load());
+#endif
 #else
     EXPECT_EQ(observation.thread.load(), callerThread);
 #endif

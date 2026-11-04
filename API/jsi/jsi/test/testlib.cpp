@@ -587,7 +587,8 @@ TEST_P(JSITest, ProxyArraySupportsLengthAndIndexedAccess) {
   EXPECT_EQ(trapped.length(rt), 2);
   EXPECT_EQ(trapped.getValueAtIndex(rt, 0).getNumber(), 55);
   eval("var revoked = Proxy.revocable([], {}); revoked.revoke();");
-  EXPECT_THROW(eval("revoked.proxy").getObject(rt).getArray(rt), JSError);
+  // Use the checked conversion: getArray only validates in debug builds.
+  EXPECT_THROW(eval("revoked.proxy").getObject(rt).asArray(rt), JSError);
 }
 #endif
 
