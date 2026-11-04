@@ -73,3 +73,6 @@ target_link_libraries(APITests
 
 add_hermes_unittest(APILeanTests APILeanTest.cpp)
 target_link_libraries(APILeanTests hermesvmlean_a)
+
+# Compile legacy public JSI epochs without linking them into the engine.
+add_subdirectory(JSICompile)
