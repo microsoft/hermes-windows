@@ -14,8 +14,7 @@ import {
   lintRepository,
 } from "./npm-source-lint.ts";
 
-const APPROVED_REGISTRY =
-  "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/";
+const APPROVED_REGISTRY = "https://packagefeedproxy.microsoft.io/npm/";
 
 function dependabot(...directories: string[]): string {
   return `version: 2
@@ -207,7 +206,7 @@ test("accepts a package-lock local source inside the repository", () => {
   assertValid(files);
 });
 
-test("rejects missing npm registry configuration", () => {
+test("requires committed npm registry configuration", () => {
   assertViolation(
     removeFile(validNpmFixture(), "project/.npmrc"),
     /committed npm registry configuration is missing/,
@@ -218,6 +217,27 @@ test("rejects missing omit-lockfile-registry-resolved", () => {
   const files = validNpmFixture();
   files["project/.npmrc"] = `registry=${APPROVED_REGISTRY}\n`;
   assertViolation(files, /omit-lockfile-registry-resolved/);
+});
+
+test("rejects a missing npm registry setting", () => {
+  const files = validNpmFixture();
+  files["project/.npmrc"] = "omit-lockfile-registry-resolved=true\n";
+  assertViolation(files, /registry.*required.*packagefeedproxy/);
+});
+
+test("rejects an unapproved npm registry", () => {
+  const files = validNpmFixture();
+  files["project/.npmrc"] = files["project/.npmrc"].replace(
+    APPROVED_REGISTRY,
+    "https://packages.example.com/npm/",
+  );
+  assertViolation(files, /registry.*required.*packagefeedproxy/);
+});
+
+test("accepts a scoped npm registry on the approved proxy", () => {
+  const files = validNpmFixture();
+  files["project/.npmrc"] += `@example:registry=${APPROVED_REGISTRY}\n`;
+  assertValid(files);
 });
 
 test("rejects an npm scoped registry override", () => {
@@ -252,6 +272,65 @@ test("rejects a Yarn public-registry URL", () => {
   resolution: "https://registry.yarnpkg.com/bad/-/bad-1.0.0.tgz"
 `;
   assertViolation(files, /registry\.yarnpkg\.com/);
+});
+
+for (const [name, registry] of [
+  [
+    "the old ADO feed",
+    "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/",
+  ],
+  ["PackageFeedProxy", APPROVED_REGISTRY],
+  [
+    "an ms-feed host",
+    "https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/",
+  ],
+]) {
+  const url = `${registry}example/-/example-1.0.0.tgz`;
+
+  test(`rejects an npm resolved download URL from ${name}`, () => {
+    const files = validNpmFixture();
+    const lock = JSON.parse(files["project/package-lock.json"]);
+    lock.packages["node_modules/example"].resolved = url;
+    files["project/package-lock.json"] = JSON.stringify(lock);
+    assertViolation(files, /registry dependencies with no resolved field/);
+  });
+
+  test(`rejects a literal Yarn download URL from ${name}`, () => {
+    const files = validYarnFixture();
+    files["project/yarn.lock"] = files["project/yarn.lock"].replace(
+      'resolution: "example@npm:1.0.0"',
+      `resolution: "${url}"`,
+    );
+    assertViolation(files, /no download URLs/);
+  });
+
+  test(`rejects an encoded Yarn archive URL from ${name}`, () => {
+    const files = validYarnFixture();
+    files["project/yarn.lock"] = files["project/yarn.lock"].replace(
+      'resolution: "example@npm:1.0.0"',
+      `resolution: "example@npm:1.0.0::__archiveUrl=${encodeURIComponent(url)}"`,
+    );
+    assertViolation(files, /__archiveUrl\) are forbidden/);
+  });
+}
+
+test("rejects a Yarn archive URL recorded only in a descriptor", () => {
+  const files = validYarnFixture();
+  files["project/yarn.lock"] = files["project/yarn.lock"].replace(
+    '"example@npm:^1.0.0":',
+    `"example@npm:^1.0.0::__archiveUrl=${encodeURIComponent(`${APPROVED_REGISTRY}example/-/example-1.0.0.tgz`)}":`,
+  );
+  assertViolation(files, /__archiveUrl\) are forbidden/);
+});
+
+test("rejects a Yarn archive URL encoded inside a patch locator", () => {
+  const files = validYarnFixture();
+  const locator = `example@npm:1.0.0::__archiveUrl=${encodeURIComponent(`${APPROVED_REGISTRY}example/-/example-1.0.0.tgz`)}`;
+  files["project/yarn.lock"] = files["project/yarn.lock"].replace(
+    'resolution: "example@npm:1.0.0"',
+    `resolution: "example@patch:${encodeURIComponent(locator)}#./example.patch"`,
+  );
+  assertViolation(files, /__archiveUrl\) are forbidden/);
 });
 
 test("rejects the wrong Yarn registry", () => {

@@ -8,8 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import yaml from "js-yaml";
 
-const APPROVED_REGISTRY =
-  "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/";
+const APPROVED_REGISTRY = "https://packagefeedproxy.microsoft.io/npm/";
 const YARN_VERSION = "4.13.0";
 const YARN_PACKAGE_MANAGER = `yarn@${YARN_VERSION}`;
 const YARN_PATH = `.yarn/releases/yarn-${YARN_VERSION}.cjs`;
@@ -597,18 +596,20 @@ function validateNpmProject(
         errors,
       );
       for (const [key, value] of config) {
-        if (key !== "registry" && key.endsWith(":registry")) {
-          if (value !== APPROVED_REGISTRY) {
-            errors.push(
-              formatError(
-                npmrc,
-                findLine(content, value),
-                key,
-                value,
-                APPROVED_REGISTRY,
-              ),
-            );
-          }
+        if (
+          key !== "registry" &&
+          key.endsWith(":registry") &&
+          value !== APPROVED_REGISTRY
+        ) {
+          errors.push(
+            formatError(
+              npmrc,
+              findLine(content, value),
+              key,
+              value,
+              APPROVED_REGISTRY,
+            ),
+          );
         }
         if (isCredentialKey(key)) {
           errors.push(
@@ -637,16 +638,13 @@ function validateNpmProject(
         path.join(root, project.lockfile),
         "utf8",
       );
-      const required = value.startsWith(APPROVED_REGISTRY)
-        ? "registry dependencies with no resolved field"
-        : `a source under ${APPROVED_REGISTRY}`;
       errors.push(
         formatError(
           project.lockfile,
           findLine(content, value),
           field,
           value,
-          required,
+          "registry dependencies with no resolved field",
         ),
       );
     } else {
@@ -715,6 +713,12 @@ function validateYarnProject(
     );
     return;
   }
+  const archiveUrlIndex = content.indexOf("__archiveUrl");
+  if (archiveUrlIndex !== -1) {
+    errors.push(
+      `${project.lockfile}:${lineAt(content, archiveUrlIndex)}: Yarn download URLs (__archiveUrl) are forbidden; keep registry-independent npm resolutions.`,
+    );
+  }
   let lock: unknown;
   try {
     lock = yaml.load(content);
@@ -739,18 +743,18 @@ function validateYarnProject(
     if (typeof value !== "string") {
       return;
     }
-    for (const source of value.match(/https?:\/\/[^\s"'<>]+/gi) ?? []) {
-      if (!source.startsWith(APPROVED_REGISTRY)) {
-        errors.push(
-          formatError(
-            project.lockfile,
-            findLine(content, source),
-            field,
-            source,
-            `a source under ${APPROVED_REGISTRY}`,
-          ),
-        );
-      }
+    for (const source of decodeReference(value).match(
+      /https?:\/\/[^\s"'<>]+/gi,
+    ) ?? []) {
+      errors.push(
+        formatError(
+          project.lockfile,
+          findLine(content, value),
+          field,
+          source,
+          "registry-independent npm resolutions with no download URLs",
+        ),
+      );
     }
     if (field.split(".").at(-1) === "resolution") {
       const reference = getLocatorReference(value);

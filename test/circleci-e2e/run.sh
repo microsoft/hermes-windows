@@ -28,9 +28,9 @@ done
 git clone --depth=1 https://github.com/facebook/react-native
 
 cd react-native
-npm install
+npm install --registry=https://packagefeedproxy.microsoft.io/npm/
 # Install new Hermes NPM.
-npm install "$hermes_npm_package"
+npm install --registry=https://packagefeedproxy.microsoft.io/npm/ "$hermes_npm_package"
 
 # Modify RN Tester app to print a log message at start-up
 echo "console.log('Using Hermes: ' + (global.HermesInternal != null));" >> packages/rn-tester/js/RNTesterApp.android.js
