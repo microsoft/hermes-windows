@@ -34,7 +34,7 @@
 /API/hermes_shared/
 
 # Local-only: Windows unit tests
-/unittests/NodeAPI/
+/unittests/NodeApi/
 /unittests/NodeApiJsi/
 
 # Local-only: Windows CMake modules

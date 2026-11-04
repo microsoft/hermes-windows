@@ -1792,11 +1792,9 @@ class JSI_EXPORT Object : public Pointer {
   bool isTypedArray(detail::RuntimeInterface& runtime) const {
     return runtime.isTypedArray(*this);
   }
-#endif
 
   /// \return true iff the Object is an Uint8Array. If so, then \c
   /// getUint8Array() will succeed
-#if JSI_VERSION >= 22
   bool isUint8Array(detail::RuntimeInterface& runtime) const {
     return runtime.isUint8Array(*this);
   }
@@ -2109,10 +2107,8 @@ class JSI_EXPORT ArrayBuffer : public Object {
   std::shared_ptr<MutableBuffer> tryGetMutableBuffer(detail::RuntimeInterface& runtime) const {
     return runtime.tryGetMutableBuffer(*this);
   }
-#endif
 
   /// \return true if the ArrayBuffer is detached, false otherwise.
-#if JSI_VERSION >= 22
   bool detached(detail::RuntimeInterface& runtime) const {
     return runtime.detached(*this);
   }
@@ -2277,9 +2273,7 @@ class JSI_EXPORT TypedArray : public Object {
   friend class Object;
   friend class Value;
   friend class Runtime;
-#if JSI_VERSION >= 22
   friend class IRuntime;
-#endif
   friend class Uint8Array;
 
   explicit TypedArray(Runtime::PointerValue* value) : Object(value) {}
@@ -2304,9 +2298,7 @@ class JSI_EXPORT Uint8Array : public TypedArray {
   friend class Object;
   friend class Value;
   friend class Runtime;
-#if JSI_VERSION >= 22
   friend class IRuntime;
-#endif
 
   explicit Uint8Array(Runtime::PointerValue* value) : TypedArray(value) {}
 };

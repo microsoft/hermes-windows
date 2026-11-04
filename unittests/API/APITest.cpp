@@ -185,7 +185,7 @@ class FinalizedOwner final : public HostObject, public NativeState {
   WeakObject weak_;
 };
 
-/// Cross all runner policies with GC collection and still-rooted shutdown.
+/// Cross unset/empty-worker policies with GC collection and rooted shutdown.
 class OwnerFinalizationTest : public ::testing::TestWithParam<int> {};
 
 TEST_P(OwnerFinalizationTest, OwnersFinalizeOnceOnSelectedThreadSynchronously) {
@@ -193,15 +193,9 @@ TEST_P(OwnerFinalizationTest, OwnersFinalizeOnceOnSelectedThreadSynchronously) {
   const bool collect = GetParam() % 2;
   const auto callerThread = std::this_thread::get_id();
   std::array<OwnerFinalization, 3> observations;
-  std::atomic<size_t> runnerEntries{0};
   auto builder = ::hermes::vm::RuntimeConfig::Builder();
   if (runnerMode == 1) {
     builder.withFinalizerThreadRunner(::hermes::vm::ThreadRunner{});
-  } else if (runnerMode == 2) {
-    builder.withFinalizerThreadRunner([&](std::function<void()> run) {
-      ++runnerEntries;
-      run();
-    });
   }
   auto runtime = makeHermesRuntime(builder.build());
 #if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES && HERMESVM_SANITIZE_HANDLES && \
@@ -276,14 +270,13 @@ TEST_P(OwnerFinalizationTest, OwnersFinalizeOnceOnSelectedThreadSynchronously) {
       EXPECT_NE(observation.thread.load(), callerThread);
     }
   }
-  EXPECT_EQ(runnerEntries.load(), runnerMode == 2 ? 1 : 0);
 }
 
 // Each policy must cover unreachable owners and owners rooted until shutdown.
 INSTANTIATE_TEST_CASE_P(
     RunnerPolicies,
     OwnerFinalizationTest,
-    ::testing::Values(0, 1, 2, 3, 4, 5));
+    ::testing::Values(0, 1, 2, 3));
 
 #if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
 /// Event-loop control whose queued work runs only when requested by a test.

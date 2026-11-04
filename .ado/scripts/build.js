@@ -747,6 +747,18 @@ function copyBuiltFilesToPkgStaging(buildParams) {
   }
 
   const dllSourcePath = path.join(buildPath, "API", "hermes_shared");
+  // Capture the VS environment once, then reuse it for every DLL copy.
+  const dumpbinEnv = Object.fromEntries(
+    execSync(`"${vcVarsAllBat}" ${getVCVarsAllBatArgs(buildParams)} && set`, {
+      encoding: "utf8",
+    })
+      .split(/\r?\n/)
+      .filter((line) => /^[^=]+=.*/.test(line))
+      .map((line) => [
+        line.slice(0, line.indexOf("=")),
+        line.slice(line.indexOf("=") + 1),
+      ]),
+  );
   const checkExports = (dll) => {
     if (copyFileIsOptional && !fs.existsSync(dll)) {
       console.log(
@@ -755,11 +767,11 @@ function copyBuiltFilesToPkgStaging(buildParams) {
       return;
     }
     const count = checkDllExports(dll, buildParams.platform, (file) =>
-      execSync(
-        `"${vcVarsAllBat}" ${getVCVarsAllBatArgs(buildParams)}` +
-          ` && dumpbin /nologo /exports "${file}"`,
-        { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
-      ),
+      execSync(`dumpbin /nologo /exports "${file}"`, {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        env: dumpbinEnv,
+      }),
     );
     console.log(`C-only export check passed: ${dll} (${count} exports)`);
   };
