@@ -162,6 +162,12 @@ sets `LGTM_INDEX_FILTERS` to keep the same paths out of its interpreted-language
 database, and `CodeQL.yml` at the repository root classifies third-party and
 test findings so they are not filed as SDL bugs.
 
+npm and Yarn restores use the anonymous PackageFeedProxy. CI
+(`.ado/npm-variables.yml`) and `.\dev` select it with `NPM_CONFIG_REGISTRY` and
+`YARN_NPM_REGISTRY_SERVER`. Committed `.npmrc` and `.yarnrc.yml` files must not
+set a registry: Dependabot reads them and cannot reach the proxy. See "Package
+feeds" in `.ado/scripts/README.md`.
+
 ## Code Architecture
 
 The build produces two VM variants: "regular" (full VM with compiler) and "lean" (excludes parser and compiler for smaller binary size).

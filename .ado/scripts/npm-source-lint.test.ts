@@ -14,7 +14,12 @@ import {
   lintRepository,
 } from "./npm-source-lint.ts";
 
-const APPROVED_REGISTRY = "https://packagefeedproxy.microsoft.io/npm/";
+const PACKAGE_FEED_PROXY = "https://packagefeedproxy.microsoft.io/npm/";
+// The lint rejects the registry key whatever its value.
+const OTHER_REGISTRIES = [
+  ["PackageFeedProxy", PACKAGE_FEED_PROXY],
+  ["the public npm registry", "https://registry.npmjs.org/"],
+] as const;
 
 function dependabot(...directories: string[]): string {
   return `version: 2
@@ -30,7 +35,7 @@ ${directories.map((directory) => `  - "${directory}"`).join("\n")}
 function validNpmFixture(): Record<string, string> {
   return {
     ".github/dependabot.yml": dependabot("/project"),
-    "project/.npmrc": `registry=${APPROVED_REGISTRY}\nomit-lockfile-registry-resolved=true\n`,
+    "project/.npmrc": "omit-lockfile-registry-resolved=true\n",
     "project/package.json": JSON.stringify({
       name: "npm-fixture",
       version: "1.0.0",
@@ -59,7 +64,8 @@ function validNpmFixture(): Record<string, string> {
 function validYarnFixture(): Record<string, string> {
   return {
     ".github/dependabot.yml": dependabot("/project"),
-    ".yarnrc.yml": `nodeLinker: node-modules\nnpmRegistryServer: "${APPROVED_REGISTRY}"\nyarnPath: .yarn/releases/yarn-4.13.0.cjs\n`,
+    ".yarnrc.yml":
+      "nodeLinker: node-modules\nyarnPath: .yarn/releases/yarn-4.13.0.cjs\n",
     ".yarn/releases/yarn-4.13.0.cjs": "module.exports = {};\n",
     "project/package.json": JSON.stringify({
       name: "yarn-fixture",
@@ -206,45 +212,120 @@ test("accepts a package-lock local source inside the repository", () => {
   assertValid(files);
 });
 
-test("requires committed npm registry configuration", () => {
+test("requires committed npm configuration", () => {
   assertViolation(
     removeFile(validNpmFixture(), "project/.npmrc"),
-    /committed npm registry configuration is missing/,
+    /committed npm configuration with omit-lockfile-registry-resolved=true is missing/,
   );
 });
 
 test("rejects missing omit-lockfile-registry-resolved", () => {
   const files = validNpmFixture();
-  files["project/.npmrc"] = `registry=${APPROVED_REGISTRY}\n`;
+  files["project/.npmrc"] = "save-exact=true\n";
   assertViolation(files, /omit-lockfile-registry-resolved/);
 });
 
-test("rejects a missing npm registry setting", () => {
-  const files = validNpmFixture();
-  files["project/.npmrc"] = "omit-lockfile-registry-resolved=true\n";
-  assertViolation(files, /registry.*required.*packagefeedproxy/);
-});
+for (const [name, registry] of OTHER_REGISTRIES) {
+  test(`rejects a committed npm registry on ${name}`, () => {
+    const files = validNpmFixture();
+    files["project/.npmrc"] += `registry=${registry}\n`;
+    assertViolation(
+      files,
+      /\.npmrc:\d+: registry is "[^"]+"; required no committed registry/,
+    );
+  });
 
-test("rejects an unapproved npm registry", () => {
+  test(`rejects a committed scoped npm registry on ${name}`, () => {
+    const files = validNpmFixture();
+    files["project/.npmrc"] += `@example:registry=${registry}\n`;
+    assertViolation(
+      files,
+      /\.npmrc:\d+: @example:registry is "[^"]+"; required no committed registry/,
+    );
+  });
+
+  test(`rejects a committed Yarn registry on ${name}`, () => {
+    const files = validYarnFixture();
+    files[".yarnrc.yml"] += `npmRegistryServer: "${registry}"\n`;
+    assertViolation(
+      files,
+      /\.yarnrc\.yml:\d+: npmRegistryServer is "[^"]+"; required no committed registry/,
+    );
+  });
+
+  test(`rejects a committed scoped Yarn registry on ${name}`, () => {
+    const files = validYarnFixture();
+    files[".yarnrc.yml"] +=
+      `npmScopes:\n  example:\n    npmRegistryServer: "${registry}"\n`;
+    assertViolation(
+      files,
+      /\.yarnrc\.yml:\d+: npmScopes\.example\.npmRegistryServer is "[^"]+"; required no committed registry/,
+    );
+  });
+}
+
+test("rejects a registry in a .npmrc that no package project owns", () => {
   const files = validNpmFixture();
-  files["project/.npmrc"] = files["project/.npmrc"].replace(
-    APPROVED_REGISTRY,
-    "https://packages.example.com/npm/",
+  files[".npmrc"] = `registry=${PACKAGE_FEED_PROXY}\n`;
+  assertViolation(
+    files,
+    /(^|\n)\.npmrc:1: registry is "[^"]+"; required no committed registry/,
   );
-  assertViolation(files, /registry.*required.*packagefeedproxy/);
 });
 
-test("accepts a scoped npm registry on the approved proxy", () => {
-  const files = validNpmFixture();
-  files["project/.npmrc"] += `@example:registry=${APPROVED_REGISTRY}\n`;
-  assertValid(files);
+test("rejects a registry in a .yarnrc.yml that no Yarn project uses", () => {
+  const files = validYarnFixture();
+  files["tools/.yarnrc.yml"] = `npmRegistryServer: "${PACKAGE_FEED_PROXY}"\n`;
+  assertViolation(
+    files,
+    /tools\/\.yarnrc\.yml:1: npmRegistryServer is "[^"]+"; required no committed registry/,
+  );
 });
 
-test("rejects an npm scoped registry override", () => {
+test("reports a registry in a shared .yarnrc.yml once", () => {
+  const files = validYarnFixture();
+  files[".github/dependabot.yml"] = dependabot("/project", "/other");
+  files["other/package.json"] = files["project/package.json"];
+  files["other/yarn.lock"] = files["project/yarn.lock"];
+  files[".yarnrc.yml"] += `npmRegistryServer: "${PACKAGE_FEED_PROXY}"\n`;
+  const root = createFixture(files);
+  try {
+    const { errors } = lintRepository(root, { emit: false });
+    assert.equal(
+      errors.filter((error) => error.includes("npmRegistryServer is")).length,
+      1,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reports an invalid shared .yarnrc.yml once", () => {
+  const files = validYarnFixture();
+  files[".github/dependabot.yml"] = dependabot("/project", "/other");
+  files["other/package.json"] = files["project/package.json"];
+  files["other/yarn.lock"] = files["project/yarn.lock"];
+  files[".yarnrc.yml"] = "nodeLinker: [node-modules\n";
+  const root = createFixture(files);
+  try {
+    const { errors } = lintRepository(root, { emit: false });
+    assert.equal(
+      errors.filter((error) => error.startsWith(".yarnrc.yml: invalid YAML"))
+        .length,
+      1,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects credentials in a .npmrc that no package project owns", () => {
   const files = validNpmFixture();
-  files["project/.npmrc"] +=
-    "@example:registry=https://packages.example.com/npm/\n";
-  assertViolation(files, /@example:registry/);
+  files[".npmrc"] = "//example.test/:_authToken=secret\n";
+  assertViolation(
+    files,
+    /(^|\n)\.npmrc:1: committed npm credentials are forbidden/,
+  );
 });
 
 test("rejects committed npm credentials", () => {
@@ -279,7 +360,7 @@ for (const [name, registry] of [
     "the old ADO feed",
     "https://pkgs.dev.azure.com/ms/react-native/_packaging/react-native-public/npm/registry/",
   ],
-  ["PackageFeedProxy", APPROVED_REGISTRY],
+  ["PackageFeedProxy", PACKAGE_FEED_PROXY],
   [
     "an ms-feed host",
     "https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/",
@@ -318,35 +399,19 @@ test("rejects a Yarn archive URL recorded only in a descriptor", () => {
   const files = validYarnFixture();
   files["project/yarn.lock"] = files["project/yarn.lock"].replace(
     '"example@npm:^1.0.0":',
-    `"example@npm:^1.0.0::__archiveUrl=${encodeURIComponent(`${APPROVED_REGISTRY}example/-/example-1.0.0.tgz`)}":`,
+    `"example@npm:^1.0.0::__archiveUrl=${encodeURIComponent(`${PACKAGE_FEED_PROXY}example/-/example-1.0.0.tgz`)}":`,
   );
   assertViolation(files, /__archiveUrl\) are forbidden/);
 });
 
 test("rejects a Yarn archive URL encoded inside a patch locator", () => {
   const files = validYarnFixture();
-  const locator = `example@npm:1.0.0::__archiveUrl=${encodeURIComponent(`${APPROVED_REGISTRY}example/-/example-1.0.0.tgz`)}`;
+  const locator = `example@npm:1.0.0::__archiveUrl=${encodeURIComponent(`${PACKAGE_FEED_PROXY}example/-/example-1.0.0.tgz`)}`;
   files["project/yarn.lock"] = files["project/yarn.lock"].replace(
     'resolution: "example@npm:1.0.0"',
     `resolution: "example@patch:${encodeURIComponent(locator)}#./example.patch"`,
   );
   assertViolation(files, /__archiveUrl\) are forbidden/);
-});
-
-test("rejects the wrong Yarn registry", () => {
-  const files = validYarnFixture();
-  files[".yarnrc.yml"] = files[".yarnrc.yml"].replace(
-    APPROVED_REGISTRY,
-    "https://registry.yarnpkg.com/",
-  );
-  assertViolation(files, /npmRegistryServer|registry\.yarnpkg\.com/);
-});
-
-test("rejects a Yarn scoped registry override", () => {
-  const files = validYarnFixture();
-  files[".yarnrc.yml"] +=
-    `npmScopes:\n  example:\n    npmRegistryServer: "https://packages.example.com/npm/"\n`;
-  assertViolation(files, /npmScopes\.example\.npmRegistryServer/);
 });
 
 test("rejects committed Yarn credentials", () => {

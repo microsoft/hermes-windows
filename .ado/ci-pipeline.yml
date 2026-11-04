@@ -35,6 +35,7 @@ variables:
   - name: tags
     value: production,externalfacing
   - template: codeql-variables.yml
+  - template: npm-variables.yml
 
 extends:
   template: build-template.yml@self

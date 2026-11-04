@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 
 import yaml from "js-yaml";
 
-const APPROVED_REGISTRY = "https://packagefeedproxy.microsoft.io/npm/";
+// Dependabot reads committed .npmrc and .yarnrc.yml files but cannot reach
+// PackageFeedProxy, so restores select their registry through the environment.
+const NO_COMMITTED_REGISTRY =
+  "no committed registry; select it through the environment because Dependabot reads this file";
 const YARN_VERSION = "4.13.0";
 const YARN_PACKAGE_MANAGER = `yarn@${YARN_VERSION}`;
 const YARN_PATH = `.yarn/releases/yarn-${YARN_VERSION}.cjs`;
@@ -98,6 +101,7 @@ export function lintRepository(
     errors,
   );
   validateBlockedDomains(root, sourceFiles, errors);
+  validateCommittedConfigs(root, sourceFiles, errors);
   validatePackageManifests(root, sourceFiles, dependabotDirectories, errors);
   const projects = getProjects(
     root,
@@ -193,11 +197,73 @@ function validateBlockedDomains(
             lineAt(content, index),
             "package source",
             domain,
-            `sources under ${APPROVED_REGISTRY}`,
+            "no public registry host",
           ),
         );
       }
     }
+  }
+}
+
+// Dependabot also reads .npmrc and .yarnrc.yml files from parent directories,
+// so check every committed copy, not only those that a package project owns.
+function validateCommittedConfigs(
+  root: string,
+  sourceFiles: Set<string>,
+  errors: string[],
+): void {
+  for (const file of sourceFiles) {
+    const isNpmrc = /(^|\/)\.npmrc$/.test(file);
+    if (!isNpmrc && !/(^|\/)\.yarnrc\.yml$/.test(file)) {
+      continue;
+    }
+    const content = readText(root, file, errors);
+    if (content === undefined) {
+      continue;
+    }
+    if (isNpmrc) {
+      for (const [key, value] of parseNpmrc(content)) {
+        if (key === "registry" || key.endsWith(":registry")) {
+          errors.push(
+            formatError(
+              file,
+              findLine(content, value),
+              key,
+              value,
+              NO_COMMITTED_REGISTRY,
+            ),
+          );
+        }
+        if (isCredentialKey(key)) {
+          errors.push(
+            `${file}:${findLine(content, key) ?? 1}: committed npm credentials are forbidden (${key}).`,
+          );
+        }
+      }
+      continue;
+    }
+    let config: unknown;
+    try {
+      config = yaml.load(content);
+    } catch (error) {
+      errors.push(`${file}: invalid YAML: ${getErrorMessage(error)}`);
+      continue;
+    }
+    visitObject(config, "", (field, value) => {
+      const key = field.split(".").at(-1)?.toLowerCase() ?? "";
+      const line =
+        typeof value === "string" ? findLine(content, value) : undefined;
+      if (key === "npmregistryserver") {
+        errors.push(
+          formatError(file, line, field, String(value), NO_COMMITTED_REGISTRY),
+        );
+      }
+      if (key === "npmauthident" || key === "npmauthtoken") {
+        errors.push(
+          `${file}:${line ?? 1}: committed Yarn credentials are forbidden (${field}).`,
+        );
+      }
+    });
   }
 }
 
@@ -574,49 +640,20 @@ function validateNpmProject(
 ): void {
   const npmrc = joinRelative(project.directory, ".npmrc");
   if (!sourceFiles.has(npmrc)) {
-    errors.push(`${npmrc}: committed npm registry configuration is missing.`);
+    errors.push(
+      `${npmrc}: committed npm configuration with omit-lockfile-registry-resolved=true is missing.`,
+    );
   } else {
     const content = readText(root, npmrc, errors);
     if (content !== undefined) {
-      const config = parseNpmrc(content);
       requireConfigValue(
         npmrc,
         content,
-        config,
-        "registry",
-        APPROVED_REGISTRY,
-        errors,
-      );
-      requireConfigValue(
-        npmrc,
-        content,
-        config,
+        parseNpmrc(content),
         "omit-lockfile-registry-resolved",
         "true",
         errors,
       );
-      for (const [key, value] of config) {
-        if (
-          key !== "registry" &&
-          key.endsWith(":registry") &&
-          value !== APPROVED_REGISTRY
-        ) {
-          errors.push(
-            formatError(
-              npmrc,
-              findLine(content, value),
-              key,
-              value,
-              APPROVED_REGISTRY,
-            ),
-          );
-        }
-        if (isCredentialKey(key)) {
-          errors.push(
-            `${npmrc}:${findLine(content, key) ?? 1}: committed npm credentials are forbidden (${key}).`,
-          );
-        }
-      }
     }
   }
 
@@ -823,8 +860,8 @@ function validateYarnConfig(
   let config: unknown;
   try {
     config = yaml.load(content);
-  } catch (error) {
-    errors.push(`${file}: invalid YAML: ${getErrorMessage(error)}`);
+  } catch {
+    // validateCommittedConfigs reports invalid YAML once per file.
     return;
   }
   if (!isObject(config)) {
@@ -835,38 +872,11 @@ function validateYarnConfig(
     file,
     content,
     config,
-    "npmRegistryServer",
-    APPROVED_REGISTRY,
-    errors,
-  );
-  requireObjectValue(
-    file,
-    content,
-    config,
     "nodeLinker",
     "node-modules",
     errors,
   );
   requireObjectValue(file, content, config, "yarnPath", YARN_PATH, errors);
-  visitObject(config, "", (field, value) => {
-    const key = field.split(".").at(-1)?.toLowerCase() ?? "";
-    if (key === "npmregistryserver" && value !== APPROVED_REGISTRY) {
-      errors.push(
-        formatError(
-          file,
-          typeof value === "string" ? findLine(content, value) : undefined,
-          field,
-          String(value),
-          APPROVED_REGISTRY,
-        ),
-      );
-    }
-    if (key === "npmauthident" || key === "npmauthtoken") {
-      errors.push(
-        `${file}:${typeof value === "string" ? (findLine(content, value) ?? 1) : 1}: committed Yarn credentials are forbidden (${field}).`,
-      );
-    }
-  });
   if (config.yarnPath === YARN_PATH) {
     const configDirectory = normalizePath(path.posix.dirname(file));
     const release = joinRelative(

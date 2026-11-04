@@ -14,7 +14,8 @@ We use **Prettier** and **ESLint** to maintain consistent code style and catch p
 
 ### Setup
 
-From this directory (`.ado/scripts`), install the dependencies:
+From this directory (`.ado/scripts`), install the dependencies after configuring
+the [package feed](#package-feeds):
 
 ```bash
 npm ci
@@ -58,32 +59,50 @@ From the repository root, validate package sources with the supported developer 
 
 ## Package feeds
 
-Local and CI npm/Yarn restores use the anonymous Microsoft PackageFeedProxy at
+npm and Yarn restores use the anonymous Microsoft PackageFeedProxy at
 `https://packagefeedproxy.microsoft.io/npm/`. Do not add credentials or a direct
 public npm registry to repository configuration. NuGet restores and publishing
 keep their existing feeds.
 
-Each npm project's `.npmrc` selects the proxy, so ordinary `npm ci` and
-`npm install` commands need no extra flags or environment variables. Yarn uses
-the root `.yarnrc.yml` and the committed Yarn 4.13.0 release. CI also sets
-`NPM_CONFIG_REGISTRY` to the same proxy.
+The committed `.npmrc` and `.yarnrc.yml` files must not set a registry.
+Dependabot reads them but cannot reach PackageFeedProxy, so a committed proxy
+registry fails every update with "egress not allowlisted". Restores select the
+proxy through their environment instead:
 
-Dependabot keeps its existing update configuration. Do not add anonymous
+- CI sets `NPM_CONFIG_REGISTRY` and `YARN_NPM_REGISTRY_SERVER` for all jobs
+  (`.ado/npm-variables.yml`).
+- `.\dev` sets the same variables unless they are already defined.
+- The Node-API test build passes the `HERMES_NPM_REGISTRY` CMake variable to
+  `npm ci`. It defaults to the proxy; to use your npm configuration instead,
+  set it to an empty value in the build tree's `CMakeCache.txt`.
+
+For other npm and Yarn commands, configure the proxy once per user, from the
+repository root:
+
+```powershell
+npm config set registry https://packagefeedproxy.microsoft.io/npm/ --location=user
+node .yarn/releases/yarn-4.13.0.cjs config set --home npmRegistryServer https://packagefeedproxy.microsoft.io/npm/
+```
+
+Setting the two environment variables above works as well.
+
+Dependabot resolves updates from the public npm registry. Do not add
 `npm-registry` declarations to `dependabot.yml`: GitHub requires credentials for
-those entries. Keep lockfiles registry-independent rather than pinning a
-download host for Dependabot or other package-manager clients.
+those entries.
 
-Both npm and Yarn lockfiles must remain free of package download URLs so local
-restores and Dependabot are not tied to a recorded download host.
+npm and Yarn lockfiles must remain free of package download URLs, so the same
+lockfile restores from both the public registry and the proxy.
 npm's `omit-lockfile-registry-resolved=true` prevents registry URLs. Yarn can
 record an encoded `__archiveUrl` when resolving through the proxy; remove that
 binding before committing, without changing versions or checksums, and rerun
 `yarn install --immutable` and `.\dev npm-source-lint`. The lint rejects these
-bindings, including those pointing at the former ADO feed or `ms-feed-*` hosts.
+bindings, committed registries, and committed credentials.
 
 Keep Yarn's `npmMinimalAgeGate: "8d"` and Dependabot's
 `cooldown.default-days: 8` aligned: the proxy has a roughly seven-day security
-cooldown, plus a one-day margin in this repository.
+cooldown, plus a one-day margin in this repository. Dependabot applies the
+cooldown only to version updates, so a security update can propose a version
+that the proxy does not serve yet.
 
 ## Configuration
 

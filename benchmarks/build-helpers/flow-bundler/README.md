@@ -6,7 +6,9 @@ does not do any lowering so maintains all Flow typing needed for Static Hermes.
 
 ## Usage
 
-From the repository root, install the dependencies with the pinned Yarn release:
+From the repository root, install the dependencies with the pinned Yarn release
+after configuring the
+[package feed](../../../.ado/scripts/README.md#package-feeds):
 
 ```
 node .yarn/releases/yarn-4.13.0.cjs \

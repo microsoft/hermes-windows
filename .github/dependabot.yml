@@ -1,6 +1,8 @@
 version: 2
-# Keep lockfiles registry-independent; do not declare anonymous registries here.
-# npm/Yarn restore sources are configured in .npmrc and .yarnrc.yml.
+# npm updates resolve from the public npm registry. Do not declare registries
+# here (GitHub requires credentials for them) or commit one in .npmrc or
+# .yarnrc.yml: Dependabot reads those files and cannot reach PackageFeedProxy.
+# CI restores the same URL-free lockfiles through the proxy.
 updates:
 - package-ecosystem: npm
   directories:

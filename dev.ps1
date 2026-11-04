@@ -27,6 +27,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $ScriptDir = $PSScriptRoot
 
+# The committed .npmrc and .yarnrc.yml files name no registry because Dependabot
+# reads them and cannot reach PackageFeedProxy. Route the npm and Yarn restores
+# that these commands start through the proxy unless the caller set a registry.
+$PackageFeedProxy = 'https://packagefeedproxy.microsoft.io/npm/'
+$RegistryVariables = 'NPM_CONFIG_REGISTRY', 'YARN_NPM_REGISTRY_SERVER'
+
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -104,29 +110,45 @@ function Show-Help {
 # Commands
 # =============================================================================
 
-switch ($Command) {
-    'build' {
-        & node (Join-Path $ScriptDir '.ado\scripts\build.js') @Args
+# .\dev runs in the caller's PowerShell process, so restore its environment.
+$savedRegistries = @{}
+foreach ($name in $RegistryVariables) {
+    $savedRegistries[$name] = [Environment]::GetEnvironmentVariable($name)
+    if (-not $savedRegistries[$name]) {
+        [Environment]::SetEnvironmentVariable($name, $PackageFeedProxy)
     }
+}
 
-    'build-fork-sync' {
-        Ensure-ForkSync
-        Write-Host 'fork-sync dependencies installed.'
+try {
+    switch ($Command) {
+        'build' {
+            & node (Join-Path $ScriptDir '.ado\scripts\build.js') @Args
+        }
+
+        'build-fork-sync' {
+            Ensure-ForkSync
+            Write-Host 'fork-sync dependencies installed.'
+        }
+
+        'fork-sync' {
+            Ensure-ForkSync
+            & node (Join-Path $ScriptDir 'tools\fork-sync\sync.ts') @Args
+        }
+
+        'npm-source-lint' {
+            Assert-Node24
+            Ensure-AdoScripts
+            $lint = Join-Path $ScriptDir '.ado\scripts\npm-source-lint.ts'
+            & node $lint @Args
+        }
+
+        default {
+            Show-Help
+        }
     }
-
-    'fork-sync' {
-        Ensure-ForkSync
-        & node (Join-Path $ScriptDir 'tools\fork-sync\sync.ts') @Args
-    }
-
-    'npm-source-lint' {
-        Assert-Node24
-        Ensure-AdoScripts
-        & node (Join-Path $ScriptDir '.ado\scripts\npm-source-lint.ts') @Args
-    }
-
-    default {
-        Show-Help
+} finally {
+    foreach ($name in $RegistryVariables) {
+        [Environment]::SetEnvironmentVariable($name, $savedRegistries[$name])
     }
 }
 
