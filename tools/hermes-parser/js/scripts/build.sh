@@ -115,12 +115,12 @@ run_yarn babel-node "$THIS_DIR/genTransformReplaceNodeTypes.js"
 for package in "${BOOTSTRAP_PACKAGES[@]}"; do
   PACKAGE_DIST_DIR="$THIS_DIR/../$package/dist"
   find "$PACKAGE_DIST_DIR" -type f -name "*.js" | while read -r file; do
-    yarn flow-remove-types --quiet --pretty --remove-empty-imports \
+    run_yarn flow-remove-types --quiet --pretty --remove-empty-imports \
       --out-file "$file.stripped" \
       "$file"
     mv "$file.stripped" "$file"
   done
-  yarn babel --config-file="$THIS_DIR/../babel.config.js" "$PACKAGE_DIST_DIR" --out-dir="$PACKAGE_DIST_DIR"
+  run_yarn babel --config-file="$THIS_DIR/../babel.config.js" "$PACKAGE_DIST_DIR" --out-dir="$PACKAGE_DIST_DIR"
 done
 
 # Re-enable the override so the remaining packages can be parsed with
