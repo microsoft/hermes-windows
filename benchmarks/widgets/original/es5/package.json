@@ -8,11 +8,11 @@
     "@babel/plugin-transform-flow-strip-types": "^7.13.0",
     "@babel/preset-env": "^7.12.11",
     "babel-loader": "^8.2.2",
-    "webpack": "^4.44.2",
-    "webpack-cli": "^3.3.12"
+    "webpack": "^5.112.2",
+    "webpack-cli": "^7.2.3"
   },
   "scripts": {
-      "build": "webpack --entry ../main.js --output widgets.js"
+      "build": "webpack --entry ../main.js --output-filename widgets.js"
   },
   "overrides": {
     "braces": "^3.0.3",

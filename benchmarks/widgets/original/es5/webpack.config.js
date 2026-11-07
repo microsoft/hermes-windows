@@ -7,13 +7,15 @@
 
 module.exports = {
   mode: "production",
+  target: ['web', 'es5'],
   output: {
+    path: __dirname,
     filename: 'widgets.js',
   },
   optimization: {
     minimize: false,
   },
-  devtool: 'source-maps',
+  devtool: 'source-map',
   module: {
     rules: [
       {

@@ -44,7 +44,11 @@
     "babel-plugin-syntax-hermes-parser"
   ],
   "resolutions": {
+    "glob@npm:^10.4.1": "^14.0.3",
+    "glob@npm:^13.0.6": "^14.0.3",
     "lodash": "^4.18.1",
+    "minimatch@npm:^9.0.4": "^11.0.1",
+    "minimatch@npm:^10.2.2": "^11.0.1",
     "patch-package/tmp": "^0.2.7"
   }
 }
