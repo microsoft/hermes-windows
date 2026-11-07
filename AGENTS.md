@@ -221,6 +221,12 @@ The build produces two VM variants: "regular" (full VM with compiler) and "lean"
   bundled ICU), WinGlob, and system ICU; keep upstream NAPI off.
 - Suppress CRT/WER dialogs in every test host (reuse
   `unittests/WindowsTestSupport.h` or LLVM initialization).
+- When upstream regenerates the wasm2c sandbox sources
+  (`API/hermes_sandbox/external/hermes_sandbox_impl_{dbg,opt}_compiled*`),
+  delete the old ones in the sync PR and add the new ones in a follow-up PR.
+  GitHub cannot diff these ~200 MB files in place, which leaves the PR with no
+  file list and no PR validation. The sandbox and its `APITests` variant are
+  skipped while the sources are absent (`API/CMakeLists.txt`).
 
 ### Testing
 
