@@ -10,7 +10,7 @@
  *   node tools/fork-sync/sync.ts --dep icu-small --status
  *   node tools/fork-sync/sync.ts --dep icu-small --continue
  *
- * All arguments are forwarded to fork-sync with `-C ..` prepended
+ * All arguments are forwarded to fork-sync with `-C <repo root>` prepended
  * so it finds the sync-manifest.json in the repository root.
  */
 
@@ -28,7 +28,8 @@ const syncScript = path.join(
   "sync.js"
 );
 
-const args = [syncScript, "-C", path.join(__dirname, ".."), ...process.argv.slice(2)];
+const repoRoot = path.join(__dirname, "..", "..");
+const args = [syncScript, "-C", repoRoot, ...process.argv.slice(2)];
 
 try {
   execFileSync("node", args, { stdio: "inherit" });

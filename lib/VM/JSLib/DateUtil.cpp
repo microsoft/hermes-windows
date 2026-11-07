@@ -21,7 +21,6 @@
 #include <cassert>
 #include <cctype>
 #include <cmath>
-#include <ctime>
 
 namespace hermes {
 namespace vm {
@@ -206,46 +205,6 @@ int32_t weekDay(double t) {
 }
 
 //===----------------------------------------------------------------------===//
-// ES5.1 15.9.1.7
-
-double localTZA() {
-#ifdef _WINDOWS
-
-  // TODO(T173336959): We should use a thread-safe API, and also be consistent
-  // with daylightSavingTA().
-  _tzset();
-
-  long gmtoff;
-  int err = _get_timezone(&gmtoff);
-  if (err)
-    return 0;
-
-  // The result of _get_timezone is negated
-  return -gmtoff * MS_PER_SECOND;
-
-#else
-
-  // Get the current time in seconds (might have DST adjustment included).
-  std::time_t currentWithDST = std::time(nullptr);
-
-  // Deconstruct the time into localTime.
-  // Note that localtime_r uses cached timezone information on Linux (glibc), so
-  // the returned local time may not be computed using an updated timezone if
-  // the timezone changes after this process has started.
-  std::tm tm;
-  std::tm *local = ::localtime_r(&currentWithDST, &tm);
-  if (!local)
-    return 0;
-
-  long gmtoff = local->tm_gmtoff;
-
-  // Use the gmtoff field and subtract an hour if currently in DST.
-  return (gmtoff * MS_PER_SECOND) - (local->tm_isdst ? MS_PER_HOUR : 0);
-
-#endif
-}
-
-//===----------------------------------------------------------------------===//
 // ES5.1 15.9.1.8
 
 static const int32_t DAYS_IN_1_YEAR = 365;
@@ -347,8 +306,8 @@ static int32_t equivalentYearAsEpochDays(
 /// Returns an equivalent time for the purpose of determining DST using the
 /// rules in ES5.1 15.9.1.8 Daylight Saving Time Adjustment
 ///
-/// \p time_ms must be within the range specified by
-/// ES5.1 15.9.1.1 Time Values and Time Range.
+/// \p epochSecs must be within the ECMAScript time range, extended by twice
+/// kLocalTimeOffsetBoundMs for local-to-UTC conversion and its offset probes.
 ///
 /// Some library calls doesn't work when the input date-time cannot be
 /// represented as a 32-bit non-negative number of seconds since
@@ -358,7 +317,9 @@ static int32_t equivalentYearAsEpochDays(
 int32_t detail::equivalentTime(int64_t epochSecs) {
   // The math behind this implementation is similar to the EquivalentTime
   // function in https://github.com/v8/v8/blob/master/src/date.h
-  assert(epochSecs >= -TIME_RANGE_SECS && epochSecs <= TIME_RANGE_SECS);
+  [[maybe_unused]] constexpr int64_t maxTime =
+      TIME_RANGE_SECS + 2 * kLocalTimeOffsetBoundMs / MS_PER_SECOND;
+  assert(epochSecs >= -maxTime && epochSecs <= maxTime);
   int64_t epochDays, secsOfDay;
   floorDivMod(epochSecs, SECONDS_PER_DAY, &epochDays, &secsOfDay);
   int32_t year, yearAsEpochDays, dayOfYear;
@@ -710,6 +671,15 @@ static inline bool isAlpha(char16_t c) {
   return 'a' <= c && c <= 'z';
 }
 
+/// \return true if c is an ASCII whitespace character, i.e. one of the
+/// characters std::isspace accepts in the C locale. This avoids passing UTF-16
+/// code units to std::isspace, whose behavior is undefined for values that
+/// don't fit in an unsigned char.
+static inline bool isSpace(char16_t c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' ||
+      c == '\r';
+}
+
 /// Read a number from the iterator at \p it into \p x.
 /// Can read integers that consist entirely of digits.
 /// \param[in,out] it is modified to the new start point of the scan if
@@ -908,7 +878,7 @@ static double parseESDate(
     if (it + len > str.end())
       return false;
     tok = str.slice(it, it + len);
-    while (it != str.end() && !std::isspace(*it) && *it != '-')
+    while (it != str.end() && !isSpace(*it) && *it != '-')
       it++;
     return true;
   };
@@ -922,7 +892,7 @@ static double parseESDate(
   };
 
   auto consumeSpaces = [&]() {
-    while (it != str.end() && std::isspace(*it))
+    while (it != str.end() && isSpace(*it))
       ++it;
   };
 
@@ -932,7 +902,7 @@ static double parseESDate(
   auto consumeSpacesOrDash = [&]() {
     auto first = true;
     while (it != str.end()) {
-      if (std::isspace(*it) || (first && *it == '-')) {
+      if (isSpace(*it) || (first && *it == '-')) {
         ++it;
       } else {
         return;

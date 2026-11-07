@@ -97,7 +97,7 @@ val installCMake by
     tasks.registering(CustomExecTask::class) {
       onlyIfProvidedPathDoesNotExists.set(cmakePath)
       commandLine(
-          windowsAwareCommandLine(getSDKManagerPath(), "--install", "cmake;${cmakeVersion}")
+          windowsAwareCommandLine(getSDKManagerPath(), "--install", "cmake;${cmakeVersion}"),
       )
     }
 
@@ -109,19 +109,18 @@ val configureBuildForHermes by
       workingDir(hermesDir)
       inputs.dir(hermesDir)
       outputs.files(hermesBuildOutputFileTree)
-      var cmakeCommandLine =
-          windowsAwareCommandLine(
-              cmakeBinaryPath,
-              // Suppress all warnings as this is the Hermes build and we can't fix them.
-              "--log-level=ERROR",
-              "-Wno-dev",
-              "-S",
-              ".",
-              "-B",
-              hermesBuildDir.toString(),
-              "-DJSI_DIR=" + jsiDir.absolutePath,
-              "-DCMAKE_BUILD_TYPE=Debug",
-          )
+      var cmakeCommandLine = windowsAwareCommandLine(
+          cmakeBinaryPath,
+          // Suppress all warnings as this is the Hermes build and we can't fix them.
+          "--log-level=ERROR",
+          "-Wno-dev",
+          "-S",
+          ".",
+          "-B",
+          hermesBuildDir.toString(),
+          "-DJSI_DIR=" + jsiDir.absolutePath,
+          "-DCMAKE_BUILD_TYPE=Debug",
+      )
       if (Os.isFamily(Os.FAMILY_WINDOWS)) {
         cmakeCommandLine = cmakeCommandLine + "-GNMake Makefiles"
       }
@@ -274,9 +273,13 @@ android {
     }
   }
 
-  sourceSets.getByName("main") {
-    manifest.srcFile("$hermesDir/android/hermes/src/main/AndroidManifest.xml")
-    java.srcDirs("$hermesDir/lib/Platform/Intl/java", "$hermesDir/lib/Platform/Unicode/java")
+  sourceSets {
+    getByName("main") {
+      manifest.srcFile("$hermesDir/android/hermes/src/main/AndroidManifest.xml")
+      java.directories.addAll(
+          listOf("$hermesDir/lib/Platform/Intl/java", "$hermesDir/lib/Platform/Unicode/java"),
+      )
+    }
   }
 
   buildFeatures {

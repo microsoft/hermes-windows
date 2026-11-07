@@ -5,6 +5,8 @@ This folder contains the JavaScript build scripts for Hermes Windows, along with
 ## Files
 
 - `build.js` - Main build script for Hermes Windows
+- `check-exports.ts` - Checks hermes.dll exports and executable PE section RVAs
+- `hermes-exports.txt` - Reviewed exact C export allowlist (model variants normalized)
 - `npm-source-lint.ts` - Validates committed npm and Yarn package sources
 - `setVersionNumber.js` - Script to set version numbers
 
@@ -30,6 +32,7 @@ npm ci
 - `npm run lint:format` - Format with Prettier and then run ESLint with auto-fix
 - `npm run npm-source-lint` - Validate repository package sources
 - `npm run test:npm-source-lint` - Run the source linter's unit tests
+- `npm run test:exports` - Run the DLL export checker's unit tests
 
 ### Usage
 

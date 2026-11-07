@@ -98,6 +98,105 @@ TEST_P(JSITest, StringTest) {
   EXPECT_EQ(movedQuux.utf8(rt), "quux2");
 }
 
+#if JSI_VERSION >= 22
+TEST_P(JSITest, StringLengthTest) {
+  // Test ASCII string length
+  String ascii = String::createFromAscii(rt, "hello");
+  EXPECT_EQ(ascii.length(rt), 5);
+
+  // Test empty string
+  String empty = String::createFromAscii(rt, "");
+  EXPECT_EQ(empty.length(rt), 0);
+
+  // Test euro sign '€' (U+20AC) - BMP character, 1 code unit
+  String euro = eval("'\\u20AC'").getString(rt);
+  EXPECT_EQ(euro.length(rt), 1);
+
+  // Test codepoint requiring 2 code units (surrogate pair)
+  // U+1F408 (🐈) is encoded as \uD83D\uDC08 in UTF-16
+  String emoji = eval("'\\uD83D\\uDC08'").getString(rt);
+  EXPECT_EQ(emoji.length(rt), 2);
+
+  // Test another surrogate pair: U+10000 (first supplementary character)
+  String supplementary = eval("'\\uD800\\uDC00'").getString(rt);
+  EXPECT_EQ(supplementary.length(rt), 2);
+
+  // Test lone high surrogate (U+D800)
+  String loneHighSurrogate = eval("'\\uD800'").getString(rt);
+  EXPECT_EQ(loneHighSurrogate.length(rt), 1);
+
+  // Test lone low surrogate (U+DC00)
+  String loneLowSurrogate = eval("'\\uDC00'").getString(rt);
+  EXPECT_EQ(loneLowSurrogate.length(rt), 1);
+
+  // Test lone surrogate in the middle of a string
+  String mixedWithLoneSurrogate = eval("'a\\uD800b'").getString(rt);
+  EXPECT_EQ(mixedWithLoneSurrogate.length(rt), 3);
+
+  // Unicode Max Value is U+10FFFF, U+11FFFF is invalid
+  // But it could be theoretically encoded as \uDBFF\uDFFF
+  String invalid = eval("'\\uDBFF\\uDFFF'").getString(rt);
+  EXPECT_EQ(invalid.length(rt), 2);
+}
+#endif
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, DecoratorForwardsStringLength) {
+  // Decorators should forward length(const String&) to the decorated runtime
+  // instead of falling back to the default Runtime::length, which copies the
+  // string via utf16() and bypasses the runtime's own implementation.
+  class Inner : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit Inner(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    size_t length(const String&) override {
+      ++lengthCalls;
+      return 42;
+    }
+
+    std::u16string utf16(const String& str) override {
+      ++utf16Calls;
+      return RuntimeDecorator::utf16(str);
+    }
+
+    int lengthCalls = 0;
+    int utf16Calls = 0;
+  };
+
+  class Outer : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit Outer(Runtime& rt) : RuntimeDecorator(rt) {}
+  };
+
+  struct Count {
+    void before() {
+      ++beforeCalls;
+    }
+    void after() {
+      ++afterCalls;
+    }
+    int beforeCalls = 0;
+    int afterCalls = 0;
+  };
+
+  Inner inner(rt);
+  String str = String::createFromAscii(inner, "hello");
+
+  Outer outer(inner);
+  EXPECT_EQ(str.length(outer), 42);
+  EXPECT_EQ(inner.lengthCalls, 1);
+  EXPECT_EQ(inner.utf16Calls, 0);
+
+  Count count;
+  WithRuntimeDecorator<Count> with(inner, count);
+  EXPECT_EQ(str.length(with), 42);
+  EXPECT_EQ(inner.lengthCalls, 2);
+  EXPECT_EQ(inner.utf16Calls, 0);
+  EXPECT_EQ(count.beforeCalls, 1);
+  EXPECT_EQ(count.afterCalls, 1);
+}
+#endif
+
 TEST_P(JSITest, ObjectTest) {
   eval("x = {1:2, '3':4, 5:'six', 'seven':['eight', 'nine']}");
   Object x = rt.global().getPropertyAsObject(rt, "x");
@@ -468,6 +567,30 @@ TEST_P(JSITest, HostObjectProtoTest) {
       eval("({__proto__: pho})[Symbol.toPrimitive]").getString(rt).utf8(rt),
       "phoprop");
 }
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, ProxyArraySupportsLengthAndIndexedAccess) {
+  auto array = eval("new Proxy([11, , 33], {})").getObject(rt).getArray(rt);
+  EXPECT_EQ(array.length(rt), 3);
+  EXPECT_EQ(array.getValueAtIndex(rt, 0).getNumber(), 11);
+  EXPECT_TRUE(array.getValueAtIndex(rt, 1).isUndefined());
+  array.setValueAtIndex(rt, 1, 22);
+  EXPECT_EQ(array.getValueAtIndex(rt, 1).getNumber(), 22);
+  // JSI indexed writes must be within the current array length.
+  array.setProperty(rt, "length", 4);
+  array.setValueAtIndex(rt, 3, 44);
+  EXPECT_EQ(array.length(rt), 4);
+  EXPECT_EQ(array.getValueAtIndex(rt, 3).getNumber(), 44);
+  auto trapped = eval(R"JS(new Proxy([], {
+    get(target, key) { return key === 'length' ? 2.9 : 55; }
+  }))JS").getObject(rt).getArray(rt);
+  EXPECT_EQ(trapped.length(rt), 2);
+  EXPECT_EQ(trapped.getValueAtIndex(rt, 0).getNumber(), 55);
+  eval("var revoked = Proxy.revocable([], {}); revoked.revoke();");
+  // Use the checked conversion: getArray only validates in debug builds.
+  EXPECT_THROW(eval("revoked.proxy").getObject(rt).asArray(rt), JSError);
+}
+#endif
 
 TEST_P(JSITest, ArrayTest) {
   eval("x = {1:2, '3':4, 5:'six', 'seven':['eight', 'nine']}");
@@ -938,6 +1061,44 @@ TEST_P(JSITest, ValueTest) {
   EXPECT_EQ(eval("['zero',1,2,3]").toString(rt).utf8(rt), "zero,1,2,3");
 }
 
+#if JSI_VERSION >= 22
+TEST_P(JSITest, IsIntegerTest) {
+  // Non-number values should return false
+  EXPECT_FALSE(Value::undefined().isInteger());
+  EXPECT_FALSE(Value::null().isInteger());
+  EXPECT_FALSE(Value(true).isInteger());
+  EXPECT_FALSE(Value(false).isInteger());
+  EXPECT_FALSE(Value(rt, String::createFromAscii(rt, "42")).isInteger());
+  EXPECT_FALSE(Value(rt, Object(rt)).isInteger());
+
+  // NaN should return false
+  EXPECT_FALSE(Value(std::numeric_limits<double>::quiet_NaN()).isInteger());
+
+  // Infinity should return false
+  EXPECT_FALSE(Value(std::numeric_limits<double>::infinity()).isInteger());
+  EXPECT_FALSE(Value(-std::numeric_limits<double>::infinity()).isInteger());
+
+  // Non-integer numbers should return false
+  EXPECT_FALSE(Value(1.5).isInteger());
+  EXPECT_FALSE(Value(-2.3).isInteger());
+  EXPECT_FALSE(Value(0.1).isInteger());
+
+  // Integer numbers should return true
+  EXPECT_TRUE(Value(0).isInteger());
+  EXPECT_TRUE(Value(0.0).isInteger());
+  EXPECT_TRUE(Value(-0.0).isInteger());
+  EXPECT_TRUE(Value(1).isInteger());
+  EXPECT_TRUE(Value(-1).isInteger());
+  EXPECT_TRUE(Value(42).isInteger());
+  EXPECT_TRUE(Value(1000000).isInteger());
+  EXPECT_TRUE(Value(-999999).isInteger());
+
+  // Large integers that can be exactly represented as doubles
+  EXPECT_TRUE(Value(static_cast<double>(1LL << 52)).isInteger());
+  EXPECT_TRUE(Value(static_cast<double>(-(1LL << 52))).isInteger());
+}
+#endif
+
 TEST_P(JSITest, EqualsTest) {
   EXPECT_TRUE(Object::strictEquals(rt, rt.global(), rt.global()));
   EXPECT_TRUE(Value::strictEquals(rt, 1, 1));
@@ -1033,7 +1194,8 @@ namespace {
 
 unsigned countOccurences(const std::string& of, const std::string& in) {
   unsigned occurences = 0;
-  std::string::size_type lastOccurence = -1;
+  std::string::size_type lastOccurence =
+      static_cast<std::string::size_type>(-1);
   while ((lastOccurence = in.find(of, lastOccurence + 1)) !=
          std::string::npos) {
     occurences++;
@@ -1081,10 +1243,26 @@ TEST_P(JSITest, JSErrorsCanBeConstructedWithStack) {
 }
 
 TEST_P(JSITest, JSErrorDoesNotInfinitelyRecurse) {
-  Value globalError = rt.global().getProperty(rt, "Error");
-  rt.global().setProperty(rt, "Error", Value::undefined());
+  // JSError(rt, message) creates its value with createError. Use the default
+  // implementation, which calls the global Error constructor, so that removing
+  // it below makes creating the Error fail even if the runtime has a native
+  // createError.
+  class RD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit RD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+#if JSI_VERSION >= 22
+    Value createError(const String& msg) override {
+      return Runtime::createError(msg);
+    }
+#endif
+  };
+  RD drt(rt);
+
+  Value globalError = drt.global().getProperty(drt, "Error");
+  drt.global().setProperty(drt, "Error", Value::undefined());
   try {
-    rt.global().getPropertyAsFunction(rt, "NotAFunction");
+    drt.global().getPropertyAsFunction(drt, "NotAFunction");
     FAIL() << "expected exception";
   } catch (const JSError& ex) {
     EXPECT_EQ(
@@ -1107,14 +1285,14 @@ TEST_P(JSITest, JSErrorDoesNotInfinitelyRecurse) {
           "function (f) { try { f(); return 'undefined'; }"
           "catch (e) { return typeof e; } }")
           .call(
-              rt,
+              drt,
               Function::createFromHostFunction(
-                  rt, PropNameID::forAscii(rt, "fails"), 0, fails))
-          .getString(rt)
-          .utf8(rt),
+                  drt, PropNameID::forAscii(drt, "fails"), 0, fails))
+          .getString(drt)
+          .utf8(drt),
       "string");
 
-  rt.global().setProperty(rt, "Error", globalError);
+  drt.global().setProperty(drt, "Error", globalError);
 }
 
 TEST_P(JSITest, JSErrorStackOverflowHandling) {
@@ -1432,6 +1610,258 @@ TEST_P(JSITest, JSErrorTest) {
       JSIException);
 }
 
+#if JSI_VERSION >= 22
+#if JSI_VERSION >= 22
+TEST_P(JSITest, CreateErrorTest) {
+  // Test JSError::createEvalError
+  {
+    try {
+      throw JSError::createEvalError(rt, "eval error");
+    } catch (const JSError& e) {
+      // getMessage() checks the C++ JSError's cached message.
+      // The "message" property check verifies the JS object was constructed
+      // correctly, since they are populated independently.
+      EXPECT_EQ(e.getMessage(), "eval error");
+      Object caughtObj = e.value().getObject(rt);
+      EXPECT_EQ(
+          caughtObj.getProperty(rt, "message").getString(rt).utf8(rt),
+          "eval error");
+      EXPECT_TRUE(rt.instanceOf(
+          caughtObj, rt.global().getPropertyAsFunction(rt, "EvalError")));
+    }
+  }
+
+  // Test JSError::createRangeError
+  {
+    try {
+      throw JSError::createRangeError(rt, "range error");
+    } catch (const JSError& e) {
+      EXPECT_EQ(e.getMessage(), "range error");
+      Object caughtObj = e.value().getObject(rt);
+      EXPECT_EQ(
+          caughtObj.getProperty(rt, "message").getString(rt).utf8(rt),
+          "range error");
+      EXPECT_TRUE(rt.instanceOf(
+          caughtObj, rt.global().getPropertyAsFunction(rt, "RangeError")));
+    }
+  }
+
+  // Test JSError::createReferenceError
+  {
+    try {
+      throw JSError::createReferenceError(rt, "reference error");
+    } catch (const JSError& e) {
+      EXPECT_EQ(e.getMessage(), "reference error");
+      Object caughtObj = e.value().getObject(rt);
+      EXPECT_EQ(
+          caughtObj.getProperty(rt, "message").getString(rt).utf8(rt),
+          "reference error");
+      EXPECT_TRUE(rt.instanceOf(
+          caughtObj, rt.global().getPropertyAsFunction(rt, "ReferenceError")));
+    }
+  }
+
+  // Test JSError::createSyntaxError
+  {
+    try {
+      throw JSError::createSyntaxError(rt, "syntax error");
+    } catch (const JSError& e) {
+      EXPECT_EQ(e.getMessage(), "syntax error");
+      Object caughtObj = e.value().getObject(rt);
+      EXPECT_EQ(
+          caughtObj.getProperty(rt, "message").getString(rt).utf8(rt),
+          "syntax error");
+      EXPECT_TRUE(rt.instanceOf(
+          caughtObj, rt.global().getPropertyAsFunction(rt, "SyntaxError")));
+    }
+  }
+
+  // Test JSError::createTypeError
+  {
+    try {
+      throw JSError::createTypeError(rt, "type error");
+    } catch (const JSError& e) {
+      EXPECT_EQ(e.getMessage(), "type error");
+      Object caughtObj = e.value().getObject(rt);
+      EXPECT_EQ(
+          caughtObj.getProperty(rt, "message").getString(rt).utf8(rt),
+          "type error");
+      EXPECT_TRUE(rt.instanceOf(
+          caughtObj, rt.global().getPropertyAsFunction(rt, "TypeError")));
+    }
+  }
+
+  // Test JSError::createURIError
+  {
+    try {
+      throw JSError::createURIError(rt, "uri error");
+    } catch (const JSError& e) {
+      EXPECT_EQ(e.getMessage(), "uri error");
+      Object caughtObj = e.value().getObject(rt);
+      EXPECT_EQ(
+          caughtObj.getProperty(rt, "message").getString(rt).utf8(rt),
+          "uri error");
+      EXPECT_TRUE(rt.instanceOf(
+          caughtObj, rt.global().getPropertyAsFunction(rt, "URIError")));
+    }
+  }
+}
+#endif
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, JSErrorMessageTest) {
+  // JSError(rt, message) creates a new Error instance.
+  {
+    JSError e(rt, "native error");
+    EXPECT_EQ(e.getMessage(), "native error");
+    Object obj = e.value().getObject(rt);
+    EXPECT_TRUE(
+        rt.instanceOf(obj, rt.global().getPropertyAsFunction(rt, "Error")));
+    EXPECT_EQ(
+        obj.getProperty(rt, "message").getString(rt).utf8(rt), "native error");
+  }
+
+  // JSError(rt, message) creates its value with Runtime::createError, so a
+  // replaced global Error constructor is invoked exactly when createError
+  // invokes it (e.g. the default jsi::Runtime implementation does, runtimes
+  // with a native implementation do not).
+  eval(
+      "var OriginalError = Error;"
+      "var replacedErrorCalls = 0;"
+      "Error = function(message) {"
+      "  ++replacedErrorCalls;"
+      "  return new OriginalError(message);"
+      "};");
+  auto replacedErrorCalls = [&] {
+    return rt.global().getProperty(rt, "replacedErrorCalls").getNumber();
+  };
+
+  rt.createError(String::createFromAscii(rt, "probe"));
+  double callsPerCreateError = replacedErrorCalls();
+
+  JSError e(rt, "replaced");
+  EXPECT_EQ(replacedErrorCalls(), 2 * callsPerCreateError);
+  EXPECT_EQ(e.getMessage(), "replaced");
+  Object obj = e.value().getObject(rt);
+  EXPECT_TRUE(rt.instanceOf(
+      obj, rt.global().getPropertyAsFunction(rt, "OriginalError")));
+  EXPECT_EQ(obj.getProperty(rt, "message").getString(rt).utf8(rt), "replaced");
+}
+#endif
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, DecoratorCreateErrorTest) {
+  // Counts the createError* calls that reach it, and forwards them to the
+  // underlying runtime.
+  class CountingRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit CountingRD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    Value createError(const String& msg) override {
+      ++count;
+      return RuntimeDecorator::createError(msg);
+    }
+    Value createEvalError(const String& msg) override {
+      ++count;
+      return RuntimeDecorator::createEvalError(msg);
+    }
+    Value createRangeError(const String& msg) override {
+      ++count;
+      return RuntimeDecorator::createRangeError(msg);
+    }
+    Value createReferenceError(const String& msg) override {
+      ++count;
+      return RuntimeDecorator::createReferenceError(msg);
+    }
+    Value createSyntaxError(const String& msg) override {
+      ++count;
+      return RuntimeDecorator::createSyntaxError(msg);
+    }
+    Value createTypeError(const String& msg) override {
+      ++count;
+      return RuntimeDecorator::createTypeError(msg);
+    }
+    Value createURIError(const String& msg) override {
+      ++count;
+      return RuntimeDecorator::createURIError(msg);
+    }
+
+    int count = 0;
+  };
+
+  class RD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit RD(Runtime& rt) : RuntimeDecorator(rt) {}
+  };
+
+  struct Count {
+    void before() {
+      ++count;
+    }
+
+    int count = 0;
+  };
+
+  class CountRuntime : public WithRuntimeDecorator<Count> {
+   public:
+    explicit CountRuntime(Runtime& rt)
+        : WithRuntimeDecorator<Count>(rt, count_) {}
+
+    Count count_;
+  };
+
+  CountingRD counting(rt);
+  RD rd(counting);
+  CountRuntime crt(counting);
+
+  struct {
+    Value (Runtime::*create)(const String&);
+    const char* ctor;
+  } cases[] = {
+      {&Runtime::createError, "Error"},
+      {&Runtime::createEvalError, "EvalError"},
+      {&Runtime::createRangeError, "RangeError"},
+      {&Runtime::createReferenceError, "ReferenceError"},
+      {&Runtime::createSyntaxError, "SyntaxError"},
+      {&Runtime::createTypeError, "TypeError"},
+      {&Runtime::createURIError, "URIError"},
+  };
+
+  // Both decorators must forward createError* to the decorated runtime rather
+  // than fall back to the default implementation calling the global ctor.
+  for (const auto& c : cases) {
+    for (Runtime* drt :
+         {static_cast<Runtime*>(&rd), static_cast<Runtime*>(&crt)}) {
+      String msg = String::createFromAscii(*drt, "decorated");
+      int countBefore = counting.count;
+      int aroundBefore = crt.count_.count;
+      Value error = (drt->*c.create)(msg);
+      EXPECT_EQ(counting.count, countBefore + 1) << c.ctor;
+      if (drt == &crt) {
+        EXPECT_EQ(crt.count_.count, aroundBefore + 1) << c.ctor;
+      }
+
+      Object obj = error.getObject(*drt);
+      EXPECT_TRUE(drt->instanceOf(
+          obj, drt->global().getPropertyAsFunction(*drt, c.ctor)))
+          << c.ctor;
+      EXPECT_EQ(
+          obj.getProperty(*drt, "message").getString(*drt).utf8(*drt),
+          "decorated")
+          << c.ctor;
+    }
+  }
+
+  // JSError(rt, message) on a decorated runtime reaches the decorated
+  // runtime's createError.
+  int countBefore = counting.count;
+  JSError e(rd, "decorated JSError");
+  EXPECT_EQ(counting.count, countBefore + 1);
+  EXPECT_EQ(e.getMessage(), "decorated JSError");
+}
+#endif
+
+#endif
 #if defined(JSI_SUPPORT_MICROTASKS) && JSI_VERSION >= 12
 TEST_P(JSITest, MicrotasksTest) {
   try {
@@ -1766,6 +2196,58 @@ TEST_P(JSITest, CreateFromUtf16Test) {
 }
 #endif
 
+#if JSI_VERSION >= 22
+#if JSI_VERSION >= 2
+TEST_P(JSITest, CreateValueFromJsonUtf8Test) {
+  uint8_t jsonText[] = "{\"a\": 1}";
+
+  // This Runtime Decorator is used to test the default createValueFromJsonUtf8
+  // implementation for VMs that do not provide their own implementation
+  class DefaultRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit DefaultRD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override {
+      return Runtime::createValueFromJsonUtf8(json, length);
+    }
+  };
+
+  DefaultRD defaultRd(rt);
+  Object obj =
+      Value::createFromJsonUtf8(defaultRd, jsonText, sizeof(jsonText) - 1)
+          .getObject(defaultRd);
+  EXPECT_EQ(obj.getProperty(defaultRd, "a").getNumber(), 1);
+
+  // A RuntimeDecorator must forward createValueFromJsonUtf8 to the runtime it
+  // decorates, like every other method.
+  class CountingRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit CountingRD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override {
+      ++count;
+      return plain().createValueFromJsonUtf8(json, length);
+    }
+
+    int count = 0;
+  };
+
+  // Overrides nothing, so it should forward everything to CountingRD.
+  class OuterRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit OuterRD(Runtime& rt) : RuntimeDecorator(rt) {}
+  };
+
+  CountingRD counting(rt);
+  OuterRD outer(counting);
+  obj = outer.createValueFromJsonUtf8(jsonText, sizeof(jsonText) - 1)
+            .getObject(outer);
+  EXPECT_EQ(counting.count, 1);
+  EXPECT_EQ(obj.getProperty(outer, "a").getNumber(), 1);
+}
+#endif
+
+#endif
 #if JSI_VERSION >= 16
 TEST_P(JSITest, GetStringDataTest) {
   // This Runtime Decorator is used to test the default getStringData
@@ -2028,6 +2510,327 @@ TEST_P(JSITest, DeleteProperty) {
   hasRes = obj.hasProperty(rd, "prop");
   EXPECT_TRUE(hasRes);
 }
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, ArrayProxyLengthUsesToLengthAndCapturedIntrinsics) {
+  eval("var savedIsArray = Array.isArray;"
+       "Array.isArray = function () { return false; };");
+  auto proxy = eval("new Proxy([], {get: function (target, key) {"
+                    "return key === 'length' ? '3.9' : target[key]; }})")
+                   .getObject(rt);
+  EXPECT_TRUE(proxy.isArray(rt));
+  EXPECT_EQ(proxy.getArray(rt).length(rt), 3);
+  EXPECT_EQ(eval("new Proxy([], {get: function () { return -1; }})")
+                .getObject(rt).getArray(rt).length(rt), 0);
+  EXPECT_EQ(eval("new Proxy([], {get: function () { return NaN; }})")
+                .getObject(rt).getArray(rt).length(rt), 0);
+  auto revoked = eval("var pair = Proxy.revocable([], {});"
+                      "pair.revoke(); pair.proxy;").getObject(rt);
+  EXPECT_THROW(revoked.isArray(rt), JSError);
+  eval("Array.isArray = savedIsArray;");
+}
+
+TEST_P(JSITest, ArrayPush) {
+  // This Runtime Decorator is used to test the default implementation of
+  // Runtime::push
+  class RD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit RD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    size_t push(const Array& arr, const Value* elements, size_t count)
+        override {
+      return Runtime::push(arr, elements, count);
+    }
+  };
+  RD rd = RD(rt);
+
+  // Push to an empty array
+  Array arr(rd, 0);
+  size_t newLength = arr.push(rd, 1, 2, 3);
+  EXPECT_EQ(newLength, 3);
+  EXPECT_EQ(arr.length(rd), 3);
+
+  EXPECT_EQ(arr.getValueAtIndex(rd, 0).getNumber(), 1);
+  EXPECT_EQ(arr.getValueAtIndex(rd, 1).getNumber(), 2);
+  EXPECT_EQ(arr.getValueAtIndex(rd, 2).getNumber(), 3);
+
+  // Push to an array already containing elements
+  arr = Array::createWithElements(rd, 1, true);
+  Object obj(rd);
+  newLength = arr.push(rd, "foobar", obj);
+  EXPECT_EQ(newLength, 4);
+  EXPECT_EQ(arr.length(rd), 4);
+
+  EXPECT_EQ(arr.getValueAtIndex(rd, 0).getNumber(), 1);
+  EXPECT_TRUE(arr.getValueAtIndex(rd, 1).getBool());
+  EXPECT_EQ(arr.getValueAtIndex(rd, 2).getString(rd).utf8(rd), "foobar");
+  EXPECT_TRUE(
+      Object::strictEquals(rd, arr.getValueAtIndex(rd, 3).getObject(rd), obj));
+
+  // Push to a Proxy of a JS Array
+  arr = eval("new Proxy([1], {})").getObject(rd).getArray(rd);
+  EXPECT_EQ(arr.length(rd), 1);
+
+  newLength = arr.push(rd, true, "foobar");
+  EXPECT_EQ(newLength, 3);
+  EXPECT_EQ(arr.length(rd), 3);
+
+  EXPECT_EQ(arr.getValueAtIndex(rd, 0).getNumber(), 1);
+  EXPECT_TRUE(arr.getValueAtIndex(rd, 1).getBool());
+  EXPECT_EQ(arr.getValueAtIndex(rd, 2).getString(rd).utf8(rd), "foobar");
+
+  // Push to a Proxy of a JS Array, where getting the length returns a custom
+  // value
+  arr = eval(
+            "var arr = [1];"
+            "var handler = {"
+            "    get(target, property) {"
+            "        if (property == 'length') {"
+            "            return target.length + 1;"
+            "        }"
+            "        return Reflect.get(target, property);"
+            "    }"
+            "};"
+            "var proxy = new Proxy(arr, handler);"
+            "proxy;")
+            .getObject(rd)
+            .getArray(rd);
+  // The handler returns the underlying array's length plus 1
+  EXPECT_EQ(arr.length(rd), 2);
+
+  // The elements will be adding starting at element 2
+  newLength = arr.push(rd, 3, 4);
+  EXPECT_EQ(newLength, 4);
+
+  EXPECT_EQ(arr.length(rd), 5);
+  EXPECT_EQ(arr.getValueAtIndex(rd, 0).getNumber(), 1);
+  EXPECT_TRUE(arr.getValueAtIndex(rd, 1).isUndefined());
+  EXPECT_EQ(arr.getValueAtIndex(rd, 2).getNumber(), 3);
+  EXPECT_EQ(arr.getValueAtIndex(rd, 3).getNumber(), 4);
+
+  // Push to a Proxy of a JS Array, where setting the 'length' property is
+  // customized
+  arr = eval(
+            "var arr = [1];"
+            "var handler = {"
+            "    set(target, property, value) {"
+            "        if (property == 'length') {"
+            "            return Reflect.set(target, property, value + 1);"
+            "        }"
+            "        return Reflect.set(target, property, value);"
+            "    }"
+            "};"
+            "var proxy = new Proxy(arr, handler);"
+            "proxy;")
+            .getObject(rd)
+            .getArray(rd);
+
+  EXPECT_EQ(arr.length(rd), 1);
+  EXPECT_EQ(arr.getValueAtIndex(rd, 0).getNumber(), 1);
+
+  newLength = arr.push(rd, 2, 3);
+  EXPECT_EQ(newLength, 3);
+
+  // When setting the 'length' property, the handler will actually set it to 3 +
+  // 1
+  EXPECT_EQ(arr.length(rd), 4);
+  EXPECT_EQ(arr.getValueAtIndex(rd, 0).getNumber(), 1);
+  EXPECT_EQ(arr.getValueAtIndex(rd, 1).getNumber(), 2);
+  EXPECT_EQ(arr.getValueAtIndex(rd, 2).getNumber(), 3);
+  EXPECT_TRUE(arr.getValueAtIndex(rd, 3).isUndefined());
+}
+#endif
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, UInt8ArrayTest) {
+  // This Runtime Decorator is used to test the default implementation of
+  // Runtime::createUint8Array and TypedArray APIs
+  class RD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit RD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    Uint8Array createUint8Array(size_t length) override {
+      return Runtime::createUint8Array(length);
+    }
+
+    Uint8Array createUint8Array(
+        const ArrayBuffer& buffer,
+        size_t offset,
+        size_t length) override {
+      return Runtime::createUint8Array(buffer, offset, length);
+    }
+
+    ArrayBuffer buffer(const TypedArray& typedArray) override {
+      return Runtime::buffer(typedArray);
+    }
+
+    size_t byteOffset(const TypedArray& typedArray) override {
+      return Runtime::byteOffset(typedArray);
+    }
+
+    size_t byteLength(const TypedArray& typedArray) override {
+      return Runtime::byteLength(typedArray);
+    }
+
+    size_t length(const TypedArray& typedArray) override {
+      return Runtime::length(typedArray);
+    }
+  };
+  RD rd = RD(rt);
+
+  // Test creating a UInt8Array with a specific length
+  {
+    auto uint8Array = rd.createUint8Array(10);
+
+    EXPECT_EQ(rd.length(uint8Array), 10);
+    EXPECT_EQ(rd.byteLength(uint8Array), 10);
+    EXPECT_EQ(rd.byteOffset(uint8Array), 0);
+  }
+
+  // Test creating a UInt8Array from an ArrayBuffer with offset
+  {
+    auto ab = eval("var buf = new ArrayBuffer(20); buf")
+                  .getObject(rd)
+                  .getArrayBuffer(rd);
+
+    // Create a Uint8Array starting at offset 5 with length 10
+    auto uint8Array = rd.createUint8Array(ab, 5, 10);
+
+    EXPECT_EQ(rd.length(uint8Array), 10);
+    EXPECT_EQ(rd.byteLength(uint8Array), 10);
+    EXPECT_EQ(rd.byteOffset(uint8Array), 5);
+
+    // Test buffer returns the correct underlying ArrayBuffer
+    auto buffer = rd.buffer(uint8Array);
+    EXPECT_EQ(buffer.size(rd), 20);
+  }
+}
+#endif
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, IsTypedArrayTest) {
+  // Test that isTypedArray returns false for a regular object
+  {
+    auto obj = Object(rt);
+    EXPECT_FALSE(rt.isTypedArray(obj));
+    EXPECT_THROW(obj.asTypedArray(rt), JSIException);
+  }
+
+  // Test that isTypedArray returns true for a Uint8Array
+  {
+    Uint8Array uint8Array(rt, 10);
+    EXPECT_TRUE(rt.isTypedArray(uint8Array));
+
+    auto typedArray = uint8Array.getTypedArray(rt);
+    EXPECT_EQ(typedArray.length(rt), 10);
+  }
+
+  // Test that isTypedArray returns true for other TypedArray types
+  {
+    auto int32ArrayObj = eval("new Int32Array(5)").getObject(rt);
+    EXPECT_TRUE(rt.isTypedArray(int32ArrayObj));
+    EXPECT_FALSE(rt.isUint8Array(int32ArrayObj));
+
+    auto typedArray = int32ArrayObj.getTypedArray(rt);
+    EXPECT_EQ(typedArray.length(rt), 5);
+  }
+
+  // Test that isTypedArray returns true for Float64Array
+  {
+    auto float64ArrayObj = eval("new Float64Array(3)").getObject(rt);
+    EXPECT_TRUE(rt.isTypedArray(float64ArrayObj));
+
+    auto typedArray = float64ArrayObj.asTypedArray(rt);
+    EXPECT_EQ(typedArray.length(rt), 3);
+  }
+
+  // Test that isTypedArray returns false for ArrayBuffer
+  {
+    auto arrayBufferObj = eval("new ArrayBuffer(10)").getObject(rt);
+    EXPECT_FALSE(rt.isTypedArray(arrayBufferObj));
+  }
+
+  // Test that isTypedArray returns false for a regular array
+  {
+    auto arrayObj = eval("[1, 2, 3]").getObject(rt);
+    EXPECT_FALSE(rt.isTypedArray(arrayObj));
+  }
+}
+#endif
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, IsUint8ArrayTest) {
+  // Test that isUint8Array returns false for a regular object
+  {
+    auto obj = Object(rt);
+    EXPECT_FALSE(rt.isUint8Array(obj));
+    EXPECT_THROW(obj.asUint8Array(rt), JSIException);
+  }
+
+  // Test that isUint8Array returns true for a Uint8Array created via JS
+  {
+    auto uint8ArrayObj = eval("new Uint8Array(10)").getObject(rt);
+    EXPECT_TRUE(rt.isUint8Array(uint8ArrayObj));
+
+    // Get uInt8Array should succeed.
+    auto uint8Array = uint8ArrayObj.getUint8Array(rt);
+    EXPECT_EQ(uint8Array.length(rt), 10);
+  }
+}
+#endif
+
+#if JSI_VERSION >= 22
+TEST_P(JSITest, ArrayBufferDetachedTest) {
+  // This Runtime Decorator is used to test the default implementation of
+  // Runtime::detached
+  class RD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit RD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    bool detached(const ArrayBuffer& ab) override {
+      return Runtime::detached(ab);
+    }
+  };
+  RD rd = RD(rt);
+
+  // Test that a normal ArrayBuffer is not detached.
+  auto ab = eval("var buf = new ArrayBuffer(10); buf")
+                .getObject(rd)
+                .getArrayBuffer(rd);
+
+  // The default Runtime::detached reads the JS "detached" property. If the
+  // runtime doesn't support ArrayBuffer.prototype.detached, it will throw
+  // JSINativeException.
+  try {
+    EXPECT_FALSE(ab.detached(rd));
+  } catch (const JSINativeException&) {
+    // Runtime doesn't support ArrayBuffer.prototype.detached, skip the rest.
+    return;
+  }
+
+  // Skip the rest if the runtime has no way to detach an ArrayBuffer from JS.
+  bool canDetach =
+      eval(
+          "typeof buf.transfer === 'function' || "
+          "(typeof HermesInternal !== 'undefined' && "
+          " typeof HermesInternal.detachArrayBuffer === 'function')")
+          .getBool();
+  if (!canDetach) {
+    return;
+  }
+
+  // Detach the ArrayBuffer. Use transfer() if available, otherwise fall back
+  // to HermesInternal.detach for Hermes runtime.
+  eval(
+      "if (typeof buf.transfer === 'function') {"
+      "  buf.transfer();"
+      "} else if (typeof HermesInternal !== 'undefined' && "
+      "           typeof HermesInternal.detachArrayBuffer === 'function') {"
+      "  HermesInternal.detachArrayBuffer(buf);"
+      "}");
+  EXPECT_TRUE(ab.detached(rd));
+}
+#endif
 
 INSTANTIATE_TEST_CASE_P(
     Runtimes,

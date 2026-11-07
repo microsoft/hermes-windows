@@ -16,12 +16,17 @@
 #include "hermes/Support/Allocator.h"
 #include "hermes/Support/Compiler.h"
 #include "hermes/VM/AlignedHeapSegment.h"
+#include "hermes/VM/Callable.h"
 #include "hermes/VM/CellKind.h"
+#include "hermes/VM/Domain.h"
 #include "hermes/VM/DummyObject.h"
 #include "hermes/VM/GC.h"
 #include "hermes/VM/GCPointer-inline.h"
 #include "hermes/VM/HermesValue.h"
+#include "hermes/VM/JSRegExp.h"
 #include "hermes/VM/JSWeakMapImpl.h"
+#include "hermes/VM/RegExpBytecode.h"
+#include "hermes/VM/RuntimeModule.h"
 #include "hermes/VM/SymbolID.h"
 
 #include "llvh/ADT/StringRef.h"
@@ -362,6 +367,21 @@ static std::pair<Node, std::vector<Edge>> findNodeAndEdgesForID(
 #define FIND_NODE_FOR_ID(...) findNodeForID(__VA_ARGS__, __FILE__, __LINE__)
 #define FIND_NODE_AND_EDGES_FOR_ID(...) \
   findNodeAndEdgesForID(__VA_ARGS__, __FILE__, __LINE__)
+
+/// \return every node named \p name.
+static std::vector<Node> findNodesNamed(
+    const std::string &name,
+    const JSONArray &nodes,
+    const JSONArray &strings) {
+  std::vector<Node> found;
+  for (auto it = nodes.begin(), e = nodes.end(); it != e;
+       it += HeapSnapshot::V8_SNAPSHOT_NODE_FIELD_COUNT) {
+    Node node = Node::parse(it, strings);
+    if (node.name == name)
+      found.push_back(std::move(node));
+  }
+  return found;
+}
 
 static Location findLocationForID(
     HeapSnapshot::NodeID id,
@@ -738,18 +758,26 @@ TEST(HeapSnapshotTest, SnapshotFromCallbackContextRunInMiddleYG) {
                   .build())
           .build());
   using LargeCell = EmptyCell<FixedSizeHeapSegment::maxSize() / 2>;
+  // The first YG collection resizes the YG to between 45% and 55% of the
+  // segment, depending on how long it took. Size cell4 so that cell4 and cell5
+  // fit in the YG at any of those sizes, and size cell1 so that the free space
+  // left in its OG segment fits exactly cell4.
+  constexpr size_t kCell4Size =
+      heapAlignSize(FixedSizeHeapSegment::maxSize() * 2 / 5);
+  using MediumCell = EmptyCell<kCell4Size>;
+  using OGCell = EmptyCell<FixedSizeHeapSegment::maxSize() - kCell4Size>;
   DummyRuntime &rt = *runtime;
   struct : Locals {
-    PinnedValue<LargeCell> cell1;
+    PinnedValue<OGCell> cell1;
     PinnedValue<LargeCell> cell2;
     PinnedValue<LargeCell> cell3;
-    PinnedValue<LargeCell> cell4;
+    PinnedValue<MediumCell> cell4;
     PinnedValue<DummyObject> cell5;
   } lv;
   DummyLocalsRAII lraii{rt, &lv};
 
   // Create a cell in OG and make it dead. It won't be freed until Sweep phase.
-  lv.cell1 = LargeCell::createLongLived(rt);
+  lv.cell1 = OGCell::createLongLived(rt);
   lv.cell1 = nullptr;
 
   // Create two cells to make YG full. Make them dead so that they won't be
@@ -759,10 +787,10 @@ TEST(HeapSnapshotTest, SnapshotFromCallbackContextRunInMiddleYG) {
   lv.cell2 = nullptr;
   lv.cell3 = nullptr;
   // Trigger a YG collection, which starts an OG collection.
-  lv.cell4 = LargeCell::create(rt);
+  lv.cell4 = MediumCell::create(rt);
 
-  // Add a small cell, so that it won't trigger YG collection due to HadesGC
-  // updating YG effectiveEnd.
+  // Add a small cell. It fits in the resized YG, so it won't trigger another
+  // YG collection.
   lv.cell5 = DummyObject::create(rt.getHeap(), rt);
   // Create another cell, this should trigger YG again, and wait for OG to
   // finish in the middle of YG. Both cell4 and cell5 need to be moved to OG,
@@ -823,8 +851,8 @@ using HeapSnapshotRuntimeTest = RuntimeTestFixture;
 
 template <typename T>
 size_t firstNamedPropertyEdge() {
-  // parent, __proto__, class, directProp$i
-  return JSObject::DIRECT_PROPERTY_SLOTS - JSObject::numOverlapSlots<T>() + 3;
+  // __proto__, class, directProp$i
+  return JSObject::DIRECT_PROPERTY_SLOTS - JSObject::numOverlapSlots<T>() + 2;
 }
 
 TEST_F(HeapSnapshotRuntimeTest, FunctionLocationForLazyCode) {
@@ -874,6 +902,121 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationForLazyCode) {
 #else
   (void)findLocationForID;
 #endif
+}
+
+TEST_F(HeapSnapshotRuntimeTest, RegExpBytecodeReportedByItsModule) {
+  JSONFactory::Allocator alloc;
+  JSONFactory jsonFactory{alloc};
+
+  CallResult<HermesValue> res = runtime.run(
+      "(function () { return function () { return /a(b)c/g; }; })()",
+      "file:///fake.js",
+      hbc::CompileFlags{});
+  ASSERT_FALSE(isException(res));
+  Handle<JSFunction> f = runtime.makeHandle(vmcast<JSFunction>(*res));
+  RuntimeModule *rm = f->getRuntimeModule();
+  const size_t numRegExps = rm->getBytecode()->getRegExpTable().size();
+  ASSERT_EQ(1u, numRegExps);
+  // Precondition: nothing is cached yet.
+  ASSERT_EQ(0u, rm->regExpCacheMemorySize());
+  const auto rmID = runtime.getHeap().getNativeID(rm);
+  Handle<Domain> domain = rm->getDomain(runtime);
+  auto domainMallocSize = [&]() {
+    GCCell *cell = domain.get();
+    return cell->getVT()->getMallocSize(cell);
+  };
+  const size_t domainSizeBefore = domainMallocSize();
+
+  size_t rmSizeBefore;
+  size_t numBytecodeNodesBefore;
+  {
+    JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory, false);
+    ASSERT_TRUE(root != nullptr);
+    const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
+    const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
+    // The runtime's internal modules may already report entries of their
+    // own; only this module's entry is new.
+    numBytecodeNodesBefore =
+        findNodesNamed("RegExpBytecode", nodes, strings).size();
+    rmSizeBefore = FIND_NODE_FOR_ID(rmID, nodes, strings).selfSize;
+  }
+
+  auto call = [&]() {
+    CallResult<PseudoHandle<>> r =
+        Callable::executeCall0(f, runtime, Runtime::getUndefinedValue());
+    EXPECT_FALSE(isException(r));
+    return runtime.makeHandle(vmcast<JSRegExp>(r->get()));
+  };
+
+  Handle<JSRegExp> r0 = call();
+  const RegExpBytecode *entry = r0->getBytecodeEntry();
+  ASSERT_EQ(RegExpBytecode::Ownership::Cached, entry->ownership());
+  auto regExpMallocSize = [](Handle<JSRegExp> r) {
+    GCCell *cell = r.get();
+    return cell->getVT()->getMallocSize(cell);
+  };
+  EXPECT_EQ(0u, regExpMallocSize(r0));
+  const size_t sizeAfterFirst = rm->regExpCacheMemorySize();
+  // The Domain reports the cache through its module.
+  EXPECT_EQ(domainSizeBefore + sizeAfterFirst, domainMallocSize());
+
+  Handle<JSRegExp> r1 = call();
+  EXPECT_EQ(entry, r1->getBytecodeEntry());
+  EXPECT_EQ(0u, regExpMallocSize(r1));
+  EXPECT_EQ(domainSizeBefore + sizeAfterFirst, domainMallocSize());
+  // The second evaluation adds nothing.
+  EXPECT_EQ(sizeAfterFirst, rm->regExpCacheMemorySize());
+
+  JSONObject *root = TAKE_SNAPSHOT(runtime.getHeap(), jsonFactory, false);
+  ASSERT_TRUE(root != nullptr);
+  const JSONArray &nodes = *llvh::cast<JSONArray>(root->at("nodes"));
+  const JSONArray &edges = *llvh::cast<JSONArray>(root->at("edges"));
+  const JSONArray &strings = *llvh::cast<JSONArray>(root->at("strings"));
+
+  // This assumes the internal modules' nodes are stable between the two
+  // snapshots: only f's module changes.
+  // Exactly one new node for the shared bytecode, sized by its allocation.
+  const auto entryID = runtime.getHeap().getNativeID(entry);
+  std::vector<Node> bytecodeNodes =
+      findNodesNamed("RegExpBytecode", nodes, strings);
+  EXPECT_EQ(numBytecodeNodesBefore + 1, bytecodeNodes.size());
+  auto entryNodeIt = std::find_if(
+      bytecodeNodes.begin(), bytecodeNodes.end(), [&](const Node &n) {
+        return n.id == entryID;
+      });
+  ASSERT_NE(bytecodeNodes.end(), entryNodeIt);
+  EXPECT_EQ(entry->mallocSize(), entryNodeIt->selfSize);
+
+  // The module node keeps its size and points at its cache vector. Every
+  // module emits a vector node (the runtime's internal module too), so the
+  // vector is found through this module's edge.
+  auto rmNodeAndEdges = FIND_NODE_AND_EDGES_FOR_ID(rmID, nodes, edges, strings);
+  EXPECT_EQ(rmSizeBefore, rmNodeAndEdges.first.selfSize);
+  auto cacheEdgeIt = std::find_if(
+      rmNodeAndEdges.second.begin(),
+      rmNodeAndEdges.second.end(),
+      [](const Edge &edge) {
+        return edge.type == HeapSnapshot::EdgeType::Internal &&
+            edge.name == "regExpCache";
+      });
+  ASSERT_NE(rmNodeAndEdges.second.end(), cacheEdgeIt);
+
+  // The vector node: named, sized by its capacity, with an indexed edge
+  // to the entry.
+  auto vectorNodeAndEdges =
+      FIND_NODE_AND_EDGES_FOR_ID(cacheEdgeIt->toNode, nodes, edges, strings);
+  EXPECT_EQ("std::vector<RegExpBytecode *>", vectorNodeAndEdges.first.name);
+  const size_t slotSize = sizeof(llvh::IntrusiveRefCntPtr<RegExpBytecode>);
+  const size_t vectorBytes = vectorNodeAndEdges.first.selfSize;
+  EXPECT_GE(vectorBytes, numRegExps * slotSize);
+  EXPECT_EQ(0u, vectorBytes % slotSize);
+  EXPECT_EQ(
+      std::vector<Edge>{Edge(HeapSnapshot::EdgeType::Element, 0, entryID)},
+      vectorNodeAndEdges.second);
+
+  // The malloc estimate agrees with the snapshot: the vector plus the
+  // entry.
+  EXPECT_EQ(vectorBytes + entry->mallocSize(), sizeAfterFirst);
 }
 
 TEST_F(HeapSnapshotRuntimeTest, FunctionLocationAndNameTest) {

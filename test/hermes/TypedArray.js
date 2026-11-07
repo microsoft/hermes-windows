@@ -222,6 +222,128 @@ cons.forEach(function(TypedArray) {
   assert.equal(view[2], 3);
 });
 
+(function testArrayCopyWithDeletedElement() {
+  var source = [1, 2, 3];
+  delete source[1];
+
+  var view = new Float64Array(source);
+  assert.arrayEqual([view[0], view[1], view[2]], [1, NaN, 3]);
+
+  view = Uint8Array.from(source);
+  assert.arrayEqual([view[0], view[1], view[2]], [1, 0, 3]);
+
+  var visited = [];
+  view = Float64Array.from(source, function(value, index) {
+    visited.push(index);
+    if (index === 1) {
+      assert.equal(value, undefined);
+      return 7;
+    }
+    return value;
+  });
+  assert.arrayEqual([view[0], view[1], view[2]], [1, 7, 3]);
+  assert.arrayEqual(visited, [0, 1, 2]);
+  assert.equal(source.length, 3);
+  assert.equal(1 in source, false);
+
+  // The holes are read while the source is iterated, before the mapper runs,
+  // so the mapper must not observe the elements it adds to Array.prototype.
+  source = [1, 2, 3, 4];
+  delete source[1];
+  delete source[3];
+  try {
+    view = Float64Array.from(source, function(value, index) {
+      if (index === 0) {
+        Array.prototype[1] = 41;
+        Array.prototype[3] = 43;
+      }
+      return value;
+    });
+  } finally {
+    // Truncate rather than delete: deleting would leave holes in
+    // Array.prototype, which disables the array fast path for later tests.
+    Array.prototype.length = 0;
+  }
+  assert.arrayEqual([view[0], view[1], view[2], view[3]], [1, NaN, 3, NaN]);
+})();
+
+(function testArrayIteratorFastPathSemantics() {
+  var dense = [1, 2, 3];
+  var view = new Float64Array(dense);
+  assert.arrayEqual([view[0], view[1], view[2]], dense);
+
+  var sparse = [1, , 3];
+  view = new Float64Array(sparse);
+  assert.equal(view[0], 1);
+  assert.equal(view[1], NaN);
+  assert.equal(view[2], 3);
+
+  Array.prototype[1] = 7;
+  try {
+    view = new Float64Array(sparse);
+    assert.equal(view[1], 7);
+  } finally {
+    delete Array.prototype[1];
+  }
+
+  var growing = [1, 2];
+  Object.defineProperty(growing, 0, {
+    get: function() {
+      growing.push(3);
+      return 1;
+    },
+  });
+  view = new Float64Array(growing);
+  assert.equal(view.length, 3);
+  assert.equal(view[2], 3);
+
+  var shrinking = [];
+  shrinking.length = 0xffffffff;
+  Object.defineProperty(shrinking, 0, {
+    get: function() {
+      shrinking.length = 1;
+      return 7;
+    },
+  });
+  view = new Float64Array(shrinking);
+  assert.equal(view.length, 1);
+  assert.equal(view[0], 7);
+
+  var source = [
+    {
+      valueOf: function() {
+        source[1] = 9;
+        return 1;
+      },
+    },
+    2,
+  ];
+  view = new Float64Array(source);
+  assert.equal(view[0], 1);
+  assert.equal(view[1], 2);
+
+  source = [1, 2];
+  source[Symbol.iterator] = function*() {
+    yield 7;
+    yield 8;
+  };
+  view = new Float64Array(source);
+  assert.equal(view[0], 7);
+  assert.equal(view[1], 8);
+
+  var iteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+  var originalNext = iteratorPrototype.next;
+  iteratorPrototype.next = function() {
+    return {value: 11, done: true};
+  };
+  try {
+    view = new Float64Array([1, 2]);
+    assert.equal(view.length, 0);
+  } finally {
+    iteratorPrototype.next = originalNext;
+  }
+})();
+
 // Check constructor from Array with arbitrary types
 cons.forEach(function(TypedArray) {
   var view = new TypedArray(['1', {}, false]);
@@ -282,6 +404,42 @@ cons.forEach(function(TypedArray) {
   assert.equal(view[0], 4);
   assert.equal(view[1], 5);
   assert.equal(view[2], 6);
+});
+
+// Check that create(iterable) propagates the error thrown by the value getter
+// of an iterator result without calling the iterator's return method, as
+// IteratorStepValue specifies.
+function ValueError() {}
+function checkValueErrorDoesNotClose(create) {
+  var returnCalls = 0;
+  var iterable = {};
+  iterable[Symbol.iterator] = function() {
+    return {
+      next: function() {
+        return {
+          done: false,
+          get value() {
+            throw new ValueError();
+          },
+        };
+      },
+      return: function() {
+        ++returnCalls;
+        return {};
+      },
+    };
+  };
+  assert.throws(function() {
+    create(iterable);
+  }, ValueError);
+  assert.equal(returnCalls, 0);
+}
+
+// Check constructor from iterable whose value getter throws
+cons.forEach(function(TypedArray) {
+  checkValueErrorDoesNotClose(function(iterable) {
+    return new TypedArray(iterable);
+  });
 });
 
 // Empty constructor
@@ -348,13 +506,12 @@ cons.forEach(function(TypedArray) {
   for(var i in view)
     result.push(i);
   assert.arrayEqual(result, ["0", "1", "2", "3", "4"]);
-  // Detach the buffer. Result should be the same because
-  // IsDetachedBuffer is not checked in ES6 9.4.5.6 [[OwnPropertyKeys]].
+  // Detach the buffer. No keys should be enumerable.
   HermesInternal.detachArrayBuffer(view.buffer);
   result = [];
   for(var i in view)
     result.push(i);
-  assert.arrayEqual(result, ["0", "1", "2", "3", "4"]);
+  assert.arrayEqual(result, []);
 });
 
 // Check basic writability properties
@@ -632,7 +789,37 @@ cons.forEach(function(c, i) {
   assert.equal(ta[0], 2);
   assert.equal(ta[1], 4);
   assert.equal(ta[2], 6);
+
+  // Doesn't close the iterator when a value getter throws.
+  checkValueErrorDoesNotClose(function(iterable) {
+    return c.from(iterable);
+  });
 });
+
+(function testFromArrayIteratorFastPathSemantics() {
+  var source = [
+    {
+      valueOf: function() {
+        source[1] = 9;
+        return 1;
+      },
+    },
+    2,
+  ];
+  var ta = Float64Array.from(source);
+  assert.equal(ta[0], 1);
+  assert.equal(ta[1], 2);
+
+  source = [1, 2];
+  ta = Float64Array.from(source, function(value, index) {
+    if (index === 0) {
+      source[1] = 9;
+    }
+    return value;
+  });
+  assert.equal(ta[0], 1);
+  assert.equal(ta[1], 2);
+})();
 
 /// @}
 
@@ -981,14 +1168,57 @@ cons.forEach(function(TypedArray) {
   assert.equal(arr.indexOf(50), 0);
   assert.equal(arr.lastIndexOf(50), 1);
 
-  assert.throws(function() {
-    arr.includes(0, {
-      valueOf() {
-        HermesInternal.detachArrayBuffer(arr.buffer);
-        return 0;
-      },
-    });
-  }, TypeError);
+  // When the buffer is detached during includes, elements become undefined.
+  // Searching for undefined should return true.
+  var arr2 = new TypedArray(10);
+  assert.ok(arr2.includes(undefined, {
+    valueOf() {
+      HermesInternal.detachArrayBuffer(arr2.buffer);
+      return 0;
+    },
+  }));
+
+  // Searching for any other value should return false.
+  var arr3 = new TypedArray(10);
+  assert.ok(!arr3.includes(0, {
+    valueOf() {
+      HermesInternal.detachArrayBuffer(arr3.buffer);
+      return 0;
+    },
+  }));
+  // When the buffer is detached during indexOf, it should always return -1.
+  var arr4 = new TypedArray(10);
+  assert.equal(arr4.indexOf(undefined, {
+    valueOf() {
+      HermesInternal.detachArrayBuffer(arr4.buffer);
+      return 0;
+    },
+  }), -1);
+
+  var arr5 = new TypedArray(10);
+  assert.equal(arr5.indexOf(0, {
+    valueOf() {
+      HermesInternal.detachArrayBuffer(arr5.buffer);
+      return 0;
+    },
+  }), -1);
+
+  // When the buffer is detached during lastIndexOf, it should always return -1.
+  var arr6 = new TypedArray(10);
+  assert.equal(arr6.lastIndexOf(undefined, {
+    valueOf() {
+      HermesInternal.detachArrayBuffer(arr6.buffer);
+      return 0;
+    },
+  }), -1);
+
+  var arr7 = new TypedArray(10);
+  assert.equal(arr7.lastIndexOf(0, {
+    valueOf() {
+      HermesInternal.detachArrayBuffer(arr7.buffer);
+      return 0;
+    },
+  }), -1);
 });
 /// @}
 
@@ -1091,9 +1321,7 @@ cons.forEach(function(ta) {
     x.sort({});
   }, TypeError);
 
-  // Sorting a TypedArray allocates handles linearly with respect to the size
-  // of the buffer. Sorting a larger array will ensure that we clean those up
-  // periodically.
+  // Exercise the comparator path with a larger captured list.
   x = new ta(104);
   x.sort(function(unused1, unused2) {
     return true;
@@ -1102,18 +1330,68 @@ cons.forEach(function(ta) {
     assert.equal(x[i], 0);
   }
 
-  // Check that detaching in the middle of sorting will cause a TypeError.
-  x = new ta([1, 2, 3]);
-  assert.throws(function() {
-    x.sort(function f(unused1, unused2) {
-      var a = {};
-      a.valueOf = function() {
-        HermesInternal.detachArrayBuffer(x.buffer);
-      };
-      return a;
-    });
-  }, TypeError);
+  // Sort the captured values even if the comparator changes the receiver.
+  x = new ta([3, 2, 1]);
+  var calls = 0;
+  x.sort(function(a, b) {
+    if (calls++ === 0) {
+      x.fill(0);
+    }
+    return a - b;
+  });
+  assert.equal(x[0], 1);
+  assert.equal(x[1], 2);
+  assert.equal(x[2], 3);
+
+  // Detaching does not change the values passed to later comparator calls.
+  x = new ta([3, 2, 1]);
+  calls = 0;
+  var result = x.sort(function(a, b) {
+    assert.notEqual(a, undefined);
+    assert.notEqual(b, undefined);
+    if (calls++ === 0) {
+      HermesInternal.detachArrayBuffer(x.buffer);
+    }
+    return a - b;
+  });
+  assert.equal(result, x);
+  assert.ok(calls > 1);
 });
+
+/// Bigint are represented as a heap object when encoded to HermesValue. This
+/// tests that they remain alive across GC.
+(function bigintSortSnapshotSurvivesGC() {
+  var x = new BigInt64Array([3n, 2n, 1n]);
+  x.sort(function(a, b) {
+    gc();
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  assert.equal(x[0], 1n);
+  assert.equal(x[1], 2n);
+  assert.equal(x[2], 3n);
+})();
+
+(function bigintElementWrites() {
+  var int64MinBit = 9223372036854775808n; // 2^63
+  var uint64Max = 18446744073709551615n;  // 2^64 - 1
+  var uint64Mod = 18446744073709551616n;  // 2^64
+
+  var u = new BigUint64Array(3);
+  u[0] = int64MinBit;
+  u[1] = uint64Max;
+  u[2] = uint64Mod;
+  assert.equal(u[0], int64MinBit);
+  assert.equal(u[1], uint64Max);
+  assert.equal(u[2], 0n);
+
+  var s = new BigInt64Array(3);
+  s[0] = int64MinBit;
+  s[1] = uint64Max;
+  s[2] = uint64Mod;
+  assert.equal(s[0], -int64MinBit);
+  assert.equal(s[1], -1n);
+  assert.equal(s[2], 0n);
+})();
 
 (function negativeZeroSort() {
   var x = new Float64Array([+0, -0]);

@@ -340,13 +340,12 @@ class JSParserImpl {
   UniqueString *underscoreIdent_;
 
   UniqueString *recordIdent_;
-#endif
-
-#if HERMES_PARSE_TS
-  UniqueString *readonlyIdent_;
+  UniqueString *writeonlyIdent_;
+  UniqueString *outIdent_;
 #endif
 
 #if HERMES_PARSE_FLOW || HERMES_PARSE_TS
+  UniqueString *readonlyIdent_;
   UniqueString *namespaceIdent_;
   UniqueString *isIdent_;
   UniqueString *inferIdent_;
@@ -1660,6 +1659,34 @@ class JSParserImpl {
     }
   }
 #endif
+
+  /// Check if the given token kind can follow a contextual variance keyword
+  /// (\c readonly or \c writeonly) in Flow mode. Used to disambiguate the
+  /// keyword as a variance annotation from the keyword used as a property name.
+  static bool canFollowVarianceKeywordFlow(OptValue<TokenKind> optTokenKind) {
+    if (!optTokenKind.hasValue()) {
+      return false;
+    }
+    // Reserved words (e.g. `with`, `enum`, `default`, `new`) are valid
+    // property names, so `readonly <reservedWord>:` should be parsed as a
+    // variance modifier on a reserved-word property — the same way
+    // `+<reservedWord>:` already is.
+    if (*optTokenKind > TokenKind::_first_resword &&
+        *optTokenKind < TokenKind::_last_resword) {
+      return true;
+    }
+    switch (*optTokenKind) {
+      case TokenKind::identifier:
+      case TokenKind::private_identifier:
+      case TokenKind::string_literal:
+      case TokenKind::numeric_literal:
+      case TokenKind::bigint_literal:
+      case TokenKind::l_square:
+        return true;
+      default:
+        return false;
+    }
+  }
 
   /// RAII to save and restore the current setting of fields that are used on a
   /// per-function basis.

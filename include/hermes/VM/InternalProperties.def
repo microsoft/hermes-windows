@@ -29,12 +29,15 @@ NAMED_PROP(NamedPropForUnitTestOnly)
 NAMED_PROP(CapturedError)
 NAMED_PROP(IntlNativeType)
 NAMED_PROP(NativeState)
+NAMED_PROP(NapiData)
 NAMED_PROP(ArrayBufferExternalFinalizer)
 NAMED_PROP(ExternalMemoryPressure)
 NAMED_PROP(NodeApiData)
 
 /// A reserved symbol ID to use for the HC transition to the frozen state.
 NAMED_PROP(FreezeTransition)
+/// A reserved symbol ID to use for the HC transition between ClassFlags.
+NAMED_PROP(FlagsTransition)
 
 #undef PROP
 #undef NAMED_PROP

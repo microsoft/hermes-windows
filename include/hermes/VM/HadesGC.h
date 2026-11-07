@@ -224,6 +224,14 @@ class HadesGC final : public GCBase {
   /// Force a garbage collection cycle.
   /// (Part of general GC API defined in GCBase.h).
   void collect(std::string cause, bool canEffectiveOOM = false) override;
+  void collectWithOptions(std::string &&cause, const GCOptions &options)
+      override;
+
+  /// Total number of completed YG collections.
+  /// Requires exclusive runtime access.
+  unsigned getNumYGGCs() const {
+    return ygCumulativeStats_.numCollections;
+  }
 
   /// Run the finalizers for all heap objects.
   void finalizeAll() override;
@@ -1729,7 +1737,7 @@ std::pair<T1 *, T2 *> HadesGC::make2YoungGenUnsafeImpl(
   uint32_t totalSize = size1 + size2;
 
   assert(
-      ((uint64_t)size1 + (uint64_t)size2) <
+      ((uint64_t)size1 + (uint64_t)size2) <=
           (uint64_t)maxYoungGenAllocationSize() &&
       "must be able to allocate in young gen");
 

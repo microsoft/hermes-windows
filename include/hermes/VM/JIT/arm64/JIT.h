@@ -10,6 +10,7 @@
 
 #include "hermes/ADT/TransparentOwningPtr.h"
 #include "hermes/VM/CodeBlock.h"
+#include "hermes/VM/JIT/JitCounters.h"
 #include "hermes/VM/JIT/PerfJitDump.h"
 
 namespace hermes {
@@ -27,20 +28,6 @@ enum : unsigned {
   EntryExit = 0x80,
 };
 }
-
-/// List of counters that can be incremented from JIT emitted code.
-#define JIT_COUNTERS(X) \
-  X(NumCall)            \
-  X(NumCallSlow)
-
-/// Enum with an entry for each JIT counter. This is used to index into the list
-/// of counters.
-enum class JitCounter : unsigned {
-#define COUNTER_NAME(name) name,
-  JIT_COUNTERS(COUNTER_NAME)
-#undef COUNTER_NAME
-      _Last,
-};
 
 /// All state related to JIT compilation.
 class JITContext {
@@ -134,9 +121,19 @@ class JITContext {
     memoryLimit_ = memoryLimit;
   }
 
+  /// Set the largest lazy JIT id assignable to a HiddenClass. Exposed only so
+  /// that tests can reach the exhaustion path without interning 65535 hidden
+  /// classes; production code should leave this at the default.
+  void setHCIdLimit(uint32_t hcIdLimit);
+
   /// Set the flag to emit asserts in the JIT'ed code.
   void setEmitAsserts(bool emitAsserts) {
     emitAsserts_ = emitAsserts;
+  }
+
+  /// Set the flag to verify FR type assumptions in the JIT'ed code.
+  void setEmitTypeAsserts(bool emitTypeAsserts) {
+    emitTypeAsserts_ = emitTypeAsserts;
   }
 
   /// Set whether we should emit counters in the JIT'ed code.
@@ -155,6 +152,11 @@ class JITContext {
   /// \return true if we should emit asserts in the JIT'ed code.
   bool getEmitAsserts() {
     return emitAsserts_;
+  }
+
+  /// \return true if we should verify FR type assumptions in JIT'ed code.
+  bool getEmitTypeAsserts() {
+    return emitTypeAsserts_;
   }
 
   /// Called by the GC at the beginning of a collection. This method informs the
@@ -184,6 +186,8 @@ class JITContext {
   bool crashOnError_{false};
   /// Whether to emit asserts in the JIT'ed code.
   bool emitAsserts_{false};
+  /// Whether to verify FR type assumptions in the JIT'ed code.
+  bool emitTypeAsserts_{false};
   /// Whether to force jitting of all functions.
   /// If true, ignores the default exec threshold completely.
   bool forceJIT_{false};

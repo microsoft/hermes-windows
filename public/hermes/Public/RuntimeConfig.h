@@ -12,7 +12,9 @@
 #include "hermes/Public/GCConfig.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 
 namespace hermes {
 namespace vm {
@@ -31,6 +33,15 @@ enum class SynthTraceMode : int8_t {
 };
 
 class PinnedHermesValue;
+
+/// Runs a thread's main function inside an embedder-provided scope.
+/// A non-empty runner must invoke its argument exactly once and must not return
+/// until the argument has returned; a runner that skips it silently discards
+/// everything the thread was going to do. An empty runner leaves the thread
+/// unwrapped.
+/// The runner must not throw. Hermes VM is compiled with exceptions disabled
+/// on most platforms, so an escaping exception terminates the process.
+using ThreadRunner = std::function<void(std::function<void()>)>;
 
 // Parameters for Runtime initialisation.  Check documentation in README.md
 // constexpr indicates that the default value is constexpr.
@@ -82,7 +93,7 @@ class PinnedHermesValue;
   F(constexpr, const void *, IntlIcuVtable, nullptr)                   \
                                                                        \
   /* Support for using microtasks. */                                  \
-  F(constexpr, bool, MicrotaskQueue, false)                            \
+  F(constexpr, bool, MicrotaskQueue, true)                             \
                                                                        \
   /* Runtime set up for synth trace. */                                \
   F(constexpr, SynthTraceMode, SynthTraceMode, SynthTraceMode::None)   \
@@ -138,9 +149,33 @@ class PinnedHermesValue;
                                                                        \
   /* Increase compliance with test262 (stricter checks at runtime). */ \
   F(constexpr, bool, Test262, false)                                   \
+                                                                       \
+  /* Fork divergence: nullopt preserves inline VM finalization, */     \
+  /* with no executor or worker. Destructors run on whichever */       \
+  /* thread finalizes: the mutator, Hades background sweep, or */      \
+  /* runtime teardown. HostObject, HostFunction and NativeState */     \
+  /* destructors must not throw in either mode. An explicit runner */  \
+  /* opts into upstream worker destruction and must not throw. */      \
+  /* An empty ThreadRunner leaves the worker unwrapped, including */   \
+  /* on Android. Use withFinalizerThreadRunner(ThreadRunner{}); */     \
+  /* bare {} is nullopt. */                                            \
+  F(HERMES_NON_CONSTEXPR,                                              \
+    std::optional<ThreadRunner>,                                       \
+    FinalizerThreadRunner,                                             \
+    std::nullopt)                                                      \
   /* RUNTIME_FIELDS END */
 
-_HERMES_CTORCONFIG_STRUCT(RuntimeConfig, RUNTIME_FIELDS, {})
+/// Version of RuntimeConfig.
+/// Changing RuntimeConfig in a non-compatible way (e.g., adding new field in
+/// the middle or changing field types) requires bumping the version.
+/// Date: Aug 10, 2026
+#define HERMES_RUNTIME_CONFIG_VERSION 1
+
+_HERMES_CTORCONFIG_STRUCT(
+    RuntimeConfig,
+    HERMES_RUNTIME_CONFIG_VERSION,
+    RUNTIME_FIELDS,
+    {})
 
 #undef RUNTIME_FIELDS
 

@@ -63,7 +63,8 @@ size_t Domain::_mallocSizeImpl(GCCell *cell) {
   auto *self = vmcast<Domain>(cell);
   size_t rmSize = 0;
   for (auto *rm : self->runtimeModules_)
-    rmSize += sizeof(RuntimeModule) + rm->additionalMemorySize();
+    rmSize += sizeof(RuntimeModule) + rm->additionalMemorySize() +
+        rm->regExpCacheMemorySize();
 
   return self->cjsRuntimeModules_.capacity_in_bytes() +
       self->cjsModuleTable_.getMemorySize() +
@@ -142,13 +143,10 @@ ExecutionStatus Domain::importCJSModuleTable(
 
     auto requireFn = NativeFunction::create(
         runtime,
-        Handle<JSObject>::vmcast(&runtime.functionPrototype),
-        Runtime::makeNullHandle<Environment>(),
         (void *)TypeErrorKind::InvalidDynamicRequire,
         throwTypeError,
         Predefined::getSymbolID(Predefined::emptyString),
-        0,
-        Runtime::makeNullHandle<JSObject>());
+        0);
 
     auto context = RequireContext::create(
         runtime,
@@ -338,12 +336,8 @@ Handle<RequireContext> RequireContext::create(
     Runtime &runtime,
     Handle<Domain> domain,
     Handle<StringPrimitive> dirname) {
-  auto objProto = Handle<JSObject>::vmcast(&runtime.objectPrototype);
   auto *cell = runtime.makeAFixed<RequireContext>(
-      runtime,
-      objProto,
-      runtime.getHiddenClassForPrototype(
-          *objProto, numOverlapSlots<RequireContext>()));
+      runtime, runtime.objectPrototype, runtime.classRequireContext);
   auto self = JSObjectInit::initToHandle(runtime, cell);
   self->domain_.set(runtime, *domain, runtime.getHeap());
   self->dirname_.set(runtime, *dirname, runtime.getHeap());

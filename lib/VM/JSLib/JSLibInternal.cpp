@@ -76,14 +76,7 @@ NativeFunction *defineMethod(
   GCScope gcScope{runtime};
 
   auto method = NativeFunction::create(
-      runtime,
-      Handle<JSObject>::vmcast(&runtime.functionPrototype),
-      Runtime::makeNullHandle<Environment>(),
-      context,
-      nativeFunctionPtr,
-      methodName,
-      paramCount,
-      Runtime::makeNullHandle<JSObject>());
+      runtime, context, nativeFunctionPtr, methodName, paramCount);
 
   auto res = JSObject::defineOwnProperty(
       objectHandle, runtime, propertyName, dpf, method);
@@ -175,15 +168,8 @@ void defineAccessor(
                     createPseudoHandle(vmcast<StringPrimitive>(strRes))))
             .get();
 
-    auto funcRes = NativeFunction::create(
-        runtime,
-        Handle<JSObject>::vmcast(&runtime.functionPrototype),
-        Runtime::makeNullHandle<Environment>(),
-        context,
-        getterFunc,
-        getterFuncName,
-        0,
-        Runtime::makeNullHandle<JSObject>());
+    auto funcRes =
+        NativeFunction::create(runtime, context, getterFunc, getterFuncName, 0);
     lv.getter = funcRes.get();
   }
   if (setterFunc) {
@@ -202,15 +188,8 @@ void defineAccessor(
                     createPseudoHandle(vmcast<StringPrimitive>(strRes))))
             .get();
 
-    auto funcRes = NativeFunction::create(
-        runtime,
-        Handle<JSObject>::vmcast(&runtime.functionPrototype),
-        Runtime::makeNullHandle<Environment>(),
-        context,
-        setterFunc,
-        setterFuncName,
-        1,
-        Runtime::makeNullHandle<JSObject>());
+    auto funcRes =
+        NativeFunction::create(runtime, context, setterFunc, setterFuncName, 1);
     lv.setter = funcRes.get();
   }
 
@@ -380,6 +359,8 @@ CallResult<HermesValue> createDynamicFunction(
     lv.selfParent = std::move(*thisParentRes);
   }
 
+  // Whether the params and body are all ASCII; the rest of the source is.
+  bool allASCII = true;
   if (argCount == 0) {
     // No arguments, just set body to be the empty string.
     lv.body = runtime.getPredefinedString(Predefined::emptyString);
@@ -398,6 +379,7 @@ CallResult<HermesValue> createDynamicFunction(
               ExecutionStatus::EXCEPTION))
         return ExecutionStatus::EXCEPTION;
       size.add(lv.param->getStringLength());
+      allASCII &= lv.param->isASCII();
     }
 
     // Last parameter is the body.
@@ -407,6 +389,7 @@ CallResult<HermesValue> createDynamicFunction(
     }
     lv.body = strRes->get();
     size.add(lv.body->getStringLength());
+    allASCII &= lv.body->isASCII();
 
     if (kind == DynamicFunctionKind::Normal && argCount == 1 &&
         isReturnThis(lv.body, runtime)) {
@@ -449,7 +432,7 @@ CallResult<HermesValue> createDynamicFunction(
 
   auto separator = createASCIIRef(",");
 
-  auto builder = StringBuilder::createStringBuilder(runtime, size);
+  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }

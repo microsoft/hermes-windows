@@ -13,6 +13,7 @@ namespace node_api_tests {
 
 // Struct to hold the result of a child process execution.
 struct ProcessResult {
+  bool timed_out{false};   // Whether the child exceeded the Windows wait limit.
   uint32_t status;         // Exit status of the child process.
   std::string std_output;  // Standard output from the child process.
   std::string std_error;   // Standard error from the child process.
@@ -22,6 +23,13 @@ struct ProcessResult {
 // arguments.
 ProcessResult SpawnSync(std::string_view command,
                         std::vector<std::string> args);
+
+#ifdef _WIN32
+// Windows test override for exercising process-tree timeout cleanup.
+ProcessResult SpawnSync(std::string_view command,
+                        std::vector<std::string> args,
+                        uint32_t timeout_ms);
+#endif
 
 }  // namespace node_api_tests
 

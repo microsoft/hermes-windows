@@ -3,10 +3,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include "child_process.h"
 #include "test_main.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -28,6 +33,66 @@ class BasicsTest : public TestFixtureBase {
  private:
   fs::path basics_js_dir_;
 };
+
+#ifdef _WIN32
+TEST_F(BasicsTest, ChildAbortReportsToStderrWithoutDialogs) {
+  ProcessResult result =
+      SpawnSync(test_exe_path_.string(), {"--abort-test-child"});
+  ASSERT_FALSE(result.timed_out) << result.std_error;
+  EXPECT_EQ(result.status, 3);
+  // Only the debug UCRT emits the abort diagnostic, even with _WRITE_ABORT_MSG.
+#ifdef _DEBUG
+  EXPECT_EQ(result.std_error,
+            "intentional test child abort\nabort() has been called");
+#else
+  EXPECT_EQ(result.std_error, "intentional test child abort\n");
+#endif
+}
+
+// Exercise timeout and normal exit: both must release inherited pipes and kill
+// the grandchild. The PID proves cleanup, not just return from the pipe read.
+TEST_F(BasicsTest, ChildJobClosesInheritedPipesAndTerminatesGrandchildren) {
+  for (bool timeout : {false, true}) {
+    SCOPED_TRACE(timeout);
+    ProcessResult result =
+        SpawnSync(test_exe_path_.string(),
+                  {timeout ? "--job-test-timeout" : "--job-test-exit"},
+                  2000);
+    EXPECT_EQ(result.timed_out, timeout);
+    EXPECT_EQ(result.status, timeout ? ERROR_TIMEOUT : 0);
+    char* end = nullptr;
+    const DWORD pid = std::strtoul(result.std_output.c_str(), &end, 10);
+    ASSERT_NE(end, result.std_output.c_str()) << result.std_error;
+    ASSERT_NE(pid, 0);
+    HANDLE grandchild = ::OpenProcess(
+        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (grandchild) {
+      DWORD wait = ::WaitForSingleObject(grandchild, 5000);
+      if (wait == WAIT_TIMEOUT) {
+        char image[MAX_PATH];
+        DWORD imageSize = MAX_PATH;
+        const BOOL queried =
+            ::QueryFullProcessImageNameA(grandchild, 0, image, &imageSize);
+        // Exited processes may no longer have an image to query.
+        if (::WaitForSingleObject(grandchild, 0) == WAIT_OBJECT_0 ||
+            (queried && fs::path(std::string(image, imageSize)).filename() !=
+                            test_exe_path_.filename())) {
+          wait = WAIT_OBJECT_0;
+        }
+      }
+      // Do not terminate by PID: it may have been reused after job cleanup.
+      ::CloseHandle(grandchild);
+      EXPECT_EQ(wait, WAIT_OBJECT_0) << "Surviving grandchild PID " << pid;
+    } else {
+      const DWORD error = ::GetLastError();
+      // A protected process may have reused the PID after job cleanup.
+      EXPECT_TRUE(error == ERROR_INVALID_PARAMETER ||
+                  error == ERROR_ACCESS_DENIED)
+          << "PID " << pid << ", error " << error;
+    }
+  }
+}
+#endif
 
 TEST_F(BasicsTest, TestHello) {
   ProcessResult result = RunScript("hello.js");

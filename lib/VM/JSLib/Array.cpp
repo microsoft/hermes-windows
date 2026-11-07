@@ -12,6 +12,7 @@
 #include "JSLibInternal.h"
 
 #include "hermes/ADT/SafeInt.h"
+#include "hermes/Support/FastArraySearch.h"
 #include "hermes/VM/HandleRootOwner-inline.h"
 #include "hermes/VM/JSLib.h"
 #include "hermes/VM/JSLib/Sorting.h"
@@ -170,6 +171,13 @@ HermesValue createArrayConstructor(Runtime &runtime) {
       nullptr,
       arrayPrototypeToSpliced,
       2);
+  defineMethod(
+      runtime,
+      arrayPrototype,
+      Predefined::getSymbolID(Predefined::toSorted),
+      nullptr,
+      arrayPrototypeToSorted,
+      1);
   defineMethod(
       runtime,
       arrayPrototype,
@@ -374,21 +382,26 @@ HermesValue createArrayConstructor(Runtime &runtime) {
 
 /// Populate \p flags with the flags to be used to check for fast path for array
 /// methods.
-/// Ensures that there's a fast indexed storage with no non-default behaviors
-/// applied to it, along with an objectID of 0 (for easy comparison).
-static constexpr void setArrayFastPathObjectFlags(SHObjectFlags &res) {
-  // This code should set every field in SHObjectFlags to make sure we don't
+/// Ensures that the HiddenClass has no behaviors that would make the array
+/// fast path observe different indexed-property behavior.
+static constexpr void setArrayFastPathClassFlags(ClassFlags &res) {
+  // This code should set every field in ClassFlags to make sure we don't
   // miss one, which is checked by the assert in arrayFastPathCheck.
+  res.dictionaryMode = 0;
+  res.dictionaryNoCacheMode = 0;
+  res.typed = 0;
+  res.hasIndexLikeProperties = 0;
+  res.indexedStorage = 1;
+  res.mayHaveAccessor = 0;
   res.noExtend = 0;
   res.sealed = 0;
   res.frozen = 0;
-  res.indexedStorage = 1;
-  res.fastIndexProperties = 1;
   res.hostObject = 0;
   res.lazyObject = 0;
   res.proxyObject = 0;
   res.isCachedUsingEpoch = 0;
-  res.objectID = 0;
+  res.parentChangeCounter = 0;
+  res.unusedPadding = 0;
 }
 
 /// Check that the prototype chain of arrays starting at Array.prototype does
@@ -399,38 +412,44 @@ static constexpr void setArrayFastPathObjectFlags(SHObjectFlags &res) {
 /// \return true if the prototype chain does not contain any index-like
 /// properties, false otherwise.
 static bool checkAndCacheProtoForFastPath(Runtime &runtime) {
-  auto *arrParent = *runtime.arrayPrototype;
-  arrParent->setCachedUsingEpoch();
+  Handle<JSObject> arrParent = runtime.arrayPrototype;
+  JSObject::setCachedUsingEpoch(arrParent, runtime);
 
   // If the parent has any index-like properties, bail.
   if (LLVM_UNLIKELY(arrParent->getClass(runtime)->getHasIndexLikeProperties()))
     return false;
 
+  struct : public Locals {
+    PinnedValue<JSObject> curParent;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
   // Check if there are any index-like properties in any parent.
   // If so, we can't use the fast path.
-  for (JSObject *curParent = arrParent->getParent(runtime);
-       curParent != nullptr;
-       curParent = curParent->getParent(runtime)) {
+  for (lv.curParent = arrParent->getParent(runtime);
+       lv.curParent.get() != nullptr;
+       lv.curParent = lv.curParent->getParent(runtime)) {
     // If the object may have index-like properties that are not reflected on
     // the hidden class or indexed storage, bail.
     if (LLVM_UNLIKELY(
-            curParent->isHostObject() || curParent->isProxyObject() ||
-            curParent->isLazy()))
+            lv.curParent->isHostObject(runtime) ||
+            lv.curParent->isProxyObject(runtime) ||
+            lv.curParent->isLazy(runtime)))
       return false;
 
     // Any index-like properties in the parent means we can't use the fast path
     // because we might trigger an accessor or have to check property flags.
     if (LLVM_UNLIKELY(
-            curParent->getClass(runtime)->getHasIndexLikeProperties()))
+            lv.curParent->getClass(runtime)->getHasIndexLikeProperties()))
       return false;
 
     // Unlike the immediate parent, we do not expect any parent further up the
     // chain to have indexed storage. Disqualify anything with indexed storage,
     // since actually checking the "indexed range" is costly.
-    if (LLVM_UNLIKELY(curParent->getFlags().indexedStorage))
+    if (LLVM_UNLIKELY(lv.curParent->hasIndexedStorage(runtime)))
       return false;
 
-    curParent->setCachedUsingEpoch();
+    JSObject::setCachedUsingEpoch(lv.curParent, runtime);
   }
   runtime.setArrayFastPathParentEpoch();
 
@@ -440,71 +459,83 @@ static bool checkAndCacheProtoForFastPath(Runtime &runtime) {
 /// Declared in JSLib.h so it can be used outside of JSLib
 bool arrayFastPathCheck(
     Runtime &runtime,
-    JSArray *arr,
-    HiddenClass *arrayClass,
+    Handle<JSArray> arr,
+    Handle<HiddenClass> arrayClass,
     uint32_t len) {
-  NoAllocScope noAlloc{runtime};
-  assert(arr && "arr must be non-null");
+  {
+    NoAllocScope noAlloc{runtime};
+    assert(arr && "arr must be non-null");
 
-  // To use the fast path, the object has to be an array with fast index
-  // properties (no index-like properties that we can't read quickly).
-  // Make our own SHObjectFlags here to compare against quickly, to avoid having
-  // to use lots of accessors on JSObject.
-  SHObjectFlags arrayFastPathObjectFlags{};
-  setArrayFastPathObjectFlags(arrayFastPathObjectFlags);
+    HiddenClass *clazz = arr->getClass(runtime);
+
+    // Optionally check that 'length' hasn't been reconfigured.
+    if (arrayClass && clazz != arrayClass.get())
+      return false;
+
+    // To use the fast path, the object has to be an array with fast index
+    // properties (no index-like properties that we can't read quickly).
+    // Make our own ClassFlags here to compare against quickly, to avoid having
+    // to use lots of accessors on HiddenClass.
+    ClassFlags arrayFastPathClassFlags{};
+    setArrayFastPathClassFlags(arrayFastPathClassFlags);
 
 #ifndef NDEBUG
-  // Test that all the flags are handled in setArrayFastPathObjectFlags
-  // by starting with all the bits reversed and calling the function,
-  // and making sure the result is the same.
-  SHObjectFlags flagsForAssert{};
-  std::memset(&flagsForAssert, 0xff, sizeof(SHObjectFlags));
-  setArrayFastPathObjectFlags(flagsForAssert);
-  assert(
-      std::memcmp(
-          &flagsForAssert, &arrayFastPathObjectFlags, sizeof(SHObjectFlags)) ==
-          0 &&
-      "setArrayFastPathObjectFlags is missing a flag");
+    // Test that all the flags are handled in setArrayFastPathClassFlags
+    // by starting with all the bits reversed and calling the function,
+    // and making sure the result is the same.
+    ClassFlags classFlagsForAssert{};
+    std::memset(&classFlagsForAssert, 0xff, sizeof(ClassFlags));
+    setArrayFastPathClassFlags(classFlagsForAssert);
+    assert(
+        std::memcmp(
+            &classFlagsForAssert,
+            &arrayFastPathClassFlags,
+            sizeof(ClassFlags)) == 0 &&
+        "setArrayFastPathClassFlags is missing a flag");
 #endif
 
-  SHObjectFlags arrFlags = arr->getFlags();
-  // Ensure the objectIDs are the same for comparison purposes.
-  arrFlags.objectID = 0;
+    ClassFlags arrClassFlags = clazz->getFlags();
+    // Clear the flags that only affect named properties or caching, which the
+    // fast path doesn't observe.
+    arrClassFlags.dictionaryMode = 0;
+    arrClassFlags.dictionaryNoCacheMode = 0;
+    arrClassFlags.mayHaveAccessor = 0;
+    arrClassFlags.typed = 0;
+    arrClassFlags.isCachedUsingEpoch = 0;
+    arrClassFlags.parentChangeCounter = 0;
+    arrClassFlags.unusedPadding = 0;
 
-  static_assert(
-      sizeof(SHObjectFlags) == sizeof(uint32_t),
-      "SHObjectFlags must be uint32_t");
-  if (LLVM_UNLIKELY(
-          std::memcmp(&arrayFastPathObjectFlags, &arrFlags, sizeof(uint32_t)) !=
-          0))
-    return false;
+    static_assert(
+        sizeof(ClassFlags) == sizeof(uint16_t), "ClassFlags must be uint16_t");
+    if (LLVM_UNLIKELY(
+            std::memcmp(
+                &arrayFastPathClassFlags, &arrClassFlags, sizeof(uint16_t)) !=
+            0))
+      return false;
 
-  // Optionally check that 'length' hasn't been reconfigured.
-  if (arrayClass && arr->getClass(runtime) != arrayClass)
-    return false;
+    // Fast path assumes that the array storage goes from 0 to len.
+    if (arr->getBeginIndex() != 0 || arr->getElemCount() != len)
+      return false;
 
-  // Fast path assumes that the array storage goes from 0 to len.
-  if (arr->getBeginIndex() != 0 || arr->getElemCount() != len)
-    return false;
+    JSArray *arrParent = *runtime.arrayPrototype;
 
-  JSArray *arrParent = *runtime.arrayPrototype;
+    // If the parent has been modified, bail.
+    if (LLVM_UNLIKELY(arr->getParent(runtime) != arrParent))
+      return false;
 
-  // If the parent has been modified, bail.
-  if (LLVM_UNLIKELY(arr->getParent(runtime) != arrParent))
-    return false;
-
-  // If there are any indexed properties in the parent we can't use the fast
-  // path. We check this specially because Array.prototype is itself
-  // an array that starts with no actual indexed properties.
-  //
-  // NOTE: It may be possible to use the fast path if the indexed properties
-  // don't overlap with the array's own indexed range, but that seems
-  // unnecessary to check for now given that this check is really to make sure
-  // that Array.prototype isn't filled with properties, and keeping track of
-  // the upper bound on the length here takes more effort and is potentially
-  // error-prone.
-  if (LLVM_UNLIKELY(arrParent->getElemCount()))
-    return false;
+    // If there are any indexed properties in the parent we can't use the fast
+    // path. We check this specially because Array.prototype is itself
+    // an array that starts with no actual indexed properties.
+    //
+    // NOTE: It may be possible to use the fast path if the indexed properties
+    // don't overlap with the array's own indexed range, but that seems
+    // unnecessary to check for now given that this check is really to make sure
+    // that Array.prototype isn't filled with properties, and keeping track of
+    // the upper bound on the length here takes more effort and is potentially
+    // error-prone.
+    if (LLVM_UNLIKELY(arrParent->getElemCount()))
+      return false;
+  }
 
   if (LLVM_UNLIKELY(!runtime.checkArrayFastPathParentEpoch()))
     return checkAndCacheProtoForFastPath(runtime);
@@ -530,7 +561,8 @@ CallResult<HermesValue> arrayConstructor(void *, Runtime &runtime) {
           (args.getNewTarget().getRaw() ==
            runtime.arrayConstructor.getHermesValue().getRaw()))) {
     CallResult<PseudoHandle<JSArray>> selfRes =
-        JSArray::create(runtime, runtime.arrayPrototype);
+        JSArray::createNoAllocPropStorage(
+            runtime, runtime.arrayPrototype, runtime.classJSArray);
     if (LLVM_UNLIKELY(selfRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
@@ -686,6 +718,8 @@ CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
 
   // Final size of the result string. Initialize to account for the separators.
   SafeUInt32 size(len32 - 1);
+  // Whether every element string is ASCII; the separator is.
+  bool allASCII = true;
 
   // Array to store each of the strings of the elements.
   auto arrRes = JSArray::create(runtime, len32, len32);
@@ -754,6 +788,7 @@ CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
         }
         lv.strElement = std::move(*strRes);
         uint32_t strLength = lv.strElement->getStringLength();
+        allASCII &= lv.strElement->isASCII();
         // Throw RangeError on overflow.
         size.add(strLength);
         if (LLVM_UNLIKELY(size.isOverflowed())) {
@@ -771,7 +806,7 @@ CallResult<HermesValue> arrayPrototypeToLocaleString(void *, Runtime &runtime) {
   }
 
   // Create and then populate the result string.
-  auto builder = StringBuilder::createStringBuilder(runtime, size);
+  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1049,6 +1084,7 @@ CallResult<HermesValue> arrayPrototypeJoin(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   struct : Locals {
     PinnedValue<JSObject> O;
+    PinnedValue<JSArray> arr;
     PinnedValue<> lenProp;
     PinnedValue<StringPrimitive> sep;
     PinnedValue<JSArray::StorageType> strings;
@@ -1104,30 +1140,40 @@ CallResult<HermesValue> arrayPrototypeJoin(void *, Runtime &runtime) {
 
   // Track the size of the resultant string.
   SafeUInt32 size;
+  // Whether the separator, if used, and every element string are ASCII.
+  bool allASCII = len < 2 || lv.sep->isASCII();
 
   // The first element not processed by the fast path.
   uint32_t fastPathEnd = 0;
 
   // 1. Fast Path: Process as many elements as possible quickly.
-  if (JSArray *arr = dyn_vmcast<JSArray>(lv.O.get());
-      arr && arrayFastPathCheck(runtime, arr, nullptr, (uint32_t)len)) {
+  if (vmisa<JSArray>(lv.O.get()) &&
+      arrayFastPathCheck(
+          runtime,
+          Handle<JSArray>::vmcast(&lv.O),
+          Runtime::makeNullHandle<HiddenClass>(),
+          (uint32_t)len)) {
     // Accumulate the size of the strings in the array, stopping at the first
     // element that is not a string, null, or undefined.
+    lv.arr.castAndSetHermesValue<JSArray>(lv.O.getHermesValue());
 
     assert(
         len != 0 &&
         "we already checled len is not 0, so storage should be non-null");
-    auto *storage = arr->getIndexedStorageUnsafe(runtime);
+    auto *storage = lv.arr->getIndexedStorageUnsafe(runtime);
     // Save it for later.
     lv.inputStorage = storage;
 
     uint32_t i;
     for (i = 0; i < len; ++i) {
+      NoAllocScope noAlloc{runtime};
       SmallHermesValue elem = storage->at(i); // Direct access
       uint32_t elemLen;
-      if (elem.isString())
-        elemLen = elem.getString(runtime)->getStringLength();
-      else if (elem.isNull() || elem.isUndefined() || elem.isEmpty())
+      if (elem.isString()) {
+        StringPrimitive *s = elem.getString(runtime);
+        elemLen = s->getStringLength();
+        allASCII &= s->isASCII();
+      } else if (elem.isNull() || elem.isUndefined() || elem.isEmpty())
         elemLen = 0;
       else
         break;
@@ -1214,6 +1260,7 @@ CallResult<HermesValue> arrayPrototypeJoin(void *, Runtime &runtime) {
 
         StringPrimitive *s = strRes.getValue().get();
         size.add(s->getStringLength());
+        allASCII &= s->isASCII();
 
         lv.strings->set(
             i,
@@ -1231,7 +1278,7 @@ CallResult<HermesValue> arrayPrototypeJoin(void *, Runtime &runtime) {
   }
 
   // Allocate the complete result.
-  auto builder = StringBuilder::createStringBuilder(runtime, size);
+  auto builder = StringBuilder::createStringBuilder(runtime, size, allASCII);
   if (builder == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1420,11 +1467,11 @@ CallResult<HermesValue> arrayPrototypePush(void *, Runtime &runtime) {
   OptValue<uint32_t> lenOpt = llvh::None;
   if (LLVM_LIKELY(vmisa<JSArray>(args.getThisArg()))) {
     // Fast path for getting the length.
-    JSArray *arr = vmcast<JSArray>(args.getThisArg());
-    uint32_t len = JSArray::getLength(arr, runtime);
+    auto arr = args.vmcastThis<JSArray>();
+    uint32_t len = JSArray::getLength(*arr, runtime);
 
     if (LLVM_LIKELY(len < UINT32_MAX - argCount) &&
-        arrayFastPathCheck(runtime, arr, *runtime.arrayClass, len)) {
+        arrayFastPathCheck(runtime, arr, runtime.classJSArray, len)) {
       return arrayPrototypePushFastPath(
           runtime, args.vmcastThis<JSArray>(), len, args);
     }
@@ -1664,11 +1711,9 @@ class StandardSortModel : public SortModel {
     assert(!lv_.bValue->isEmpty());
 
     if (lv_.aValue->isUndefined()) {
-      // Spec defines undefined as greater than everything.
-      return 1;
+      return lv_.bValue->isUndefined() ? 0 : 1;
     }
     if (lv_.bValue->isUndefined()) {
-      // Spec defines undefined as greater than everything.
       return -1;
     }
 
@@ -1710,6 +1755,119 @@ class StandardSortModel : public SortModel {
   }
 };
 
+/// A sort model that operates directly on a JSArray's indexed storage.
+/// This is only safe when the caller owns the array and user code has no
+/// reference to it (e.g. the fresh array created by toSorted). Unlike
+/// StandardSortModel, this bypasses the full property descriptor machinery
+/// and reads/writes via storage->at()/storage->set() directly.
+/// The array must not contain any holes (empty values). Its beginIndex must be
+/// 0 and elements count must be equal to length.
+class DirectSortModel : public SortModel {
+ private:
+  Runtime &runtime_;
+  GCScope gcScope_;
+  Handle<Callable> compareFn_;
+  Handle<JSArray> arr_;
+
+  struct : Locals {
+    PinnedValue<> aValue;
+    PinnedValue<> bValue;
+    PinnedValue<> tmpValue;
+  } lv_;
+  LocalsRAII lraii_;
+  GCScope::Marker gcMarker_;
+
+  /// Get the indexed storage, which must be re-fetched after any GC safepoint.
+  JSArray::StorageType *storage() {
+    return arr_->getIndexedStorageUnsafe(runtime_);
+  }
+
+ public:
+  DirectSortModel(
+      Runtime &runtime,
+      Handle<JSArray> arr,
+      Handle<Callable> compareFn)
+      : runtime_(runtime),
+        gcScope_(runtime),
+        compareFn_(compareFn),
+        arr_(arr),
+        lraii_(runtime_, &lv_),
+        gcMarker_(gcScope_.createMarker()) {
+    assert(arr_->getIndexedStorageUnsafe(runtime_) && "Empty array");
+#ifndef NDEBUG
+    NoAllocScope noAlloc{runtime};
+    auto *s = arr->getIndexedStorageUnsafe(runtime);
+    assert(
+        (arr->getBeginIndex() == 0) &&
+        (arr->getElemCount() == JSArray::getLength(*arr, runtime)));
+    for (uint32_t i = 0, e = arr->getEndIndex(); i < e; ++i) {
+      assert(
+          !s->at(i).isEmpty() && "DirectSortModel input must not have holes");
+    }
+#endif
+  }
+
+  ExecutionStatus swap(uint32_t a, uint32_t b) override {
+    NoAllocScope noAlloc{runtime_};
+    auto *s = storage();
+    auto tmp = s->at(a);
+    s->set(a, s->at(b), runtime_.getHeap());
+    s->set(b, tmp, runtime_.getHeap());
+    return ExecutionStatus::RETURNED;
+  }
+
+  CallResult<int> compare(uint32_t a, uint32_t b) override {
+    {
+      NoAllocScope noAlloc{runtime_};
+      auto *s = storage();
+      auto aSmall = s->at(a);
+      auto bSmall = s->at(b);
+      if (aSmall.isUndefined()) {
+        return bSmall.isUndefined() ? 0 : 1;
+      }
+      if (bSmall.isUndefined()) {
+        return -1;
+      }
+      lv_.aValue = aSmall.unboxToHV(runtime_);
+      lv_.bValue = bSmall.unboxToHV(runtime_);
+    }
+
+    GCScopeMarkerRAII gcMarker{gcScope_, gcMarker_};
+    if (compareFn_) {
+      auto callRes = Callable::executeCall2(
+          compareFn_,
+          runtime_,
+          Runtime::getUndefinedValue(),
+          lv_.aValue.get(),
+          lv_.bValue.get());
+      if (LLVM_UNLIKELY(callRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv_.tmpValue = std::move(*callRes);
+      auto intRes = toNumber_RJS(runtime_, lv_.tmpValue);
+      if (LLVM_UNLIKELY(intRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      auto res = intRes->getNumber();
+      return (res < 0) ? -1 : (res > 0 ? 1 : 0);
+    } else {
+      auto aValueRes = toString_RJS(runtime_, lv_.aValue);
+      if (LLVM_UNLIKELY(aValueRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv_.aValue = aValueRes->getHermesValue();
+
+      auto bValueRes = toString_RJS(runtime_, lv_.bValue);
+      if (LLVM_UNLIKELY(bValueRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv_.bValue = bValueRes->getHermesValue();
+
+      return lv_.aValue->getString()->compare(lv_.bValue->getString());
+    }
+  }
+};
+
 /// Perform a sort of a sparse object by querying its properties first.
 /// It cannot be a proxy or a host object because they are not guaranteed to
 /// be able to list their properties.
@@ -1721,7 +1879,7 @@ CallResult<HermesValue> sortSparse(
   GCScope gcScope{runtime};
 
   assert(
-      !O->isHostObject() && !O->isProxyObject() &&
+      !O->isHostObject(runtime) && !O->isProxyObject(runtime) &&
       "only non-exotic objects can be sparsely sorted");
 
   struct : Locals {
@@ -1874,8 +2032,8 @@ CallResult<HermesValue> arrayPrototypeSort(void *, Runtime &runtime) {
   // If we are not sorting a regular dense array, use a special routine which
   // first copies all existing properties into an array and sorts that.
   // Proxies and host objects however are excluded because they are weird.
-  if (!lv.O->isProxyObject() && !lv.O->isHostObject() &&
-      !lv.O->hasFastIndexProperties())
+  if (!lv.O->isProxyObject(runtime) && !lv.O->isHostObject(runtime) &&
+      !lv.O->hasFastIndexProperties(runtime))
     return sortSparse(runtime, lv.O, compareFn, len);
 
   // This is the "fast" path. We are sorting an array with indexed storage.
@@ -2396,8 +2554,10 @@ static CallResult<HermesValue> arrayPrototypeSpliceFastPath(
     uint32_t actualDeleteCount,
     uint32_t itemCount,
     NativeArgs args) {
-  assert(O->hasFastIndexProperties() && "O must have fast index properties");
-  assert(!O->isProxyObject() && "O must not be proxy");
+  assert(
+      O->hasFastIndexProperties(runtime) &&
+      "O must have fast index properties");
+  assert(!O->isProxyObject(runtime) && "O must not be proxy");
   assert(O->getBeginIndex() == 0 && "incorrect begin index");
   assert(O->getEndIndex() == len && "incorrect end index");
 
@@ -2603,7 +2763,7 @@ CallResult<HermesValue> arrayPrototypeSplice(void *, Runtime &runtime) {
   // If we can use the fast path, do so.
   if (LLVM_LIKELY(*lv.OArray) &&
       LLVM_LIKELY(
-          arrayFastPathCheck(runtime, *lv.OArray, *runtime.arrayClass, len)) &&
+          arrayFastPathCheck(runtime, lv.OArray, runtime.classJSArray, len)) &&
       LLVM_LIKELY(len - actualDeleteCount < UINT32_MAX - itemCount)) {
     // These can be cast to uint32_t because we know that O is a JSArray.
     assert(actualStart <= len && "actualStart out of range");
@@ -3013,10 +3173,10 @@ CallResult<HermesValue> arrayPrototypePop(void *, Runtime &runtime) {
   uint64_t len;
   if (LLVM_LIKELY(vmisa<JSArray>(args.getThisArg()))) {
     // Fast path for getting the length.
-    JSArray *arr = vmcast<JSArray>(args.getThisArg());
-    len = JSArray::getLength(arr, runtime);
+    auto arr = args.vmcastThis<JSArray>();
+    len = JSArray::getLength(*arr, runtime);
 
-    if (arrayFastPathCheck(runtime, arr, *runtime.arrayClass, len)) {
+    if (arrayFastPathCheck(runtime, arr, runtime.classJSArray, len)) {
       return arrayPrototypePopFastPath(
           runtime, args.vmcastThis<JSArray>(), len);
     }
@@ -3207,6 +3367,28 @@ CallResult<HermesValue> arrayPrototypeShift(void *, Runtime &runtime) {
   return lv.first.get();
 }
 
+/// SIMD-accelerated linear search for a raw value in an array of
+/// SmallHermesValue elements.
+/// \p reverse when true, search backward returning the last match;
+///   when false, search forward returning the first match.
+/// \return the index of the match, or -1 if not found.
+template <typename T>
+static int64_t fastSearch(
+    llvh::ArrayRef<T> data,
+    size_t start,
+    size_t end,
+    T target,
+    bool reverse) {
+  if constexpr (sizeof(T) == 4) {
+    return reverse ? searchReverseU32(data, start, end, target)
+                   : searchU32(data, start, end, target);
+  } else {
+    static_assert(sizeof(T) == 8, "unexpected element size");
+    return reverse ? searchReverseU64(data, start, end, target)
+                   : searchU64(data, start, end, target);
+  }
+}
+
 /// Used to help with indexOf and lastIndexOf.
 /// \p reverse true if searching in reverse (lastIndexOf), false otherwise.
 static inline CallResult<HermesValue>
@@ -3294,18 +3476,30 @@ indexOfHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
 
   // Search for the element.
   auto searchElement = args.getArgHandle(0);
-  // If the range of Array IndexedStorage is not [0, len), there could be holes
-  // at some indices.
+  // Fast path.
   if (LLVM_LIKELY(
-          arrHandle && (0 == arrHandle->getBeginIndex()) &&
-          (len == arrHandle->getEndIndex()))) {
-    // Fast path: access array storage directly.
+          arrHandle &&
+          arrayFastPathCheck(
+              runtime,
+              arrHandle,
+              Runtime::makeNullHandle<HiddenClass>(),
+              (uint32_t)len))) {
+    // SmallHermesValue::getRaw() may return uintptr_t, which can be a
+    // different type from uint32_t/uint64_t on some platforms (e.g.
+    // unsigned long vs unsigned long long).
+    using SearchType = std::conditional_t<
+        sizeof(SmallHermesValue::RawType) == 4,
+        uint32_t,
+        uint64_t>;
     auto searchElementVal =
         SmallHermesValue::encodeHermesValue(searchElement.get(), runtime);
     NoAllocScope noAlloc{runtime};
-    bool hasHole = false;
     assert(len != 0 && "we already checked len != 0, so storage can't be null");
     auto *arrStorage = arrHandle->getIndexedStorageUnsafe(runtime);
+
+    llvh::ArrayRef<SearchType> rawData(
+        reinterpret_cast<const SearchType *>(arrStorage->data()), len);
+    auto rawTarget = static_cast<SearchType>(searchElementVal.getRaw());
 
     // Macro for searching the array with given loop initialization, terminating
     // condition and updating rule after each iteration. Note that the macro
@@ -3314,10 +3508,6 @@ indexOfHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
 #define SEARCH_ARRAY_DIRECTED(INIT, LOOP_COND, STEP)   \
   for (INIT; LOOP_COND; STEP) {                        \
     auto element = arrStorage->at(k);                  \
-    if (LLVM_UNLIKELY(element.isEmpty())) {            \
-      hasHole = true;                                  \
-      break;                                           \
-    }                                                  \
     if (COMPARE_EXPR(element))                         \
       return HermesValue::encodeTrustedNumberValue(k); \
   }
@@ -3337,28 +3527,43 @@ indexOfHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
       if (LLVM_UNLIKELY(std::isnan(searchNum))) {
         return HermesValue::encodeTrustedNumberValue(-1);
       }
-      // If it's +0.0/-0.0.
+      assert(
+          SmallHermesValue::canInlineDouble(+0.0) &&
+          SmallHermesValue::canInlineDouble(-0.0) &&
+          "+0.0/-0.0 must not be boxed");
+      auto negativeZeroBits = static_cast<SearchType>(
+          SmallHermesValue::encodeNumberValue(-0.0, runtime).getRaw());
+      auto positiveZeroBits = static_cast<SearchType>(
+          SmallHermesValue::encodeNumberValue(+0.0, runtime).getRaw());
       if (searchNum == 0) {
-        auto negativeZero = SmallHermesValue::encodeNumberValue(-0.0, runtime);
-        auto negativeZeroBits = negativeZero.getRaw();
-        auto positiveZero = SmallHermesValue::encodeNumberValue(+0.0, runtime);
-        auto positiveZeroBits = positiveZero.getRaw();
-        assert(
-            negativeZero.isInlinedDouble() && positiveZero.isInlinedDouble() &&
-            "Both +0.0/-0.0 should be inline double.");
-        // Compare bits with +0.0/-0.0 directly.
-#define COMPARE_EXPR(element) \
-  element.getRaw() == negativeZeroBits || element.getRaw() == positiveZeroBits
-        SEARCH_ARRAY
-#undef COMPARE_EXPR
+        // +0.0/-0.0 must match each other. Run two SIMD searches
+        // and pick the earliest (forward) or latest (reverse) hit.
+        if (reverse) {
+          size_t s = 0, e = k + 1;
+          int64_t r1 = fastSearch(rawData, s, e, negativeZeroBits, true);
+          int64_t r2 = fastSearch(rawData, s, e, positiveZeroBits, true);
+          int64_t result = std::max(r1, r2);
+          if (result >= 0)
+            return HermesValue::encodeTrustedNumberValue(result);
+        } else {
+          size_t s = k, e = len;
+          int64_t r1 = fastSearch(rawData, s, e, negativeZeroBits, false);
+          int64_t r2 = fastSearch(rawData, s, e, positiveZeroBits, false);
+          int64_t result =
+              (r1 < 0 || r2 < 0) ? std::max(r1, r2) : std::min(r1, r2);
+          // If both r1 and r2 are -1, no zero is found.
+          if (result >= 0)
+            return HermesValue::encodeTrustedNumberValue(result);
+        }
       } else {
-        // If it's not +0.0/-0.0/NaN, compare raw bits directly.
-#define COMPARE_EXPR(element) searchElementVal.getRaw() == element.getRaw()
-        SEARCH_ARRAY
-#undef COMPARE_EXPR
+        // Normal number (not 0, not NaN): raw-bit SIMD search.
+        size_t s = reverse ? 0 : (size_t)k;
+        size_t e = reverse ? (size_t)(k + 1) : len;
+        int64_t result = fastSearch(rawData, s, e, rawTarget, reverse);
+        if (result >= 0)
+          return HermesValue::encodeTrustedNumberValue(result);
       }
     } else if (searchElementVal.isBoxedDouble()) {
-      // Only HV32 can have boxed doubles, compare the double value.
       auto searchNum = searchElementVal.getBoxedDouble(runtime);
 #define COMPARE_EXPR(element) \
   element.isBoxedDouble() && searchNum == element.getBoxedDouble(runtime)
@@ -3379,19 +3584,18 @@ indexOfHelper(Runtime &runtime, NativeArgs args, const bool reverse) {
       SEARCH_ARRAY
 #undef COMPARE_EXPR
     } else {
-      // For all other types (e.g., Object), compare the exact bits.
-#define COMPARE_EXPR(element) searchElementVal.getRaw() == element.getRaw()
-      SEARCH_ARRAY
-#undef COMPARE_EXPR
+      // For all other types (e.g., Object), raw-bit SIMD search.
+      size_t s = reverse ? 0 : (size_t)k;
+      size_t e = reverse ? (size_t)(k + 1) : len;
+      int64_t result = fastSearch(rawData, s, e, rawTarget, reverse);
+      if (result >= 0)
+        return HermesValue::encodeTrustedNumberValue(result);
     }
 
 #undef SEARCH_ARRAY_DIRECTED
 #undef SEARCH_ARRAY
 
-    // If array has no hole and target is not found, return -1.
-    if (!hasHole) {
-      return HermesValue::encodeTrustedNumberValue(-1);
-    }
+    return HermesValue::encodeTrustedNumberValue(-1);
   }
 
   // Slow path for non-array objects or arrays with holes.
@@ -4155,14 +4359,20 @@ CallResult<HermesValue> arrayPrototypeReverse(void *, Runtime &runtime) {
   NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
   // Fast path for a JSArray with a contiguous storage and no numeric props
   // in the prototype.
-  if (auto *arr = llvh::dyn_vmcast<JSArray>(args.getThisArg())) {
-    NoAllocScope noAllocScope{runtime};
-    uint32_t len = JSArray::getLength(arr, runtime);
+  if (vmisa<JSArray>(args.getThisArg())) {
+    uint32_t len =
+        JSArray::getLength(vmcast<JSArray>(args.getThisArg()), runtime);
     if (len <= 1)
       return args.getThisArg();
 
-    if (arrayFastPathCheck(runtime, arr, nullptr, len)) {
-      auto *storage = arr->getIndexedStorageNullable(runtime);
+    if (arrayFastPathCheck(
+            runtime,
+            args.vmcastThis<JSArray>(),
+            Runtime::makeNullHandle<HiddenClass>(),
+            len)) {
+      NoAllocScope noAllocScope{runtime};
+      auto *storage = vmcast<JSArray>(args.getThisArg())
+                          ->getIndexedStorageNullable(runtime);
       for (uint32_t l = 0, u = len - 1; l < u; ++l, --u) {
         assert(storage && "storage should not be null");
         auto lowerValue = storage->at(l);
@@ -4323,18 +4533,26 @@ CallResult<HermesValue> arrayPrototypeIncludes(void *, Runtime &runtime) {
   }
   lv.O.castAndSetHermesValue<JSObject>(*oRes);
 
-  // 2. Let len be ? ToLength(? Get(O, "length")).
-  auto lenPropRes = JSObject::getNamed_RJS(
-      lv.O, runtime, Predefined::getSymbolID(Predefined::length));
-  if (LLVM_UNLIKELY(lenPropRes == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
+  // Fast path: get array length directly for JSArray.
+  uint64_t len;
+  auto arrHandle = vmisa<JSArray>(*lv.O) ? Handle<JSArray>::vmcast(&lv.O)
+                                         : Runtime::makeNullHandle<JSArray>();
+  if (LLVM_LIKELY(arrHandle)) {
+    len = JSArray::getLength(arrHandle.get(), runtime);
+  } else {
+    // 2. Let len be ? ToLength(? Get(O, "length")).
+    auto lenPropRes = JSObject::getNamed_RJS(
+        lv.O, runtime, Predefined::getSymbolID(Predefined::length));
+    if (LLVM_UNLIKELY(lenPropRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    lv.lenProp = std::move(*lenPropRes);
+    auto lenRes = toLengthU64(runtime, lv.lenProp);
+    if (LLVM_UNLIKELY(lenRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    len = *lenRes;
   }
-  lv.lenProp = std::move(*lenPropRes);
-  auto lenRes = toLengthU64(runtime, lv.lenProp);
-  if (LLVM_UNLIKELY(lenRes == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  uint64_t len = *lenRes;
 
   // 3. If len is 0, return false.
   if (len == 0) {
@@ -4366,6 +4584,117 @@ CallResult<HermesValue> arrayPrototypeIncludes(void *, Runtime &runtime) {
     if (fk < 0)
       fk = 0;
     k = (uint64_t)fk;
+  }
+
+  // Fast path.
+  if (LLVM_LIKELY(
+          arrHandle &&
+          arrayFastPathCheck(
+              runtime,
+              arrHandle,
+              Runtime::makeNullHandle<HiddenClass>(),
+              (uint32_t)len))) {
+    using SearchType = std::conditional_t<
+        sizeof(SmallHermesValue::RawType) == 4,
+        uint32_t,
+        uint64_t>;
+    auto searchElementVal =
+        SmallHermesValue::encodeHermesValue(args.getArg(0), runtime);
+    NoAllocScope noAlloc{runtime};
+    assert(len != 0 && "we already checked len != 0");
+    auto *arrStorage = arrHandle->getIndexedStorageUnsafe(runtime);
+
+    llvh::ArrayRef<SearchType> rawData(
+        reinterpret_cast<const SearchType *>(arrStorage->data()), len);
+    auto rawTarget = static_cast<SearchType>(searchElementVal.getRaw());
+
+    if (searchElementVal.isInlinedDouble()) {
+      auto searchNum = searchElementVal.getNumber(runtime);
+      if (LLVM_UNLIKELY(std::isnan(searchNum))) {
+        // SameValueZero: NaN includes NaN. Scan for any NaN element.
+        for (uint64_t i = k; i < len; ++i) {
+          auto element = arrStorage->at(i);
+          if (element.isInlinedDouble() &&
+              std::isnan(element.getNumber(runtime)))
+            return HermesValue::encodeBoolValue(true);
+        }
+      } else if (searchNum == 0) {
+        // +0/-0: SameValueZero treats them as equal. Search for
+        // +0.0 first, fall back to -0.0 if not found.
+        assert(
+            SmallHermesValue::canInlineDouble(+0.0) &&
+            SmallHermesValue::canInlineDouble(-0.0) &&
+            "+0.0/-0.0 must not be boxed");
+        auto posZeroBits = static_cast<SearchType>(
+            SmallHermesValue::encodeNumberValue(+0.0, runtime).getRaw());
+        auto negZeroBits = static_cast<SearchType>(
+            SmallHermesValue::encodeNumberValue(-0.0, runtime).getRaw());
+
+        int64_t result = fastSearch(rawData, k, len, posZeroBits, false);
+        if (result >= 0)
+          return HermesValue::encodeBoolValue(true);
+        result = fastSearch(rawData, k, len, negZeroBits, false);
+        if (result >= 0)
+          return HermesValue::encodeBoolValue(true);
+      } else {
+        // Normal number or NaN: all inlined NaNs share the same
+        // raw encoding (quiet NaN), so raw-bit SIMD search works.
+        int64_t result = fastSearch(rawData, k, len, rawTarget, false);
+        if (result >= 0)
+          return HermesValue::encodeBoolValue(true);
+      }
+    } else if (searchElementVal.isBoxedDouble()) {
+      auto searchNum = searchElementVal.getBoxedDouble(runtime);
+      if (LLVM_UNLIKELY(std::isnan(searchNum))) {
+        // SameValueZero: NaN includes NaN. Scan for any NaN element.
+        for (uint64_t i = k; i < len; ++i) {
+          auto element = arrStorage->at(i);
+          if (element.isBoxedDouble() &&
+              std::isnan(element.getBoxedDouble(runtime)))
+            return HermesValue::encodeBoolValue(true);
+        }
+      } else {
+        for (uint64_t i = k; i < len; ++i) {
+          auto element = arrStorage->at(i);
+          if (element.isBoxedDouble() &&
+              searchNum == element.getBoxedDouble(runtime))
+            return HermesValue::encodeBoolValue(true);
+        }
+      }
+    } else if (searchElementVal.isString()) {
+      auto searchStr = searchElementVal.getString(runtime);
+      for (uint64_t i = k; i < len; ++i) {
+        auto element = arrStorage->at(i);
+        if (element.isString() && searchStr->equals(element.getString(runtime)))
+          return HermesValue::encodeBoolValue(true);
+      }
+    } else if (searchElementVal.isBigInt()) {
+      auto searchBigInt = searchElementVal.getBigInt(runtime);
+      for (uint64_t i = k; i < len; ++i) {
+        auto element = arrStorage->at(i);
+        if (element.isBigInt() &&
+            !searchBigInt->compare(element.getBigInt(runtime)))
+          return HermesValue::encodeBoolValue(true);
+      }
+    } else if (searchElementVal.isUndefined()) {
+      // includes treats empty slots as undefined per spec.
+      // Search for both undefined and empty raw encodings.
+      int64_t result = fastSearch(rawData, k, len, rawTarget, false);
+      if (result >= 0)
+        return HermesValue::encodeBoolValue(true);
+      auto emptyRaw = static_cast<SearchType>(
+          SmallHermesValue::encodeEmptyValue().getRaw());
+      result = fastSearch(rawData, k, len, emptyRaw, false);
+      if (result >= 0)
+        return HermesValue::encodeBoolValue(true);
+    } else {
+      // Objects, symbols, etc., SIMD raw-bit search.
+      int64_t result = fastSearch(rawData, k, len, rawTarget, false);
+      if (result >= 0)
+        return HermesValue::encodeBoolValue(true);
+    }
+
+    return HermesValue::encodeBoolValue(false);
   }
 
   // 7. Repeat, while k < len
@@ -4439,7 +4768,9 @@ CallResult<HermesValue> arrayPrototypeToReversed(void *, Runtime &runtime) {
   }
 
   // Fast Path: Input is a JSArray and arrayFastPathCheck passes.
-  if (jsArr && arrayFastPathCheck(runtime, jsArr.get(), nullptr, len32)) {
+  if (jsArr &&
+      arrayFastPathCheck(
+          runtime, jsArr, Runtime::makeNullHandle<HiddenClass>(), len32)) {
     NoAllocScope noAllocScope{runtime};
     auto *srcStorage = jsArr->getIndexedStorageNullable(runtime);
     auto *destStorage = lv.A->getIndexedStorageNullable(runtime);
@@ -4498,6 +4829,116 @@ CallResult<HermesValue> arrayPrototypeToReversed(void *, Runtime &runtime) {
     ++k;
   }
 
+  return lv.A.getHermesValue();
+}
+
+/// ES2025 23.1.3.34
+CallResult<HermesValue> arrayPrototypeToSorted(void *, Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+
+  // 1. If comparator is not undefined and IsCallable(comparator) is false,
+  // throw a TypeError exception.
+  auto compareFn = Handle<Callable>::dyn_vmcast(args.getArgHandle(0));
+  if (!args.getArg(0).isUndefined() && !compareFn) {
+    return runtime.raiseTypeError("Array sort argument must be callable");
+  }
+
+  struct : Locals {
+    PinnedValue<JSObject> O;
+    PinnedValue<JSArray> A;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  // 2. Let O be ? ToObject(this value).
+  auto oRes = toObject(runtime, args.getThisHandle());
+  if (LLVM_UNLIKELY(oRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  lv.O.castAndSetHermesValue<JSObject>(*oRes);
+
+  // 3. Let len be ? LengthOfArrayLike(O).
+  auto jsArr = vmisa<JSArray>(*lv.O) ? Handle<JSArray>::vmcast(&lv.O)
+                                     : Runtime::makeNullHandle<JSArray>();
+  auto lenRes = lengthOfArrayLike(runtime, lv.O, jsArr);
+  if (LLVM_UNLIKELY(lenRes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  auto len = lenRes.getValue();
+  // We use a JSArray to store the sorted results, which is limited to
+  // uint32_t elements.
+  if (LLVM_UNLIKELY(len > UINT32_MAX)) {
+    return runtime.raiseRangeError("invalid array length");
+  }
+  uint32_t len32 = (uint32_t)len;
+
+  // 4. Let A be ? ArrayCreate(len).
+  // Allocate with known capacity to avoid reallocation.
+  auto ARes = JSArray::create(runtime, len32, 0);
+  if (LLVM_UNLIKELY(ARes == ExecutionStatus::EXCEPTION)) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  lv.A = std::move(*ARes);
+  if (len == 0) {
+    return lv.A.getHermesValue();
+  }
+
+  // 6. Let sortedList be ? SortIndexedProperties(O, len, SortCompare,
+  // READ-THROUGH-HOLES).
+  // Copy all elements from O into A, treating holes as undefined.
+  if (jsArr &&
+      arrayFastPathCheck(
+          runtime, jsArr, Runtime::makeNullHandle<HiddenClass>(), len32)) {
+    // A is freshly created with the default class, so length is writable.
+    // May allocate, so encode before NoAllocScope.
+    auto newLen = SmallHermesValue::encodeNumberValue(len32, runtime);
+    NoAllocScope noAllocScope{runtime};
+    auto *srcStorage = jsArr->getIndexedStorageNullable(runtime);
+    auto *destStorage = lv.A->getIndexedStorageNullable(runtime);
+    assert(srcStorage && destStorage && "storage should not be null");
+    // Bulk copy the source storage into the destination.
+    destStorage->appendWithinCapacity(runtime, srcStorage);
+    lv.A->setElemCountUnsafe(len32);
+    JSArray::putLengthUnsafe(lv.A.get(), runtime, newLen);
+    // Replace holes (empty values) with undefined.
+    for (uint32_t k = 0; k < len32; ++k) {
+      if (LLVM_UNLIKELY(destStorage->at(k).isEmpty())) {
+        destStorage->set(
+            k, SmallHermesValue::encodeUndefinedValue(), runtime.getHeap());
+      }
+    }
+  } else {
+    if (LLVM_UNLIKELY(
+            JSArray::setStorageEndIndex(lv.A, runtime, len32) ==
+            ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    // A is freshly created with the default class, so length is writable.
+    auto newLen = SmallHermesValue::encodeNumberValue(len32, runtime);
+    JSArray::putLengthUnsafe(lv.A.get(), runtime, newLen);
+    GCScope gcScope{runtime};
+    auto marker = gcScope.createMarker();
+    for (uint32_t k = 0; k < len32; ++k) {
+      gcScope.flushToMarker(marker);
+      CallResult<PseudoHandle<>> propRes = getIndexed_RJS(runtime, lv.O, k);
+      if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      auto shv = SmallHermesValue::encodeHermesValue(
+          propRes->getHermesValue(), runtime);
+      JSArray::unsafeSetExistingElementAt(lv.A.get(), runtime, k, shv);
+    }
+  }
+
+  // Sort A in place. Use DirectSortModel since A is a fresh array that
+  // user code has no reference to — direct storage access is safe.
+  // 5. Let SortCompare be an Abstract Closure calling
+  // CompareArrayElements(x, y, comparator).
+  // 7-8. Copy sortedList into A (already done above, sort in place).
+  DirectSortModel sm(runtime, lv.A, compareFn);
+  if (LLVM_UNLIKELY(quickSort(&sm, 0u, len32) == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+
+  // 9. Return A.
   return lv.A.getHermesValue();
 }
 

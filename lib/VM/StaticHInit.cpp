@@ -11,6 +11,7 @@
 #include "jsi/instrumentation.h"
 
 #include "llvh/ADT/ScopeExit.h"
+#include "llvh/Support/Signals.h"
 
 #include <mutex>
 
@@ -89,6 +90,10 @@ extern "C" void _sh_done(SHRuntime *shr) {
 
 #ifndef HERMES_IS_MOBILE_BUILD
 static SHRuntime *_sh_init(int argc, char **argv, llvh::raw_ostream &errs) {
+#ifdef _WIN32
+  // Standalone compiled programs do not pass through the compiler's InitLLVM.
+  llvh::sys::PrintStackTraceOnErrorSignal("Static Hermes");
+#endif
   vm::RuntimeConfig runtimeConfig{};
 
   // Serialize command line parsing, since there is a single global parser.

@@ -7,10 +7,33 @@ It is being used by React Native project to work with JS engines.
 ## JSI versions
 
 JSI has versions associated with the following commit hashes in the 
-https://github.com/facebook/hermes repo. 
+https://github.com/facebook/hermes repo.
+New version 22 rows use `static_h` hashes; existing rows retain their `main`
+hashes. Version 21's `606a4249` (`main`) equals `b10cafda8e1` (`static_h`):
+their `API/jsi` trees are identical.
+
+This fork builds `hermes.dll` and its internal C++ clients at JSI 22. Public
+headers still default to JSI 21 when a consumer supplies neither `JSI_VERSION`
+nor a `jsi/jsi-version.h` override. RNW uses JSI 21 over the C API boundary;
+no JSI C++ objects cross that boundary. Direct C++ consumers must build all JSI
+objects and clients at matching epochs; the fallback is not DLL C++ ABI
+compatibility.
+
+Version 22 groups the following changes into one epoch.
+Serialization remains opt-in under `JSI_UNSTABLE`, not part of version 22.
+Event-loop control is a separate UUID-discovered extension, not a numbered
+JSI version. Later decorator forwarding fixes do not introduce new epochs.
 
 | Version | Commit Hash                                | Commit Description
 |--------:|:-------------------------------------------|------------------------------------------------------
+|      22 | `4ec5f281981f70727c5bae0f5155887f9665b8a4` | Split IRuntime from Runtime; use IRuntime in helpers
+|         | `ee7bedb565f1a7fa79d5d93d346a31d7062b2fac` | Add Array::push
+|         | `bd725d32b28d1d6dd44350b533012f20d69c4d10` | Add ArrayBuffer::tryGetMutableBuffer
+|         | `2521f099b8aafb69596de799fce737b870fbd6ce` | Add ArrayBuffer::detached
+|         | `f03f407164d0fb584b3c93da29ad8d86eb45e898` | Add TypedArray and Uint8Array APIs
+|         | `417e8ddadb92d1eb40260e5724be63d1e5767242` | Add runtime error creation APIs and JSError factories
+|         | `590396bd4601d4c836cd3c35f24ad1ce6b81a13e` | Add String::length
+|         | `100841794bda7dab547f0308149f6c4ab61a8611` | Add Value::isInteger
 |      21 | `606a4249fea27b072118c791431e799287cacf7c` | Move dumpOpcodeStats() to jsi::Instrumentation, remove IHermesExtra
 |         | `195afcf8232db8df27f5b2a09c420a6962068c7c` | Add deleteProperty API 
 |         | `7f716de439a5ae83eedc137c6e4f2a1d43a576eb` | Add Value override for has/get/setProperty
@@ -46,7 +69,11 @@ Relationship to React Native versions:
 
 | Hermes RN Version | JSI version |
 |------------------:|------------:|
-|              main |          19 |
+|              main |          22 |
+|             0.86+ |          22 |
+|         0.82-0.85 |          21 |
+|              0.81 |          20 |
+|              0.80 |          19 |
 |            0.79.0 |          19 |
 |            0.78.0 |          18 |
 |            0.77.0 |          15 |

@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %shermes -typed -dump-ir -O %s | %FileCheckOrRegen %s --match-full-lines
+// RUN: %shermes -Xdump-functions=foo -typed -dump-ir -O %s | %FileCheckOrRegen %s --match-full-lines
 
 return function foo(x: string, y: string): string[] {
   return [x + y, x + 'abc', x + y + 'abc' + 'def' + y];
@@ -13,22 +13,20 @@ return function foo(x: string, y: string): string[] {
 
 // Auto-generated content below. Please do not modify manually.
 
-// CHECK:function global(): object
-// CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = CreateFunctionInst (:object) empty: any, empty: any, %foo(): functionCode
-// CHECK-NEXT:       ReturnInst %0: object
-// CHECK-NEXT:function_end
+// CHECK:scope %VS0 [?Array.prototype: object]
 
 // CHECK:function foo(x: string, y: string): object [typed]
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = LoadParamInst (:string) %x: string
-// CHECK-NEXT:  %1 = LoadParamInst (:string) %y: string
-// CHECK-NEXT:  %2 = AllocFastArrayInst (:object) 3: number
-// CHECK-NEXT:  %3 = StringConcatInst (:string) %0: string, %1: string
-// CHECK-NEXT:       FastArrayPushInst %3: string, %2: object
-// CHECK-NEXT:  %5 = StringConcatInst (:string) %0: string, "abc": string
-// CHECK-NEXT:       FastArrayPushInst %5: string, %2: object
-// CHECK-NEXT:  %7 = StringConcatInst (:string) %0: string, %1: string, "abcdef": string, %1: string
-// CHECK-NEXT:       FastArrayPushInst %7: string, %2: object
-// CHECK-NEXT:       ReturnInst %2: object
+// CHECK-NEXT:  %0 = GetParentScopeInst (:environment) %VS0: any, %parentScope: environment
+// CHECK-NEXT:  %1 = LoadParamInst (:string) %x: string
+// CHECK-NEXT:  %2 = LoadParamInst (:string) %y: string
+// CHECK-NEXT:  %3 = LoadFrameInst (:object) %0: environment, [%VS0.?Array.prototype]: object
+// CHECK-NEXT:  %4 = AllocFastArrayInst (:object) 3: number, %3: object
+// CHECK-NEXT:  %5 = StringConcatInst (:string) %1: string, %2: string
+// CHECK-NEXT:       FastArrayPushInst %5: string, %4: object
+// CHECK-NEXT:  %7 = StringConcatInst (:string) %1: string, "abc": string
+// CHECK-NEXT:       FastArrayPushInst %7: string, %4: object
+// CHECK-NEXT:  %9 = StringConcatInst (:string) %1: string, %2: string, "abcdef": string, %2: string
+// CHECK-NEXT:        FastArrayPushInst %9: string, %4: object
+// CHECK-NEXT:        ReturnInst %4: object
 // CHECK-NEXT:function_end

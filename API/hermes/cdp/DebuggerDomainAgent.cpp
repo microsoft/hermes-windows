@@ -28,7 +28,8 @@ DebuggerDomainAgent::DebuggerDomainAgent(
     DebuggerDomainCoordinator &debuggerDomainCoordinator,
     SynchronizedOutboundCallback messageCallback,
     std::shared_ptr<RemoteObjectsTable> objTable,
-    DomainState &state)
+    DomainState &state,
+    EvaluatedScriptSources &evaluatedScriptSources)
     : DomainAgent(
           executionContextID,
           std::move(messageCallback),
@@ -36,6 +37,7 @@ DebuggerDomainAgent::DebuggerDomainAgent(
       runtime_(runtime),
       asyncDebugger_(asyncDebugger),
       debuggerDomainCoordinator_(debuggerDomainCoordinator),
+      evaluatedScriptSources_(evaluatedScriptSources),
       state_(state),
       enabled_(false) {
   std::unique_ptr<StateValue> value = state_.getCopy({kBreakpointsKey});
@@ -411,6 +413,32 @@ void DebuggerDomainAgent::evaluateOnCallFrame(
       });
 }
 
+void DebuggerDomainAgent::getScriptSource(
+    const m::debugger::GetScriptSourceRequest &req) {
+  if (!checkDebuggerEnabled(req)) {
+    return;
+  }
+
+  std::shared_ptr<const jsi::StringBuffer> source =
+      evaluatedScriptSources_.find(req.scriptId);
+  if (source == nullptr) {
+    // Same error as V8 reports for a script it doesn't know about:
+    // https://source.chromium.org/chromium/chromium/src/+/main:v8/src/inspector/v8-debugger-agent-impl.cc;l=1288
+    sendResponseToClient(
+        m::makeErrorResponse(
+            req.id,
+            m::ErrorCode::ServerError,
+            "No script for id: " + req.scriptId));
+    return;
+  }
+
+  m::debugger::GetScriptSourceResponse resp;
+  resp.id = req.id;
+  resp.scriptSource = std::string(
+      reinterpret_cast<const char *>(source->data()), source->size());
+  sendResponseToClient(resp);
+}
+
 void DebuggerDomainAgent::setBreakpoint(
     const m::debugger::SetBreakpointRequest &req) {
   if (!checkDebuggerEnabled(req)) {
@@ -494,6 +522,20 @@ void DebuggerDomainAgent::setBreakpointByUrl(
       }
     }
   }
+  sendResponseToClient(resp);
+}
+
+void DebuggerDomainAgent::getPossibleBreakpoints(
+    const m::debugger::GetPossibleBreakpointsRequest &req) {
+  if (!checkDebuggerEnabled(req)) {
+    return;
+  }
+
+  // Compatibility stub: unconditionally return an empty set of locations. This
+  // patches spec-conformance so clients (e.g. VS Code) stop treating it as
+  // "method not found". Real breakpoint enumeration is TODO.
+  m::debugger::GetPossibleBreakpointsResponse resp;
+  resp.id = req.id;
   sendResponseToClient(resp);
 }
 

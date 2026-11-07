@@ -8,7 +8,10 @@
 #include "VMRuntimeTestHelpers.h"
 
 #include "hermes/BCGen/HBC/SimpleBytecodeBuilder.h"
+#include "hermes/VM/FastArray.h"
+#include "hermes/VM/HiddenClass.h"
 #include "hermes/VM/JSDate.h"
+#include "hermes/VM/JSObject-inline.h"
 #include "hermes/VM/PropertyAccessor.h"
 
 using namespace hermes::hbc;
@@ -194,7 +197,7 @@ TEST_F(ObjectModelTest, DefineOwnPropertyTest) {
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, enumerable);
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, configurable);
     EXPECT_PROPERTY_FLAG(FALSE, obj, *prop1ID, accessor);
-    JSObject::preventExtensions(obj.get());
+    JSObject::preventExtensionsNonProxy(obj, runtime);
     ASSERT_TRUE(*JSObject::defineOwnProperty(
         obj,
         runtime,
@@ -902,7 +905,7 @@ TEST_F(ObjectModelTest, ParentCacheEpochTest) {
   lv.obj = JSObject::create(runtime, lv.parent);
   uint32_t idx = *runtimeModule->allocateAddCacheEntry();
   AddPropertyCacheEntry &entry = runtimeModule->getAddCacheEntry(idx);
-  entry.parent = lv.obj->getParentGCPtr();
+  entry.parent = lv.obj->getParentGCPtr(runtime);
   entry.startClazz = lv.obj->getClassGCPtr();
   entry.setParentEpochAndSlot(runtime.getParentCacheEpoch(), 5);
 
@@ -916,5 +919,146 @@ TEST_F(ObjectModelTest, ParentCacheEpochTest) {
   EXPECT_FALSE(entry.startClazz);
   EXPECT_FALSE(runtime.checkArrayFastPathParentEpoch());
 }
+
+// FastArrays must be sealed and non-extensible via their class flags.
+TEST_F(ObjectModelTest, FastArrayClassSealedNonExtensible) {
+  struct : public Locals {
+    PinnedValue<FastArray> arr;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  auto arrRes = FastArray::create(runtime);
+  ASSERT_EQ(ExecutionStatus::RETURNED, arrRes.getStatus());
+  lv.arr = vmcast<FastArray>(*arrRes);
+  auto *clazz = lv.arr->getClass(runtime);
+  EXPECT_FALSE(clazz->isExtensible());
+  EXPECT_TRUE(clazz->isSealed());
+}
+
+TEST_F(ObjectModelTest, IsFrozenClassFlag) {
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  auto propID = *runtime.getIdentifierTable().getSymbolHandle(
+      runtime, createASCIIRef("prop"));
+  lv.obj = JSObject::create(runtime);
+
+  DefinePropertyFlags dpf{};
+  dpf.setValue = 1;
+  dpf.setWritable = 1;
+  dpf.writable = 0;
+  dpf.setConfigurable = 1;
+  dpf.configurable = 0;
+  ASSERT_TRUE(*JSObject::defineOwnProperty(
+      lv.obj, runtime, *propID, dpf, Runtime::getUndefinedValue()));
+  JSObject::preventExtensionsNonProxy(lv.obj, runtime);
+
+  // The object is already semantically frozen, but the class frozen flag is a
+  // lazy cache.
+  ASSERT_FALSE(lv.obj->getClass(runtime)->isFrozen());
+  EXPECT_TRUE(JSObject::isFrozen(createPseudoHandle(lv.obj.get()), runtime));
+  EXPECT_TRUE(lv.obj->getClass(runtime)->isFrozen());
+}
+
+// Freezing, sealing or preventing extensions on objects that share a class
+// must move them all to one cached class and leave sibling objects alone.
+TEST_F(ObjectModelTest, ClassFlagsTransitionShared) {
+  struct : public Locals {
+    PinnedValue<JSObject> a;
+    PinnedValue<JSObject> b;
+    PinnedValue<JSObject> sibling;
+    PinnedValue<HiddenClass> baseClass;
+    PinnedValue<HiddenClass> newClass;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  auto propID = *runtime.getIdentifierTable().getSymbolHandle(
+      runtime, createASCIIRef("prop"));
+  auto otherID = *runtime.getIdentifierTable().getSymbolHandle(
+      runtime, createASCIIRef("other"));
+  auto val = runtime.makeHandle(HermesValue::encodeTrustedNumberValue(1));
+
+  enum class Op { Freeze, Seal, PreventExtensions };
+  for (Op op : {Op::Freeze, Op::Seal, Op::PreventExtensions}) {
+    GCScopeMarkerRAII marker{runtime};
+    PinnedValue<JSObject> *objs[] = {&lv.a, &lv.b, &lv.sibling};
+    for (PinnedValue<JSObject> *obj : objs) {
+      *obj = JSObject::create(runtime);
+      ASSERT_TRUE(*JSObject::putNamed_RJS(*obj, runtime, *propID, val));
+    }
+    lv.baseClass = lv.a->getClass(runtime);
+    ASSERT_EQ(*lv.baseClass, lv.b->getClass(runtime));
+    ASSERT_EQ(*lv.baseClass, lv.sibling->getClass(runtime));
+
+    for (PinnedValue<JSObject> *obj : {&lv.a, &lv.b}) {
+      switch (op) {
+        case Op::Freeze:
+          ASSERT_EQ(ExecutionStatus::RETURNED, JSObject::freeze(*obj, runtime));
+          break;
+        case Op::Seal:
+          ASSERT_EQ(ExecutionStatus::RETURNED, JSObject::seal(*obj, runtime));
+          break;
+        case Op::PreventExtensions:
+          JSObject::preventExtensionsNonProxy(*obj, runtime);
+          break;
+      }
+    }
+
+    lv.newClass = lv.a->getClass(runtime);
+    EXPECT_NE(*lv.baseClass, *lv.newClass);
+    // The second object reuses the cached FlagsTransition.
+    EXPECT_EQ(*lv.newClass, lv.b->getClass(runtime));
+    EXPECT_FALSE(lv.newClass->isExtensible());
+    EXPECT_EQ(op != Op::PreventExtensions, lv.newClass->isSealed());
+    EXPECT_EQ(op == Op::Freeze, lv.newClass->isFrozen());
+
+    // The sibling and the base class are untouched.
+    EXPECT_EQ(*lv.baseClass, lv.sibling->getClass(runtime));
+    EXPECT_TRUE(lv.baseClass->isExtensible());
+    EXPECT_FALSE(lv.baseClass->isSealed());
+    EXPECT_FALSE(lv.baseClass->isFrozen());
+    EXPECT_TRUE(lv.sibling->isExtensible(runtime));
+    EXPECT_FALSE(
+        JSObject::isSealed(createPseudoHandle(lv.sibling.get()), runtime));
+    ASSERT_TRUE(*JSObject::putNamed_RJS(lv.sibling, runtime, *otherID, val));
+  }
+}
+
+#if HERMESVM_GCKIND == _HERMESVM_GCVALUE_HADES
+using ObjectModelLargeHeapTest = LargeHeapRuntimeTestFixture;
+
+/// An object with maxYoungGenAllocationPropCount() property slots is allocated
+/// together with its property storage in a single young gen allocation.
+TEST_F(ObjectModelLargeHeapTest, CreateWithMaxYoungGenAllocationPropCount) {
+  struct : public Locals {
+    PinnedValue<JSObject> obj;
+    PinnedValue<> value;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  constexpr uint32_t propCount = JSObject::maxYoungGenAllocationPropCount();
+  // The object and its property storage exactly fill the maximum young gen
+  // allocation.
+  EXPECT_EQ(
+      cellSize<JSObject>() +
+          heapAlignSize(
+              PropStorage::allocationSize(
+                  propCount - JSObject::DIRECT_PROPERTY_SLOTS)),
+      GC::maxYoungGenAllocationSize());
+
+  lv.obj = JSObject::create(
+      runtime, runtime.objectPrototype, runtime.classJSObject, propCount);
+
+  // Add a property, then make sure it survives a collection.
+  auto lengthID = Predefined::getSymbolID(Predefined::length);
+  lv.value = 1.0_hd;
+  ASSERT_TRUE(*JSObject::putNamed_RJS(lv.obj, runtime, lengthID, lv.value));
+  runtime.collect("test");
+  EXPECT_CALLRESULT_DOUBLE(
+      1.0, JSObject::getNamed_RJS(lv.obj, runtime, lengthID));
+}
+#endif
 
 } // namespace

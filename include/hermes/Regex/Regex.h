@@ -45,7 +45,14 @@ class Regex {
 
  private:
   Traits traits_;
-  SyntaxFlags flags_ = {};
+
+  /// This field is the set of flags that were used at the top-level definition
+  /// of the regex. However, the i/m/s flags can be modified locally within the
+  /// regex. So it's not correct to read those flags from this field when
+  /// constructing the individual nodes that need access to those fields.
+  /// Instead, that state is maintained by the parser, and will be passed in to
+  /// the constructor of the nodes that need it.
+  SyntaxFlags globalFlags_ = {};
 
   // Number of capture groups encountered so far.
   uint16_t markedCount_ = 0;
@@ -65,6 +72,10 @@ class Regex {
 
   // Constraints on the type of strings that can match this regex.
   MatchConstraintSet matchConstraints_ = 0;
+
+  /// The code units that can begin a match, or None if there is no start
+  /// filter: the regex can match the empty string, or the analysis gave up.
+  llvh::Optional<StartSet> startSet_;
 
   // This holds the named capture groups in the order they were defined.
   std::deque<llvh::SmallVector<char16_t, 5>> orderedGroupNames_{};
@@ -140,11 +151,13 @@ class Regex {
         markedCount_ <= constants::kMaxCaptureGroupCount &&
         "Too many capture groups");
     assert(loopCount_ <= constants::kMaxLoopCount && "Too many loops");
-    RegexBytecodeHeader header = {
-        markedCount_,
-        static_cast<uint16_t>(loopCount_),
-        flags_.toByte(),
-        matchConstraints_};
+    RegexBytecodeHeader header{};
+    header.markedCount = markedCount_;
+    header.loopCount = static_cast<uint16_t>(loopCount_);
+    header.syntaxFlags = globalFlags_.toByte();
+    header.constraints = matchConstraints_;
+    if (startSet_)
+      startSet_->writeTo(header);
     RegexBytecodeStream bcs(header);
     Node::compile(nodes_, bcs);
     return bcs.acquireBytecode();
@@ -165,7 +178,7 @@ class Regex {
       error_ = constants::ErrorType::InvalidFlags;
       return;
     }
-    flags_ = *sflags;
+    globalFlags_ = *sflags;
     error_ = parse(pattern.begin(), pattern.end());
   }
 
@@ -178,11 +191,8 @@ class Regex {
   Regex(Regex &&) = default;
 
   // Accessors.
-  unsigned markCount() const {
-    return markedCount_;
-  }
-  SyntaxFlags flags() const {
-    return flags_;
+  SyntaxFlags globalFlags() const {
+    return globalFlags_;
   }
 
   std::deque<llvh::SmallVector<char16_t, 5>> &getOrderedNamedGroups() {
@@ -243,23 +253,23 @@ class Regex {
 
   bool resolveNamedBackRefs();
 
-  void pushLeftAnchor();
-  void pushRightAnchor();
-  void pushMatchAny();
+  void pushLeftAnchor(bool multiline);
+  void pushRightAnchor(bool multiline);
+  void pushMatchAny(bool dotAll);
   void pushLoop(
       uint32_t min,
       uint32_t max,
       NodeList loopedList,
       uint32_t mexp_begin,
       bool greedy);
-  BracketNode *startBracketList(bool negate);
-  void pushChar(CodePoint c);
-  void pushCharClass(CharacterClass c);
-  void pushBackRef(uint32_t i);
-  void pushNamedBackRef(GroupName &&identifier);
+  BracketNode *startBracketList(bool negate, bool icase);
+  void pushChar(CodePoint c, bool icase);
+  void pushCharClass(CharacterClass c, bool icase);
+  void pushBackRef(uint32_t i, bool icase);
+  void pushNamedBackRef(GroupName &&identifier, bool icase);
   void pushAlternation(std::vector<NodeList> alternatives);
   void pushMarkedSubexpression(NodeList, uint32_t mexp);
-  void pushWordBoundary(bool);
+  void pushWordBoundary(bool invert, bool icase);
   void pushLookaround(NodeList, uint16_t, uint16_t, bool, bool);
 };
 
@@ -279,7 +289,7 @@ constants::ErrorType Regex<Traits>::parse(
     ForwardIterator first,
     ForwardIterator last) {
   uint32_t maxBackRef = 0;
-  bool hasNamedGroups = flags_.unicode;
+  bool hasNamedGroups = globalFlags_.unicode;
   auto result = parseWithBackRefLimit(
       first,
       last,
@@ -304,14 +314,14 @@ constants::ErrorType Regex<Traits>::parse(
   // We must also reparse if there were any named capture groups used and it is
   // not unicode mode.
   bool reparseForNamedBackref = false;
-  if (!flags_.unicode && nameMapping_.size() > 0 &&
+  if (!globalFlags_.unicode && nameMapping_.size() > 0 &&
       sawNamedBackrefBeforeGroup_) {
     reparseForNamedBackref = true;
     hasNamedGroups = true;
   }
 
   if (reparseForNumberedBackref || reparseForNamedBackref) {
-    if (flags_.unicode) {
+    if (globalFlags_.unicode) {
       return constants::ErrorType::EscapeInvalid;
     }
 
@@ -342,15 +352,22 @@ constants::ErrorType Regex<Traits>::parseWithBackRefLimit(
     uint32_t *outMaxBackRef) {
   // Initialize our node list with a single no-op node (it must never be empty.)
   nodes_.clear();
-  appendNode<Node>();
+  startSet_ = llvh::None;
+  appendNode<EmptyNode>();
   auto result = parseRegex(
-      first, last, this, flags_, backRefLimit, hasNamedGroups, outMaxBackRef);
+      first,
+      last,
+      this,
+      globalFlags_,
+      backRefLimit,
+      hasNamedGroups,
+      outMaxBackRef);
 
   // If we succeeded, add a goal node as the last node and perform optimizations
   // on the list.
   if (result == constants::ErrorType::None) {
     appendNode<GoalNode>();
-    Node::optimizeNodeList(nodes_, flags_, nodeHolder_);
+    Node::optimizeNodeList(nodes_, globalFlags_, nodeHolder_);
     if (!resolveNamedBackRefs()) {
       return constants::ErrorType::NonexistentNamedCaptureReference;
     }
@@ -358,6 +375,13 @@ constants::ErrorType Regex<Traits>::parseWithBackRefLimit(
 
   // Compute any match constraints.
   matchConstraints_ = Node::matchConstraintsForList(nodes_);
+
+  // Compute the start-position filter.
+  if (result == constants::ErrorType::None) {
+    StartSet set;
+    if (Node::addStartSetForList(nodes_, set, 0) == StartSetResult::Consumes)
+      startSet_ = set;
+  }
 
   return result;
 }
@@ -393,16 +417,16 @@ void Regex<Traits>::pushLoop(
 }
 
 template <class Traits>
-void Regex<Traits>::pushChar(CodePoint c) {
-  bool icase = flags().ignoreCase;
+void Regex<Traits>::pushChar(CodePoint c, bool icase) {
+  bool unicode = globalFlags_.unicode;
   if (icase)
-    c = traits_.canonicalize(c, flags().unicode);
-  appendNode<MatchCharNode>(Node::CodePointList{c}, flags());
+    c = traits_.canonicalize(c, unicode);
+  appendNode<MatchCharNode>(Node::CodePointList{c}, icase, unicode);
 }
 
 template <class Traits>
-void Regex<Traits>::pushCharClass(CharacterClass c) {
-  auto bracket = startBracketList(false);
+void Regex<Traits>::pushCharClass(CharacterClass c, bool icase) {
+  auto bracket = startBracketList(false, icase);
   bracket->addClass(c);
 }
 
@@ -412,44 +436,45 @@ void Regex<Traits>::pushMarkedSubexpression(NodeList nodes, uint32_t mexp) {
 }
 
 template <class Traits>
-void Regex<Traits>::pushLeftAnchor() {
-  appendNode<LeftAnchorNode>(flags());
+void Regex<Traits>::pushLeftAnchor(bool multiline) {
+  appendNode<LeftAnchorNode>(multiline);
 }
 
 template <class Traits>
-void Regex<Traits>::pushRightAnchor() {
-  appendNode<RightAnchorNode>();
+void Regex<Traits>::pushRightAnchor(bool multiline) {
+  appendNode<RightAnchorNode>(multiline);
 }
 
 template <class Traits>
-void Regex<Traits>::pushMatchAny() {
-  appendNode<MatchAnyNode>(flags());
+void Regex<Traits>::pushMatchAny(bool dotAll) {
+  bool unicode = globalFlags_.unicode;
+  appendNode<MatchAnyNode>(dotAll, unicode);
 }
 
 template <class Traits>
-void Regex<Traits>::pushWordBoundary(bool invert) {
-  appendNode<WordBoundaryNode>(invert);
+void Regex<Traits>::pushWordBoundary(bool invert, bool icase) {
+  appendNode<WordBoundaryNode>(invert, icase);
 }
 
 template <class Traits>
-void Regex<Traits>::pushBackRef(uint32_t i) {
-  appendNode<BackRefNode>(i);
+void Regex<Traits>::pushBackRef(uint32_t i, bool icase) {
+  appendNode<BackRefNode>(i, icase);
 }
 
 template <class Traits>
-void Regex<Traits>::pushNamedBackRef(GroupName &&identifier) {
+void Regex<Traits>::pushNamedBackRef(GroupName &&identifier, bool icase) {
   auto search = nameMapping_.find(identifier);
   if (search == nameMapping_.end()) {
     // If this name hasn't been defined yet, we have a case of an ambiguous
     // named backref. It could be valid or not, because the group name could be
     // defined in the future. We will revist these nodes at the end to see if
     // they are valid.
-    BackRefNode *backRef = appendNode<BackRefNode>(0);
+    BackRefNode *backRef = appendNode<BackRefNode>(0, icase);
     unresolvedNamedBackRefs_.emplace_back(std::move(identifier), backRef);
     return;
   }
   auto groupNum = search->second;
-  appendNode<BackRefNode>(groupNum - 1);
+  appendNode<BackRefNode>(groupNum - 1, icase);
 }
 
 template <class Traits>
@@ -458,8 +483,9 @@ void Regex<Traits>::pushAlternation(std::vector<NodeList> alternatives) {
 }
 
 template <class Traits>
-BracketNode<Traits> *Regex<Traits>::startBracketList(bool negate) {
-  return appendNode<BracketNode>(traits_, negate, flags_);
+BracketNode<Traits> *Regex<Traits>::startBracketList(bool negate, bool icase) {
+  bool unicode = globalFlags_.unicode;
+  return appendNode<BracketNode>(traits_, negate, icase, unicode);
 }
 
 template <class Traits>

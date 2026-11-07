@@ -20,6 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
+import { checkDllExports } from "./check-exports.ts";
 
 // ES modules don't have __dirname, so we need to create it
 const __filename = fileURLToPath(import.meta.url);
@@ -746,7 +747,48 @@ function copyBuiltFilesToPkgStaging(buildParams) {
   }
 
   const dllSourcePath = path.join(buildPath, "API", "hermes_shared");
+  // Capture the VS environment once, then reuse it for every DLL copy.
+  const dumpbinEnv = Object.fromEntries(
+    execSync(`"${vcVarsAllBat}" ${getVCVarsAllBatArgs(buildParams)} && set`, {
+      encoding: "utf8",
+    })
+      .split(/\r?\n/)
+      .filter((line) => /^[^=]+=.*/.test(line))
+      .map((line) => [
+        line.slice(0, line.indexOf("=")),
+        line.slice(line.indexOf("=") + 1),
+      ]),
+  );
+  const checkExports = (dll) => {
+    if (copyFileIsOptional && !fs.existsSync(dll)) {
+      console.log(
+        `Skipping C-only export check: ${dll} (file not found, optional copy)`,
+      );
+      return;
+    }
+    const count = checkDllExports(dll, buildParams.platform, (file) =>
+      execSync(`dumpbin /nologo /exports "${file}"`, {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        env: dumpbinEnv,
+      }),
+    );
+    console.log(`C-only export check passed: ${dll} (${count} exports)`);
+  };
+  const sourceDll = path.join(dllSourcePath, "hermes.dll");
+  checkExports(sourceDll);
+  // Include runtime/bin and test-host copies, not just the linked DLL.
+  for (const file of fs.readdirSync(buildPath, { recursive: true })) {
+    const dll = path.join(buildPath, file);
+    if (
+      path.basename(file).toLowerCase() === "hermes.dll" &&
+      dll !== sourceDll
+    ) {
+      checkExports(dll);
+    }
+  }
   copyFile("hermes.dll", dllSourcePath, dllStagingPath, copyFileIsOptional);
+  checkExports(path.join(dllStagingPath, "hermes.dll"));
   copyFile("hermes.lib", dllSourcePath, dllStagingPath, copyFileIsOptional);
   copyFile("hermes.pdb", dllSourcePath, dllStagingPath, copyFileIsOptional);
 
@@ -1255,6 +1297,9 @@ function runBinSkim(buildParams) {
 }
 
 function setupJSTestEnvPaths() {
+  // LIT and test262 diagnostics can contain characters outside the Windows ACP.
+  process.env.PYTHONIOENCODING = "utf-8";
+
   console.log("Setting up environment paths...");
 
   // Helper function to find executable path using 'where'

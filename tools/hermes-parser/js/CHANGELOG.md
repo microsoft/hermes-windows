@@ -1,3 +1,41 @@
+## 0.37.0
+
+### `hermes-transform`
+- Print with Prettier's built-in Flow and TypeScript plugins instead of conditionally loading `prettier-plugin-hermes-parser`
+
+### `flow-api-translator`
+- Emit TypeScript ESTree generic instantiation fields expected by current `@typescript-eslint` and Prettier
+- Emit `TSImportType.source` for `$Exports` so Prettier's TypeScript printer can format it
+- Require Prettier v3, matching `hermes-transform`
+
+## 0.36.1
+
+### `hermes-parser`
+- Fix `await` not recognized inside `async component` bodies
+
+## 0.36.0
+
+### `hermes-estree`
+- Add `writeonly`, `in`, and `out` to variance kind type
+
+### `hermes-parser`
+- Fix malformed AST for `for (using x of y)` and `for await (await using x of y)` — bindings are now correctly wrapped in `VariableDeclarator`
+- Parse `writeonly` as a Flow variance modifier on object type properties, indexers, and class properties
+- Parse `in T` and `out T` as long-form Flow type-parameter variance (contravariance and covariance)
+- Allow `readonly` variance modifier before reserved-word property names (e.g. `{readonly with: T}`)
+
+## 0.35.0
+
+### `hermes-estree`
+- Add `readonly` to variance type
+
+### `hermes-parser`
+- Parse `readonly` as a Flow variance annotation on object type properties, indexers, class properties, and tuple labeled elements
+- Add missing `decorators` to `ClassProperty` and `ClassPrivateProperty` parser visitor keys
+
+### `flow-api-translator`
+- Support `readonly` variance in Flow to TypeScript translation
+
 ## 0.34.0
 
 ### `hermes-parser`

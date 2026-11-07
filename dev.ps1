@@ -51,17 +51,18 @@ function Assert-Node24 {
     }
 }
 
-function Ensure-AdoScripts {
-    $root = Join-Path $ScriptDir '.ado\scripts'
-    $stamp = Join-Path $root 'node_modules\.package-lock.json'
-    $packageJson = Join-Path $root 'package.json'
-    $packageLock = Join-Path $root 'package-lock.json'
+# Restores a package's dependencies from its lock file when node_modules is
+# missing or older than package.json/package-lock.json. Never rewrites the lock.
+function Restore-NpmDependencies([string]$Root, [string]$Description) {
+    $stamp = Join-Path $Root 'node_modules\.package-lock.json'
+    $packageJson = Join-Path $Root 'package.json'
+    $packageLock = Join-Path $Root 'package-lock.json'
 
     if (-not (Test-Path $stamp) -or
         (Get-Item $packageJson).LastWriteTime -gt (Get-Item $stamp).LastWriteTime -or
         (Get-Item $packageLock).LastWriteTime -gt (Get-Item $stamp).LastWriteTime) {
-        Write-Host 'Installing build script dependencies...'
-        Push-Location $root
+        Write-Host "Installing $Description dependencies..."
+        Push-Location $Root
         try {
             & npm ci --ignore-scripts --no-audit --no-fund
             if ($LASTEXITCODE -ne 0) {
@@ -73,16 +74,14 @@ function Ensure-AdoScripts {
     }
 }
 
-function Ensure-ForkSync {
-    $stamp = Join-Path $ScriptDir 'tools\fork-sync\node_modules\.package-lock.json'
-    $pkg = Join-Path $ScriptDir 'tools\fork-sync\package.json'
+function Ensure-AdoScripts {
+    Assert-Node24
+    Restore-NpmDependencies (Join-Path $ScriptDir '.ado\scripts') 'build script'
+}
 
-    if (-not (Test-Path $stamp) -or
-        (Get-Item $pkg).LastWriteTime -gt (Get-Item $stamp).LastWriteTime) {
-        Write-Host 'Installing fork-sync dependencies...'
-        Push-Location (Join-Path $ScriptDir 'tools\fork-sync')
-        try { npm install } finally { Pop-Location }
-    }
+function Ensure-ForkSync {
+    Assert-Node24
+    Restore-NpmDependencies (Join-Path $ScriptDir 'tools\fork-sync') 'fork-sync'
 }
 
 function Show-Help {
@@ -136,7 +135,6 @@ try {
         }
 
         'npm-source-lint' {
-            Assert-Node24
             Ensure-AdoScripts
             $lint = Join-Path $ScriptDir '.ado\scripts\npm-source-lint.ts'
             & node $lint @Args

@@ -139,6 +139,13 @@ The main build script is `.ado/scripts/build.js`. It handles:
 - CMake configuration with correct flags per platform
 - Building, testing, packaging, and BinSkim validation
 
+### DLL Export Check
+
+Every build checks all `hermes.dll` copies against the C-only allowlist in
+`.ado/scripts/hermes-exports.txt`. After reviewing a new C export, add its exact
+name to that allowlist; never allow C++ exports. Run `npm run test:exports` in
+`.ado/scripts` to test the checker.
+
 ### Continuous Integration
 
 `.ado/build-template.yml` drives both the PR and the CI pipelines. x64, x86 and
@@ -201,6 +208,19 @@ The build produces two VM variants: "regular" (full VM with compiler) and "lean"
 - `cmake/modules/HermesWindows.cmake`: Windows build configuration (MSVC/Clang flags, security flags, linker flags)
 - `.ado/scripts/build.js`: Main build orchestration script
 - `dev.ps1`: PowerShell developer wrapper
+
+### Windows Fork Behaviors to Preserve on Every Sync
+
+- Build `hermes.dll` with JSI 22; keep the public header default at 21
+  (`API/jsi/jsi/README.md`).
+- Preserve the `HermesExport.h` `CREATE_SHARED_LIBRARY` guard.
+- Support `MicrotaskQueue=false`.
+- Run JSI finalizers inline by default; use a worker only with an explicit
+  `FinalizerThreadRunner` (`RuntimeConfig.h`).
+- Preserve Windows Intl providers: bundled ICU by default (Win32; UWP has no
+  bundled ICU), WinGlob, and system ICU; keep upstream NAPI off.
+- Suppress CRT/WER dialogs in every test host (reuse
+  `unittests/WindowsTestSupport.h` or LLVM initialization).
 
 ### Testing
 

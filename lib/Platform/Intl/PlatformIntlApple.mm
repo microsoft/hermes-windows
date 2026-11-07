@@ -899,6 +899,16 @@ uint8_t getCurrencyDigits(std::u16string_view code) {
     return *digitsOpt;
   return 2;
 }
+
+/// Convert an NSCalendar identifier to the corresponding UTS-35 calendar
+/// identifier. Only Gregorian and Ethiopic Amete Alem use different names.
+std::u16string bcp47CalendarIdentifierFor(NSString *nsIdentifier) {
+  if ([nsIdentifier isEqualToString:NSCalendarIdentifierGregorian])
+    return u"gregory";
+  if ([nsIdentifier isEqualToString:NSCalendarIdentifierEthiopicAmeteAlem])
+    return u"ethioaa";
+  return nsStringToU16String(nsIdentifier);
+}
 } // namespace
 
 /// https://402.ecma-international.org/8.0/#sec-intl.getcanonicallocales
@@ -1785,10 +1795,23 @@ void DateTimeFormatApple::initializeNSDateFormatter(
   }
   nsDateFormatter_.timeZone =
       [[NSTimeZone alloc] initWithName:u16StringToNSString(timeZone_)];
+  if (calendar_) {
+    // Set the calendar through the locale so it is used for both formatting
+    // and pattern selection. Do not change locale_: calendar options need not
+    // appear in the locale returned by resolvedOptions().
+    auto parsed = ParsedLocaleIdentifier::parse(locale_);
+    parsed->unicodeExtensionKeywords[u"ca"] = *calendar_;
+    nsLocale = [NSLocale
+        localeWithLocaleIdentifier:u16StringToNSString(parsed->canonicalize())];
+  }
   nsDateFormatter_.locale = nsLocale;
-  if (calendar_)
-    nsDateFormatter_.calendar = [[NSCalendar alloc]
-        initWithCalendarIdentifier:u16StringToNSString(*calendar_)];
+  if (!calendar_) {
+    // ECMA-402 requires [[Calendar]] to always be defined. The formatter
+    // resolves the locale's default calendar on demand, so take it from
+    // there to stay consistent with what is actually used for formatting.
+    calendar_ = bcp47CalendarIdentifierFor(
+        nsDateFormatter_.calendar.calendarIdentifier);
+  }
   if (timeStyle_.has_value() || dateStyle_.has_value())
     return;
   // The following options cannot be used in conjunction with timeStyle or
@@ -2613,10 +2636,19 @@ void NumberFormatApple::initializeNSFormatters() noexcept {
     nsMeasurementFormatter_ = [NSMeasurementFormatter new];
     nsMeasurementFormatter_.numberFormatter = nsNumberFormatter_;
     nsMeasurementFormatter_.locale = nsLocale;
+    // ECMA-402 formats the number as-is in the requested unit, so keep
+    // NSMeasurementFormatter from converting to the locale's preferred unit
+    // for the dimension (which renders 2 hours as "7,200s" or 2 kilometers
+    // as "1.243mi" in en-US).
+    nsMeasurementFormatter_.unitOptions =
+        NSMeasurementFormatterUnitOptionsProvidedUnit;
+    // NSFormattingUnitStyleShort is the symbol-only form CLDR calls "narrow"
+    // ("2h"), and NSFormattingUnitStyleMedium is CLDR "short" ("2 hr"), so
+    // map the ECMA-402 unitDisplay values accordingly.
     if (unitDisplay_ == u"short") {
-      nsMeasurementFormatter_.unitStyle = NSFormattingUnitStyleShort;
-    } else if (unitDisplay_ == u"narrow") {
       nsMeasurementFormatter_.unitStyle = NSFormattingUnitStyleMedium;
+    } else if (unitDisplay_ == u"narrow") {
+      nsMeasurementFormatter_.unitStyle = NSFormattingUnitStyleShort;
     } else if (unitDisplay_ == u"long") {
       nsMeasurementFormatter_.unitStyle = NSFormattingUnitStyleLong;
     }

@@ -15,6 +15,7 @@
 #include "hermes/BCGen/HBC/SimpleBytecodeBuilder.h"
 #include "hermes/FrontEndDefs/Builtins.h"
 #include "hermes/Platform/Logging.h"
+#include "hermes/Regex/Executor.h"
 #include "hermes/Support/MemoryBuffer.h"
 #include "hermes/Support/OSCompat.h"
 #include "hermes/Support/PerfSection.h"
@@ -330,6 +331,9 @@ Runtime::Runtime(
           crashMgr_->registerCallback([this](int fd) { crashCallback(fd); })),
       codeCoverageProfiler_(std::make_unique<CodeCoverageProfiler>(*this)),
       gcEventCallback_(runtimeConfig.getGCConfig().getCallback()) {
+  // The fork's C host API supports both scheduling modes: bridge hosts use
+  // setImmediate for Promise jobs, while explicit-microtask hosts drain the VM
+  // queue. Keep the existing hasMicrotaskQueue() branches for both contracts.
   assert(
       (void *)this == (void *)(PointerBase *)this &&
       "cast to PointerBase should be no-op");
@@ -416,55 +420,42 @@ Runtime::Runtime(
   returnThisCodeBlock_ =
       specialCodeBlockRuntimeModule_->getCodeBlockMayAllocate(1);
 
-  // Initialize the root hidden class and its variants.
+  initRootHiddenClasses();
+
+  // Object.prototype needs a class before classJSObject can exist, since
+  // classJSObject's parent is Object.prototype. Start it on a temporary root,
+  // then move it to classJSObject's null-parent transition below, so it shares
+  // a class with every other null-parent JSObject.
   {
-    MutableHandle<HiddenClass> clazz(*this, HiddenClass::createRoot(*this));
-    rootClazzes_[0] = clazz.getHermesValue();
-    for (unsigned i = 1; i <= InternalProperty::NumAnonymousInternalProperties;
-         ++i) {
-      auto addResult = HiddenClass::reserveSlot(clazz, *this);
-      assert(
-          addResult != ExecutionStatus::EXCEPTION &&
-          "Could not possibly grow larger than the limit");
-      clazz = *addResult->first;
-      rootClazzes_[i] = clazz.getHermesValue();
-    }
-
-    // Create a separate hierarchy of hidden classes for lazy objects, Proxy and
-    // HostObject, for lazy objects so that they never
-    // compare equal to ordinary objects.
-    clazz = HiddenClass::createRoot(*this);
-
-    // For lazy objects, they should just use this empty HiddenClass until they
-    // are actually populated.
-    lazyObjectClass = clazz;
-
-    constexpr unsigned maxNumOverlapSlots = std::max(
-        {JSObject::numOverlapSlots<JSProxy>(),
-         JSObject::numOverlapSlots<JSCallableProxy>(),
-         JSObject::numOverlapSlots<HostObject>()});
-    for (unsigned i = 0;; ++i) {
-      if (i == JSObject::numOverlapSlots<JSProxy>())
-        proxyClass = clazz;
-      if (i == JSObject::numOverlapSlots<JSCallableProxy>())
-        callableProxyClass = clazz;
-      if (i == JSObject::numOverlapSlots<HostObject>())
-        hostObjectClass = clazz;
-      if (i == maxNumOverlapSlots)
-        break;
-      auto addResult = HiddenClass::reserveSlot(clazz, *this);
-      assert(
-          addResult != ExecutionStatus::EXCEPTION &&
-          "Could not possibly grow larger than the limit");
-      clazz = *addResult->first;
-    }
+    struct : public Locals {
+      PinnedValue<HiddenClass> tmpRoot;
+    } lv;
+    LocalsRAII lraii{*this, &lv};
+    lv.tmpRoot = HiddenClass::createRoot(
+        *this, makeNullHandle<JSObject>(), ClassFlags{});
+    objectPrototype =
+        JSObject::create(*this, makeNullHandle<JSObject>(), lv.tmpRoot);
   }
-
-  objectPrototype =
-      JSObject::create(*this, Runtime::makeNullHandle<JSObject>());
   objectPrototypeRawPtr = *objectPrototype;
 
-  global_ = JSObject::create(*this, objectPrototype).getHermesValue();
+  // We want the prototype of 'global' to be an ordinary object,
+  // with Object.prototype as the parent.
+  // We don't need to use the full createRootHiddenClass in GlobalObject.cpp
+  // because we know that JSObject has no overlap slots, simplifying things.
+  static_assert(
+      JSObject::numOverlapSlots<JSObject>() == 0,
+      "must have no overlap slots for classJSObject");
+  classJSObject = HiddenClass::createRoot(*this, objectPrototype, ClassFlags{});
+  {
+    // getHiddenClassForPrototype may allocate and move objectPrototype, so
+    // dereference objectPrototype only after it returns.
+    Handle<HiddenClass> nullParentClass =
+        getHiddenClassForPrototype(nullptr, classJSObject);
+    JSObject::setEmptyClassUnsafe(*objectPrototype, *this, *nullParentClass);
+  }
+
+  global_ =
+      JSObject::create(*this, objectPrototype, classJSObject).getHermesValue();
 
   JSLibFlags jsLibFlags{};
   jsLibFlags.enableHermesInternal = runtimeConfig.getEnableHermesInternal();
@@ -505,7 +496,20 @@ Runtime::~Runtime() {
   samplingProfiler.reset();
 #endif // HERMESVM_SAMPLING_PROFILER_AVAILABLE
 
+  // Run embedder shutdown callbacks while the heap is still functional.
+  // Callbacks may allocate, call into JS, and trigger GC.
+  for (auto &cb : shutdownCallbacks_)
+    cb();
+  shutdownCallbacks_.clear();
+
   getHeap().finalizeAll();
+
+  // Heap is now quiesced; run deleters for embedder objects that had to
+  // outlive finalizeAll (e.g., napi_env whose NativeState finalizers
+  // were invoked above and called env->queuePendingFinalizer).
+  for (auto &d : postShutdownDeleters_)
+    d();
+  postShutdownDeleters_.clear();
   // Remove inter-module dependencies so we can delete them in any order.
   for (auto &module : runtimeModuleList_) {
     module.prepareForDestruction();
@@ -627,8 +631,6 @@ void Runtime::markRoots(RootAcceptorWithNames &acceptor, bool markLongLived) {
   {
     MarkRootsPhaseTimer timer(*this, RootAcceptor::Section::RuntimeFields);
     acceptor.beginRootSection(RootAcceptor::Section::RuntimeFields);
-    for (auto &clazz : rootClazzes_)
-      acceptor.accept(clazz, "rootClass");
 #define SHRUNTIME_HV_FIELD(name) acceptor.acceptNullable(*toPHV(&name));
 #include "hermes/VM/SHRuntimeHermesValueFields.def"
 #define RUNTIME_HV_FIELD(name, type) acceptor.acceptNullablePV(name);
@@ -780,6 +782,9 @@ void Runtime::markWeakRoots(WeakRootAcceptor &acceptor, bool markLongLived) {
       acceptor.acceptWeak(entry.clazz);
     }
     for (auto &entry : fixedReadPropCache_) {
+      assert(
+          !entry.negMatchClazz &&
+          "negMatchClazz is always zero for non-JS code property cache");
       acceptor.acceptWeak(entry.clazz);
     }
   }
@@ -1073,18 +1078,28 @@ static CallResult<HermesValue> interpretFunctionWithRandomStack(
   return runtime.interpretFunction(globalCode);
 }
 
+std::unique_ptr<Buffer> makeCompilationSourceBuffer(
+    llvh::StringRef code,
+    const hbc::CompileFlags &compileFlags) {
+  // The compiled module retains its source buffer when compiling lazily or with
+  // full debug info (see keepCompilationData in BCProviderFromSrc), so in those
+  // cases the buffer must own its bytes: `code` may not outlive the module (for
+  // example a transient eval or debugger command string). Otherwise the buffer
+  // is dropped after compilation, so borrowing `code` is safe.
+  if (compileFlags.lazy || compileFlags.debug) {
+    return std::make_unique<OwnedMemoryBuffer>(
+        llvh::MemoryBuffer::getMemBufferCopy(code));
+  }
+  return std::make_unique<OwnedMemoryBuffer>(
+      llvh::MemoryBuffer::getMemBuffer(code));
+}
+
 CallResult<HermesValue> Runtime::run(
     llvh::StringRef code,
     llvh::StringRef sourceURL,
     const hbc::CompileFlags &compileFlags) {
-  std::unique_ptr<hermes::Buffer> buffer;
-  if (compileFlags.lazy) {
-    buffer.reset(new hermes::OwnedMemoryBuffer(
-        llvh::MemoryBuffer::getMemBufferCopy(code)));
-  } else {
-    buffer.reset(
-        new hermes::OwnedMemoryBuffer(llvh::MemoryBuffer::getMemBuffer(code)));
-  }
+  std::unique_ptr<hermes::Buffer> buffer =
+      makeCompilationSourceBuffer(code, compileFlags);
   return run(std::move(buffer), sourceURL, compileFlags);
 }
 
@@ -1516,10 +1531,9 @@ ExecutionStatus Runtime::raiseTypeErrorForValue(
     default:
       if (value->isNumber()) {
         char buf[hermes::NUMBER_TO_STRING_BUF_SIZE];
-        size_t len = hermes::numberToString(
+        llvh::StringRef str = hermes::numberToString(
             value->getNumber(), buf, hermes::NUMBER_TO_STRING_BUF_SIZE);
-        return raiseTypeError(
-            msg1 + TwineChar16(llvh::StringRef{buf, len}) + msg2);
+        return raiseTypeError(msg1 + TwineChar16(str) + msg2);
       }
   }
   return raiseTypeError(msg1 + TwineChar16("Value") + msg2);
@@ -1705,6 +1719,22 @@ void Runtime::initCharacterStrings() {
     gc.flushToMarker(marker);
     charStrings_.push_back(allocateCharacterString(ch).getHermesValue());
   }
+}
+
+/// Initialize the root HiddenClasses for all the GCCells.
+void Runtime::initRootHiddenClasses() {
+  struct : public Locals {
+    PinnedValue<HiddenClass> clazz;
+  } lv;
+  LocalsRAII lraii{*this, &lv};
+
+  // For lazy objects, they should just use this empty HiddenClass until they
+  // are actually populated.
+  ClassFlags lazyFlags{};
+  lazyFlags.lazyObject = 1;
+  lv.clazz =
+      HiddenClass::createRoot(*this, makeNullHandle<JSObject>(), lazyFlags);
+  lazyObjectClass_ = lv.clazz;
 }
 
 Handle<StringPrimitive> Runtime::allocateCharacterString(char16_t ch) {
@@ -2004,6 +2034,11 @@ void Runtime::freezeBuiltins() {
 }
 
 ExecutionStatus Runtime::drainJobs() {
+  // Invoke registered callbacks before draining (e.g., NAPI
+  // finalizer draining).
+  for (auto &cb : drainJobsCallbacks_)
+    cb();
+
   GCScope gcScope{*this};
   MutableHandle<Callable> job{*this};
   // Note that new jobs can be enqueued during the draining.

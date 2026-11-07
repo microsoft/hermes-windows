@@ -25,6 +25,7 @@
 #include "hermes/IR/IR.h"
 #include "hermes/IR/IRVerifier.h"
 #include "hermes/IR/Instrs.h"
+#include "hermes/Regex/RegexSerialization.h"
 #include "hermes/Support/BigIntSupport.h"
 #include "hermes/Support/DenseMapInfoSpecializations.h"
 #include "hermes/Support/HashString.h"
@@ -174,6 +175,33 @@ class SHStringTable {
   }
 };
 
+/// Emit \p buf as a C array of unsigned char named \p name.
+static void generateBuffer(
+    llvh::raw_ostream &os,
+    llvh::StringRef name,
+    llvh::ArrayRef<unsigned char> buf) {
+  os << "static unsigned char " << name << "[" << buf.size() << "] = {";
+  for (unsigned char c : buf) {
+    os << (int)c << ",";
+  }
+  os << "};\n";
+}
+
+/// Emit the regexp bytecode storage and the table that locates each
+/// regexp in it.
+static void generateRegExpTable(
+    llvh::raw_ostream &os,
+    const UniquingRegExpTable &table) {
+  generateBuffer(os, "s_regexp_storage", table.getBytecodeBuffer());
+  os << "static const SHRegExpTableEntry s_regexp_table[] = {\n";
+  for (const RegExpTableEntry &entry : table.getEntryList()) {
+    os.indent(2);
+    os << "{ .offset = " << entry.offset << ", .length = " << entry.length
+       << " },\n";
+  }
+  os << "};\n";
+}
+
 class SHLiteralBuffers {
  public:
   /// Table of constants used to initialize constant arrays/object values.
@@ -228,18 +256,6 @@ class SHLiteralBuffers {
       os.indent(2);
       os << "{ .key_buffer_offset = " << entry.keyBufferOffset
          << ", .num_props = " << entry.numProps << " },\n";
-    }
-    os << "};\n";
-  }
-
- private:
-  void generateBuffer(
-      llvh::raw_ostream &os,
-      llvh::StringRef name,
-      llvh::ArrayRef<unsigned char> buf) const {
-    os << "static unsigned char " << name << "[" << buf.size() << "] = {";
-    for (unsigned char c : buf) {
-      os << (int)c << ",";
     }
     os << "};\n";
   }
@@ -440,6 +456,9 @@ struct ModuleGen {
   /// Table of JS native functions
   SHNativeJSFunctionTable nativeFunctionTable;
 
+  /// Uniqued table of the module's regexp literals and their bytecode.
+  UniquingRegExpTable regExpTable{};
+
   explicit ModuleGen(Module *M, bool optimizationEnabled)
       : literalBuffers{M, stringTable, optimizationEnabled},
         srcLocationTable{stringTable},
@@ -448,23 +467,23 @@ struct ModuleGen {
 
 /// \return true if the SHLegacyValue representations of values \p a and \p b
 /// can be compared directly (bitwise).
-static bool canCompareStrictEqualityRaw(Value *a, Value *b) {
+static bool canCompareStrictEqualityRaw(TypeContext &tc, Value *a, Value *b) {
   Type aType = a->getType();
   Type bType = b->getType();
 
   // If both can be numbers, then we can't compare because `-0` and `0` have
   // different bitwise representations.
-  if (aType.canBeNumber() && bType.canBeNumber())
+  if (tc.canBeNumber(aType) && tc.canBeNumber(bType))
     return false;
 
   // If both can be bigint, then we can't compare because BigInts are compared
   // by values which are stored on the heap.
-  if (aType.canBeBigInt() && bType.canBeBigInt())
+  if (tc.canBeBigInt(aType) && tc.canBeBigInt(bType))
     return false;
 
   // If both can be strings, then we can't compare because strings are compared
   // by their contents which are stored on the heap.
-  if (aType.canBeString() && bType.canBeString())
+  if (tc.canBeString(aType) && tc.canBeString(bType))
     return false;
 
   // Otherwise, we can compare.
@@ -534,6 +553,9 @@ class InstrGen {
 
   // The function being compiled.
   Function &F_;
+
+  /// IR type context for the module being compiled.
+  TypeContext &typeCtx_{F_.getParent()->getTypeContext()};
 
   // Info related to native compilation.
   NativeContext &nativeContext_;
@@ -1087,14 +1109,16 @@ class InstrGen {
                                         : "_sh_ljs_left_shift_rjs_inline";
         break;
       case ValueKind::BinaryNotEqualInstKind: // !=
-        funcUntypedOp = "!_sh_ljs_equal_rjs";
+        funcUntypedOp = options_.smallC ? "!_sh_ljs_equal_rjs"
+                                        : "!_sh_ljs_equal_rjs_inline";
         boolConv = true;
         break;
       case ValueKind::BinaryEqualInstKind: // ==
         if (bothDouble) {
           infixDoubleOp = "==";
         } else {
-          funcUntypedOp = "_sh_ljs_equal_rjs";
+          funcUntypedOp = options_.smallC ? "_sh_ljs_equal_rjs"
+                                          : "_sh_ljs_equal_rjs_inline";
         }
         boolConv = true;
         break;
@@ -1102,10 +1126,13 @@ class InstrGen {
         if (bothDouble) {
           infixDoubleOp = "!=";
         } else if (canCompareStrictEqualityRaw(
-                       inst.getLeftHandSide(), inst.getRightHandSide())) {
+                       typeCtx_,
+                       inst.getLeftHandSide(),
+                       inst.getRightHandSide())) {
           infixRawOp = "!=";
         } else {
-          funcUntypedOp = "!_sh_ljs_strict_equal";
+          funcUntypedOp = options_.smallC ? "!_sh_ljs_strict_equal"
+                                          : "!_sh_ljs_strict_equal_inline";
           passByValue = true;
         }
         boolConv = true;
@@ -1114,10 +1141,13 @@ class InstrGen {
         if (bothDouble) {
           infixDoubleOp = "==";
         } else if (canCompareStrictEqualityRaw(
-                       inst.getLeftHandSide(), inst.getRightHandSide())) {
+                       typeCtx_,
+                       inst.getLeftHandSide(),
+                       inst.getRightHandSide())) {
           infixRawOp = "==";
         } else {
-          funcUntypedOp = "_sh_ljs_strict_equal";
+          funcUntypedOp = options_.smallC ? "_sh_ljs_strict_equal"
+                                          : "_sh_ljs_strict_equal_inline";
           passByValue = true;
         }
         boolConv = true;
@@ -1257,6 +1287,37 @@ class InstrGen {
       generateRegister(*inst.getObject());
       os_ << ", ";
       genStringConstWriteIC(LS, inst.getStoredValue()) << ");\n";
+      return;
+    }
+    // If the prop is an index-like constant, use put_by_index directly.
+    if (auto *litNum = llvh::dyn_cast<LiteralNumber>(inst.getProperty())) {
+      if (auto idxOpt = doubleToArrayIndex(litNum->getValue())) {
+        if (strictMode)
+          os_ << "_sh_ljs_put_by_index_strict_rjs";
+        else
+          os_ << "_sh_ljs_put_by_index_loose_rjs";
+        os_ << "(shr,&";
+        generateRegister(*inst.getObject());
+        os_ << ", " << *idxOpt << "u, &";
+        generateRegister(*inst.getStoredValue());
+        os_ << ");\n";
+        return;
+      }
+    }
+    // If the key is known to be a number, use the optimized numeric path
+    // which tries sh_tryfast_f64_to_u32 inline before falling back.
+    else if (inst.getProperty()->getType().isNumberType()) {
+      if (strictMode)
+        os_ << "_sh_ljs_put_by_val_numeric_strict_rjs";
+      else
+        os_ << "_sh_ljs_put_by_val_numeric_loose_rjs";
+      os_ << "(shr,&";
+      generateRegister(*inst.getObject());
+      os_ << ", ";
+      generateRegister(*inst.getProperty());
+      os_ << ", &";
+      generateRegister(*inst.getStoredValue());
+      os_ << ");\n";
       return;
     }
 
@@ -1659,8 +1720,9 @@ class InstrGen {
   void generateAllocFastArrayInst(AllocFastArrayInst &inst) {
     os_.indent(2);
     generateRegister(inst);
-    os_ << " = _sh_new_fastarray(shr, " << inst.getCapacity()->asUInt32()
-        << ");\n";
+    os_ << " = _sh_new_fastarray_with_proto(shr, &";
+    generateRegister(*inst.getPrototype());
+    os_ << ", " << inst.getCapacity()->asUInt32() << ");\n";
   }
   void generateGetTemplateObjectInst(GetTemplateObjectInst &inst) {
     os_.indent(2);
@@ -1690,42 +1752,35 @@ class InstrGen {
     assert(
         inst.getKeyValuePairCount() == 0 &&
         "AllocObjectLiteralInst with properties should be lowered to LIRAllocObjectFromBufferInst");
+    assert(llvh::isa<EmptySentinel>(inst.getParentObject()));
     os_.indent(2);
     generateRegister(inst);
     os_ << " = ";
     // TODO: Utilize sizeHint.
-    if (llvh::isa<EmptySentinel>(inst.getParentObject())) {
-      os_ << "_sh_ljs_new_object(shr)";
-    } else {
-      os_ << "_sh_ljs_new_object_with_parent(shr, &";
-      generateValue(*inst.getParentObject());
-      os_ << ")";
-    }
+    os_ << "_sh_ljs_new_object(shr)";
     os_ << ";\n";
   }
   void generateAllocTypedObjectInst(AllocTypedObjectInst &inst) {
     assert(
         inst.getKeyValuePairCount() == 0 &&
         "AllocTypedObjectInst with properties should be lowered to LIRAllocObjectFromBufferInst");
+    assert(llvh::isa<EmptySentinel>(inst.getParentObject()));
     os_.indent(2);
     generateRegister(inst);
     os_ << " = ";
     // TODO: Utilize sizeHint.
-    os_ << "_sh_ljs_new_object_with_parent(shr, &";
-    generateValue(*inst.getParentObject());
-    os_ << ")";
+    os_ << "_sh_ljs_new_object(shr)";
     os_ << ";\n";
   }
   void generateAllocTypedNonEnumObjectInst(AllocTypedNonEnumObjectInst &inst) {
     assert(
         inst.getKeyValuePairCount() == 0 &&
         "AllocTypedNonEnumObjectInst with properties should be lowered to LIRAllocTypedNonEnumObjectFromBufferInst");
+    assert(llvh::isa<EmptySentinel>(inst.getParentObject()));
     os_.indent(2);
     generateRegister(inst);
     os_ << " = ";
-    os_ << "_sh_ljs_new_object_with_parent(shr, &";
-    generateValue(*inst.getParentObject());
-    os_ << ")";
+    os_ << "_sh_ljs_new_object(shr)";
     os_ << ";\n";
   }
   void generateCreateArgumentsLooseInst(CreateArgumentsLooseInst &inst) {
@@ -1754,26 +1809,19 @@ class InstrGen {
     uint32_t flagsStrID =
         moduleGen_.stringTable.add(inst.getFlags()->getValue().str());
 
-    // Compile the regexp. We expect this to succeed because the AST went
-    // through the SemanticValidator. This is a bit of a hack: what we would
-    // really like to do is have the Parser emit a CompiledRegExp that can be
-    // threaded through the AST and then through the IR to this instruction
-    // selection, but that is too awkward, so we compile again here.
-    // uint32_t reBytecodeID = UINT32_MAX;
-    // if (auto regexp = CompiledRegExp::tryCompile(
-    //         inst.getPattern()->getValue().str(),
-    //         inst.getFlags()->getValue().str())) {
-    //   reBytecodeID = moduleGen_.regexpTable.addRegExp(std::move(*regexp));
-    // }
+    // Semantic resolution compiled every regexp literal into the Context.
+    CompiledRegExp &regexp = F_.getContext().getCompiledRegExp(
+        inst.getPattern()->getValue().getUnderlyingPointer(),
+        inst.getFlags()->getValue().getUnderlyingPointer());
+    uint32_t regExpID = moduleGen_.regExpTable.addRegExp(&regexp);
 
-    // TODO(T132343328): Compile the regexp bytecode ahead of time.
     generateValue(inst);
     os_ << " = ";
-    os_ << "_sh_ljs_create_regexp(shr, ";
+    os_ << "_sh_ljs_create_regexp(shr, shUnit, ";
     os_ << llvh::format("get_symbols(shUnit)[%u]", patternStrID);
     os_ << ", ";
     os_ << llvh::format("get_symbols(shUnit)[%u]", flagsStrID);
-    os_ << ");\n";
+    os_ << ", " << regExpID << ");\n";
   }
   void generateTryEndInst(TryEndInst &inst) {
     // Restore the tryState to the state of the Try enclosing the catch.
@@ -2070,6 +2118,35 @@ class InstrGen {
         << (uint32_t)inst.getBuiltinIndex() << ");\n";
   }
   void generateCallBuiltinInst(CallBuiltinInst &inst) {
+    // These builtins only exist to be called from typed code, so call their
+    // implementations directly instead of going through the builtin table.
+    const char *directCall = nullptr;
+    switch (inst.getBuiltinIndex()) {
+      case BuiltinMethod::HermesBuiltin_objectKeys:
+        directCall = "_sh_object_keys";
+        break;
+      case BuiltinMethod::HermesBuiltin_objectValues:
+        directCall = "_sh_object_values";
+        break;
+      case BuiltinMethod::HermesBuiltin_objectEntries:
+        directCall = "_sh_object_entries";
+        break;
+      default:
+        break;
+    }
+    if (directCall) {
+      assert(
+          inst.getNumArguments() == 3 &&
+          "object props builtins take 'this' plus the object and prototype");
+      os_.indent(2);
+      generateRegister(inst);
+      os_ << " = " << directCall << "(shr, ";
+      generateValue(*inst.getArgument(1));
+      os_ << ", ";
+      generateValue(*inst.getArgument(2));
+      os_ << ");\n";
+      return;
+    }
     if (inst.getBuiltinIndex() == BuiltinMethod::Math_sqrt) {
       if (inst.getNumArguments() == 2 &&
           inst.getArgument(1)->getType().isNumberType()) {
@@ -2139,7 +2216,10 @@ class InstrGen {
     auto *protoStr =
         M->getLiteralString(M->getContext().getIdentifier("prototype"));
     genReadIC(protoStr);
-    os_ << ");\n";
+    os_ << ", &shUnit->object_literal_class_cache["
+        << moduleGen_.literalBuffers.serializedLiteralOffsetFor(&inst)
+               .shapeTableIdx
+        << "]);\n";
   }
   void generateLIRGetArgumentsPropByValLooseInst(
       LIRGetArgumentsPropByValLooseInst &inst) {
@@ -2181,15 +2261,24 @@ class InstrGen {
         moduleGen_.literalBuffers.serializedLiteralOffsetFor(&inst);
 
     os_ << " = ";
-    if (llvh::isa<EmptySentinel>(inst.getParentObject())) {
+    if (inst.getKeyValuePairCount() == 0) {
+      assert(
+          !llvh::isa<EmptySentinel>(inst.getParentObject()) &&
+          "must have a parent, otherwise we should use AllocObjectLiteral");
+      os_ << "_sh_ljs_new_object_with_parent(shr, shUnit, ";
+      generateRegisterPtr(*inst.getParentObject());
+      os_ << ", " << shapeIdx << ")";
+    } else if (llvh::isa<EmptySentinel>(inst.getParentObject())) {
       os_ << "_sh_ljs_new_object_with_buffer(shr, shUnit, ";
     } else {
       os_ << "_sh_ljs_new_object_with_buffer_and_parent(shr, shUnit, ";
       generateRegisterPtr(*inst.getParentObject());
       os_ << ", ";
     }
-    os_ << shapeIdx << ", ";
-    os_ << valIdx << ")";
+    if (inst.getKeyValuePairCount() > 0) {
+      os_ << shapeIdx << ", ";
+      os_ << valIdx << ")";
+    }
     os_ << ";\n";
   }
   void generateLIRAllocTypedObjectFromBufferInst(
@@ -2201,12 +2290,19 @@ class InstrGen {
         moduleGen_.literalBuffers.serializedLiteralOffsetFor(&inst);
 
     os_ << " = ";
-    os_ << "_sh_new_typed_object_with_buffer(shr, shUnit, ";
-    generateRegisterPtr(*inst.getParentObject());
-    os_ << ", ";
-    os_ << shapeIdx << ", ";
-    os_ << valIdx;
-    os_ << ");\n";
+    if (inst.getKeyValuePairCount() == 0) {
+      os_ << "_sh_ljs_new_object_with_parent(shr, shUnit, ";
+      generateRegisterPtr(*inst.getParentObject());
+      os_ << ", " << shapeIdx << ")";
+    } else {
+      os_ << "_sh_new_typed_object_with_buffer(shr, shUnit, ";
+      generateRegisterPtr(*inst.getParentObject());
+      os_ << ", ";
+      os_ << shapeIdx << ", ";
+      os_ << valIdx;
+      os_ << ")";
+    }
+    os_ << ";\n";
   }
   void generateLIRAllocTypedNonEnumObjectFromBufferInst(
       LIRAllocTypedNonEnumObjectFromBufferInst &inst) {
@@ -2217,12 +2313,19 @@ class InstrGen {
         moduleGen_.literalBuffers.serializedLiteralOffsetFor(&inst);
 
     os_ << " = ";
-    os_ << "_sh_new_typed_non_enum_object_with_buffer(shr, shUnit, ";
-    generateRegisterPtr(*inst.getParentObject());
-    os_ << ", ";
-    os_ << shapeIdx << ", ";
-    os_ << valIdx;
-    os_ << ");\n";
+    if (inst.getKeyValuePairCount() == 0) {
+      os_ << "_sh_ljs_new_object_with_parent(shr, shUnit, ";
+      generateRegisterPtr(*inst.getParentObject());
+      os_ << ", " << shapeIdx << ")";
+    } else {
+      os_ << "_sh_new_typed_non_enum_object_with_buffer(shr, shUnit, ";
+      generateRegisterPtr(*inst.getParentObject());
+      os_ << ", ";
+      os_ << shapeIdx << ", ";
+      os_ << valIdx;
+      os_ << ")";
+    }
+    os_ << ";\n";
   }
   void generateHBCProfilePointInst(HBCProfilePointInst &inst) {
     unimplemented(inst);
@@ -2272,35 +2375,41 @@ class InstrGen {
 
   /// \return the name of the SH function for checking whether a value is of
   /// a specific type.
-  static llvh::StringLiteral nameOfFunctionCheckingForType(Type type) {
+  static llvh::StringLiteral nameOfFunctionCheckingForType(
+      TypeContext &tc,
+      Type type) {
     assert(!type.isNoType() && "type must be non-zero");
-    switch (type.getFirstTypeKind()) {
-      case Type::Empty:
+    switch (tc.getFirstKind(type)) {
+      case TypeKind::Empty:
         return "_sh_ljs_is_empty";
-      case Type::Uninit:
-      case Type::Undefined:
+      case TypeKind::Uninit:
+      case TypeKind::Undefined:
         return "_sh_ljs_is_undefined";
-      case Type::Null:
+      case TypeKind::Null:
         return "_sh_ljs_is_null";
-      case Type::Boolean:
+      case TypeKind::Boolean:
         return "_sh_ljs_is_bool";
-      case Type::String:
+      case TypeKind::String:
         return "_sh_ljs_is_string";
-      case Type::Number:
+      case TypeKind::Number:
+      // The number subtypes are all represented as doubles at runtime.
+      case TypeKind::Int32:
+      case TypeKind::Uint32:
+      case TypeKind::UInt31:
         return "_sh_ljs_is_double";
-      case Type::BigInt:
+      case TypeKind::BigInt:
         return "_sh_ljs_is_bigint";
-      case Type::Symbol:
+      case TypeKind::Symbol:
         return "_sh_ljs_is_symbol";
-      case Type::Environment:
+      case TypeKind::Environment:
         hermes_fatal("cannot check for environment type");
-      case Type::PrivateName:
+      case TypeKind::PrivateName:
         hermes_fatal("cannot check for PrivateName type");
-      case Type::FunctionCode:
+      case TypeKind::FunctionCode:
         hermes_fatal("cannot check for functionCode type");
-      case Type::Object:
+      case TypeKind::Object:
         return "_sh_ljs_is_object";
-      case Type::LAST_TYPE:
+      default:
         break;
     }
     hermes_fatal("invalid type for checking");
@@ -2319,7 +2428,7 @@ class InstrGen {
     // Are there fewer "bad" types than "good" types? That determines which we
     // check.
     auto [checkTypes, negativeCheck] =
-        badTypes.countTypes() < resultType.countTypes()
+        typeCtx_.countKinds(badTypes) < typeCtx_.countKinds(resultType)
         ? std::make_pair(badTypes, true)
         : std::make_pair(resultType, false);
 
@@ -2327,10 +2436,10 @@ class InstrGen {
       os_ << "!(";
     {
       bool first = true;
-      for (Type t : checkTypes) {
+      for (Type t : typeCtx_.arms(checkTypes)) {
         if (!first)
           os_ << " || ";
-        os_ << nameOfFunctionCheckingForType(t) << '(';
+        os_ << nameOfFunctionCheckingForType(typeCtx_, t) << '(';
         generateRegister(srcReg);
         os_ << ')';
         first = false;
@@ -2361,7 +2470,7 @@ class InstrGen {
     sh::Register dstReg = ra_.getRegister(&inst);
 
     // Are the input and output type the same?
-    if (inputType.isSubsetOf(resultType)) {
+    if (typeCtx_.isSubsetOf(inputType, resultType)) {
       // If so, just move the value, but do nothing if the registers are the
       // same.
       if (dstReg != srcReg) {
@@ -2377,7 +2486,7 @@ class InstrGen {
     // TODO: generate a type-specific error.
     _typeCastHelper(
         resultType,
-        Type::subtractTy(inputType, resultType),
+        typeCtx_.subtractTy(inputType, resultType),
         dstReg,
         srcReg,
         "_sh_throw_type_error_ascii(shr, \"Checked cast failed\")");
@@ -2390,8 +2499,7 @@ class InstrGen {
     Type badTypes = inst.getInvalidTypes()->getData();
     assert(
         !badTypes.isNoType() &&
-        badTypes.isSubsetOf(
-            Type::unionTy(Type::createEmpty(), Type::createUninit())) &&
+        typeCtx_.isSubsetOf(badTypes, Type::createEmptyOrUninit()) &&
         "invalidTypes set can only contain Empty or Uninit");
 
     _typeCastHelper(
@@ -2807,6 +2915,23 @@ void generateFunction(
     OS << "  SHLegacyValue np" << i << " = _sh_ljs_undefined();\n";
   }
 
+  switch (F.getProhibitInvoke()) {
+    case Function::ProhibitInvoke::ProhibitNone:
+      break;
+    case Function::ProhibitInvoke::ProhibitConstruct:
+      OS << "  if (!_sh_ljs_is_undefined(frame["
+         << hbc::StackFrameLayout::NewTarget << "]))\n"
+         << "    _sh_throw_type_error_ascii(shr, \"Function is not a "
+            "constructor\");\n";
+      break;
+    case Function::ProhibitInvoke::ProhibitCall:
+      OS << "  if (_sh_ljs_is_undefined(frame["
+         << hbc::StackFrameLayout::NewTarget << "]))\n"
+         << "    _sh_throw_type_error_ascii(shr, \"Class constructor invoked "
+            "without new\");\n";
+      break;
+  }
+
   // Initialize SHJmpBuf and emit the setjmp for the function-level try.
   // Every caught exception will jump to this _sh_try and be handled in the
   // switch statement under L_catch.
@@ -3071,6 +3196,7 @@ static SHNativeFuncInfo s_function_info_table[];
 
   if (options.format == DumpBytecode || options.format == EmitBundle) {
     moduleGen.literalBuffers.generate(OS);
+    generateRegExpTable(OS, moduleGen.regExpTable);
     moduleGen.srcLocationTable.generate(
         OS, M->getContext().getSourceErrorManager());
     moduleGen.nativeFunctionTable.generate(OS);
@@ -3112,6 +3238,10 @@ static SHNativeFuncInfo s_function_info_table[];
        << ".obj_shape_table_count = "
        << moduleGen.literalBuffers.objShapeTable.size() << ", "
        << ".object_literal_class_cache = unit_data->object_literal_class_cache, "
+       << ".regexp_storage = s_regexp_storage, "
+       << ".regexp_table = s_regexp_table, "
+       << ".num_regexps = " << moduleGen.regExpTable.getEntryList().size()
+       << ", "
        << ".source_locations = s_source_locations, "
        << ".source_locations_size = " << moduleGen.srcLocationTable.size()
        << ", " << ".unit_main = _0_global, "
@@ -3140,6 +3270,8 @@ typedef struct SHConsoleContext SHConsoleContext;
 SHConsoleContext *init_console_bindings(
     SHRuntime *shr, int scriptArgc, const char *const *scriptArgv);
 
+void release_console_bindings(SHConsoleContext *consoleContext);
+
 void free_console_context(SHConsoleContext *consoleContext);
 
 bool run_event_loop(
@@ -3164,8 +3296,9 @@ SHERMES_EXPORT int main(int argc, char **argv) {
   bool success =
     _sh_initialize_units(shr, 1, CREATE_THIS_UNIT) &&
     run_event_loop(shr, consoleContext);
-  free_console_context(consoleContext);
+  release_console_bindings(consoleContext);
   _sh_done(shr);
+  free_console_context(consoleContext);
   return success ? 0 : 1;
 }
 )";

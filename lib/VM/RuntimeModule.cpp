@@ -11,7 +11,7 @@
 #include "hermes/VM/ArrayStorage.h"
 #include "hermes/VM/CodeBlock.h"
 #include "hermes/VM/Domain.h"
-#include "hermes/VM/HiddenClass.h"
+#include "hermes/VM/HiddenClass-inline.h"
 #include "hermes/VM/ModuleExportsCache.h"
 #include "hermes/VM/Predefined.h"
 #include "hermes/VM/Runtime.h"
@@ -73,6 +73,14 @@ RuntimeModule::~RuntimeModule() {
     runtime_.getHeap().getIDTracker().untrackNative(block.get());
   }
   runtime_.getHeap().getIDTracker().untrackNative(&functionMap_);
+
+  // Entries may outlive the module, held by JSRegExps, but only the module
+  // reports them.
+  for (const auto &entry : regExpCache_) {
+    if (entry)
+      runtime_.getHeap().getIDTracker().untrackNative(entry.get());
+  }
+  runtime_.getHeap().getIDTracker().untrackNative(&regExpCache_);
 }
 
 void RuntimeModule::prepareForDestruction() {
@@ -295,6 +303,23 @@ llvh::ArrayRef<uint8_t> RuntimeModule::getRegExpBytecodeFromRegExpID(
   return bcProvider_->getRegExpStorage().slice(entry.offset, entry.length);
 }
 
+llvh::IntrusiveRefCntPtr<RegExpBytecode> RuntimeModule::getRegExpBytecode(
+    uint32_t regExpID) {
+  if (LLVM_UNLIKELY(regExpID >= regExpCache_.size())) {
+    // Lazy compilation adds regexps to the table as functions compile.
+    size_t tableSize = bcProvider_->getRegExpTable().size();
+    assert(regExpID < tableSize && "Invalid regexp id");
+    regExpCache_.resize(tableSize);
+  }
+  llvh::IntrusiveRefCntPtr<RegExpBytecode> &entry = regExpCache_[regExpID];
+  if (LLVM_UNLIKELY(!entry)) {
+    entry = RegExpBytecode::create(
+        getRegExpBytecodeFromRegExpID(regExpID),
+        RegExpBytecode::Ownership::Cached);
+  }
+  return entry;
+}
+
 template <typename T>
 SymbolID RuntimeModule::mapStringMayAllocate(
     llvh::ArrayRef<T> str,
@@ -383,20 +408,28 @@ void RuntimeModule::markWeakRoots(
 
 HiddenClass *RuntimeModule::findCachedLiteralHiddenClass(
     Runtime &runtime,
+    JSObject *parent,
     uint32_t shapeTableIndex) const {
   assert(
       shapeTableIndex < objectLiteralHiddenClasses_.size() &&
       "Invalid shape table index");
-  return objectLiteralHiddenClasses_[shapeTableIndex].get(
+  auto *cached = objectLiteralHiddenClasses_[shapeTableIndex].get(
       runtime, runtime.getHeap());
+  if (cached && cached->getObjectParent(runtime) == parent) {
+    return cached;
+  }
+  return nullptr;
 }
 
 void RuntimeModule::setCachedLiteralHiddenClass(
     Runtime &runtime,
     unsigned shapeTableIndex,
     HiddenClass *clazz) {
+  if (shapeTableIndex == hbc::SHAPE_TABLE_CACHING_DISABLED)
+    return;
   assert(
-      !findCachedLiteralHiddenClass(runtime, shapeTableIndex) &&
+      !findCachedLiteralHiddenClass(
+          runtime, clazz->getObjectParent(runtime), shapeTableIndex) &&
       "Why are we caching an item already cached?");
   objectLiteralHiddenClasses_[shapeTableIndex].set(runtime, clazz);
 }
@@ -406,6 +439,15 @@ size_t RuntimeModule::additionalMemorySize() const {
       addCacheEntries_.capacity_in_bytes() +
       objectLiteralHiddenClasses_.size() * sizeof(WeakRoot<HiddenClass>) +
       templateMap_.getMemorySize();
+}
+
+size_t RuntimeModule::regExpCacheMemorySize() const {
+  size_t size = regExpCache_.capacity() * sizeof(regExpCache_[0]);
+  for (const auto &entry : regExpCache_) {
+    if (entry)
+      size += entry->mallocSize();
+  }
+  return size;
 }
 
 /// Set the module export for module \p modIndex to \p modExport.
@@ -468,6 +510,34 @@ void RuntimeModule::snapshotAddNodes(GC &gc, HeapSnapshot &snap) const {
       gc.getNativeID(&functionMap_),
       functionMap_.capacity() * sizeof(CodeBlock *),
       0);
+
+  // Create a native node for each cached regexp bytecode entry.
+  for (const auto &entry : regExpCache_) {
+    if (entry) {
+      snap.beginNode();
+      snap.endNode(
+          HeapSnapshot::NodeType::Native,
+          "RegExpBytecode",
+          gc.getNativeID(entry.get()),
+          entry->mallocSize(),
+          0);
+    }
+  }
+
+  // Create a node for regExpCache_, with an edge to each entry.
+  snap.beginNode();
+  for (int i = 0, e = regExpCache_.size(); i < e; i++) {
+    if (const RegExpBytecode *entry = regExpCache_[i].get()) {
+      snap.addIndexedEdge(
+          HeapSnapshot::EdgeType::Element, i, gc.getNativeID(entry));
+    }
+  }
+  snap.endNode(
+      HeapSnapshot::NodeType::Native,
+      "std::vector<RegExpBytecode *>",
+      gc.getNativeID(&regExpCache_),
+      regExpCache_.capacity() * sizeof(regExpCache_[0]),
+      0);
 }
 
 void RuntimeModule::snapshotAddEdges(GC &gc, HeapSnapshot &snap) const {
@@ -475,6 +545,10 @@ void RuntimeModule::snapshotAddEdges(GC &gc, HeapSnapshot &snap) const {
       HeapSnapshot::EdgeType::Internal,
       "functionMap",
       gc.getNativeID(&functionMap_));
+  snap.addNamedEdge(
+      HeapSnapshot::EdgeType::Internal,
+      "regExpCache",
+      gc.getNativeID(&regExpCache_));
 }
 #endif // HERMES_MEMORY_INSTRUMENTATION
 

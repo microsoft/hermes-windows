@@ -285,42 +285,35 @@ CallResult<PseudoHandle<StringPrimitive>> numberToStringPrimitive(
     Runtime &runtime,
     double m) {
   char buf8[hermes::NUMBER_TO_STRING_BUF_SIZE];
+  llvh::StringRef str;
 
   // Optimization: Fast-case for positive integers < 2^31
-  int32_t n;
-  if (sh_tryfast_f64_to_i32(m, n) && n > 0) {
-    // Write base 10 digits in reverse from end of buf8.
-    char *p = buf8 + sizeof(buf8);
-    do {
-      *--p = '0' + (n % 10);
-      n /= 10;
-    } while (n);
-    size_t len = buf8 + sizeof(buf8) - p;
-    // Temporarily stop the propagation of removing.
-    auto result = StringPrimitive::create(runtime, ASCIIRef(p, len));
-    if (LLVM_UNLIKELY(result == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    return createPseudoHandle(vmcast<StringPrimitive>(*result));
+  if (auto fast = hermes::tryFastPositiveIntToString(m, buf8, sizeof(buf8))) {
+    str = *fast;
+  } else {
+    // These cases are already handled correctly by numberToStringSlowPath().
+    // We check them here only so that we can return an interned string instead
+    // of allocating a new one, and only after the fast path so that the common
+    // integer case does not pay for the comparisons.
+    auto getPredefined = [&runtime](Predefined::Str predefinedID) {
+      return createPseudoHandle(runtime.getPredefinedString(predefinedID));
+    };
+
+    if (std::isnan(m))
+      return getPredefined(Predefined::NaN);
+    if (m == 0)
+      return getPredefined(Predefined::zero);
+    if (m == std::numeric_limits<double>::infinity())
+      return getPredefined(Predefined::Infinity);
+    if (m == -std::numeric_limits<double>::infinity())
+      return getPredefined(Predefined::NegativeInfinity);
+
+    // After special cases, run the slow path to convert.
+    str = hermes::numberToStringSlowPath(m, buf8, sizeof(buf8));
   }
 
-  auto getPredefined = [&runtime](Predefined::Str predefinedID) {
-    return createPseudoHandle(runtime.getPredefinedString(predefinedID));
-  };
-
-  if (std::isnan(m))
-    return getPredefined(Predefined::NaN);
-  if (m == 0)
-    return getPredefined(Predefined::zero);
-  if (m == std::numeric_limits<double>::infinity())
-    return getPredefined(Predefined::Infinity);
-  if (m == -std::numeric_limits<double>::infinity())
-    return getPredefined(Predefined::NegativeInfinity);
-
-  // After special cases, run the generic routine to convert.
-  size_t len = hermes::numberToString(m, buf8, sizeof(buf8));
-
-  auto result = StringPrimitive::create(runtime, ASCIIRef(buf8, len));
+  auto result =
+      StringPrimitive::create(runtime, ASCIIRef(str.data(), str.size()));
   if (LLVM_UNLIKELY(result == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -1284,6 +1277,14 @@ bool strictEqualityTest(HermesValue x, HermesValue y) {
 
 CallResult<HermesValue>
 addOp_RJS(Runtime &runtime, Handle<> xHandle, Handle<> yHandle) {
+  // Fast path: both operands are already strings, concat directly.
+  // Skips toPrimitive + toString (both no-ops for strings) and 4 handle allocs.
+  if (xHandle->isString() && yHandle->isString()) {
+    return StringPrimitive::concat(
+        runtime,
+        Handle<StringPrimitive>::vmcast(xHandle),
+        Handle<StringPrimitive>::vmcast(yHandle));
+  }
   auto resX = toPrimitive_RJS(runtime, xHandle, PreferredType::NONE);
   if (resX == ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -2002,7 +2003,7 @@ ordinaryHasInstance(Runtime &runtime, Handle<> constructor, Handle<> object) {
     if (parentRes->get() == ctorPrototype.get()) {
       return true;
     }
-    if (head->isProxyObject()) {
+    if (head->isProxyObject(runtime)) {
       ++proxyCount;
       if (proxyCount > kMaxProxyCount) {
         return runtime.raiseRangeError(
@@ -2106,7 +2107,8 @@ CallResult<Handle<StringPrimitive>> symbolDescriptiveString(
   descLen.add(8);
 
   // 5. Return the string-concatenation of "Symbol(", desc, and ")".
-  auto builder = StringBuilder::createStringBuilder(runtime, descLen);
+  auto builder =
+      StringBuilder::createStringBuilder(runtime, descLen, desc->isASCII());
   if (LLVM_UNLIKELY(builder == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
@@ -2128,7 +2130,7 @@ CallResult<bool> isArray(Runtime &runtime, JSObject *obj) {
     if (vmisa<FastArray>(obj)) {
       return true;
     }
-    if (LLVM_LIKELY(!obj->isProxyObject())) {
+    if (LLVM_LIKELY(!obj->isProxyObject(runtime))) {
       return false;
     }
     if (JSProxy::isRevoked(obj, runtime)) {
@@ -2530,7 +2532,7 @@ ExecutionStatus setTemplateObjectProps(
     return runtime.raiseTypeError(
         "Failed to set 'length' property on the raw object read-only.");
   }
-  JSObject::preventExtensions(rawObj.get());
+  JSObject::preventExtensionsNonProxy(rawObj, runtime);
 
   // Set raw object as a read-only non-enumerable property of the template
   // object.
@@ -2562,7 +2564,7 @@ ExecutionStatus setTemplateObjectProps(
     return runtime.raiseTypeError(
         "Failed to set 'length' property on the raw object read-only.");
   }
-  JSObject::preventExtensions(templateObj.get());
+  JSObject::preventExtensionsNonProxy(templateObj, runtime);
 
   return ExecutionStatus::RETURNED;
 }
@@ -3578,13 +3580,6 @@ extern "C" SHLegacyValue _sh_ljs_iterator_next_rjs(
       return valueRes->get();
     }
     if (LLVM_UNLIKELY(iteratorOrIdxHandle->isUndefined())) {
-      // In all current use cases of IteratorNext, we check and branch away
-      // from IteratorNext in the case that iterStorage was set to undefined
-      // (which indicates completion of iteration).
-      // If we introduce a use case which allows calling IteratorNext,
-      // then this assert can be removed. For now, this branch just returned
-      // undefined in NDEBUG mode.
-      assert(false && "IteratorNext called on completed iterator");
       return HermesValue::encodeUndefinedValue();
     }
 

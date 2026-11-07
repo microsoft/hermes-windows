@@ -147,18 +147,14 @@ void populateCCCfg(CCCfg &cfg) {
   init(cfg.ldlibs, "LDLIBS", "");
 
   llvh::SmallVector<llvh::StringRef, 2> vec{};
-#ifdef _WIN32
-  // Use ';' on Windows because ':' conflicts with drive letters (e.g. E:/).
-  constexpr char pathSep = ';';
-#else
-  constexpr char pathSep = ':';
-#endif
-  llvh::StringLiteral(SHERMES_CC_LIB_PATH).split(vec, pathSep, -1, false);
+  llvh::StringLiteral(SHERMES_CC_LIB_PATH)
+      .split(vec, llvh::sys::EnvPathSeparator, -1, false);
   for (auto sr : vec)
     cfg.hermesLibPath.push_back(sr.str());
 
   vec.clear();
-  llvh::StringLiteral(SHERMES_CC_INCLUDE_PATH).split(vec, pathSep, -1, false);
+  llvh::StringLiteral(SHERMES_CC_INCLUDE_PATH)
+      .split(vec, llvh::sys::EnvPathSeparator, -1, false);
   for (auto sr : vec)
     cfg.hermesIncludePath.push_back(sr.str());
 }

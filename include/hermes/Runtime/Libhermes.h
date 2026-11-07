@@ -34,6 +34,7 @@ const char libhermes[] =
 "var WeakSet;"
 ""
 "var $SHBuiltin;"
+"var Hermes;"
 ""
 "var Infinity;"
 "var NaN;"
@@ -51,6 +52,7 @@ const char libhermes[] =
 "function ArrayBuffer() {}"
 "function DataView() {}"
 "function TextEncoder() {}"
+"function Worker() {}"
 #define TYPED_ARRAY(name, type) \
   "function " #name "Array() {}"
 #include "hermes/VM/TypedArrays.def"

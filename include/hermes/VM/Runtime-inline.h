@@ -9,6 +9,8 @@
 #define HERMES_VM_RUNTIME_INLINE_H
 
 #include "hermes/FrontEndDefs/Builtins.h"
+#include "hermes/VM/Callable.h"
+#include "hermes/VM/HiddenClass-inline.h"
 #include "hermes/VM/Runtime.h"
 
 namespace hermes {
@@ -28,19 +30,43 @@ void Runtime::registerBuiltin(
   builtins_[(size_t)builtinIndex] = builtin;
 }
 
+void Runtime::overwriteBuiltinUnsafe(
+    BuiltinMethod::Enum builtinIndex,
+    Callable *builtin) {
+  assert(builtin && "Builtin must be non-null");
+  assert(
+      builtinIndex < BuiltinMethod::_count && "out of bound BuiltinMethod ID");
+  assert(builtins_[(size_t)builtinIndex] && "Builtin is not set");
+  // All builtins invoked by CallBuiltin are NativeFunction.
+  if (builtinIndex < BuiltinMethod::_firstJS) {
+    assert(vmisa<NativeFunction>(builtin) && "NativeFunction expected");
+  }
+  builtins_[(size_t)builtinIndex] = builtin;
+}
+
 inline void Runtime::enqueueJob(Callable *job) {
   jobQueue_.push_back(job);
 }
 
 inline Handle<HiddenClass> Runtime::getHiddenClassForPrototype(
     JSObject *proto,
-    unsigned reservedSlots) {
-  assert(
-      reservedSlots <= InternalProperty::NumAnonymousInternalProperties &&
-      "out of bounds");
-  PinnedHermesValue *clazz = &rootClazzes_[reservedSlots];
-  assert(!clazz->isUndefined() && "must initialize root classes before use");
-  return Handle<HiddenClass>::vmcast(clazz);
+    Handle<HiddenClass> root) {
+  assert(root && "root must be non-null");
+  clazzForPrototypeTmp = HermesValue::encodeObjectValue(
+      HiddenClass::updateObjectParent(root, *this, createPseudoHandle(proto)));
+  return Handle<HiddenClass>::vmcast(&clazzForPrototypeTmp);
+}
+
+inline Handle<HiddenClass> Runtime::getLazyHiddenClassForPrototype(
+    JSObject *proto) {
+  const PinnedValue<HiddenClass> *clazz = &lazyObjectClass_;
+  auto clazzWithNullObjParent = Handle<HiddenClass>::vmcast(clazz);
+  if (!proto)
+    return clazzWithNullObjParent;
+  clazzForPrototypeTmp = HermesValue::encodeObjectValue(
+      HiddenClass::updateObjectParent(
+          clazzWithNullObjParent, *this, createPseudoHandle(proto)));
+  return Handle<HiddenClass>::vmcast(&clazzForPrototypeTmp);
 }
 
 } // namespace vm

@@ -18,10 +18,13 @@ target_link_libraries(NodeApiJsiTest
   hermesNodeApiJsiRuntime
 )
 
-# copy hermes.dll next to the NodeApiJsiTest.exe
-add_dependencies(NodeApiJsiTest libshared)
-add_custom_command(TARGET NodeApiJsiTest POST_BUILD
-  VERBATIM
+# Refresh even when only hermes.dll changes and the test does not relink.
+add_custom_target(NodeApiJsiTest_copy_dll ALL
+  COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:NodeApiJsiTest>
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-  $<TARGET_FILE:libshared>
-  $<TARGET_FILE_DIR:NodeApiJsiTest>)
+    $<TARGET_FILE:libshared>
+    $<TARGET_FILE_DIR:NodeApiJsiTest>
+  DEPENDS libshared
+  VERBATIM
+)
+add_dependencies(NodeApiJsiTest NodeApiJsiTest_copy_dll)
