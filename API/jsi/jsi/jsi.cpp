@@ -29,7 +29,7 @@ struct RuntimeDataGlobal {
   /// Maps a runtime pointer to a map of its custom data. At destruction of the
   /// runtime, its entry will be removed from the global map.
   std::unordered_map<
-      Runtime*,
+      detail::RuntimeInterface*,
       std::unordered_map<
           UUID,
           std::pair<const void*, void (*)(const void* data)>,
@@ -46,7 +46,7 @@ RuntimeDataGlobal& getRuntimeDataGlobal() {
 /// entry from the global map of custom data.
 class RemoveRuntimeDataHostObject : public jsi::HostObject {
  public:
-  explicit RemoveRuntimeDataHostObject(Runtime* runtime) : runtime_(runtime) {}
+  explicit RemoveRuntimeDataHostObject(detail::RuntimeInterface* runtime) : runtime_(runtime) {}
 
   RemoveRuntimeDataHostObject(const RemoveRuntimeDataHostObject&) = default;
   RemoveRuntimeDataHostObject(RemoveRuntimeDataHostObject&&) = default;
@@ -75,12 +75,12 @@ class RemoveRuntimeDataHostObject : public jsi::HostObject {
   }
 
  private:
-  Runtime* runtime_;
+  detail::RuntimeInterface* runtime_;
 };
 #endif
 
 // This is used for generating short exception strings.
-std::string kindToString(const Value& v, Runtime* rt = nullptr) {
+std::string kindToString(const Value& v, detail::RuntimeInterface* rt = nullptr) {
   if (v.isUndefined()) {
     return "undefined";
   } else if (v.isNull()) {
@@ -108,7 +108,10 @@ std::string kindToString(const Value& v, Runtime* rt = nullptr) {
 // failure is in building a JSError, this will lead to infinite
 // recursion.  This function is used in place of getPropertyAsFunction
 // when building JSError, to avoid that infinite recursion.
-Value callGlobalFunction(Runtime& runtime, const char* name, const Value& arg) {
+Value callGlobalFunction(
+    detail::RuntimeInterface& runtime,
+    const char* name,
+    const Value& arg) {
   Value v = runtime.global().getProperty(runtime, name);
   if (!v.isObject()) {
     throw JSINativeException(
@@ -297,7 +300,7 @@ HostObject::~HostObject() {}
 NativeState::~NativeState() {}
 #endif
 
-#ifdef JSI_UNSTABLE
+#if defined(JSI_UNSTABLE) && JSI_VERSION >= 20
 Serialized::~Serialized() {}
 #endif
 
@@ -387,7 +390,7 @@ Value Runtime::createValueFromJsonUtf8(const uint8_t* json, size_t length) {
 }
 #else
 Value Value::createFromJsonUtf8(
-    Runtime& runtime,
+    detail::RuntimeInterface& runtime,
     const uint8_t* json,
     size_t length) {
   Function parseJson = runtime.global()
@@ -509,6 +512,18 @@ void Runtime::deleteProperty(const Object& object, const Value& name) {
 }
 #endif
 
+#if JSI_VERSION >= 22
+size_t Runtime::push(const Array& arr, const Value* elements, size_t count) {
+  size_t newSize = size(arr);
+  for (size_t i = 0; i < count; i++) {
+    arr.setProperty(*this, Value((int)newSize), elements[i]);
+    ++newSize;
+  }
+  arr.setProperty(*this, "length", Value((int)newSize));
+  return newSize;
+}
+
+#endif
 #if JSI_VERSION >= 20
 void Runtime::setRuntimeDataImpl(
     const UUID& uuid,
@@ -596,6 +611,122 @@ void Runtime::setPropertyValue(
 }
 #endif
 
+#if JSI_VERSION >= 22
+std::shared_ptr<MutableBuffer> Runtime::tryGetMutableBuffer(
+    const jsi::ArrayBuffer&) {
+  return nullptr;
+}
+
+Uint8Array Runtime::createUint8Array(size_t length) {
+  auto uint8ArrayCtor = global().getPropertyAsFunction(*this, "Uint8Array");
+  auto result =
+      uint8ArrayCtor.callAsConstructor(*this, static_cast<int>(length));
+  return Uint8Array(cloneObject(getPointerValue(result.getObject(*this))));
+}
+
+Uint8Array Runtime::createUint8Array(
+    const ArrayBuffer& buffer,
+    size_t offset,
+    size_t length) {
+  auto uint8ArrayCtor = global().getPropertyAsFunction(*this, "Uint8Array");
+  auto result = uint8ArrayCtor.callAsConstructor(
+      *this, buffer, static_cast<int>(offset), static_cast<int>(length));
+  return Uint8Array(cloneObject(getPointerValue(result.getObject(*this))));
+}
+
+Value Runtime::createError(const String& msg) {
+  return callGlobalFunction(*this, "Error", Value(*this, msg));
+}
+
+Value Runtime::createEvalError(const String& msg) {
+  return callGlobalFunction(*this, "EvalError", Value(*this, msg));
+}
+
+Value Runtime::createRangeError(const String& msg) {
+  return callGlobalFunction(*this, "RangeError", Value(*this, msg));
+}
+
+Value Runtime::createReferenceError(const String& msg) {
+  return callGlobalFunction(*this, "ReferenceError", Value(*this, msg));
+}
+
+Value Runtime::createSyntaxError(const String& msg) {
+  return callGlobalFunction(*this, "SyntaxError", Value(*this, msg));
+}
+
+Value Runtime::createTypeError(const String& msg) {
+  return callGlobalFunction(*this, "TypeError", Value(*this, msg));
+}
+
+Value Runtime::createURIError(const String& msg) {
+  return callGlobalFunction(*this, "URIError", Value(*this, msg));
+}
+
+size_t Runtime::length(const String& str) {
+  return utf16(str).size();
+}
+
+bool Runtime::detached(const ArrayBuffer& buffer) {
+  Value prop = buffer.getProperty(*this, "detached");
+  if (!prop.isBool()) {
+    throw JSINativeException(
+        "ArrayBuffer.detached is not supported by this runtime");
+  }
+  return prop.getBool();
+}
+
+ArrayBuffer Runtime::buffer(const TypedArray& typedArray) {
+  Value buffer = typedArray.getProperty(*this, "buffer");
+  if (!buffer.isObject()) {
+    throw JSINativeException("TypedArray.buffer is not an object");
+  }
+  Object bufferObj = buffer.getObject(*this);
+  if (!bufferObj.isArrayBuffer(*this)) {
+    throw JSINativeException("TypedArray.buffer is not an ArrayBuffer");
+  }
+  return bufferObj.getArrayBuffer(*this);
+}
+
+size_t Runtime::byteOffset(const TypedArray& typedArray) {
+  Value byteOffset = typedArray.getProperty(*this, "byteOffset");
+  if (!byteOffset.isNumber()) {
+    throw JSINativeException("TypedArray.byteOffset is not a number");
+  }
+  return static_cast<size_t>(byteOffset.getNumber());
+}
+
+size_t Runtime::byteLength(const TypedArray& typedArray) {
+  Value byteLength = typedArray.getProperty(*this, "byteLength");
+  if (!byteLength.isNumber()) {
+    throw JSINativeException("TypedArray.byteLength is not a number");
+  }
+  return static_cast<size_t>(byteLength.getNumber());
+}
+
+size_t Runtime::length(const TypedArray& typedArray) {
+  Value length = typedArray.getProperty(*this, "length");
+  if (!length.isNumber()) {
+    throw JSINativeException("TypedArray.length is not a number");
+  }
+  return static_cast<size_t>(length.getNumber());
+}
+
+bool Runtime::isTypedArray(const Object& obj) const {
+  Runtime& self = const_cast<Runtime&>(*this);
+  // Uint8Array.__proto__ is the %TypedArray% intrinsic constructor.
+  auto uint8ArrayCtor = self.global().getPropertyAsFunction(self, "Uint8Array");
+  auto typedArrayCtor =
+      uint8ArrayCtor.getProperty(self, "__proto__").getObject(self);
+  return self.instanceOf(obj, typedArrayCtor.getFunction(self));
+}
+
+bool Runtime::isUint8Array(const Object& obj) const {
+  Runtime& self = const_cast<Runtime&>(*this);
+  auto uint8ArrayCtor = self.global().getPropertyAsFunction(self, "Uint8Array");
+  return self.instanceOf(obj, uint8ArrayCtor);
+}
+
+#endif
 Pointer& Pointer::operator=(Pointer&& other) JSI_NOEXCEPT_15 {
   if (ptr_) {
     ptr_->invalidate();
@@ -605,7 +736,7 @@ Pointer& Pointer::operator=(Pointer&& other) JSI_NOEXCEPT_15 {
   return *this;
 }
 
-Object Object::getPropertyAsObject(Runtime& runtime, const char* name) const {
+Object Object::getPropertyAsObject(detail::RuntimeInterface& runtime, const char* name) const {
   Value v = getProperty(runtime, name);
 
   if (!v.isObject()) {
@@ -618,7 +749,7 @@ Object Object::getPropertyAsObject(Runtime& runtime, const char* name) const {
   return v.getObject(runtime);
 }
 
-Function Object::getPropertyAsFunction(Runtime& runtime, const char* name)
+Function Object::getPropertyAsFunction(detail::RuntimeInterface& runtime, const char* name)
     const {
   Object obj = getPropertyAsObject(runtime, name);
   if (!obj.isFunction(runtime)) {
@@ -631,7 +762,7 @@ Function Object::getPropertyAsFunction(Runtime& runtime, const char* name)
   return std::move(obj).getFunction(runtime);
 }
 
-Array Object::asArray(Runtime& runtime) const& {
+Array Object::asArray(detail::RuntimeInterface& runtime) const& {
   if (!isArray(runtime)) {
     throw JSError(
         runtime,
@@ -641,7 +772,7 @@ Array Object::asArray(Runtime& runtime) const& {
   return getArray(runtime);
 }
 
-Array Object::asArray(Runtime& runtime) && {
+Array Object::asArray(detail::RuntimeInterface& runtime) && {
   if (!isArray(runtime)) {
     throw JSError(
         runtime,
@@ -651,7 +782,7 @@ Array Object::asArray(Runtime& runtime) && {
   return std::move(*this).getArray(runtime);
 }
 
-Function Object::asFunction(Runtime& runtime) const& {
+Function Object::asFunction(detail::RuntimeInterface& runtime) const& {
   if (!isFunction(runtime)) {
     throw JSError(
         runtime,
@@ -661,7 +792,7 @@ Function Object::asFunction(Runtime& runtime) const& {
   return getFunction(runtime);
 }
 
-Function Object::asFunction(Runtime& runtime) && {
+Function Object::asFunction(detail::RuntimeInterface& runtime) && {
   if (!isFunction(runtime)) {
     throw JSError(
         runtime,
@@ -671,6 +802,28 @@ Function Object::asFunction(Runtime& runtime) && {
   return std::move(*this).getFunction(runtime);
 }
 
+#if JSI_VERSION >= 22
+TypedArray Object::asTypedArray(detail::RuntimeInterface& runtime) const& {
+  if (!isTypedArray(runtime)) {
+    throw JSError(
+        runtime,
+        "Object is " + kindToString(Value(runtime, *this), &runtime) +
+            ", expected a TypedArray");
+  }
+  return getTypedArray(runtime);
+}
+
+Uint8Array Object::asUint8Array(detail::RuntimeInterface& runtime) const& {
+  if (!isUint8Array(runtime)) {
+    throw JSError(
+        runtime,
+        "Object is " + kindToString(Value(runtime, *this), &runtime) +
+            ", expected a Uint8Array");
+  }
+  return getUint8Array(runtime);
+}
+
+#endif
 Value::Value(Value&& other) JSI_NOEXCEPT_15 : Value(other.kind_) {
   if (kind_ == BooleanKind) {
     data_.boolean = other.data_.boolean;
@@ -683,7 +836,7 @@ Value::Value(Value&& other) JSI_NOEXCEPT_15 : Value(other.kind_) {
   other.kind_ = UndefinedKind;
 }
 
-Value::Value(Runtime& runtime, const Value& other) : Value(other.kind_) {
+Value::Value(detail::RuntimeInterface& runtime, const Value& other) : Value(other.kind_) {
   // data_ is uninitialized, so use placement new to create non-POD
   // types in it.  Any other kind of initialization will call a dtor
   // first, which is incorrect.
@@ -710,7 +863,7 @@ Value::~Value() {
   }
 }
 
-bool Value::strictEquals(Runtime& runtime, const Value& a, const Value& b) {
+bool Value::strictEquals(detail::RuntimeInterface& runtime, const Value& a, const Value& b) {
   if (a.kind_ != b.kind_) {
     return false;
   }
@@ -762,7 +915,7 @@ double Value::asNumber() const {
   return getNumber();
 }
 
-Object Value::asObject(Runtime& rt) const& {
+Object Value::asObject(detail::RuntimeInterface& rt) const& {
   if (!isObject()) {
     throw JSError(
         rt, "Value is " + kindToString(*this, &rt) + ", expected an Object");
@@ -771,7 +924,7 @@ Object Value::asObject(Runtime& rt) const& {
   return getObject(rt);
 }
 
-Object Value::asObject(Runtime& rt) && {
+Object Value::asObject(detail::RuntimeInterface& rt) && {
   if (!isObject()) {
     throw JSError(
         rt, "Value is " + kindToString(*this, &rt) + ", expected an Object");
@@ -781,7 +934,7 @@ Object Value::asObject(Runtime& rt) && {
   return static_cast<Object>(ptr);
 }
 
-Symbol Value::asSymbol(Runtime& rt) const& {
+Symbol Value::asSymbol(detail::RuntimeInterface& rt) const& {
   if (!isSymbol()) {
     throw JSError(
         rt, "Value is " + kindToString(*this, &rt) + ", expected a Symbol");
@@ -790,7 +943,7 @@ Symbol Value::asSymbol(Runtime& rt) const& {
   return getSymbol(rt);
 }
 
-Symbol Value::asSymbol(Runtime& rt) && {
+Symbol Value::asSymbol(detail::RuntimeInterface& rt) && {
   if (!isSymbol()) {
     throw JSError(
         rt, "Value is " + kindToString(*this, &rt) + ", expected a Symbol");
@@ -800,7 +953,7 @@ Symbol Value::asSymbol(Runtime& rt) && {
 }
 
 #if JSI_VERSION >= 6
-BigInt Value::asBigInt(Runtime& rt) const& {
+BigInt Value::asBigInt(detail::RuntimeInterface& rt) const& {
   if (!isBigInt()) {
     throw JSError(
         rt, "Value is " + kindToString(*this, &rt) + ", expected a BigInt");
@@ -809,7 +962,7 @@ BigInt Value::asBigInt(Runtime& rt) const& {
   return getBigInt(rt);
 }
 
-BigInt Value::asBigInt(Runtime& rt) && {
+BigInt Value::asBigInt(detail::RuntimeInterface& rt) && {
   if (!isBigInt()) {
     throw JSError(
         rt, "Value is " + kindToString(*this, &rt) + ", expected a BigInt");
@@ -819,7 +972,7 @@ BigInt Value::asBigInt(Runtime& rt) && {
 }
 #endif
 
-String Value::asString(Runtime& rt) const& {
+String Value::asString(detail::RuntimeInterface& rt) const& {
   if (!isString()) {
     throw JSError(
         rt, "Value is " + kindToString(*this, &rt) + ", expected a String");
@@ -828,7 +981,7 @@ String Value::asString(Runtime& rt) const& {
   return getString(rt);
 }
 
-String Value::asString(Runtime& rt) && {
+String Value::asString(detail::RuntimeInterface& rt) && {
   if (!isString()) {
     throw JSError(
         rt, "Value is " + kindToString(*this, &rt) + ", expected a String");
@@ -837,20 +990,20 @@ String Value::asString(Runtime& rt) && {
   return std::move(*this).getString(rt);
 }
 
-String Value::toString(Runtime& runtime) const {
+String Value::toString(detail::RuntimeInterface& runtime) const {
   Function toString = runtime.global().getPropertyAsFunction(runtime, "String");
-  return toString.call(runtime, *this).getString(runtime);
+  return toString.call(runtime, *this).asString(runtime);
 }
 
 #if JSI_VERSION >= 8
-uint64_t BigInt::asUint64(Runtime& runtime) const {
+uint64_t BigInt::asUint64(detail::RuntimeInterface& runtime) const {
   if (!isUint64(runtime)) {
     throw JSError(runtime, "Lossy truncation in BigInt64::asUint64");
   }
   return getUint64(runtime);
 }
 
-int64_t BigInt::asInt64(Runtime& runtime) const {
+int64_t BigInt::asInt64(detail::RuntimeInterface& runtime) const {
   if (!isInt64(runtime)) {
     throw JSError(runtime, "Lossy truncation in BigInt64::asInt64");
   }
@@ -859,7 +1012,7 @@ int64_t BigInt::asInt64(Runtime& runtime) const {
 #endif
 
 Array Array::createWithElements(
-    Runtime& rt,
+    detail::RuntimeInterface& rt,
     std::initializer_list<Value> elements) {
   Array result(rt, elements.size());
   size_t index = 0;
@@ -879,22 +1032,26 @@ Runtime::ScopeState* Runtime::pushScope() {
 
 void Runtime::popScope(ScopeState*) {}
 
-JSError::JSError(Runtime& rt, Value&& value) {
+JSError::JSError(detail::RuntimeInterface& rt, Value&& value) {
   setValue(rt, std::move(value));
 }
 
-JSError::JSError(Runtime& rt, std::string msg) : message_(std::move(msg)) {
+JSError::JSError(detail::RuntimeInterface& rt, std::string msg) : message_(std::move(msg)) {
   try {
+#if JSI_VERSION >= 22
+    setValue(rt, rt.createError(String::createFromUtf8(rt, message_)));
+#else
     setValue(
         rt,
         callGlobalFunction(rt, "Error", String::createFromUtf8(rt, message_)));
+#endif
   } catch (const JSIException& ex) {
     message_ = std::string(ex.what()) + " (while raising " + message_ + ")";
     setValue(rt, String::createFromUtf8(rt, message_));
   }
 }
 
-JSError::JSError(Runtime& rt, std::string msg, std::string stack)
+JSError::JSError(detail::RuntimeInterface& rt, std::string msg, std::string stack)
     : message_(std::move(msg)), stack_(std::move(stack)) {
   try {
     Object e(rt);
@@ -906,7 +1063,7 @@ JSError::JSError(Runtime& rt, std::string msg, std::string stack)
   }
 }
 
-JSError::JSError(std::string what, Runtime& rt, Value&& value)
+JSError::JSError(std::string what, detail::RuntimeInterface& rt, Value&& value)
     : JSIException(std::move(what)) {
   setValue(rt, std::move(value));
 }
@@ -917,7 +1074,44 @@ JSError::JSError(Value&& value, std::string message, std::string stack)
       message_(std::move(message)),
       stack_(std::move(stack)) {}
 
-void JSError::setValue(Runtime& rt, Value&& value) {
+#if JSI_VERSION >= 22
+JSError JSError::createEvalError(detail::RuntimeInterface& rt, const std::string& message) {
+  return JSError(
+      message, rt, rt.createEvalError(String::createFromUtf8(rt, message)));
+}
+
+JSError JSError::createRangeError(detail::RuntimeInterface& rt, const std::string& message) {
+  return JSError(
+      message, rt, rt.createRangeError(String::createFromUtf8(rt, message)));
+}
+
+JSError JSError::createReferenceError(
+    detail::RuntimeInterface& rt,
+    const std::string& message) {
+  return JSError(
+      message,
+      rt,
+      rt.createReferenceError(String::createFromUtf8(rt, message)));
+}
+
+JSError JSError::createSyntaxError(detail::RuntimeInterface& rt, const std::string& message) {
+  return JSError(
+      message, rt, rt.createSyntaxError(String::createFromUtf8(rt, message)));
+}
+
+JSError JSError::createTypeError(detail::RuntimeInterface& rt, const std::string& message) {
+  return JSError(
+      message, rt, rt.createTypeError(String::createFromUtf8(rt, message)));
+}
+
+JSError JSError::createURIError(detail::RuntimeInterface& rt, const std::string& message) {
+  return JSError(
+      message, rt, rt.createURIError(String::createFromUtf8(rt, message)));
+}
+#endif
+
+
+void JSError::setValue(detail::RuntimeInterface& rt, Value&& value) {
   value_ = std::make_shared<Value>(std::move(value));
 
   if ((message_.empty() || stack_.empty()) && value_->isObject()) {

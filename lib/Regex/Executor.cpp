@@ -14,6 +14,9 @@
 #include "llvh/Support/TrailingObjects.h"
 #include "llvh/Support/raw_ostream.h"
 
+#include <cstring>
+#include <type_traits>
+
 // This file contains the machinery for executing a regexp compiled to bytecode.
 
 namespace hermes {
@@ -79,6 +82,7 @@ enum class Width1Opcode : uint8_t {
   MatchAny = (uint8_t)Opcode::MatchAny,
   MatchAnyButNewline = (uint8_t)Opcode::MatchAnyButNewline,
   Bracket = (uint8_t)Opcode::Bracket,
+  BracketICase = (uint8_t)Opcode::BracketICase,
 };
 
 /// LoopData tracks information about a loop during a match attempt. Each State
@@ -575,15 +579,14 @@ bool isLineTerminator(CharT c) {
 }
 
 template <class Traits>
-bool matchesLeftAnchor(Context<Traits> &ctx, State<Traits> &s) {
+bool matchesLeftAnchor(Context<Traits> &ctx, State<Traits> &s, bool multiline) {
   bool matchesAnchor = false;
   const Cursor<Traits> &c = s.cursor_;
   if (c.atLeft()) {
     // Beginning of text.
     matchesAnchor = true;
   } else if (
-      (ctx.syntaxFlags_.multiline) && !c.atLeft() &&
-      isLineTerminator(c.currentPointer()[-1])) {
+      multiline && !c.atLeft() && isLineTerminator(c.currentPointer()[-1])) {
     // Multiline and after line terminator.
     matchesAnchor = true;
   }
@@ -591,17 +594,41 @@ bool matchesLeftAnchor(Context<Traits> &ctx, State<Traits> &s) {
 }
 
 template <class Traits>
-bool matchesRightAnchor(Context<Traits> &ctx, State<Traits> &s) {
+bool matchesRightAnchor(
+    Context<Traits> &ctx,
+    State<Traits> &s,
+    bool multiline) {
   bool matchesAnchor = false;
   const Cursor<Traits> &c = s.cursor_;
   if (c.atRight() && !(ctx.flags_ & constants::matchNotEndOfLine)) {
     matchesAnchor = true;
   } else if (
-      (ctx.syntaxFlags_.multiline) && (!c.atRight()) &&
-      isLineTerminator(c.currentPointer()[0])) {
+      multiline && (!c.atRight()) && isLineTerminator(c.currentPointer()[0])) {
     matchesAnchor = true;
   }
   return matchesAnchor;
+}
+
+/// \return true if the cursor is at a word boundary, using the given
+/// \p isWordChar predicate to classify characters. The result is xored with
+/// \p invert.
+template <class Traits, typename IsWordCharFn>
+bool matchesWordBoundary(
+    const Cursor<Traits> &c,
+    bool invert,
+    IsWordCharFn isWordChar) {
+  const auto *charPointer = c.currentPointer();
+
+  bool prevIsWordchar = false;
+  if (!c.atLeft())
+    prevIsWordchar = isWordChar(charPointer[-1]);
+
+  bool currentIsWordchar = false;
+  if (!c.atRight())
+    currentIsWordchar = isWordChar(charPointer[0]);
+
+  bool isWordBoundary = (prevIsWordchar != currentIsWordchar);
+  return isWordBoundary != invert;
 }
 
 /// \return true if all chars, stored in contiguous memory after \p insn,
@@ -639,6 +666,59 @@ bool Context<Traits>::matchesNCharICase8(
   return true;
 }
 
+/// Match a backreference against the input. Compares the captured text
+/// (from \p cr) against the current cursor position character by character.
+/// If \p icase is true, characters are compared after canonicalization.
+/// \return true if the backreference matches, advancing \p c past the matched
+/// text. Returns false (without modifying \p c) if the match fails.
+template <class Traits>
+bool matchBackRef(
+    const Context<Traits> &ctx,
+    CapturedRange cr,
+    Cursor<Traits> &c,
+    bool icase) {
+  // TODO: this can be optimized by hoisting the branches out of the loop.
+  bool unicode = ctx.syntaxFlags_.unicode;
+  auto capturedStart = ctx.first_ + cr.start;
+  auto capturedEnd = ctx.first_ + cr.end;
+  Cursor<Traits> cursor2(
+      capturedStart,
+      c.forwards() ? capturedStart : capturedEnd,
+      capturedEnd,
+      c.forwards());
+  Cursor<Traits> cursor1 = c;
+  bool matched = true;
+  while (matched && !cursor2.atEnd()) {
+    if (cursor1.atEnd()) {
+      matched = false;
+    } else if (!icase) {
+      // Direct comparison. Here we don't need to decode surrogate pairs.
+      matched = (cursor1.consume() == cursor2.consume());
+    } else if (!unicode) {
+      // Case-insensitive non-Unicode comparison, no decoding of surrogate
+      // pairs.
+      auto c1 = cursor1.consume();
+      auto c2 = cursor2.consume();
+      matched =
+          (c1 == c2 ||
+           ctx.traits_.canonicalize(c1, unicode) ==
+               ctx.traits_.canonicalize(c2, unicode));
+    } else {
+      // Unicode: we do need to decode surrogate pairs.
+      auto cp1 = cursor1.consumeUTF16();
+      auto cp2 = cursor2.consumeUTF16();
+      matched =
+          (cp1 == cp2 ||
+           ctx.traits_.canonicalize(cp1, unicode) ==
+               ctx.traits_.canonicalize(cp2, unicode));
+    }
+  }
+  if (matched) {
+    c.setCurrentPointer(cursor1.currentPointer());
+  }
+  return matched;
+}
+
 /// \return true if the character \p ch matches a bracket instruction \p insn,
 /// containing the bracket ranges \p ranges. Note the count of ranges is given
 /// in \p insn.
@@ -647,36 +727,17 @@ bool bracketMatchesChar(
     const Context<Traits> &ctx,
     const BracketInsn *insn,
     const BracketRange32 *ranges,
-    typename Traits::CodePoint ch) {
-  const auto &traits = ctx.traits_;
-  // Note that if the bracket is negated /[^abc]/, we want to return true if we
-  // do not match, false if we do. Implement this by xor with the negate flag.
-
-  // Check character classes.
-  // When both ignoreCase and unicode are set (/iu), canonicalize the character
-  // before testing, because per ES spec 22.2.2.9.2 (WordCharacters), \w with
-  // /iu must match any character whose canonical form is a word character
-  // (e.g. U+212A KELVIN SIGN canonicalizes to 'k').
-  if (insn->positiveCharClasses || insn->negativeCharClasses) {
-    auto testCh = ctx.syntaxFlags_.ignoreCase && ctx.syntaxFlags_.unicode
-        ? Traits::canonicalize(ch, true)
-        : ch;
-    for (auto charClass :
-         {CharacterClass::Digits,
-          CharacterClass::Spaces,
-          CharacterClass::Words}) {
-      if ((insn->positiveCharClasses & charClass) &&
-          traits.characterHasType(testCh, charClass))
-        return true ^ insn->negate;
-      if ((insn->negativeCharClasses & charClass) &&
-          !traits.characterHasType(testCh, charClass))
-        return true ^ insn->negate;
-    }
-  }
-
-  bool contained =
-      traits.rangesContain(llvh::makeArrayRef(ranges, insn->rangeCount), ch);
-  return contained ^ insn->negate;
+    typename Traits::CodePoint ch,
+    bool icase) {
+  return bracketMatchesCodePoint(
+      ctx.traits_,
+      insn->positiveCharClasses,
+      insn->negativeCharClasses,
+      insn->negate,
+      llvh::makeArrayRef(ranges, insn->rangeCount),
+      ch,
+      icase,
+      ctx.syntaxFlags_.unicode);
 }
 
 template <class Traits>
@@ -840,7 +901,17 @@ bool Context<Traits>::matchWidth1(const Insn *base, CodeUnit c) const {
       const BracketInsn *insn = llvh::cast<BracketInsn>(base);
       const BracketRange32 *ranges =
           reinterpret_cast<const BracketRange32 *>(insn + 1);
-      return bracketMatchesChar<Traits>(*this, insn, ranges, c);
+      return bracketMatchesChar<Traits>(*this, insn, ranges, c, false);
+    }
+
+    case Width1Opcode::BracketICase: {
+      assert(
+          !(syntaxFlags_.unicode) &&
+          "Unicode should not be set for Width 1 brackets");
+      const BracketICaseInsn *insn = llvh::cast<BracketICaseInsn>(base);
+      const BracketRange32 *ranges =
+          reinterpret_cast<const BracketRange32 *>(insn + 1);
+      return bracketMatchesChar<Traits>(*this, insn, ranges, c, true);
     }
   }
   llvm_unreachable("Invalid width 1 opcode");
@@ -902,6 +973,9 @@ ExecutorResult<bool> Context<Traits>::matchWidth1Loop(
       break;
     case W1::Bracket:
       matched = matchWidth1LoopBody<W1::Bracket>(body, c, maxMatch);
+      break;
+    case W1::BracketICase:
+      matched = matchWidth1LoopBody<W1::BracketICase>(body, c, maxMatch);
       break;
   }
 
@@ -970,6 +1044,50 @@ inline size_t Context<Traits>::advanceStringIndex(
   return index + 2;
 }
 
+/// The number of consecutive attempted start positions that pass the start
+/// filter after which a search stops consulting it. Dropping the filter
+/// only adds positions to try, so the search still finds the same match.
+static constexpr unsigned kMaxStartFilterPasses = 16;
+
+/// \return whether the code unit \p cu can begin a match according to the
+/// start filter of \p header. A unit >= 0x80 passes iff StartFilterNonASCII
+/// is set. The char path is not always 7-bit: the VM passes only ASCII
+/// strings, but other callers of searchWithBytecode(const char *) pass
+/// UTF-8 bytes, which are then units >= 0x80 like any other.
+template <typename CU>
+static inline bool startUnitPasses(const RegexBytecodeHeader &header, CU cu) {
+  const uint32_t u = static_cast<typename std::make_unsigned<CU>::type>(cu);
+  return u >= 0x80 ? (header.startFlags & StartFilterNonASCII) != 0
+                   : startSetHasASCII(header, u);
+}
+
+/// \return the first index i in [\p from, \p length) such that the code
+/// unit \p start[i] can begin a match according to the start filter of
+/// \p header (see startUnitPasses()), or \p length if there is none.
+template <typename CU>
+static inline size_t findStartCandidate(
+    const RegexBytecodeHeader &header,
+    const CU *start,
+    size_t from,
+    size_t length) {
+  if (from >= length)
+    return length;
+  if constexpr (sizeof(CU) == 1) {
+    // With one ASCII member and no unit >= 0x80, a byte search finds it.
+    if ((header.startFlags & (StartFilterSingleChar | StartFilterNonASCII)) ==
+        StartFilterSingleChar) {
+      const void *found =
+          std::memchr(start + from, header.startChar, length - from);
+      return found ? static_cast<const CU *>(found) - start : length;
+    }
+  }
+  for (size_t i = from; i < length; ++i) {
+    if (startUnitPasses(header, start[i]))
+      return i;
+  }
+  return length;
+}
+
 template <class Traits>
 auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
     -> ExecutorResult<const CodeUnit *> {
@@ -995,6 +1113,22 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
   // Note that we do want to check the empty range at the end, so add one to
   // charsToRight.
   const size_t locsToCheckCount = onlyAtStart ? 1 : 1 + charsToRight;
+
+  // The start-position filter. Only a search that tries several positions
+  // uses it: sticky and anchored searches and every lookaround recursion
+  // (which may run a backwards cursor) pass onlyAtStart.
+  // startFilterPasses counts the consecutive attempted positions whose unit
+  // passed the filter. The filter is in use while it is below
+  // kMaxStartFilterPasses: past that, the filter is not paying for itself
+  // and is dropped for the rest of this search. One variable holds both, to
+  // keep register pressure off the matching loop below.
+  const auto *header =
+      reinterpret_cast<const RegexBytecodeHeader *>(bytecodeStream_.data());
+  unsigned startFilterPasses = !onlyAtStart &&
+          (header->startFlags & StartFilterPresent) &&
+          !(flags_ & constants::matchNoStartFilter)
+      ? 0
+      : kMaxStartFilterPasses;
 
   // If we are tracking backwards, we should only ever have one potential match
   // location. This is because advanceStringIndex only ever tracks forwards.
@@ -1025,6 +1159,25 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
 
   for (size_t locIndex = 0; locIndex < locsToCheckCount;
        locIndex = advanceStringIndex(startLoc, locIndex, charsToRight)) {
+    if (startFilterPasses < kMaxStartFilterPasses) {
+      // A filtered regex cannot match the empty string, so the position at
+      // the end of the input needs no attempt.
+      if (LLVM_UNLIKELY(locIndex >= charsToRight))
+        return nullptr;
+      if (startUnitPasses(*header, startLoc[locIndex])) {
+        ++startFilterPasses;
+      } else {
+        // Skip to the next position whose unit can begin a match. Under /u,
+        // every non-ASCII unit is treated alike, so the scan stops on a high
+        // surrogate before its low surrogate, and advanceStringIndex then
+        // steps over the pair.
+        startFilterPasses = 0;
+        locIndex =
+            findStartCandidate(*header, startLoc, locIndex + 1, charsToRight);
+        if (locIndex >= charsToRight)
+          return nullptr;
+      }
+    }
     const CodeUnit *potentialMatchLocation = startLoc + locIndex;
     c.setCurrentPointer(potentialMatchLocation);
     s->ip_ = startIp;
@@ -1036,15 +1189,27 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
           return potentialMatchLocation;
 
         case Opcode::LeftAnchor:
-          if (!matchesLeftAnchor(*this, *s))
+          if (!matchesLeftAnchor(*this, *s, false))
             BACKTRACK();
           s->ip_ += sizeof(LeftAnchorInsn);
           break;
 
+        case Opcode::LeftAnchorMultiline:
+          if (!matchesLeftAnchor(*this, *s, true))
+            BACKTRACK();
+          s->ip_ += sizeof(LeftAnchorMultilineInsn);
+          break;
+
         case Opcode::RightAnchor:
-          if (!matchesRightAnchor(*this, *s))
+          if (!matchesRightAnchor(*this, *s, false))
             BACKTRACK();
           s->ip_ += sizeof(RightAnchorInsn);
+          break;
+
+        case Opcode::RightAnchorMultiline:
+          if (!matchesRightAnchor(*this, *s, true))
+            BACKTRACK();
+          s->ip_ += sizeof(RightAnchorMultilineInsn);
           break;
 
         case Opcode::MatchAny:
@@ -1092,7 +1257,9 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
 
         case Opcode::U16MatchChar32: {
           const auto *insn = llvh::cast<U16MatchChar32Insn>(base);
-          if (c.atEnd() || c.consumeUTF16() != (CodePoint)insn->c)
+          // Compare as uint32_t: casting the operand to CodePoint would
+          // truncate it to a byte in the char executor.
+          if (c.atEnd() || (uint32_t)c.consumeUTF16() != insn->c)
             BACKTRACK();
           s->ip_ += sizeof(U16MatchChar32Insn);
           break;
@@ -1118,10 +1285,12 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
           const auto *insn = llvh::cast<U16MatchCharICase32Insn>(base);
           bool matched = false;
           if (!c.atEnd()) {
-            CodePoint cp = c.consumeUTF16();
+            // Compare as uint32_t so a wide operand is not truncated to
+            // CodePoint (a byte in the char executor).
+            uint32_t cp = c.consumeUTF16();
             matched =
-                (cp == (CodePoint)insn->c ||
-                 traits_.canonicalize(cp, true) == (CodePoint)insn->c);
+                (cp == insn->c ||
+                 (uint32_t)traits_.canonicalize(cp, true) == insn->c);
           }
           if (!matched)
             BACKTRACK();
@@ -1186,36 +1355,59 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
           break;
         }
 
+        case Opcode::BracketICase: {
+          if (c.atEnd() ||
+              !matchWidth1<Width1Opcode::BracketICase>(base, c.consume()))
+            BACKTRACK();
+          s->ip_ += llvh::cast<BracketICaseInsn>(base)->totalWidth();
+          break;
+        }
+
         case Opcode::U16Bracket: {
           const U16BracketInsn *insn = llvh::cast<U16BracketInsn>(base);
-          // U16BracketInsn is followed by a list of BracketRange32s.
           const BracketRange32 *ranges =
               reinterpret_cast<const BracketRange32 *>(insn + 1);
           if (c.atEnd() ||
               !bracketMatchesChar<Traits>(
-                  *this, insn, ranges, c.consumeUTF16()))
+                  *this, insn, ranges, c.consumeUTF16(), false))
+            BACKTRACK();
+          s->ip_ += insn->totalWidth();
+          break;
+        }
+
+        case Opcode::U16BracketICase: {
+          const auto *insn = llvh::cast<U16BracketICaseInsn>(base);
+          const BracketRange32 *ranges =
+              reinterpret_cast<const BracketRange32 *>(insn + 1);
+          if (c.atEnd() ||
+              !bracketMatchesChar<Traits>(
+                  *this, insn, ranges, c.consumeUTF16(), true))
             BACKTRACK();
           s->ip_ += insn->totalWidth();
           break;
         }
 
         case Opcode::WordBoundary: {
-          const WordBoundaryInsn *insn = llvh::cast<WordBoundaryInsn>(base);
-          const auto *charPointer = c.currentPointer();
-
-          bool prevIsWordchar = false;
-          if (!c.atLeft())
-            prevIsWordchar = traits_.characterHasType(
-                charPointer[-1], CharacterClass::Words);
-
-          bool currentIsWordchar = false;
-          if (!c.atRight())
-            currentIsWordchar =
-                traits_.characterHasType(charPointer[0], CharacterClass::Words);
-
-          bool isWordBoundary = (prevIsWordchar != currentIsWordchar);
-          if (isWordBoundary ^ insn->invert)
+          const auto *insn = llvh::cast<WordBoundaryInsn>(base);
+          if (matchesWordBoundary(c, insn->invert, [&](auto ch) {
+                return traits_.characterHasType(ch, CharacterClass::Words);
+              }))
             s->ip_ += sizeof(WordBoundaryInsn);
+          else
+            BACKTRACK();
+          break;
+        }
+
+        case Opcode::WordBoundaryICase: {
+          const auto *insn = llvh::cast<WordBoundaryICaseInsn>(base);
+          bool unicode = syntaxFlags_.unicode;
+          if (matchesWordBoundary(c, insn->invert, [&](auto ch) {
+                return traits_.characterHasType(ch, CharacterClass::Words) ||
+                    traits_.characterHasType(
+                        Traits::canonicalize(ch, unicode),
+                        CharacterClass::Words);
+              }))
+            s->ip_ += sizeof(WordBoundaryICaseInsn);
           else
             BACKTRACK();
           break;
@@ -1275,51 +1467,22 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
             s->ip_ += sizeof(BackRefInsn);
             break;
           }
-
-          // TODO: this can be optimized by hoisting the branches out of the
-          // loop.
-          bool icase = syntaxFlags_.ignoreCase;
-          bool unicode = syntaxFlags_.unicode;
-          auto capturedStart = first_ + cr.start;
-          auto capturedEnd = first_ + cr.end;
-          Cursor<Traits> cursor2(
-              capturedStart,
-              c.forwards() ? capturedStart : capturedEnd,
-              capturedEnd,
-              c.forwards());
-          Cursor<Traits> cursor1 = c;
-          bool matched = true;
-          while (matched && !cursor2.atEnd()) {
-            if (cursor1.atEnd()) {
-              matched = false;
-            } else if (!icase) {
-              // Direct comparison. Here we don't need to decode surrogate
-              // pairs.
-              matched = (cursor1.consume() == cursor2.consume());
-            } else if (!unicode) {
-              // Case-insensitive non-Unicode comparison, no decoding of
-              // surrogate pairs.
-              auto c1 = cursor1.consume();
-              auto c2 = cursor2.consume();
-              matched =
-                  (c1 == c2 ||
-                   traits_.canonicalize(c1, unicode) ==
-                       traits_.canonicalize(c2, unicode));
-            } else {
-              // Unicode: we do need to decode surrogate pairs.
-              auto cp1 = cursor1.consumeUTF16();
-              auto cp2 = cursor2.consumeUTF16();
-              matched =
-                  (cp1 == cp2 ||
-                   traits_.canonicalize(cp1, unicode) ==
-                       traits_.canonicalize(cp2, unicode));
-            }
-          }
-          if (!matched) {
+          if (!matchBackRef(*this, cr, c, false))
             BACKTRACK();
-          }
           s->ip_ += sizeof(BackRefInsn);
-          c.setCurrentPointer(cursor1.currentPointer());
+          break;
+        }
+
+        case Opcode::BackRefICase: {
+          const auto insn = llvh::cast<BackRefICaseInsn>(base);
+          CapturedRange cr = s->getCapturedRange(insn->mexp);
+          if (cr.start == kNotMatched || cr.end == kNotMatched) {
+            s->ip_ += sizeof(BackRefICaseInsn);
+            break;
+          }
+          if (!matchBackRef(*this, cr, c, true))
+            BACKTRACK();
+          s->ip_ += sizeof(BackRefICaseInsn);
           break;
         }
 

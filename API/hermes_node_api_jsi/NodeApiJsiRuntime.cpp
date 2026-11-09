@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -1065,6 +1066,9 @@ class NodeApiJsiRuntime : public jsi::Runtime {
 
   // Cache of commonly used values.
   struct CachedValue {
+#if JSI_VERSION >= 22
+    NodeApiRefHolder ArrayIsArray;
+#endif
     NodeApiRefHolder Error;
     NodeApiRefHolder Global;
     NodeApiRefHolder HostObjectProxyHandler;
@@ -1216,6 +1220,14 @@ NodeApiJsiRuntime::NodeApiJsiRuntime(
 
   cachedValue_.Global =
       makeNodeApiRef(getGlobal(), NodeApiPointerValueKind::Object);
+#if JSI_VERSION >= 22
+  // Capture the intrinsic before application code can replace Array.isArray.
+  cachedValue_.ArrayIsArray = makeNodeApiRef(
+      getProperty(
+          getProperty(getGlobal(), getPropertyIdFromName("Array")),
+          getPropertyIdFromName("isArray")),
+      NodeApiPointerValueKind::Object);
+#endif
   cachedValue_.Error = makeNodeApiRef(
       getProperty(
           getNodeApiValue(cachedValue_.Global),
@@ -1971,6 +1983,25 @@ jsi::ArrayBuffer NodeApiJsiRuntime::createArrayBuffer(
 
 size_t NodeApiJsiRuntime::size(const jsi::Array &arr) {
   NodeApiScope scope{*this};
+#if JSI_VERSION >= 22
+  // Node-API's array-length operation accepts only direct arrays. JSI also
+  // accepts proxies, whose length follows the ordinary Get/ToLength path.
+  napi_value value = getNodeApiValue(arr);
+  bool directArray{};
+  CHECK_NAPI(jsrApi_->napi_is_array(env_, value, &directArray));
+  if (!directArray) {
+    napi_value number{};
+    CHECK_NAPI(jsrApi_->napi_coerce_to_number(
+        env_, getProperty(value, getPropertyIdFromName("length")), &number));
+    double length = getValueDouble(number);
+    if (!(length > 0)) {
+      return 0;
+    }
+    return static_cast<size_t>(std::min(
+        length, std::min(9007199254740991.0,
+                         static_cast<double>(std::numeric_limits<size_t>::max()))));
+  }
+#endif
   return getArrayLength(getNodeApiValue(arr));
 }
 
@@ -2991,6 +3022,13 @@ napi_value NodeApiJsiRuntime::createNodeApiArray(size_t length) const {
 bool NodeApiJsiRuntime::isArray(napi_value value) const {
   bool result{};
   CHECK_NAPI(jsrApi_->napi_is_array(env_, value, &result));
+#if JSI_VERSION >= 22
+  if (!result) {
+    napi_value args[] = {value};
+    result = getValueBool(callFunction(
+        getUndefined(), getNodeApiValue(cachedValue_.ArrayIsArray), args));
+  }
+#endif
   return result;
 }
 

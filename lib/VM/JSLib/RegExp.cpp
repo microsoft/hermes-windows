@@ -19,6 +19,9 @@
 #include "hermes/VM/StringPrimitive.h"
 #include "hermes/VM/StringView.h"
 
+#include "llvh/ADT/ArrayRef.h"
+#include "llvh/ADT/StringExtras.h"
+
 namespace hermes {
 namespace vm {
 
@@ -68,7 +71,16 @@ HermesValue createRegExpConstructor(Runtime &runtime) {
       2,
       lv.cons);
 
+  // ES2025 22.2.5.2.1 RegExp.escape ( S )
   defineMethod(
+      runtime,
+      lv.cons,
+      Predefined::getSymbolID(Predefined::escape),
+      nullptr,
+      regExpEscape,
+      1);
+
+  runtime.regExpPrototypeExec = defineMethod(
       runtime,
       proto,
       Predefined::getSymbolID(Predefined::exec),
@@ -190,6 +202,206 @@ HermesValue createRegExpConstructor(Runtime &runtime) {
   defineGetter(proto, Predefined::flags, regExpFlagsGetter);
 
   return lv.cons.getHermesValue();
+}
+
+/// \return true if \p cp is a RegExp SyntaxCharacter:
+/// one of ^ $ \ . * + ? ( ) [ ] { } |.
+static bool isRegExpSyntaxChar(uint32_t cp) {
+  switch (cp) {
+    case u'^':
+    case u'$':
+    case u'\\':
+    case u'.':
+    case u'*':
+    case u'+':
+    case u'?':
+    case u'(':
+    case u')':
+    case u'[':
+    case u']':
+    case u'{':
+    case u'}':
+    case u'|':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/// \return true if \p cp is one of the "other punctuators" that
+/// EncodeForRegExpEscape escapes.
+static bool isOtherPunctuator(uint32_t cp) {
+  switch (cp) {
+    case u',':
+    case u'-':
+    case u'=':
+    case u'<':
+    case u'>':
+    case u'#':
+    case u'&':
+    case u'!':
+    case u'%':
+    case u':':
+    case u';':
+    case u'@':
+    case u'~':
+    case u'\'':
+    case u'`':
+    case u'"':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/// Append "\xNN" (lowercase hex) to \p R for \p c, which must be <= 0xFF.
+static void appendHexEscape(llvh::SmallVectorImpl<char16_t> &R, uint32_t c) {
+  assert(c <= 0xFF && "appendHexEscape argument out of bounds");
+  R.append(
+      {u'\\',
+       u'x',
+       static_cast<char16_t>(
+           llvh::hexdigit((c >> 4) & 0xf, /* LowerCase */ true)),
+       static_cast<char16_t>(llvh::hexdigit(c & 0xf, /* LowerCase */ true))});
+}
+
+/// Append "\uNNNN" (lowercase hex) to \p R for code unit \p cu.
+static void appendUnicodeEscape(
+    llvh::SmallVectorImpl<char16_t> &R,
+    char16_t cu) {
+  R.append(
+      {u'\\',
+       u'u',
+       static_cast<char16_t>(
+           llvh::hexdigit((cu >> 12) & 0xf, /* LowerCase */ true)),
+       static_cast<char16_t>(
+           llvh::hexdigit((cu >> 8) & 0xf, /* LowerCase */ true)),
+       static_cast<char16_t>(
+           llvh::hexdigit((cu >> 4) & 0xf, /* LowerCase */ true)),
+       static_cast<char16_t>(llvh::hexdigit(cu & 0xf, /* LowerCase */ true))});
+}
+
+/// ES2026 22.2.5.1.1 EncodeForRegExpEscape ( c )
+/// Append the encoding of code point \p cp to \p R.
+static void encodeForRegExpEscape(
+    llvh::SmallVectorImpl<char16_t> &R,
+    uint32_t cp) {
+  // 1. If cp is matched by SyntaxCharacter or cp is U+002F (SOLIDUS), then
+  if (cp == u'/' || isRegExpSyntaxChar(cp)) {
+    // a. Return the string-concatenation of 0x005C (REVERSE SOLIDUS) and
+    // UTF16EncodeCodePoint(cp)
+    R.push_back(u'\\');
+    R.push_back(static_cast<char16_t>(cp));
+    return;
+  }
+  // 2. If cp is a code point listed in the “Code Point” column of Table 62,
+  // then
+  switch (cp) {
+    // a. Return the string-concatenation of 0x005C (REVERSE SOLIDUS) and the
+    // string in the “ControlEscape” column of the row whose “Code Point” column
+    // contains cp.
+    case 0x09:
+      R.push_back(u'\\');
+      R.push_back(u't');
+      return;
+    case 0x0A:
+      R.push_back(u'\\');
+      R.push_back(u'n');
+      return;
+    case 0x0B:
+      R.push_back(u'\\');
+      R.push_back(u'v');
+      return;
+    case 0x0C:
+      R.push_back(u'\\');
+      R.push_back(u'f');
+      return;
+    case 0x0D:
+      R.push_back(u'\\');
+      R.push_back(u'r');
+      return;
+    default:
+      break;
+  }
+  // 3. Let otherPunctuators be the string-concatenation of ",-=<>#&!%:;@~'`"
+  // and the code unit 0x0022 (QUOTATION MARK).
+  // 4. Let toEscape be StringToCodePoints(otherPunctuators).
+  bool needsEscape = isOtherPunctuator(cp);
+  if (!needsEscape && cp <= 0xFFFF) {
+    char16_t c16 = static_cast<char16_t>(cp);
+    needsEscape = isWhiteSpaceChar(c16) || isLineTerminatorChar(c16) ||
+        isHighSurrogate(cp) || isLowSurrogate(cp);
+  }
+  // 5. If toEscape contains cp, cp is matched by either WhiteSpace or
+  // LineTerminator, or cp has the same numeric value as a leading surrogate or
+  // trailing surrogate, then
+  if (needsEscape) {
+    // a. Let cpNum be the numeric value of cp.
+    // b. If cpNum ≤ 0xFF, then
+    if (cp <= 0xFF) {
+      // i. Let hex be Number::toString((cpNum), 16).
+      // ii. Return the string-concatenation of the code unit 0x005C (REVERSE
+      // SOLIDUS), "x", and StringPad(hex, 2, "0", start).
+      appendHexEscape(R, cp);
+      return;
+    }
+    // c. Let escaped be the empty String.
+    // d. Let codeUnits be UTF16EncodeCodePoint(cp).
+    // e. For each code unit cu of codeUnits, do
+    // i. Set escaped to the string-concatenation of escaped and
+    // UnicodeEscape(cu).
+    // f. Return escaped.
+    appendUnicodeEscape(R, static_cast<char16_t>(cp));
+    return;
+  }
+  // 6. Return UTF16EncodeCodePoint(cp).
+  utf16Encoding(cp, R);
+}
+
+/// ES2026 22.2.5.1 RegExp.escape ( S )
+CallResult<HermesValue> regExpEscape(void *, Runtime &runtime) {
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  // 1. If S is not a String, throw a TypeError exception.
+  if (LLVM_UNLIKELY(!args.getArg(0).isString())) {
+    return runtime.raiseTypeError("RegExp.escape() argument must be a string");
+  }
+
+  struct : public Locals {
+    PinnedValue<StringPrimitive> string;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.string.castAndSetHermesValue<StringPrimitive>(args.getArg(0));
+
+  // 2. Let escaped be the empty String.
+  uint32_t len = lv.string->getStringLength();
+  SmallU16String<16> escaped{};
+  escaped.reserve(len);
+
+  auto view = StringPrimitive::createStringView(runtime, lv.string);
+  // 3. Let cpList be StringToCodePoints(S).
+  // 4. For each code point c of cpList, do
+  for (uint32_t i = 0; i < len;) {
+    char16_t first = view[i];
+    uint32_t cp = first;
+    if (isHighSurrogate(first) && i + 1 < len && isLowSurrogate(view[i + 1])) {
+      cp = utf16SurrogatePairToCodePoint(first, view[i + 1]);
+      i += 2;
+    } else {
+      ++i;
+    }
+    // 4a. If escaped is the empty String and c is matched by DecimalDigit or
+    // AsciiLetter, escape the leading character as "\xNN". The hex of an ASCII
+    // digit or letter is always exactly 2 digits.
+    if (escaped.empty() && cp < 128 && llvh::isAlnum(static_cast<char>(cp))) {
+      appendHexEscape(escaped, cp);
+    } else {
+      // 4b. Else, append EncodeForRegExpEscape(c).
+      encodeForRegExpEscape(escaped, cp);
+    }
+  }
+
+  // 5. Return escaped.
+  return StringPrimitive::create(runtime, escaped);
 }
 
 /// ES2022 22.2.5.2.4 GetStringIndex ( S, e )
@@ -477,16 +689,88 @@ static ExecutionStatus regExpConstructorFastCopy(
   return ExecutionStatus::RETURNED;
 }
 
-static void createGroupsObject(
+/// Build an object whose property keys are identical to \p mappingObj. Each
+/// value for a given property key `k` in this object is
+/// `getCapture(mappingObj[k])`: \p getCapture maps an index of the match
+/// (0 is the whole match, n the n-th group) to that element as a
+/// SmallHermesValue, and must not allocate. The result has a null
+/// prototype.
+template <typename GetCapture>
+static CallResult<PseudoHandle<JSObject>> buildGroupsObject(
     Runtime &runtime,
-    Handle<JSArray> matchObj,
-    Handle<JSObject> mappingObj) {
+    Handle<JSObject> mappingObj,
+    const GetCapture &getCapture) {
   struct : public Locals {
-    PinnedValue<HiddenClass> clazzHandle;
+    PinnedValue<HiddenClass> clazz;
     PinnedValue<JSObject> groupsObj;
+    PinnedValue<> tmpVal;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
+  lv.clazz = mappingObj->getClass(runtime);
+
+  if (LLVM_LIKELY(!lv.clazz->isDictionary())) {
+    // Fast path: non-dictionary class is safe to share between groupsObj and
+    // mappingObj.
+    lv.groupsObj =
+        JSObject::create(runtime, Runtime::makeNullHandle<JSObject>(), lv.clazz)
+            .get();
+    HiddenClass::forEachProperty(
+        lv.clazz, runtime, [&](SymbolID, NamedPropertyDescriptor desc) {
+          assert(
+              !desc.flags.privateName &&
+              "private name not expected in regex mapping object");
+          auto idx = static_cast<uint32_t>(
+              JSObject::getNamedSlotValueUnsafe(*mappingObj, runtime, desc.slot)
+                  .getNumber(runtime));
+          JSObject::setNamedSlotValueUnsafe(
+              lv.groupsObj.get(), runtime, desc.slot, getCapture(idx));
+        });
+    return PseudoHandle<JSObject>::create(lv.groupsObj.get());
+  }
+
+  // Slow path: mappingObj's class is in dictionary mode. Dictionary classes
+  // are owned by a single object and mutated in place; sharing one with
+  // groupsObj would let a later mutation on this `groups` grow the shared
+  // class past the underlying propStorage of any sibling (out-of-bounds
+  // read/write). Build groupsObj with its own fresh class instead.
+  //
+  // Calling defineNewOwnProperty inside HiddenClass::forEachPropertyWhile is
+  // safe: it only touches groupsObj's class chain (independent from
+  // lv.clazz), and forEachPropertyWhile flushes the GCScope after each
+  // callback so handle counts stay bounded.
+  lv.groupsObj =
+      JSObject::create(runtime, Runtime::makeNullHandle<JSObject>()).get();
+  ExecutionStatus status = ExecutionStatus::RETURNED;
+  HiddenClass::forEachPropertyWhile(
+      lv.clazz,
+      runtime,
+      [&](Runtime &, SymbolID id, NamedPropertyDescriptor desc) -> bool {
+        auto idx = static_cast<uint32_t>(
+            JSObject::getNamedSlotValueUnsafe(*mappingObj, runtime, desc.slot)
+                .getNumber(runtime));
+        lv.tmpVal = getCapture(idx).unboxToHV(runtime);
+        if (LLVM_UNLIKELY(
+                JSObject::defineNewOwnProperty(
+                    lv.groupsObj,
+                    runtime,
+                    id,
+                    PropertyFlags::defaultNewNamedPropertyFlags(),
+                    lv.tmpVal) == ExecutionStatus::EXCEPTION)) {
+          status = ExecutionStatus::EXCEPTION;
+          return false;
+        }
+        return true;
+      });
+  if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return PseudoHandle<JSObject>::create(lv.groupsObj.get());
+}
+
+static ExecutionStatus setMatchGroups(
+    Runtime &runtime,
+    Handle<JSArray> matchObj,
+    Handle<JSObject> mappingObj) {
   // matchObj is created with a HiddenClass that already has the groups
   // property.
   NamedPropertyDescriptor groupsDesc;
@@ -502,34 +786,22 @@ static void createGroupsObject(
   if (!mappingObj) {
     auto shv = SmallHermesValue::encodeUndefinedValue();
     JSObject::setNamedSlotValueUnsafe(matchObj.get(), runtime, groupsDesc, shv);
-    return;
+    return ExecutionStatus::RETURNED;
   }
 
   // The `__proto__` property on the groups object is not special,
   // and does not affect the [[Prototype]] of the resulting groups object.
   // This means that the prototype of the resulting groups object is null.
-  lv.clazzHandle = mappingObj->getClass(runtime);
-  auto groupsObjRes = JSObject::create(
-      runtime, Runtime::makeNullHandle<JSObject>(), lv.clazzHandle);
-  lv.groupsObj = groupsObjRes.get();
-
-  HiddenClass::forEachProperty(
-      lv.clazzHandle, runtime, [&](SymbolID id, NamedPropertyDescriptor desc) {
-        assert(
-            !desc.flags.privateName &&
-            "private name not expected in regex mapping object");
-        auto groupIdx =
-            JSObject::getNamedSlotValueUnsafe(*mappingObj, runtime, desc.slot)
-                .getNumber(runtime);
-        JSObject::setNamedSlotValueUnsafe(
-            lv.groupsObj.get(),
-            runtime,
-            desc.slot,
-            matchObj->at(runtime, groupIdx));
+  auto groupsRes = buildGroupsObject(
+      runtime, mappingObj, [&](uint32_t i) -> SmallHermesValue {
+        return matchObj->at(runtime, i);
       });
+  if (LLVM_UNLIKELY(groupsRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
 
-  auto shv = SmallHermesValue::encodeObjectValue(lv.groupsObj.get(), runtime);
+  auto shv = SmallHermesValue::encodeObjectValue(groupsRes->get(), runtime);
   JSObject::setNamedSlotValueUnsafe(matchObj.get(), runtime, groupsDesc, shv);
+  return ExecutionStatus::RETURNED;
 }
 
 /// ES2022 22.2.7.8 MakeMatchIndicesIndexPairArray
@@ -545,7 +817,6 @@ static ExecutionStatus makeMatchIndicesIndexPairArray(
     PinnedValue<> groups;
     PinnedValue<JSArray> A;
     PinnedValue<JSArray> pair;
-    PinnedValue<HiddenClass> mappingObjClazz;
     PinnedValue<JSObject> groupsObj;
   } lv;
   LocalsRAII lraii(runtime, &lv);
@@ -602,29 +873,16 @@ static ExecutionStatus makeMatchIndicesIndexPairArray(
   // 6. If hasGroups is true, then
   if (hasGroups) {
     // a. Let groups be OrdinaryObjectCreate(null).
-    lv.mappingObjClazz = mappingObj->getClass(runtime);
-    auto groupsRes = JSObject::create(
-        runtime, Runtime::makeNullHandle<JSObject>(), lv.mappingObjClazz);
-    lv.groupsObj = groupsRes.get();
-    HiddenClass::forEachProperty(
-        lv.mappingObjClazz,
-        runtime,
-        [&](SymbolID id, NamedPropertyDescriptor desc) {
-          assert(
-              !desc.flags.privateName &&
-              "private name not expected in regex mapping object");
-          auto groupIdx =
-              JSObject::getNamedSlotValueUnsafe(*mappingObj, runtime, desc.slot)
-                  .getNumber(runtime);
-          // 9.e. If i > 0 and groupNames[i - 1] is not undefined, then
-          // ii. Perform ! CreateDataPropertyOrThrow(groups, groupNames[i-1],
-          // matchIndexPair).
-          JSObject::setNamedSlotValueUnsafe(
-              lv.groupsObj.get(),
-              runtime,
-              desc.slot,
-              lv.A.get()->at(runtime, groupIdx));
+    // 9.e. If i > 0 and groupNames[i - 1] is not undefined, then
+    // ii. Perform ! CreateDataPropertyOrThrow(groups, groupNames[i-1],
+    // matchIndexPair).
+    auto groupsRes = buildGroupsObject(
+        runtime, mappingObj, [&](uint32_t i) -> SmallHermesValue {
+          return lv.A->at(runtime, i);
         });
+    if (LLVM_UNLIKELY(groupsRes == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    lv.groupsObj = groupsRes->get();
     lv.groups = lv.groupsObj.getHermesValue();
   } else {
     // 7. Else,
@@ -648,17 +906,18 @@ static ExecutionStatus makeMatchIndicesIndexPairArray(
   return ExecutionStatus::RETURNED;
 }
 
-// ES6 21.2.5.2.2
-ExecutionStatus directRegExpExec(
+/// ES6 21.2.5.2.2 RegExpBuiltinExec ( R, S ) up to, but not including,
+/// building the result array: the Get and ToLength of lastIndex, the
+/// search, the Set of lastIndex, and the unicode adjustment of the ranges.
+/// \return false on no match, leaving \p match empty; on a match, set
+/// \p match to its ranges (element 0 is the whole match) and \return true.
+static CallResult<bool> regExpBuiltinExecMatch(
     Handle<JSRegExp> regexp,
     Runtime &runtime,
     Handle<StringPrimitive> S,
-    MutableHandle<JSArray> resultOut) {
+    RegExpMatch &match) {
   struct : public Locals {
-    PinnedValue<JSArray> A;
     PinnedValue<> propHandle;
-    PinnedValue<StringPrimitive> strHandle;
-    PinnedValue<JSArray> indicesArray;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -684,13 +943,10 @@ ExecutionStatus directRegExpExec(
 
   // If flags contains "g", let global be true, else let global be false
   // If flags contains "y", let sticky be true, else let sticky be false.
-  // If flags contains "d", let hasIndices be true, else let hasIndices be
-  // false.
   // If flags contains "u", let fullUnicode be true, else let fullUnicode be
   // false.
   const bool global = flags.global;
   const bool sticky = flags.sticky;
-  const bool hasIndices = flags.hasIndices;
   const bool fullUnicode = flags.unicode;
 
   // If global is false and sticky is false, set lastIndex to 0.
@@ -702,18 +958,18 @@ ExecutionStatus directRegExpExec(
   // handled internally by JSRegExp::search for efficiency reasons.
   // (Note that lastIndex == length is allowed: it may match an empty range at
   // the end of the string.)
-  CallResult<RegExpMatch> matchResult = RegExpMatch{};
+  match.clear();
   if (lastIndex <= length) {
     assert(
         lastIndex <= UINT32_MAX &&
         "lastIndex should fit in u32 because it is <= a string length");
     uint32_t searchStartOffset = static_cast<uint32_t>(lastIndex);
-    matchResult = JSRegExp::search(regexp, runtime, S, searchStartOffset);
+    auto matchResult = JSRegExp::search(regexp, runtime, S, searchStartOffset);
+    if (LLVM_UNLIKELY(matchResult == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    match = std::move(*matchResult);
   }
 
-  if (LLVM_UNLIKELY(matchResult == ExecutionStatus::EXCEPTION))
-    return ExecutionStatus::EXCEPTION;
-  RegExpMatch &match = *matchResult;
   if (match.empty()) {
     // No match. The following implements both:
     //   If lastIndex > length, then
@@ -733,16 +989,10 @@ ExecutionStatus directRegExpExec(
         return ExecutionStatus::EXCEPTION;
       }
     }
-    resultOut.clear();
-    return ExecutionStatus::RETURNED;
+    return false;
   }
 
   // We have a match!
-  // "If global is true or sticky is true, Let setStatus be Set(R, "lastIndex",
-  // e, true)."
-  // Here 'e' is the end of the total match.
-  assert(!match.empty() && "Match should not be empty");
-
   // If using unicode, ensure that no indices can be set to a trailing
   // surrogate.
   if (fullUnicode) {
@@ -755,6 +1005,9 @@ ExecutionStatus directRegExpExec(
     }
   }
 
+  // "If global is true or sticky is true, Let setStatus be Set(R, "lastIndex",
+  // e, true)."
+  // Here 'e' is the end of the total match.
   if (global || sticky) {
     auto totalMatch = *match.front();
     uint32_t e = totalMatch.location + totalMatch.length;
@@ -763,11 +1016,41 @@ ExecutionStatus directRegExpExec(
       return ExecutionStatus::EXCEPTION;
     }
   }
+  return true;
+}
+
+// ES6 21.2.5.2.2
+ExecutionStatus directRegExpExec(
+    Handle<JSRegExp> regexp,
+    Runtime &runtime,
+    Handle<StringPrimitive> S,
+    MutableHandle<JSArray> resultOut) {
+  struct : public Locals {
+    PinnedValue<JSArray> A;
+    PinnedValue<StringPrimitive> strHandle;
+    PinnedValue<JSArray> indicesArray;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  GCScope gcScope{runtime};
+
+  RegExpMatch match;
+  auto matchRes = regExpBuiltinExecMatch(regexp, runtime, S, match);
+  if (LLVM_UNLIKELY(matchRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  if (!*matchRes) {
+    resultOut.clear();
+    return ExecutionStatus::RETURNED;
+  }
+
+  // If flags contains "d", let hasIndices be true, else let hasIndices be
+  // false.
+  const bool hasIndices = JSRegExp::getSyntaxFlags(regexp.get()).hasIndices;
 
   auto arrRes = JSArray::createAndAllocPropStorage(
       runtime,
-      Handle<JSObject>::vmcast(&runtime.arrayPrototype),
-      Handle<HiddenClass>::vmcast(&runtime.regExpMatchClass),
+      runtime.arrayPrototype,
+      runtime.regExpMatchClass,
       match.size(),
       match.size());
   if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
@@ -855,7 +1138,10 @@ ExecutionStatus directRegExpExec(
     }
   }
 
-  createGroupsObject(runtime, lv.A, groupNames);
+  if (LLVM_UNLIKELY(
+          setMatchGroups(runtime, lv.A, groupNames) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
   resultOut.castAndSetHermesValue<JSArray>(lv.A.getHermesValue());
   return ExecutionStatus::RETURNED;
 }
@@ -895,6 +1181,38 @@ advanceStringIndex(const StringPrimitive *S, uint64_t index, bool unicode) {
   return index + 1;
 }
 
+/// Run \p body as the body of a call of the builtin RegExp.prototype.exec
+/// with this \p R and the argument \p S: inside a native frame for
+/// runtime.regExpPrototypeExec built as Callable::executeCall1,
+/// Callable::call and NativeFunction::_nativeCall build it. Stack traces,
+/// the debugger and the sampling profiler then see the same exec frame as
+/// for a real call. \p body returns CallResult<HermesValue>.
+template <typename Body>
+static CallResult<HermesValue> runInBuiltinExecFrame(
+    Runtime &runtime,
+    Handle<JSObject> R,
+    Handle<StringPrimitive> S,
+    const Body &body) {
+  // As Callable::executeCall1.
+  ScopedNativeCallFrame newFrame{
+      runtime,
+      1,
+      runtime.regExpPrototypeExec.getHermesValue(),
+      HermesValue::encodeUndefinedValue(),
+      R.getHermesValue()};
+  if (LLVM_UNLIKELY(newFrame.overflowed()))
+    return runtime.raiseStackOverflow(Runtime::StackOverflowKind::NativeStack);
+  newFrame->getArgRef(0) = S.getHermesValue();
+  // As Callable::call. The callee is read again from its root below.
+  runtime.potentiallyMoveHeap();
+  // As NativeFunction::_nativeCall.
+  auto res = NativeFunction::runNativeCallBody(
+      *runtime.regExpPrototypeExec, runtime, body);
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return res->get();
+}
+
 /// ES6.0 21.2.5.2.1 Runtime Semantics: RegExpExec ( R, S )
 CallResult<HermesValue>
 regExpExec(Runtime &runtime, Handle<JSObject> R, Handle<StringPrimitive> S) {
@@ -913,6 +1231,18 @@ regExpExec(Runtime &runtime, Handle<JSObject> R, Handle<StringPrimitive> S) {
   lv.exec = std::move(propRes.getValue());
   // 5. If IsCallable(exec) is true, then
   if (auto execCallable = Handle<Callable>::dyn_vmcast(Handle<>{lv.exec})) {
+    // The builtin exec on a JSRegExp would run ToString(S), a no-op on a
+    // string, and then RegExpBuiltinExec, whose result is an object or null.
+    // Run that in the exec frame without the dispatch through
+    // Callable::call.
+    if (lv.exec.getHermesValue().getRaw() ==
+        runtime.regExpPrototypeExec.getHermesValue().getRaw()) {
+      if (auto regExpObj = Handle<JSRegExp>::dyn_vmcast(R)) {
+        return runInBuiltinExecFrame(runtime, R, S, [&]() {
+          return regExpBuiltinExec(runtime, regExpObj, S);
+        });
+      }
+    }
     // a. Let result be Call(exec, R, «S»).
     // b. ReturnIfAbrupt(result).
     auto callRes =
@@ -983,16 +1313,33 @@ CallResult<HermesValue> regExpPrototypeExec(void *, Runtime &runtime) {
 }
 
 /// Implementation of RegExp.prototype.test
-/// Returns true if a match is found, false otherwise
-/// TODO optimization: avoid constructing the submatch array. Instead simply
-/// check for a match.
+/// Returns true if a match is found, false otherwise. It runs the effects
+/// of the builtin exec (lastIndex, the statics) without building the
+/// result array. As before, it never looks up exec.
 CallResult<HermesValue> regExpPrototypeTest(void *context, Runtime &runtime) {
-  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
-  CallResult<HermesValue> res = regExpPrototypeExecImpl(runtime, args);
-  if (res == ExecutionStatus::EXCEPTION)
-    return ExecutionStatus::EXCEPTION;
+  struct : public Locals {
+    PinnedValue<StringPrimitive> S;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
 
-  return HermesValue::encodeBoolValue(!res.getValue().isNull());
+  NativeArgs args = runtime.getCurrentFrame().getNativeArgs();
+  Handle<JSRegExp> regexp = args.dyncastThis<JSRegExp>();
+  if (!regexp) {
+    return runtime.raiseTypeError(
+        "RegExp function called on non-RegExp object");
+  }
+
+  auto strRes = toString_RJS(runtime, args.getArgHandle(0));
+  if (strRes == ExecutionStatus::EXCEPTION) {
+    return ExecutionStatus::EXCEPTION;
+  }
+  lv.S = std::move(*strRes);
+
+  RegExpMatch match;
+  auto matchRes = regExpBuiltinExecMatch(regexp, runtime, lv.S, match);
+  if (LLVM_UNLIKELY(matchRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return HermesValue::encodeBoolValue(*matchRes);
 }
 
 /// Return the ith capture group in the most recent successful RegExp search.
@@ -1097,7 +1444,6 @@ CallResult<HermesValue> regExpFlagPropertyGetter(void *ctx, Runtime &runtime) {
       return HermesValue::encodeBoolValue(syntaxFlags.hasIndices);
     default:
       llvm_unreachable("Invalid flag passed to regExpFlagPropertyGetter");
-      return HermesValue::encodeEmptyValue();
   }
 }
 
@@ -1226,6 +1572,22 @@ CallResult<HermesValue> getSubstitution(
   // Don't use a StringView iterator, as any calls to createStringView can
   // allocate and move the underlying char storage.
   for (size_t i = 0, e = replacementView.length(); i < e;) {
+    // A single $ substitution can expand to the whole input string, so result
+    // can grow past MAX_STRING_LENGTH before the bounds check in
+    // StringPrimitive::create() below runs. Bail out early with a RangeError
+    // instead, as overflowing the intermediate SmallVector would crash.
+    //
+    // Checking once per iteration is enough to prevent that overflow:
+    // everything an iteration can append ($&, $`, $', $n, and $<name> via
+    // toString_RJS) is a StringPrimitive and so is at most MAX_STRING_LENGTH
+    // long, which bounds result at 2 * MAX_STRING_LENGTH. SmallVector's
+    // capacity is an unsigned whose doubling wraps above 2^31 elements, and
+    // that bound has to stay clear of it.
+    static_assert(
+        2ull * StringPrimitive::MAX_STRING_LENGTH < (1ull << 31),
+        "result can overflow SmallVector's capacity");
+    if (LLVM_UNLIKELY(result.size() > StringPrimitive::MAX_STRING_LENGTH))
+      return runtime.raiseRangeError("String length exceeds limit");
     // Go character by character and account for $ replacement strings.
     char16_t c0 = replacementView[i];
     if (c0 != u'$' || i + 1 == e) {
@@ -1511,6 +1873,99 @@ CallResult<HermesValue> regExpPrototypeToString(void *, Runtime &runtime) {
   return StringPrimitive::create(runtime, result);
 }
 
+/// \return true if \p R is a JSRegExp and Get(R, "exec") would return the
+/// builtin exec from a plain data property, with no proxy, host object or
+/// accessor on the lookup path. Such a Get runs no user code, so skipping
+/// it is unobservable.
+static bool hasBuiltinExec(Runtime &runtime, Handle<JSObject> R) {
+  if (!vmisa<JSRegExp>(R.getHermesValue()))
+    return false;
+  NamedPropertyDescriptor desc;
+  JSObject *owner = JSObject::getNamedDescriptorPredefined(
+      R, runtime, Predefined::exec, desc);
+  if (!owner || desc.flags.proxyObject || desc.flags.hostObject ||
+      desc.flags.accessor)
+    return false;
+  SmallHermesValue slot =
+      JSObject::getNamedSlotValueUnsafe(owner, runtime, desc);
+  return slot.isObject() &&
+      slot.getObject(runtime) == *runtime.regExpPrototypeExec;
+}
+
+/// Run regExpBuiltinExecMatch(\p R, \p S, \p match) inside a frame for the
+/// builtin exec, as a call of RegExp.prototype.exec would. \return whether
+/// it matched.
+static CallResult<bool> execMatchInBuiltinExecFrame(
+    Runtime &runtime,
+    Handle<JSRegExp> R,
+    Handle<StringPrimitive> S,
+    RegExpMatch &match) {
+  bool matched = false;
+  auto res =
+      runInBuiltinExecFrame(runtime, R, S, [&]() -> CallResult<HermesValue> {
+        auto matchRes = regExpBuiltinExecMatch(R, runtime, S, match);
+        if (LLVM_UNLIKELY(matchRes == ExecutionStatus::EXCEPTION))
+          return ExecutionStatus::EXCEPTION;
+        matched = *matchRes;
+        return HermesValue::encodeUndefinedValue();
+      });
+  if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  return matched;
+}
+
+/// RegExpExec(\p rx, \p S) for @@match, @@search or @@replace. If \p fast
+/// (hasBuiltinExec(rx) held), run the builtin exec in its frame and store
+/// the match in \p match, leaving \p result untouched; otherwise run
+/// RegExpExec and store its result in \p result, and \p match is
+/// meaningless. \return whether there was a match (the result is not null).
+static CallResult<bool> execBuiltinOrGeneric(
+    Runtime &runtime,
+    bool fast,
+    Handle<JSObject> rx,
+    Handle<StringPrimitive> S,
+    RegExpMatch &match,
+    MutableHandle<> result) {
+  if (fast)
+    return execMatchInBuiltinExecFrame(
+        runtime, Handle<JSRegExp>::vmcast(rx), S, match);
+  auto execRes = regExpExec(runtime, rx, S);
+  if (LLVM_UNLIKELY(execRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  result.set(*execRes);
+  return !result->isNull();
+}
+
+/// After an empty match in the loop of @@match or @@replace: set lastIndex
+/// of \p rx to AdvanceStringIndex(\p S, ToLength(Get(rx, "lastIndex")),
+/// \p fullUnicode).
+static ExecutionStatus advanceLastIndexAfterEmptyMatch(
+    Runtime &runtime,
+    Handle<JSObject> rx,
+    Handle<StringPrimitive> S,
+    bool fullUnicode) {
+  struct : public Locals {
+    PinnedValue<> lastIndex;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  // a. Let thisIndex be ToLength(Get(rx, "lastIndex")).
+  // b. ReturnIfAbrupt(thisIndex).
+  auto propRes = runtime.getNamed(rx, PropCacheID::RegExpLastIndex);
+  if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  lv.lastIndex = std::move(*propRes);
+  auto thisIndex = toLength(runtime, lv.lastIndex);
+  if (LLVM_UNLIKELY(thisIndex == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  // c. Let nextIndex be AdvanceStringIndex(S, thisIndex, fullUnicode).
+  double nextIndex = advanceStringIndex(
+      S.get(), thisIndex->getNumberAs<uint64_t>(), fullUnicode);
+  // d. Let setStatus be Set(rx, "lastIndex", nextIndex, true).
+  // e. ReturnIfAbrupt(setStatus).
+  return setLastIndex(rx, runtime, nextIndex);
+}
+
 // TODO: consider writing this in JS.
 /// ES6.0 21.2.5.6
 CallResult<HermesValue> regExpPrototypeSymbolMatch(void *, Runtime &runtime) {
@@ -1578,19 +2033,26 @@ CallResult<HermesValue> regExpPrototypeSymbolMatch(void *, Runtime &runtime) {
   // e. Let n be 0.
   uint32_t n = 0;
 
+  // Whether exec is the builtin. Besides exec, every step of the loop below
+  // runs no user code (ToString of a string, Get and ToLength of the number
+  // that lastIndex holds, Set of lastIndex), so exec cannot change during
+  // the loop and one check covers every iteration.
+  const bool fast = hasBuiltinExec(runtime, rx);
+
   // g. Repeat,
   auto marker = gcScope.createMarker();
+  RegExpMatch match;
   while (true) {
     gcScope.flushToMarker(marker);
     // i. Let result be RegExpExec(rx, S).
-    auto callRes = regExpExec(runtime, rx, lv.S);
     // ii. ReturnIfAbrupt(result).
-    if (LLVM_UNLIKELY(callRes == ExecutionStatus::EXCEPTION)) {
+    auto matchedRes =
+        execBuiltinOrGeneric(runtime, fast, rx, lv.S, match, lv.result);
+    if (LLVM_UNLIKELY(matchedRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
-    lv.result = callRes.getValue();
     // iii. If result is null, then
-    if (lv.result->isNull()) {
+    if (!*matchedRes) {
       if (n == 0) {
         return HermesValue::encodeNullValue();
       } else {
@@ -1602,19 +2064,29 @@ CallResult<HermesValue> regExpPrototypeSymbolMatch(void *, Runtime &runtime) {
       }
     }
     // iv. Else result is not null,
-    auto resultObj = Handle<JSObject>::vmcast(&lv.result);
     // 1. Let matchStr be ToString(Get(result, "0")).
     // 2. ReturnIfAbrupt(matchStr).
-    auto propRes2 = getIndexed_RJS(runtime, resultObj, 0);
-    if (propRes2 == ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
+    if (fast) {
+      // Element 0 of the builtin's result is this slice of S.
+      auto strRes = StringPrimitive::slice(
+          runtime, lv.S, match[0]->location, match[0]->length);
+      if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.matchStr.castAndSetHermesValue<StringPrimitive>(*strRes);
+    } else {
+      auto resultObj = Handle<JSObject>::vmcast(&lv.result);
+      auto propRes2 = getIndexed_RJS(runtime, resultObj, 0);
+      if (propRes2 == ExecutionStatus::EXCEPTION) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.propValue = std::move(propRes2.getValue());
+      auto strRes2 = toString_RJS(runtime, lv.propValue);
+      if (strRes2 == ExecutionStatus::EXCEPTION) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.matchStr = strRes2->get();
     }
-    lv.propValue = std::move(propRes2.getValue());
-    auto strRes2 = toString_RJS(runtime, lv.propValue);
-    if (strRes2 == ExecutionStatus::EXCEPTION) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    lv.matchStr = strRes2->get();
     // 3. Let status be CreateDataProperty(A, ToString(n), matchStr).
     // 4. Assert: status is true.
     if (LLVM_UNLIKELY(
@@ -1622,25 +2094,11 @@ CallResult<HermesValue> regExpPrototypeSymbolMatch(void *, Runtime &runtime) {
             ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
     // 5. If matchStr is the empty String, then
+    //   a-e. Set lastIndex to AdvanceStringIndex(S, thisIndex, fullUnicode).
     if (lv.matchStr->getStringLength() == 0) {
-      // a. Let thisIndex be ToLength(Get(rx, "lastIndex")).
-      // b. ReturnIfAbrupt(thisIndex).
-      if ((propRes = runtime.getNamed(rx, PropCacheID::RegExpLastIndex)) ==
-          ExecutionStatus::EXCEPTION) {
-        return ExecutionStatus::EXCEPTION;
-      }
-      lv.propValue = std::move(propRes.getValue());
-      auto thisIndex = toLength(runtime, lv.propValue);
-      if (thisIndex == ExecutionStatus::EXCEPTION) {
-        return ExecutionStatus::EXCEPTION;
-      }
-      // c. Let nextIndex be AdvanceStringIndex(S, thisIndex, fullUnicode).
-      double nextIndex = advanceStringIndex(
-          lv.S.get(), thisIndex->getNumberAs<uint64_t>(), fullUnicode);
-      // d. Let setStatus be Set(rx, "lastIndex", nextIndex, true).
-      auto setStatus = setLastIndex(rx, runtime, nextIndex);
-      // e. ReturnIfAbrupt(setStatus).
-      if (setStatus == ExecutionStatus::EXCEPTION) {
+      if (LLVM_UNLIKELY(
+              advanceLastIndexAfterEmptyMatch(runtime, rx, lv.S, fullUnicode) ==
+              ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
     }
@@ -1692,11 +2150,15 @@ CallResult<HermesValue> regExpPrototypeSymbolSearch(void *, Runtime &runtime) {
   }
   // 9. Let result be RegExpExec(rx, S).
   // 10. ReturnIfAbrupt(result).
-  auto execRes = regExpExec(runtime, rx, lv.S);
-  if (LLVM_UNLIKELY(execRes == ExecutionStatus::EXCEPTION)) {
+  // When exec is the builtin, only the position of the match is needed.
+  const bool fast = hasBuiltinExec(runtime, rx);
+  RegExpMatch match;
+  auto matchedRes =
+      execBuiltinOrGeneric(runtime, fast, rx, lv.S, match, lv.result);
+  if (LLVM_UNLIKELY(matchedRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  lv.result = execRes.getValue();
+  const bool matched = *matchedRes;
   // 11. Let status be Set(rx, "lastIndex", previousLastIndex, true).
   auto previousLastIndexSHV = SmallHermesValue::encodeHermesValue(
       lv.previousLastIndex.getHermesValue(), runtime);
@@ -1705,11 +2167,15 @@ CallResult<HermesValue> regExpPrototypeSymbolSearch(void *, Runtime &runtime) {
   if (LLVM_UNLIKELY(status == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  // 13. If result is null, return –1.
-  if (lv.result.getHermesValue().isNull()) {
+  // 13. If result is null, return -1.
+  if (!matched) {
     return HermesValue::encodeTrustedNumberValue(-1);
   }
   // 14. Return Get(result, "index").
+  if (fast) {
+    // The builtin's index is the start of the whole match.
+    return HermesValue::encodeTrustedNumberValue(match[0]->location);
+  }
   auto resultObj = Handle<JSObject>::dyn_vmcast(Handle<>{lv.result});
   if (LLVM_UNLIKELY(!resultObj)) {
     return ExecutionStatus::EXCEPTION;
@@ -1717,6 +2183,221 @@ CallResult<HermesValue> regExpPrototypeSymbolSearch(void *, Runtime &runtime) {
   return JSObject::getNamed_RJS(
              resultObj, runtime, Predefined::getSymbolID(Predefined::index))
       .toCallResultHermesValue();
+}
+
+/// ES6.0 21.2.5.8 steps 16.m-p of RegExp.prototype[@@replace], for one
+/// match: compute the replacement of the match \p matched at \p position of
+/// \p S, whose captures are \p captures (each a string or undefined) and
+/// whose named captures are \p namedCaptures (undefined if none), by calling
+/// \p replaceFn if it is not null and by GetSubstitution with
+/// \p replaceValueStr otherwise. If \p position is not before
+/// \p nextSourcePosition, append the text of \p stringView (a view of S)
+/// from nextSourcePosition up to position, and the replacement, to
+/// \p accumulatedResult, and move \p nextSourcePosition past the match.
+static ExecutionStatus replaceOneMatch(
+    Runtime &runtime,
+    Handle<StringPrimitive> S,
+    const StringView &stringView,
+    Handle<Callable> replaceFn,
+    Handle<StringPrimitive> replaceValueStr,
+    Handle<StringPrimitive> matched,
+    uint32_t position,
+    Handle<ArrayStorageSmall> captures,
+    Handle<> namedCaptures,
+    SmallU16String<32> &accumulatedResult,
+    uint32_t &nextSourcePosition) {
+  struct : public Locals {
+    PinnedValue<HermesValue> namedCapturesObj;
+    PinnedValue<> replValue;
+    PinnedValue<StringPrimitive> replacement;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  const bool hasNamedCaptures = !namedCaptures->isUndefined();
+  // f. Let matchLength be the number of code units in matched.
+  const uint32_t matchLength = matched->getStringLength();
+
+  // m. If functionalReplace is true, then
+  if (replaceFn) {
+    CallResult<PseudoHandle<>> callRes{ExecutionStatus::EXCEPTION};
+    {
+      // i. Let replacerArgs be «matched».
+      // Arguments: matched, captures, position, S (, groups).
+      size_t replacerArgsCount =
+          1 + (size_t)captures->size() + 2 + hasNamedCaptures;
+      if (LLVM_UNLIKELY(replacerArgsCount >= UINT32_MAX))
+        return runtime.raiseStackOverflow(
+            Runtime::StackOverflowKind::JSRegisterStack);
+      ScopedNativeCallFrame newFrame{
+          runtime,
+          static_cast<uint32_t>(replacerArgsCount),
+          *replaceFn,
+          false,
+          HermesValue::encodeUndefinedValue()};
+      if (LLVM_UNLIKELY(newFrame.overflowed()))
+        return runtime.raiseStackOverflow(
+            Runtime::StackOverflowKind::NativeStack);
+
+      uint32_t argIdx = 0;
+      newFrame->getArgRef(argIdx++) = matched.getHermesValue();
+      // ii. Append in list order the elements of captures to the end of the
+      // List replacerArgs.
+      for (; argIdx <= captures->size(); ++argIdx) {
+        newFrame->getArgRef(argIdx) =
+            captures->at(argIdx - 1).unboxToHV(runtime);
+      }
+      // iii. Append position and S.
+      newFrame->getArgRef(argIdx++) =
+          HermesValue::encodeTrustedNumberValue(position);
+      newFrame->getArgRef(argIdx++) = S.getHermesValue();
+      // iv. If namedCaptures is not undefined, then
+      if (hasNamedCaptures) {
+        newFrame->getArgRef(argIdx++) = namedCaptures.getHermesValue();
+      }
+      // v. Let replValue be Call(replaceValue, undefined, replacerArgs).
+      callRes = Callable::call(replaceFn, runtime);
+      if (callRes == ExecutionStatus::EXCEPTION) {
+        return ExecutionStatus::EXCEPTION;
+      }
+    }
+    // vi. Let replacement be ToString(replValue).
+    lv.replValue = std::move(callRes.getValue());
+    auto strRes = toString_RJS(runtime, lv.replValue);
+    if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    lv.replacement = strRes->get();
+  } else {
+    // n. Else,
+    // i. If namedCaptures is not undefined, then
+    if (hasNamedCaptures) {
+      // 1. Set namedCaptures to ? ToObject(namedCaptures).
+      auto objRes = toObject(runtime, namedCaptures);
+      if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.namedCapturesObj = *objRes;
+    }
+    // ii. Let replacement be GetSubstitution(matched, S, position, captures,
+    // replaceValue).
+    auto callRes = getSubstitution(
+        runtime,
+        matched,
+        S,
+        position,
+        captures,
+        hasNamedCaptures ? Handle<JSObject>::vmcast(&lv.namedCapturesObj)
+                         : Runtime::makeNullHandle<JSObject>(),
+        replaceValueStr);
+    if (LLVM_UNLIKELY(callRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    lv.replacement.castAndSetHermesValue<StringPrimitive>(callRes.getValue());
+  }
+  // o. ReturnIfAbrupt(replacement).
+  // p. If position ≥ nextSourcePosition, then
+  if (position >= nextSourcePosition) {
+    // i. NOTE position should not normally move backwards. If it does, it is
+    // an indication of an ill-behaving RegExp subclass or use of an access
+    // triggered side-effect to change the global flag or other
+    // characteristics of rx. In such cases, the corresponding substitution is
+    // ignored.
+    // ii. Let accumulatedResult be the String formed by concatenating the
+    // code units of the current value of accumulatedResult with the
+    // substring of S consisting of the code units from nextSourcePosition
+    // (inclusive) up to position (exclusive) and with the code units of
+    // replacement.
+    stringView.slice(nextSourcePosition, position - nextSourcePosition)
+        .appendUTF16String(accumulatedResult);
+    lv.replacement->appendUTF16String(accumulatedResult);
+    // iii. Let nextSourcePosition be position + matchLength.
+    nextSourcePosition = position + matchLength;
+  }
+  return ExecutionStatus::RETURNED;
+}
+
+/// Phase 2 of RegExp.prototype[@@replace] for a match \p match of the
+/// builtin exec on \p S, given as its ranges in RegExpMatch order: build
+/// matched, the captures and the groups object (from \p groupNames, the
+/// regexp's group-name mapping, if not null) as the builtin's result array
+/// would hold them, then run replaceOneMatch().
+/// The Gets this replaces read own properties of an array user code never
+/// sees, so skipping them is unobservable.
+static ExecutionStatus replaceBuiltinMatch(
+    Runtime &runtime,
+    Handle<StringPrimitive> S,
+    const StringView &stringView,
+    Handle<Callable> replaceFn,
+    Handle<StringPrimitive> replaceValueStr,
+    Handle<JSObject> groupNames,
+    llvh::ArrayRef<OptValue<RegExpMatchRange>> match,
+    SmallU16String<32> &accumulatedResult,
+    uint32_t &nextSourcePosition) {
+  struct : public Locals {
+    PinnedValue<StringPrimitive> matched;
+    PinnedValue<ArrayStorageSmall> captures;
+    PinnedValue<> capN;
+    PinnedValue<> namedCaptures;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+
+  // matched: element 0, the whole match.
+  const RegExpMatchRange whole = *match[0];
+  auto matchedRes =
+      StringPrimitive::slice(runtime, S, whole.location, whole.length);
+  if (LLVM_UNLIKELY(matchedRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  lv.matched.castAndSetHermesValue<StringPrimitive>(*matchedRes);
+
+  // captures: a string per matched group, undefined per unmatched one.
+  const uint32_t nCaptures = match.size() - 1;
+  auto capturesRes = ArrayStorageSmall::create(runtime, nCaptures);
+  if (LLVM_UNLIKELY(capturesRes == ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+  lv.captures.castAndSetHermesValue<ArrayStorageSmall>(*capturesRes);
+  MutableHandle<ArrayStorageSmall> captures{lv.captures};
+  for (uint32_t n = 1; n <= nCaptures; ++n) {
+    GCScopeMarkerRAII marker{runtime};
+    if (!match[n]) {
+      lv.capN = HermesValue::encodeUndefinedValue();
+    } else {
+      auto capRes = StringPrimitive::slice(
+          runtime, S, match[n]->location, match[n]->length);
+      if (LLVM_UNLIKELY(capRes == ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+      lv.capN = *capRes;
+    }
+    if (LLVM_UNLIKELY(
+            ArrayStorageSmall::push_back(captures, runtime, lv.capN) ==
+            ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+  }
+
+  // namedCaptures: the groups object, or undefined without named groups.
+  if (groupNames) {
+    auto groupsRes = buildGroupsObject(
+        runtime, groupNames, [&](uint32_t i) -> SmallHermesValue {
+          return captures->at(i - 1);
+        });
+    if (LLVM_UNLIKELY(groupsRes == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    lv.namedCaptures = groupsRes->getHermesValue();
+  } else {
+    lv.namedCaptures = HermesValue::encodeUndefinedValue();
+  }
+
+  return replaceOneMatch(
+      runtime,
+      S,
+      stringView,
+      replaceFn,
+      replaceValueStr,
+      lv.matched,
+      whole.location,
+      captures,
+      lv.namedCaptures,
+      accumulatedResult,
+      nextSourcePosition);
 }
 
 /// ES6.0 21.2.5.8
@@ -1735,8 +2416,7 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
     PinnedValue<ArrayStorageSmall> capturesHandle;
     PinnedValue<> capN;
     PinnedValue<HermesValue> namedCaptures;
-    PinnedValue<StringPrimitive> replacement;
-    PinnedValue<> replValueHandle;
+    PinnedValue<> execResult;
   } lv;
   LocalsRAII lraii(runtime, &lv);
 
@@ -1802,45 +2482,69 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
       return ExecutionStatus::EXCEPTION;
     }
   }
-  // 11. Let results be a new empty List.
-  auto arrRes = ArrayStorageSmall::create(runtime, 16 /* capacity */);
-  if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
-    return ExecutionStatus::EXCEPTION;
-  }
-  lv.resultsHandle.castAndSetHermesValue<ArrayStorageSmall>(arrRes.getValue());
+  // Whether exec is the builtin. From here to the end of phase 1 no user
+  // code runs outside exec (ToString of a string, Get and ToLength of the
+  // number that lastIndex holds, Set of lastIndex), so one check covers
+  // every exec; callbacks run in phase 2, after the last exec.
+  const bool fast = hasBuiltinExec(runtime, rx);
+  // The matches of phase 1 when fast, back to back: each holds
+  // fastMatchStride ranges, the whole match and one per group. One flat
+  // vector keeps the memory outside the GC heap to the ranges themselves.
+  std::vector<OptValue<RegExpMatchRange>> fastMatches;
+  size_t fastMatchStride = 0;
   MutableHandle<ArrayStorageSmall> resultsHandle{lv.resultsHandle};
+  if (!fast) {
+    // 11. Let results be a new empty List.
+    auto arrRes = ArrayStorageSmall::create(runtime, 16 /* capacity */);
+    if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
+      return ExecutionStatus::EXCEPTION;
+    }
+    lv.resultsHandle.castAndSetHermesValue<ArrayStorageSmall>(
+        arrRes.getValue());
+  }
 
   // 12. Let done be false.
-  bool done = false;
-
   // 13. Repeat, while done is false
   auto stringView = StringPrimitive::createStringView(runtime, lv.S);
-  while (!done) {
+  while (true) {
     GCScopeMarkerRAII marker{runtime};
+    bool emptyMatch = false;
     // a. Let result be RegExpExec(rx, S).
     // b. ReturnIfAbrupt(result).
-    auto execRes = regExpExec(runtime, rx, lv.S);
-    if (LLVM_UNLIKELY(execRes == ExecutionStatus::EXCEPTION)) {
+    RegExpMatch match;
+    auto matchedRes =
+        execBuiltinOrGeneric(runtime, fast, rx, lv.S, match, lv.execResult);
+    if (LLVM_UNLIKELY(matchedRes == ExecutionStatus::EXCEPTION)) {
       return ExecutionStatus::EXCEPTION;
     }
     // c. If result is null, set done to true.
-    if (execRes->isNull()) {
-      done = true;
+    if (!*matchedRes)
       break;
-    }
-    // d. Else result is not null,
-    // If result is not null, it must be an object.
-    lv.result.castAndSetHermesValue<JSObject>(execRes.getValue());
-    // i. Append result to the end of results.
-    if (LLVM_UNLIKELY(
-            ArrayStorageSmall::push_back(resultsHandle, runtime, lv.result) ==
-            ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    // ii. If global is false, set done to true.
-    if (!global) {
-      done = true;
+    if (fast) {
+      // Element 0 of the builtin's result is this range of S.
+      emptyMatch = match[0]->length == 0;
+      // d.i. Append result to the end of results.
+      assert(
+          (fastMatchStride == 0 || fastMatchStride == match.size()) &&
+          "every match of a regexp has the same number of ranges");
+      fastMatchStride = match.size();
+      fastMatches.insert(fastMatches.end(), match.begin(), match.end());
+      // ii. If global is false, set done to true.
+      if (!global)
+        break;
     } else {
+      // d. Else result is not null,
+      // If result is not null, it must be an object.
+      lv.result.castAndSetHermesValue<JSObject>(lv.execResult.get());
+      // i. Append result to the end of results.
+      if (LLVM_UNLIKELY(
+              ArrayStorageSmall::push_back(resultsHandle, runtime, lv.result) ==
+              ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      // ii. If global is false, set done to true.
+      if (!global)
+        break;
       // iii. Else,
       // 1. Let matchStr be ToString(Get(result, "0")).
       // 2. ReturnIfAbrupt(matchStr).
@@ -1854,28 +2558,15 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
         return ExecutionStatus::EXCEPTION;
       }
       lv.matchStr = strRes->get();
-      // 3. If matchStr is the empty String, then
-      if (lv.matchStr->getStringLength() == 0) {
-        // a. Let thisIndex be ToLength(Get(rx, "lastIndex")).
-        // b. ReturnIfAbrupt(thisIndex).
-        if ((propRes = runtime.getNamed(rx, PropCacheID::RegExpLastIndex)) ==
-            ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        lv.propValue = std::move(propRes.getValue());
-        auto thisIndex = toLength(runtime, lv.propValue);
-        if (thisIndex == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        // c. Let nextIndex be AdvanceStringIndex(S, thisIndex, fullUnicode).
-        double nextIndex = advanceStringIndex(
-            lv.S.get(), thisIndex->getNumberAs<uint64_t>(), fullUnicode);
-        // d. Let setStatus be Set(rx, "lastIndex", nextIndex, true).
-        auto setStatus = setLastIndex(rx, runtime, nextIndex);
-        // e. ReturnIfAbrupt(setStatus).
-        if (setStatus == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
+      emptyMatch = lv.matchStr->getStringLength() == 0;
+    }
+    // iii.3. If matchStr is the empty String, then
+    //   a-e. Set lastIndex to AdvanceStringIndex(S, thisIndex, fullUnicode).
+    if (emptyMatch) {
+      if (LLVM_UNLIKELY(
+              advanceLastIndexAfterEmptyMatch(runtime, rx, lv.S, fullUnicode) ==
+              ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
       }
     }
   }
@@ -1885,214 +2576,152 @@ CallResult<HermesValue> regExpPrototypeSymbolReplace(void *, Runtime &runtime) {
   // 15. Let nextSourcePosition be 0.
   uint32_t nextSourcePosition = 0;
   // 16. Repeat, for each result in results,
-  for (uint32_t i = 0, size = resultsHandle->size(); i < size; ++i) {
-    GCScopeMarkerRAII marker1{runtime};
-    lv.result = vmcast<JSObject>(resultsHandle->at(i).getObject(runtime));
-    // a. Let nCaptures be ToLength(Get(result, "length")).
-    // b. ReturnIfAbrupt(nCaptures).
-    propRes = JSObject::getNamed_RJS(
-        lv.result, runtime, Predefined::getSymbolID(Predefined::length));
-    if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
+  if (fast) {
+    Handle<JSObject> groupNames =
+        Handle<JSRegExp>::vmcast(rx)->getGroupNameMappings(runtime);
+    for (size_t i = 0, e = fastMatches.size(); i < e; i += fastMatchStride) {
+      GCScopeMarkerRAII marker1{runtime};
+      if (LLVM_UNLIKELY(
+              replaceBuiltinMatch(
+                  runtime,
+                  lv.S,
+                  stringView,
+                  replaceFn,
+                  lv.replaceValueStr,
+                  groupNames,
+                  llvh::makeArrayRef(&fastMatches[i], fastMatchStride),
+                  accumulatedResult,
+                  nextSourcePosition) == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
     }
-    lv.valueHandle = std::move(propRes.getValue());
-    auto lengthRes = toLength(runtime, lv.valueHandle);
-    if (LLVM_UNLIKELY(lengthRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    // Use uint64_t so it can fit the result of toLength.
-    uint64_t nCaptures = lengthRes->getNumberAs<uint64_t>();
-    // c. Let nCaptures be max(nCaptures − 1, 0).
-    nCaptures = nCaptures > 0 ? nCaptures - 1 : 0;
-
-    // Throw RangeError if nCaptures exceeds uint32_t, since
-    // ArrayStorageSmall::create() takes uint32_t capacity and the loop below
-    // would run for an impractical number of iterations.
-    if (LLVM_UNLIKELY(nCaptures > UINT32_MAX)) {
-      return runtime.raiseRangeError("Too many capture groups in exec result");
-    }
-    // d. Let matched be ToString(Get(result, "0")).
-    // e. ReturnIfAbrupt(matched).
-    propRes = getIndexed_RJS(runtime, lv.result, 0);
-    if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    lv.indexedPropValue = std::move(propRes.getValue());
-    auto strRes = toString_RJS(runtime, lv.indexedPropValue);
-    if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    lv.matched = std::move(*strRes);
-    // f. Let matchLength be the number of code units in matched.
-    uint32_t matchLength = lv.matched->getStringLength();
-    // g. Let position be ToIntegerOrInfinity(Get(result, "index")).
-    // h. ReturnIfAbrupt(position).
-    propRes = JSObject::getNamed_RJS(
-        lv.result, runtime, Predefined::getSymbolID(Predefined::index));
-    if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    lv.indexPropValue = std::move(propRes.getValue());
-    auto intRes = toIntegerOrInfinity(runtime, lv.indexPropValue);
-    if (LLVM_UNLIKELY(intRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    // position could potentially be negative or Infinity here, so use double.
-    double positionDouble = intRes->getNumber();
-    // i. Let position be max(min(position, lengthS), 0).
-    // Now we can clamp to uint32_t because we've bounds checked
-    // and `lengthS` is `uint32_t`.
-    uint32_t position = (int64_t)std::fmax(
-        std::fmin(positionDouble, (double)lengthS), (double)0);
-    // j. Let n be 1.
-    // Match the type of nCaptures.
-    uint64_t n = 1;
-    // k. Let captures be an empty List.
-    arrRes =
-        ArrayStorageSmall::create(runtime, static_cast<uint32_t>(nCaptures));
-    if (LLVM_UNLIKELY(arrRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    lv.capturesHandle.castAndSetHermesValue<ArrayStorageSmall>(
-        arrRes.getValue());
-    MutableHandle<ArrayStorageSmall> capturesHandle{lv.capturesHandle};
-    // l. Repeat while n ≤ nCaptures
-    while (n <= nCaptures) {
-      GCScopeMarkerRAII marker2{runtime};
-      // i. Let capN be Get(result, ToString(n)).
-      // ii. ReturnIfAbrupt(capN).
-      propRes = getIndexed_RJS(runtime, lv.result, n);
+  } else {
+    for (uint32_t i = 0, size = resultsHandle->size(); i < size; ++i) {
+      GCScopeMarkerRAII marker1{runtime};
+      lv.result = vmcast<JSObject>(resultsHandle->at(i).getObject(runtime));
+      // a. Let nCaptures be ToLength(Get(result, "length")).
+      // b. ReturnIfAbrupt(nCaptures).
+      propRes = JSObject::getNamed_RJS(
+          lv.result, runtime, Predefined::getSymbolID(Predefined::length));
       if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      lv.capN = std::move(propRes.getValue());
-      // iii. If capN is not undefined, then
-      if (!lv.capN->isUndefined()) {
-        // 1. Let capN be ToString(capN).
-        // 2. ReturnIfAbrupt(capN).
-        auto strRes = toString_RJS(runtime, lv.capN);
-        if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        lv.capN = strRes->getHermesValue();
-      }
-      // iv. Append capN as the last element of captures.
-      if (LLVM_UNLIKELY(
-              ArrayStorageSmall::push_back(capturesHandle, runtime, lv.capN) ==
-              ExecutionStatus::EXCEPTION)) {
+      lv.valueHandle = std::move(propRes.getValue());
+      auto lengthRes = toLength(runtime, lv.valueHandle);
+      if (LLVM_UNLIKELY(lengthRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      // v. Let n be n+1
-      n++;
-    }
+      // Use uint64_t so it can fit the result of toLength.
+      uint64_t nCaptures = lengthRes->getNumberAs<uint64_t>();
+      // c. Let nCaptures be max(nCaptures − 1, 0).
+      nCaptures = nCaptures > 0 ? nCaptures - 1 : 0;
 
-    // j. Let namedCaptures be ? Get(result, "groups").
-    bool hasNamedCaptures = false;
-    auto namedCapturesRes = JSObject::getNamed_RJS(
-        lv.result, runtime, Predefined::getSymbolID(Predefined::groups));
-    if (LLVM_UNLIKELY(namedCapturesRes == ExecutionStatus::EXCEPTION)) {
-      return ExecutionStatus::EXCEPTION;
-    }
-    if (!(*namedCapturesRes)->isUndefined()) {
-      lv.namedCaptures = namedCapturesRes->get();
-      hasNamedCaptures = true;
-    }
-
-    // m. If functionalReplace is true, then
-    if (replaceFn) {
-      CallResult<PseudoHandle<>> callRes{ExecutionStatus::EXCEPTION};
-      {
-        // i. Let replacerArgs be «matched».
-        // Arguments: matched, captures, position, S (, groups).
-        size_t replacerArgsCount = 1 + nCaptures + 2 + hasNamedCaptures;
-        if (LLVM_UNLIKELY(replacerArgsCount >= UINT32_MAX))
-          return runtime.raiseStackOverflow(
-              Runtime::StackOverflowKind::JSRegisterStack);
-        ScopedNativeCallFrame newFrame{
-            runtime,
-            static_cast<uint32_t>(replacerArgsCount),
-            *replaceFn,
-            false,
-            HermesValue::encodeUndefinedValue()};
-        if (LLVM_UNLIKELY(newFrame.overflowed()))
-          return runtime.raiseStackOverflow(
-              Runtime::StackOverflowKind::NativeStack);
-
-        uint32_t argIdx = 0;
-        newFrame->getArgRef(argIdx++) = lv.matched.getHermesValue();
-        // ii. Append in list order the elements of captures to the end of the
-        // List replacerArgs.
-        for (; argIdx <= capturesHandle->size(); ++argIdx) {
-          newFrame->getArgRef(argIdx) =
-              capturesHandle->at(argIdx - 1).unboxToHV(runtime);
-        }
-        // iii. Append position and S.
-        newFrame->getArgRef(argIdx++) =
-            HermesValue::encodeTrustedNumberValue(position);
-        newFrame->getArgRef(argIdx++) = lv.S.getHermesValue();
-        // iv. If namedCaptures is not undefined, then
-        if (hasNamedCaptures) {
-          newFrame->getArgRef(argIdx++) = lv.namedCaptures.getHermesValue();
-        }
-        // v. Let replValue be Call(replaceValue, undefined, replacerArgs).
-        callRes = Callable::call(replaceFn, runtime);
-        if (callRes == ExecutionStatus::EXCEPTION) {
-          return ExecutionStatus::EXCEPTION;
-        }
+      // Throw RangeError if nCaptures exceeds uint32_t, since
+      // ArrayStorageSmall::create() takes uint32_t capacity and the loop
+      // below would run for an impractical number of iterations.
+      if (LLVM_UNLIKELY(nCaptures > UINT32_MAX)) {
+        return runtime.raiseRangeError(
+            "Too many capture groups in exec result");
       }
-      // vi. Let replacement be ToString(replValue).
-      lv.replValueHandle = std::move(callRes.getValue());
-      auto strRes = toString_RJS(runtime, lv.replValueHandle);
+      // d. Let matched be ToString(Get(result, "0")).
+      // e. ReturnIfAbrupt(matched).
+      propRes = getIndexed_RJS(runtime, lv.result, 0);
+      if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.indexedPropValue = std::move(propRes.getValue());
+      auto strRes = toString_RJS(runtime, lv.indexedPropValue);
       if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      lv.replacement = strRes->get();
-    } else {
-      // n. Else,
-      // i. If namedCaptures is not undefined, then
-      if (hasNamedCaptures) {
-        auto objRes = toObject(runtime, lv.namedCaptures);
-        if (LLVM_UNLIKELY(objRes == ExecutionStatus::EXCEPTION)) {
-          return ExecutionStatus::EXCEPTION;
-        }
-        // 1. Set namedCaptures to ? ToObject(namedCaptures).
-        lv.namedCaptures = *objRes;
-      }
-
-      // ii. Let replacement be GetSubstitution(matched, S, position, captures,
-      // replaceValue).
-      auto callRes = getSubstitution(
-          runtime,
-          lv.matched,
-          lv.S,
-          position,
-          capturesHandle,
-          hasNamedCaptures ? Handle<JSObject>::vmcast(&lv.namedCaptures)
-                           : Runtime::makeNullHandle<JSObject>(),
-          lv.replaceValueStr);
-      if (LLVM_UNLIKELY(callRes == ExecutionStatus::EXCEPTION)) {
+      lv.matched = std::move(*strRes);
+      // g. Let position be ToIntegerOrInfinity(Get(result, "index")).
+      // h. ReturnIfAbrupt(position).
+      propRes = JSObject::getNamed_RJS(
+          lv.result, runtime, Predefined::getSymbolID(Predefined::index));
+      if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
         return ExecutionStatus::EXCEPTION;
       }
-      lv.replacement.castAndSetHermesValue<StringPrimitive>(callRes.getValue());
-    }
-    // o. ReturnIfAbrupt(replacement).
-    // p. If position ≥ nextSourcePosition, then
-    if (position >= nextSourcePosition) {
-      // i. NOTE position should not normally move backwards. If it does, it is
-      // an indication of an ill-behaving RegExp subclass or use of an access
-      // triggered side-effect to change the global flag or other
-      // characteristics of rx. In such cases, the corresponding substitution is
-      // ignored.
-      // ii. Let accumulatedResult be the String formed by
-      // concatenating the code units of the current value of accumulatedResult
-      // with the substring of S consisting of the code units from
-      // nextSourcePosition (inclusive) up to position (exclusive) and with the
-      // code units of replacement.
-      stringView.slice(nextSourcePosition, position - nextSourcePosition)
-          .appendUTF16String(accumulatedResult);
-      lv.replacement->appendUTF16String(accumulatedResult);
-      // iii. Let nextSourcePosition be position + matchLength.
-      nextSourcePosition = position + matchLength;
+      lv.indexPropValue = std::move(propRes.getValue());
+      auto intRes = toIntegerOrInfinity(runtime, lv.indexPropValue);
+      if (LLVM_UNLIKELY(intRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      // position could potentially be negative or Infinity here, so use
+      // double.
+      double positionDouble = intRes->getNumber();
+      // i. Let position be max(min(position, lengthS), 0).
+      // Now we can clamp to uint32_t because we've bounds checked
+      // and `lengthS` is `uint32_t`.
+      uint32_t position = (int64_t)std::fmax(
+          std::fmin(positionDouble, (double)lengthS), (double)0);
+      // j. Let n be 1.
+      // Match the type of nCaptures.
+      uint64_t n = 1;
+      // k. Let captures be an empty List.
+      auto capturesRes =
+          ArrayStorageSmall::create(runtime, static_cast<uint32_t>(nCaptures));
+      if (LLVM_UNLIKELY(capturesRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.capturesHandle.castAndSetHermesValue<ArrayStorageSmall>(
+          capturesRes.getValue());
+      MutableHandle<ArrayStorageSmall> capturesHandle{lv.capturesHandle};
+      // l. Repeat while n ≤ nCaptures
+      while (n <= nCaptures) {
+        GCScopeMarkerRAII marker2{runtime};
+        // i. Let capN be Get(result, ToString(n)).
+        // ii. ReturnIfAbrupt(capN).
+        propRes = getIndexed_RJS(runtime, lv.result, n);
+        if (LLVM_UNLIKELY(propRes == ExecutionStatus::EXCEPTION)) {
+          return ExecutionStatus::EXCEPTION;
+        }
+        lv.capN = std::move(propRes.getValue());
+        // iii. If capN is not undefined, then
+        if (!lv.capN->isUndefined()) {
+          // 1. Let capN be ToString(capN).
+          // 2. ReturnIfAbrupt(capN).
+          auto capStrRes = toString_RJS(runtime, lv.capN);
+          if (LLVM_UNLIKELY(capStrRes == ExecutionStatus::EXCEPTION)) {
+            return ExecutionStatus::EXCEPTION;
+          }
+          lv.capN = capStrRes->getHermesValue();
+        }
+        // iv. Append capN as the last element of captures.
+        if (LLVM_UNLIKELY(
+                ArrayStorageSmall::push_back(
+                    capturesHandle, runtime, lv.capN) ==
+                ExecutionStatus::EXCEPTION)) {
+          return ExecutionStatus::EXCEPTION;
+        }
+        // v. Let n be n+1
+        n++;
+      }
+
+      // j. Let namedCaptures be ? Get(result, "groups").
+      auto namedCapturesRes = JSObject::getNamed_RJS(
+          lv.result, runtime, Predefined::getSymbolID(Predefined::groups));
+      if (LLVM_UNLIKELY(namedCapturesRes == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
+      lv.namedCaptures = std::move(*namedCapturesRes);
+
+      // m-p.
+      if (LLVM_UNLIKELY(
+              replaceOneMatch(
+                  runtime,
+                  lv.S,
+                  stringView,
+                  replaceFn,
+                  lv.replaceValueStr,
+                  lv.matched,
+                  position,
+                  capturesHandle,
+                  lv.namedCaptures,
+                  accumulatedResult,
+                  nextSourcePosition) == ExecutionStatus::EXCEPTION)) {
+        return ExecutionStatus::EXCEPTION;
+      }
     }
   }
 
@@ -2263,7 +2892,7 @@ CallResult<HermesValue> regExpPrototypeSymbolSplit(void *, Runtime &runtime) {
     if (LLVM_UNLIKELY(matchResult == ExecutionStatus::EXCEPTION))
       return ExecutionStatus::EXCEPTION;
 
-    auto match = *matchResult;
+    RegExpMatch match = std::move(*matchResult);
 
     if (match.empty() || match[0]->location >= size) {
       // There's no matches between index q and the end of the string, so we're

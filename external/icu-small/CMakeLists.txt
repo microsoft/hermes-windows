@@ -91,8 +91,7 @@ set_target_properties(hermes-icu PROPERTIES
 # Step 4: Include directories
 # =============================================================================
 
-# BEFORE ensures our ICU 78 headers take priority over the old
-# external/icu_decls/ headers that are added globally by the root CMakeLists.txt.
+# Keep the bundled ICU headers ahead of any other include directories.
 target_include_directories(hermes-icu BEFORE PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/source/common
   ${CMAKE_CURRENT_SOURCE_DIR}/source/i18n

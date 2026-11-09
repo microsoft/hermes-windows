@@ -11,6 +11,56 @@
 namespace hermes {
 namespace irgen {
 
+namespace {
+
+/// Call the appropriate callback for every member of \p type that is backed by
+/// a Variable rather than stored on the object. Generic method declarations
+/// are skipped because their concrete specializations are handled separately.
+/// \p onField defaults to a no-op, for callers that only care about methods.
+template <
+    typename OnMethod,
+    typename OnField = void (*)(const flow::ClassType::Field &)>
+void forEachVariableBackedClassMember(
+    flow::ClassType *type,
+    OnMethod &&onMethod,
+    OnField &&onField = [](const flow::ClassType::Field &) {}) {
+  if (!type)
+    return;
+
+  /// Call onMethod for any non-generic method.
+  /// Specialized generics are handled separately via getSpecializedMethodDecls.
+  auto visitMethod = [&onMethod](ESTree::MethodDefinitionNode *method) {
+    if (!method)
+      return;
+    if (llvh::cast<ESTree::FunctionExpressionNode>(method->_value)
+            ->_typeParameters)
+      return;
+    onMethod(method);
+  };
+
+  for (const flow::ClassType::Field &field : type->getFields()) {
+    if (field.isStoredOnObject())
+      continue;
+
+    if (!field.isMethod()) {
+      onField(field);
+      continue;
+    }
+
+    if (field.isOverloaded()) {
+      for (const auto &overload : field.overloads)
+        visitMethod(overload.first);
+      continue;
+    }
+
+    visitMethod(field.method);
+    // getter is stored in field.method, so that's already covered.
+    visitMethod(field.setterMethod);
+  }
+}
+
+} // namespace
+
 void ESTreeIRGen::genClassDeclaration(ESTree::ClassDeclarationNode *node) {
   auto *id = llvh::cast<ESTree::IdentifierNode>(node->_id);
   sema::Decl *decl = getIDDecl(id);
@@ -45,27 +95,17 @@ void ESTreeIRGen::genClassDeclaration(ESTree::ClassDeclarationNode *node) {
     curFunction()->typedClassContext = savedClsCtx;
   });
 
-  // Emit private methods as variables.
-  for (auto &[name, idx] :
-       classType->getHomeObjectTypeInfo()->getPrivateFieldNameMap()) {
-    const flow::ClassType::Field &field =
-        classType->getHomeObjectTypeInfo()->getFields()[idx];
-    if (field.isMethod() && field.isPrivate) {
-      auto *funcExpr =
-          llvh::cast<ESTree::FunctionExpressionNode>(field.method->_value);
-      Value *function = genFunctionExpression(funcExpr, field.name);
-      Variable *var = Builder.createVariable(
-          curFunction()->curScope()->getVariableScope(),
-          field.name,
-          flowTypeToIRType(field.type),
-          /* hidden */ true);
-      Builder.createStoreFrameInst(curFunction()->curScope(), function, var);
-      sema::Decl *decl = getIDDecl(
-          llvh::cast<ESTree::IdentifierNode>(
-              llvh::cast<ESTree::PrivateNameNode>(field.method->_key)->_id));
-      setDeclData(decl, var);
-    }
-  }
+  // Store the Variable-backed closure for a method.
+  auto emitMethodClosure = [this](ESTree::MethodDefinitionNode *method) {
+    sema::Decl *decl =
+        semCtx_.getExpressionDecl(ESTree::getPropertyIdentifier(method->_key));
+    assert(decl && "Variable-backed method must have a declaration");
+    emitTypedClassMethodClosureStore(method, decl);
+  };
+  forEachVariableBackedClassMember(
+      classType->getHomeObjectTypeInfo(), emitMethodClosure);
+  forEachVariableBackedClassMember(
+      classType->getStaticObjectTypeInfo(), emitMethodClosure);
 
   // Create the implicit field initializer function; store the closure
   // for it in a variable, and save that variable in a table indexed by
@@ -77,10 +117,7 @@ void ESTreeIRGen::genClassDeclaration(ESTree::ClassDeclarationNode *node) {
   Identifier consName = classType->getClassName().isValid()
       ? classType->getClassName()
       : Identifier();
-  if (classType->getConstructorType()) {
-    ESTree::MethodDefinitionNode *consMethod = semCtx_.getConstructor(node);
-    assert(consMethod && "constructor must exist");
-
+  if (ESTree::MethodDefinitionNode *consMethod = semCtx_.getConstructor(node)) {
     // Check that 'super()' call is the first statement in SH for derived
     // classes.
     // TODO: This is intentionally overly restrictive. In the future, we can
@@ -133,11 +170,7 @@ void ESTreeIRGen::genClassDeclaration(ESTree::ClassDeclarationNode *node) {
   // Must be done even if there are no methods to enable 'instanceof'.
   Value *vtable;
   if (superClass) {
-    auto it = classConstructors_.find(classType->getSuperClassInfo());
-    assert(it != classConstructors_.end() && "missing super class constructor");
-    auto *RSI =
-        emitResolveScopeInstIfNeeded(it->second.homeObjectVar->getParent());
-    vtable = Builder.createLoadFrameInst(RSI, it->second.homeObjectVar);
+    vtable = emitLoadTypedHomeObject(classType->getSuperClassInfo());
     // TODO: This will be known to be the actual type when we properly use an
     // instruction for class creation, but for now we need an object here
     // because we want to use PrLoad on it.
@@ -149,8 +182,15 @@ void ESTreeIRGen::genClassDeclaration(ESTree::ClassDeclarationNode *node) {
   auto *homeObject = emitTypedClassAllocation(
       classType->getHomeObjectTypeInfo(),
       vtable,
-      /* skipPrivateFields */ true,
       /* propertiesEnumerable */ false);
+
+  // Handle generic method specializations.
+  // Compile each specialization and store its closure in the Variable that
+  // was declared at the top of the enclosing scope.
+  for (const auto &[specializedMethod, decl] :
+       classType->getSpecializedMethodDecls()) {
+    emitTypedClassMethodClosureStore(specializedMethod, decl);
+  }
 
   // Store the home object in a variable so that we can reference it later,
   // e.g. when we emit method calls. Check if we already have a cached entry
@@ -198,20 +238,107 @@ void ESTreeIRGen::genClassDeclaration(ESTree::ClassDeclarationNode *node) {
       homeObject,
       consFunction,
       Builder.getLiteralString(kw_.identPrototype->str()));
+
+  if (Function *staticElementsCode =
+          genFieldInitFunction(/* staticElements */ true)) {
+    CreateFunctionInst *staticElementsFunc = Builder.createCreateFunctionInst(
+        curFunction()->curScope(), staticElementsCode);
+    Builder
+        .createCallInst(
+            staticElementsFunc,
+            staticElementsCode,
+            /* calleeIsAlwaysClosure */ true,
+            /* env */ curFunction()->curScope(),
+            /* newTarget */ Builder.getLiteralUndefined(),
+            consFunction,
+            /* args */ {})
+        ->setType(Type::createUndefined());
+  }
+}
+
+Variable *ESTreeIRGen::defineClassMemberVar(
+    sema::Decl *decl,
+    Identifier name,
+    Type type,
+    Value *init) {
+  if (!decl->customData) {
+    auto *var = Builder.createVariable(
+        curFunction()->curScope()->getVariableScope(),
+        name,
+        type,
+        /* hidden */ true);
+    setDeclData(decl, var);
+  }
+  return storeClassMemberVar(decl, init);
+}
+
+Variable *ESTreeIRGen::storeClassMemberVar(sema::Decl *decl, Value *value) {
+  assert(decl->customData && "class member Variable must be declared first");
+  auto *var = llvh::cast<Variable>(getDeclData(decl));
+  Builder.createStoreFrameInst(
+      emitResolveScopeInstIfNeeded(var->getParent()), value, var);
+  return var;
+}
+
+void ESTreeIRGen::declareTypedClassMemberVars(sema::Decl *classDecl) {
+  flow::Type *declType = flowContext_.findDeclType(classDecl);
+  auto *consType = llvh::dyn_cast_or_null<flow::ClassConstructorType>(
+      declType ? declType->info : nullptr);
+  // A class without a ClassConstructorType is legacy, and has no members in
+  // Variables.
+  if (!consType)
+    return;
+  flow::ClassType *classType = consType->getClassTypeInfo();
+
+  // Closures have no representable literal default, so like object-typed
+  // statics they start out empty and are checked on load.
+  Type closureStorageType =
+      getTypeContext().unionTy(Type::createObject(), Type::createEmpty());
+
+  /// Declare the Variable backing the closure of \p method. The closure itself
+  /// is stored when the class declaration is emitted.
+  auto declareMethodVar = [this, closureStorageType](
+                              ESTree::MethodDefinitionNode *method) {
+    ESTree::IdentifierNode *id = ESTree::getPropertyIdentifier(method->_key);
+    sema::Decl *decl = semCtx_.getExpressionDecl(id);
+    assert(decl && "Variable-backed method must have a declaration");
+    Identifier name = llvh::isa<ESTree::PrivateNameNode>(method->_key)
+        ? Mod->getContext().getPrivateNameIdentifier(id->_name)
+        : Identifier::getFromPointer(id->_name);
+    defineClassMemberVar(
+        decl, name, closureStorageType, Builder.getLiteralEmpty());
+  };
+  auto declareFieldVar = [this](const flow::ClassType::Field &field) {
+    assert(
+        field.staticKeyNode &&
+        "non-method Variable-backed field must be static");
+    sema::Decl *decl = semCtx_.getExpressionDecl(field.staticKeyNode);
+    auto [initValue, storageType] = getClassMemberVarInit(field.type);
+    defineClassMemberVar(decl, field.name, storageType, initValue);
+  };
+
+  // Final, private and accessor methods are not stored on the home object.
+  forEachVariableBackedClassMember(
+      classType->getHomeObjectTypeInfo(), declareMethodVar, declareFieldVar);
+
+  // Specializations of generic methods each get their own Variable.
+  for (const auto &[specializedMethod, specializedDecl] :
+       classType->getSpecializedMethodDecls()) {
+    defineClassMemberVar(
+        specializedDecl,
+        specializedDecl->name,
+        closureStorageType,
+        Builder.getLiteralEmpty());
+  }
+
+  // All static elements are currently Variable-backed.
+  forEachVariableBackedClassMember(
+      classType->getStaticObjectTypeInfo(), declareMethodVar, declareFieldVar);
 }
 
 CreateFunctionInst *ESTreeIRGen::genTypedImplicitConstructor(
     const Identifier &consName,
     Value *superClass) {
-  // Create an empty constructor.
-  if (superClass) {
-    // TODO: An implicit constructor has to pass all arguments along to the
-    // parent class.
-    Mod->getContext().getSourceErrorManager().error(
-        curFunction()->typedClassContext.node->getStartLoc(),
-        "inherited classes implicit constructor unsupported, "
-        "add an explicit constructor");
-  }
   Function *func;
 
   // Use the compiledEntities_ cache even though we're not enqueuing a
@@ -234,20 +361,45 @@ CreateFunctionInst *ESTreeIRGen::genTypedImplicitConstructor(
         funcInfo &&
         "Semantic resolver failed to decorate class with implicit ctor");
 
+    // AST Node for the superClass, null if no superclass.
+    ESTree::Node *superClassNode = superClass
+        ? curFunction()->typedClassContext.node->_superClass
+        : nullptr;
+
+    // Determine if the implicit constructor needs to emit a super() call.
+    // This is needed only if some ancestor has an explicit constructor or
+    // field initializers that must be triggered.
+    bool needsSuperCall = false;
+    if (superClassNode) {
+      for (auto *cur =
+               curFunction()->typedClassContext.type->getSuperClassInfo();
+           cur;
+           cur = cur->getSuperClassInfo()) {
+        if (cur->getConstructorType() || classFieldInitInfo_.count(cur)) {
+          needsSuperCall = true;
+          break;
+        }
+      }
+    }
+
     func = Builder.createFunction(
         consName,
-        Function::DefinitionKind::ES5Function,
+        needsSuperCall ? Function::DefinitionKind::ES6DerivedConstructor
+                       : Function::DefinitionKind::ES5Function,
         true,
         funcInfo->customDirectives);
 
     auto compileFunc = [this,
                         func,
                         funcInfo,
+                        superClassNode,
+                        needsSuperCall,
                         typedClassContext = curFunction()->typedClassContext,
                         parentScope =
                             curFunction()->curScope()->getVariableScope()] {
       FunctionContext newFunctionContext{this, func, funcInfo};
       newFunctionContext.typedClassContext = typedClassContext;
+      newFunctionContext.superClassNode_ = superClassNode;
 
       auto *prologueBB = Builder.createBasicBlock(func);
       Builder.setInsertionBlock(prologueBB);
@@ -258,6 +410,49 @@ CreateFunctionInst *ESTreeIRGen::genTypedImplicitConstructor(
           InitES5CaptureState::No,
           DoEmitDeclarations::No,
           parentScope);
+
+      if (needsSuperCall) {
+        // Generate implicit super call forwarding the parameters.
+        // Walk up the class chain to find the nearest explicit constructor.
+        flow::TypedFunctionType *superCtorTypeInfo = nullptr;
+        for (auto *cur = typedClassContext.type->getSuperClassInfo(); cur;
+             cur = cur->getSuperClassInfo()) {
+          if (cur->getConstructorType()) {
+            superCtorTypeInfo = cur->getConstructorTypeInfo();
+            break;
+          }
+        }
+
+        // Forward the super constructor's parameters, if any.
+        CallInst::ArgumentList args;
+        if (superCtorTypeInfo) {
+          auto params = superCtorTypeInfo->getParams();
+          for (const flow::TypedFunctionType::Param &param : params) {
+            auto *jsParam = Builder.createJSDynamicParam(func, param.name);
+            jsParam->setType(flowTypeToIRType(param.type));
+            auto *loadParam = Builder.createLoadParamInst(jsParam);
+            curFunction()->jsParams.push_back(loadParam);
+            args.push_back(loadParam);
+          }
+          // +1 for 'this'.
+          func->setExpectedParamCountIncludingThis(params.size() + 1);
+        }
+
+        // Load the super class callee and call it.
+        Value *callee = genExpression(superClassNode);
+        Value *thisVal = curFunction()->jsParams[0];
+        Value *newTarget =
+            Builder.createGetNewTargetInst(func->getNewTargetParam());
+
+        Builder.createCallInst(
+            callee,
+            /* target */ Builder.getEmptySentinel(),
+            /* calleeIsAlwaysClosure */ true,
+            Builder.getEmptySentinel(),
+            newTarget,
+            thisVal,
+            args);
+      }
 
       emitTypedFieldInitCall(curFunction()->typedClassContext.type);
 
@@ -276,46 +471,46 @@ CreateFunctionInst *ESTreeIRGen::genTypedImplicitConstructor(
 Value *ESTreeIRGen::emitTypedClassAllocation(
     flow::ClassType *classType,
     Value *parent,
-    bool skipPrivateFields,
     bool propertiesEnumerable) {
   assert(parent && "parent must be specified");
   // TODO: should create a sealed object, etc.
   AllocTypedObjectInst::ObjectPropertyMap propMap{};
 
-  // Number of fields: the number of public properties as well as the number of
-  // private properties of this class and all ancestors combined.
-  size_t numFields = classType->getFieldNameMap().size();
-  if (!skipPrivateFields) {
-    for (auto *cur = classType; cur; cur = cur->getSuperClassInfo()) {
-      numFields += cur->getPrivateFieldNameMap().size();
-    }
-  }
+  // Number of layout slots, which includes both public and private fields.
+  // Variable-backed methods don't get layout slots, so use
+  // getNumLayoutSlots() instead of getFieldNameMap().size().
+  size_t numFields = classType->getNumLayoutSlots();
   propMap.resize(numFields);
-
   auto addField = [this, &propMap, classType, parent](
                       const flow::ClassType::FieldLookupEntry &entry) {
     const flow::ClassType::Field &field = *entry.getField();
+
+    if (!field.isStoredOnObject())
+      return;
+
+    // Verify that each layout slot is filled exactly once.
     assert(
-        propMap[field.layoutSlotIR].first == nullptr &&
-        "every entry must be filled exactly once");
+        (!field.layoutSlotIR.hasValue() ||
+         propMap[*field.layoutSlotIR].first == nullptr) &&
+        "every layout slot must be filled exactly once");
 
     Literal *name = field.isPrivate
         ? Builder.getLiteralPrivateName(field.name)
         : static_cast<Literal *>(Builder.getLiteralString(field.name));
 
     if (field.isMethod()) {
-      // Create the code for the method.
       if (entry.classType == classType) {
+        // Create the code for the method.
         Value *function = genFunctionExpression(
             llvh::cast<ESTree::FunctionExpressionNode>(field.method->_value),
             field.name);
-        propMap[field.layoutSlotIR] = {name, function};
+        propMap[*field.layoutSlotIR] = {name, function};
         if (auto *CFI = llvh::dyn_cast<CreateFunctionInst>(function)) {
-          // If this field represents a final method, record the IR function
-          // so we can use it to populate the target of calls.
+          // If this field represents a non-overridden method, record the
+          // IR function so we can populate the target of calls.
           if (!field.overridden) {
-            auto [it, success] =
-                finalMethods_.try_emplace(&field, CFI->getFunctionCode());
+            auto [it, success] = nonOverriddenMethods_.try_emplace(
+                &field, CFI->getFunctionCode());
             (void)it;
             (void)success;
             // On recompilation (e.g., finally blocks), the entry may already
@@ -328,23 +523,23 @@ Value *ESTreeIRGen::emitTypedClassAllocation(
       } else {
         assert(parent && "inherited field without parent ClassType");
         // Method is inherited. Read it from the parent.
-        propMap[field.layoutSlotIR] = {
+        propMap[*field.layoutSlotIR] = {
             name,
             Builder.createPrLoadInst(
                 parent,
-                field.layoutSlotIR,
+                *field.layoutSlotIR,
                 name,
                 flowTypeToIRType(field.type))};
-        return;
       }
     } else {
       // Class element is a field.
-      // Need to emit an IDZ check for types that can't have a primitive
-      // default.
-      Value *initValue = flowTypeToIRType(field.type).canBePrimitive()
-          ? getDefaultInitValue(field.type)
-          : Builder.getLiteralUninit();
-      propMap[field.layoutSlotIR] = {name, initValue};
+      // Types without a representable literal default (object types and symbol)
+      // are stored uninitialized and IDZ-checked on load.
+      Type irType = flowTypeToIRType(field.type);
+      Value *initValue = getTypeContext().isIDZType(irType)
+          ? Builder.getLiteralUninit()
+          : getDefaultInitValue(field.type);
+      propMap[*field.layoutSlotIR] = {name, initValue};
     }
   };
 
@@ -353,14 +548,12 @@ Value *ESTreeIRGen::emitTypedClassAllocation(
     flow::ClassType::FieldLookupEntry entry = it.second;
     addField(entry);
   }
-  // Private fields are not stored in the privateFieldNameMap,
-  // so we need to iterate over superclasses to find them.
-  if (!skipPrivateFields) {
-    for (auto *cur = classType; cur; cur = cur->getSuperClassInfo()) {
-      for (const auto &[name, idx] : cur->getPrivateFieldNameMap()) {
-        flow::ClassType::FieldLookupEntry entry{cur, idx};
-        addField(entry);
-      }
+  // Private fields aren't in fieldNameMap_, so iterate over superclasses to
+  // find them. Variable-backed private methods are ignored by addField.
+  for (auto *cur = classType; cur; cur = cur->getSuperClassInfo()) {
+    for (const auto &[name, idx] : cur->getPrivateFieldNameMap()) {
+      flow::ClassType::FieldLookupEntry entry{cur, idx};
+      addField(entry);
     }
   }
 
@@ -379,18 +572,35 @@ Value *ESTreeIRGen::getDefaultInitValue(flow::Type *type) {
       return Builder.getLiteralBool(false);
     case flow::TypeKind::String:
       return Builder.getLiteralString("");
+    case flow::TypeKind::StringLiteral:
+      return Builder.getLiteralString(
+          Identifier::getFromPointer(
+              llvh::cast<flow::StringLiteralType>(type->info)->getValue()));
+    case flow::TypeKind::NumberLiteral:
+      return Builder.getLiteralNumber(
+          llvh::cast<flow::NumberLiteralType>(type->info)->getValue());
+    case flow::TypeKind::BooleanLiteral:
+      return Builder.getLiteralBool(
+          llvh::cast<flow::BooleanLiteralType>(type->info)->getValue());
     case flow::TypeKind::CPtr:
     case flow::TypeKind::Number:
       return Builder.getLiteralPositiveZero();
     case flow::TypeKind::BigInt:
       return Builder.getLiteralBigInt(
           Mod->getContext().getIdentifier("0").getUnderlyingPointer());
+    case flow::TypeKind::Symbol:
     case flow::TypeKind::Any:
+    case flow::TypeKind::Empty:
     case flow::TypeKind::Mixed:
       return Builder.getLiteralUndefined();
-    case flow::TypeKind::Union:
-      return getDefaultInitValue(
-          llvh::cast<flow::UnionType>(type->info)->getTypes()[0]);
+    case flow::TypeKind::Union: {
+      for (auto *arm : llvh::cast<flow::UnionType>(type->info)->getTypes()) {
+        // Try to find a type that is not IDZ.
+        if (!getTypeContext().isIDZType(flowTypeToIRType(arm->info)))
+          return getDefaultInitValue(arm);
+      }
+      return Builder.getLiteralPositiveZero();
+    }
     case flow::TypeKind::TypedFunction:
     case flow::TypeKind::NativeFunction:
     case flow::TypeKind::UntypedFunction:
@@ -402,9 +612,20 @@ Value *ESTreeIRGen::getDefaultInitValue(flow::Type *type) {
       return Builder.getLiteralPositiveZero();
     case flow::TypeKind::Generic:
     case flow::TypeKind::InferencePlaceholder:
+    case flow::TypeKind::InferencePlaceholderArray:
       hermes_fatal("invalid typekind");
   }
   llvm_unreachable("all cases handled");
+}
+
+std::pair<Value *, Type> ESTreeIRGen::getClassMemberVarInit(flow::Type *type) {
+  TypeContext &tc = getTypeContext();
+  Type irType = flowTypeToIRType(type);
+  // Types without a representable literal default (object types and symbol)
+  // start out empty, like a TDZ variable, and are checked on load.
+  if (tc.isIDZType(irType))
+    return {Builder.getLiteralEmpty(), tc.unionTy(irType, Type::createEmpty())};
+  return {getDefaultInitValue(type), irType};
 }
 
 Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
@@ -414,22 +635,29 @@ Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
     case flow::TypeKind::Null:
       return Type::createNull();
     case flow::TypeKind::Boolean:
+    case flow::TypeKind::BooleanLiteral:
       return Type::createBoolean();
     case flow::TypeKind::String:
+    case flow::TypeKind::StringLiteral:
       return Type::createString();
     case flow::TypeKind::CPtr:
     case flow::TypeKind::Number:
+    case flow::TypeKind::NumberLiteral:
       return Type::createNumber();
+    case flow::TypeKind::Symbol:
+      return Type::createSymbol();
     case flow::TypeKind::BigInt:
       return Type::createBigInt();
     case flow::TypeKind::Any:
+    case flow::TypeKind::Empty:
     case flow::TypeKind::Mixed:
       return Type::createAnyType();
     case flow::TypeKind::Union: {
+      TypeContext &tc = getTypeContext();
       Type res = Type::createNoType();
       for (flow::Type *elemType :
            llvh::cast<flow::UnionType>(flowType)->getTypes()) {
-        res = Type::unionTy(res, flowTypeToIRType(elemType));
+        res = tc.unionTy(res, flowTypeToIRType(elemType));
       }
       return res;
     }
@@ -448,6 +676,7 @@ Type ESTreeIRGen::flowTypeToIRType(flow::TypeInfo *flowType) {
       return Type::createObject();
     case flow::TypeKind::Generic:
     case flow::TypeKind::InferencePlaceholder:
+    case flow::TypeKind::InferencePlaceholderArray:
       hermes_fatal("invalid typekind");
   }
   llvm_unreachable("all cases handled");

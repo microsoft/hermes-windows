@@ -8,6 +8,7 @@
 set(HERMES_ENABLE_EH ON)
 add_library(shermes_console SHARED ConsoleBindings.cpp)
 target_link_libraries(shermes_console PRIVATE hermesvm jsi)
+target_link_options(shermes_console PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 
 add_library(shermes_console_a STATIC ConsoleBindings.cpp)
 # Add hermesvm as a dependency so headers are available, even though we aren't
@@ -18,16 +19,29 @@ set(HERMES_ENABLE_EH OFF)
 set(SHERMES_CC "${CMAKE_C_COMPILER}" CACHE STRING "C compiler to invoke")
 set(SHERMES_CC_SYSCFLAGS "" CACHE STRING "C compiler system flags")
 set(SHERMES_CC_SYSLDFLAGS "" CACHE STRING "C compiler system linker flags")
-# Use ';' as path separator on Windows because ':' conflicts with drive letters.
-if(WIN32)
-  set(_shermes_path_sep ";")
+if(CMAKE_HOST_WIN32)
+  set(SHERMES_CC_PATH_SEPARATOR ";")
 else()
-  set(_shermes_path_sep ":")
+  set(SHERMES_CC_PATH_SEPARATOR ":")
 endif()
-set(SHERMES_CC_INCLUDE_PATH
-  "${PROJECT_BINARY_DIR}/lib/config${_shermes_path_sep}${PROJECT_SOURCE_DIR}/include" CACHE STRING
+
+set(SHERMES_CC_INCLUDE_PATH_DEFAULT_ENTRIES
+  "${PROJECT_BINARY_DIR}/lib/config"
+  "${PROJECT_SOURCE_DIR}/include")
+list(JOIN SHERMES_CC_INCLUDE_PATH_DEFAULT_ENTRIES
+  "${SHERMES_CC_PATH_SEPARATOR}"
+  SHERMES_CC_INCLUDE_PATH_DEFAULT)
+
+set(SHERMES_CC_LIB_PATH_DEFAULT_ENTRIES
+  "$<TARGET_FILE_DIR:hermesvm>"
+  "$<TARGET_FILE_DIR:jsi>"
+  "$<TARGET_FILE_DIR:shermes_console>")
+list(JOIN SHERMES_CC_LIB_PATH_DEFAULT_ENTRIES
+  "${SHERMES_CC_PATH_SEPARATOR}"
+  SHERMES_CC_LIB_PATH_DEFAULT)
+set(SHERMES_CC_INCLUDE_PATH "${SHERMES_CC_INCLUDE_PATH_DEFAULT}" CACHE STRING
   "Include path when invoking CC")
-set(SHERMES_CC_LIB_PATH "$<TARGET_FILE_DIR:hermesvm>${_shermes_path_sep}$<TARGET_FILE_DIR:jsi>${_shermes_path_sep}$<TARGET_FILE_DIR:shermes_console>" CACHE STRING
+set(SHERMES_CC_LIB_PATH "${SHERMES_CC_LIB_PATH_DEFAULT}" CACHE STRING
   "Library path when invoking CC")
 
 if (HERMES_ENABLE_ADDRESS_SANITIZER)
@@ -39,12 +53,28 @@ if (HERMES_ENABLE_UNDEFINED_BEHAVIOR_SANITIZER)
   append("-fsanitize=undefined" SHERMES_CC_SYSCFLAGS SHERMES_CC_SYSLDFLAGS)
 endif()
 
+# Generated C allocates SHUnits which the VM frees. Match the VM CRT,
+# including debug heap headers and the Windows fork's hybrid UCRT linkage.
+set(SHERMES_CC_RUNTIME_CFLAGS "")
+set(SHERMES_CC_RUNTIME_LDFLAGS "")
+if(WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+  # dev may build the VM with MSVC but still use clang for generated C.
+  get_filename_component(SHERMES_CC_NAME "${SHERMES_CC}" NAME_WE)
+  if(SHERMES_CC_NAME MATCHES "^clang(\\+\\+)?(-[0-9]+)?$")
+    set(SHERMES_CC_RUNTIME_CFLAGS
+      "-fms-runtime-lib=$<IF:$<CONFIG:Debug>,static_dbg,static>")
+    # HermesWindows.cmake uses the debug UCRT for every non-Release Clang build.
+    set(SHERMES_CC_RUNTIME_LDFLAGS
+      "-Wl,/nodefaultlib:libucrt$<$<NOT:$<CONFIG:Release>>:d>.lib,/defaultlib:ucrt$<$<NOT:$<CONFIG:Release>>:d>.lib")
+  endif()
+endif()
+
 file(GENERATE
         OUTPUT $<CONFIG>/config.h
         CONTENT "\
 #define SHERMES_CC                    R\"(${SHERMES_CC})\"
-#define SHERMES_CC_SYSCFLAGS          R\"(${SHERMES_CC_SYSCFLAGS})\"
-#define SHERMES_CC_SYSLDFLAGS         R\"(${SHERMES_CC_SYSLDFLAGS})\"
+#define SHERMES_CC_SYSCFLAGS          R\"(${SHERMES_CC_SYSCFLAGS} ${SHERMES_CC_RUNTIME_CFLAGS})\"
+#define SHERMES_CC_SYSLDFLAGS         R\"(${SHERMES_CC_SYSLDFLAGS} ${SHERMES_CC_RUNTIME_LDFLAGS})\"
 #define SHERMES_CC_INCLUDE_PATH       R\"(${SHERMES_CC_INCLUDE_PATH})\"
 #define SHERMES_CC_LIB_PATH           R\"(${SHERMES_CC_LIB_PATH})\""
         )

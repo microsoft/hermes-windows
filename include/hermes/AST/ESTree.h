@@ -296,6 +296,11 @@ class FunctionLikeDecoration : public ScopeDecorationBase {
   /// This is used for lazy reparsing of the function.
   bool isMethodDefinition{false};
 
+  /// Decorations attached to this function via Hermes.decorate(...) calls
+  /// in typed mode. Each entry is a DecoratorNode wrapping the decoration
+  /// expression (e.g. Hermes.builtin).
+  NodeList decorations;
+
   void setSemInfo(sema::FunctionInfo *semInfo) {
     assert(semInfo && "setting semInfo to null");
     assert(!semInfo_ && "semInfo is already set");
@@ -1342,6 +1347,11 @@ Node *getProperty(MemberExpressionLikeNode *node);
 /// \return whether the member expression node is computed.
 NodeBoolean getComputed(MemberExpressionLikeNode *node);
 
+/// \return the type annotation of a destructuring pattern node
+/// (ObjectPatternNode or ArrayPatternNode), or nullptr if none or if \p node
+/// is not a pattern node.
+Node *getPatternTypeAnnotation(Node *node);
+
 /// \return the callee of the call.
 Node *getCallee(CallExpressionLikeNode *node);
 
@@ -1369,6 +1379,10 @@ ClassBodyNode *getClassBody(ClassLikeNode *node);
 
 /// \return the body node of \p node.
 ESTree::NodeList &getDecorators(ClassLikeNode *node);
+
+/// Extract the IdentifierNode from a property key node.
+/// \p node must be an IdentifierNode or a PrivateNameNode.
+IdentifierNode *getPropertyIdentifier(Node *node);
 
 /// Allow using \p NodeKind in \p llvh::DenseMaps.
 struct NodeKindInfo : llvh::DenseMapInfo<NodeKind> {

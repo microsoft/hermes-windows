@@ -154,6 +154,35 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   Instrumentation& instrumentation() override {
     return *this;
   }
+#if JSI_VERSION >= 2
+  Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override {
+    return plain_.createValueFromJsonUtf8(json, length);
+  }
+#endif
+
+#if JSI_VERSION >= 22
+  Value createError(const String& msg) override {
+    return plain().createError(msg);
+  }
+  Value createEvalError(const String& msg) override {
+    return plain().createEvalError(msg);
+  }
+  Value createRangeError(const String& msg) override {
+    return plain().createRangeError(msg);
+  }
+  Value createReferenceError(const String& msg) override {
+    return plain().createReferenceError(msg);
+  }
+  Value createSyntaxError(const String& msg) override {
+    return plain().createSyntaxError(msg);
+  }
+  Value createTypeError(const String& msg) override {
+    return plain().createTypeError(msg);
+  }
+  Value createURIError(const String& msg) override {
+    return plain().createURIError(msg);
+  }
+#endif
 
  protected:
   // plain is generally going to be a reference to an object managed
@@ -166,11 +195,11 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
 
   Runtime::PointerValue* cloneSymbol(const Runtime::PointerValue* pv) override {
     return plain_.cloneSymbol(pv);
-  };
+  }
 #if JSI_VERSION >= 6
   Runtime::PointerValue* cloneBigInt(const Runtime::PointerValue* pv) override {
     return plain_.cloneBigInt(pv);
-  };
+  }
 #endif
   Runtime::PointerValue* cloneString(const Runtime::PointerValue* pv) override {
     return plain_.cloneString(pv);
@@ -261,6 +290,12 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   }
 #endif
 
+#if JSI_VERSION >= 22
+  size_t length(const String& str) override {
+    return plain_.length(str);
+  }
+
+#endif
 #if JSI_VERSION >= 16
   void getStringData(
       const jsi::String& str,
@@ -397,6 +432,14 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   bool isArrayBuffer(const Object& o) const override {
     return plain_.isArrayBuffer(o);
   }
+#if JSI_VERSION >= 22
+  bool isTypedArray(const Object& o) const override {
+    return plain_.isTypedArray(o);
+  }
+  bool isUint8Array(const Object& o) const override {
+    return plain_.isUint8Array(o);
+  }
+#endif
   bool isFunction(const Object& o) const override {
     return plain_.isFunction(o);
   }
@@ -435,6 +478,11 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   uint8_t* data(const ArrayBuffer& ab) override {
     return plain_.data(ab);
   }
+#if JSI_VERSION >= 22
+  bool detached(const ArrayBuffer& ab) override {
+    return plain_.detached(ab);
+  }
+#endif
   Value getValueAtIndex(const Array& a, size_t i) override {
     return plain_.getValueAtIndex(a, i);
   }
@@ -442,6 +490,12 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
       override {
     plain_.setValueAtIndexImpl(a, i, value);
   }
+
+#if JSI_VERSION >= 22
+  size_t push(const Array& a, const Value* elements, size_t count) override {
+    return plain_.push(a, elements, count);
+  }
+#endif
 
   Function createFunctionFromHostFunction(
       const PropNameID& name,
@@ -472,6 +526,37 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
 
   const void* getRuntimeDataImpl(const UUID& uuid) override {
     return plain_.getRuntimeDataImpl(uuid);
+  }
+#endif
+
+#if JSI_VERSION >= 22
+  std::shared_ptr<MutableBuffer> tryGetMutableBuffer(
+      const jsi::ArrayBuffer& arrayBuffer) override {
+    return plain_.tryGetMutableBuffer(arrayBuffer);
+  }
+
+  ArrayBuffer buffer(const TypedArray& typedArray) override {
+    return plain_.buffer(typedArray);
+  }
+  size_t byteOffset(const TypedArray& typedArray) override {
+    return plain_.byteOffset(typedArray);
+  }
+  size_t byteLength(const TypedArray& typedArray) override {
+    return plain_.byteLength(typedArray);
+  }
+  size_t length(const TypedArray& typedArray) override {
+    return plain_.length(typedArray);
+  }
+
+  Uint8Array createUint8Array(size_t length) override {
+    return plain_.createUint8Array(length);
+  }
+
+  Uint8Array createUint8Array(
+      const ArrayBuffer& buffer,
+      size_t offset,
+      size_t length) override {
+    return plain_.createUint8Array(buffer, offset, length);
   }
 #endif
 
@@ -727,6 +812,37 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     return RD::isInspectable();
   }
 
+#if JSI_VERSION >= 22
+  Value createError(const String& msg) override {
+    Around around{with_};
+    return RD::createError(msg);
+  }
+  Value createEvalError(const String& msg) override {
+    Around around{with_};
+    return RD::createEvalError(msg);
+  }
+  Value createRangeError(const String& msg) override {
+    Around around{with_};
+    return RD::createRangeError(msg);
+  }
+  Value createReferenceError(const String& msg) override {
+    Around around{with_};
+    return RD::createReferenceError(msg);
+  }
+  Value createSyntaxError(const String& msg) override {
+    Around around{with_};
+    return RD::createSyntaxError(msg);
+  }
+  Value createTypeError(const String& msg) override {
+    Around around{with_};
+    return RD::createTypeError(msg);
+  }
+  Value createURIError(const String& msg) override {
+    Around around{with_};
+    return RD::createURIError(msg);
+  }
+#endif
+
   // The jsi:: prefix is necessary because MSVC compiler complains C2247:
   // Instrumentation is not accessible because RuntimeDecorator uses private
   // to inherit from Instrumentation.
@@ -859,6 +975,13 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
   }
 #endif
 
+#if JSI_VERSION >= 22
+  size_t length(const String& str) override {
+    Around around{with_};
+    return RD::length(str);
+  }
+
+#endif
 #if JSI_VERSION >= 16
   void getStringData(
       const jsi::String& str,
@@ -1013,6 +1136,16 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::isArrayBuffer(o);
   }
+#if JSI_VERSION >= 22
+  bool isTypedArray(const Object& o) const override {
+    Around around{with_};
+    return RD::isTypedArray(o);
+  }
+  bool isUint8Array(const Object& o) const override {
+    Around around{with_};
+    return RD::isUint8Array(o);
+  }
+#endif
   bool isFunction(const Object& o) const override {
     Around around{with_};
     return RD::isFunction(o);
@@ -1046,6 +1179,7 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
 #if JSI_VERSION >= 9
   ArrayBuffer createArrayBuffer(
       std::shared_ptr<MutableBuffer> buffer) override {
+    Around around{with_};
     return RD::createArrayBuffer(std::move(buffer));
   }
 #endif
@@ -1061,6 +1195,12 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::data(ab);
   }
+#if JSI_VERSION >= 22
+  bool detached(const ArrayBuffer& ab) override {
+    Around around{with_};
+    return RD::detached(ab);
+  }
+#endif
   Value getValueAtIndex(const Array& a, size_t i) override {
     Around around{with_};
     return RD::getValueAtIndex(a, i);
@@ -1070,6 +1210,12 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     RD::setValueAtIndexImpl(a, i, value);
   }
+#if JSI_VERSION >= 22
+  size_t push(const Array& a, const Value* elements, size_t count) override {
+    Around around{with_};
+    return RD::push(a, elements, count);
+  }
+#endif
 
   Function createFunctionFromHostFunction(
       const PropNameID& name,
@@ -1092,6 +1238,43 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::callAsConstructor(f, args, count);
   }
+
+#if JSI_VERSION >= 22
+  std::shared_ptr<MutableBuffer> tryGetMutableBuffer(
+      const jsi::ArrayBuffer& arrayBuffer) override {
+    Around around{with_};
+    return RD::tryGetMutableBuffer(arrayBuffer);
+  }
+
+  ArrayBuffer buffer(const TypedArray& typedArray) override {
+    Around around{with_};
+    return RD::buffer(typedArray);
+  }
+  size_t byteOffset(const TypedArray& typedArray) override {
+    Around around{with_};
+    return RD::byteOffset(typedArray);
+  }
+  size_t byteLength(const TypedArray& typedArray) override {
+    Around around{with_};
+    return RD::byteLength(typedArray);
+  }
+  size_t length(const TypedArray& typedArray) override {
+    Around around{with_};
+    return RD::length(typedArray);
+  }
+
+  Uint8Array createUint8Array(size_t length) override {
+    Around around{with_};
+    return RD::createUint8Array(length);
+  }
+  Uint8Array createUint8Array(
+      const ArrayBuffer& buffer,
+      size_t offset,
+      size_t length) override {
+    Around around{with_};
+    return RD::createUint8Array(buffer, offset, length);
+  }
+#endif
 
   // Private data for managing scopes.
   Runtime::ScopeState* pushScope() override {

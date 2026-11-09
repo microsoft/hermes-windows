@@ -238,6 +238,25 @@ class JSWeakMapImplBase : public JSObject {
   static HermesValue
   getValue(Handle<JSWeakMapImplBase> self, Runtime &runtime, Handle<> key);
 
+  /// If \p key already exists, \return its current value without overwriting
+  /// it. Otherwise insert \p key -> \p value and \return \p value.
+  /// \pre \p key must be an Object or non-registered Symbol.
+  static HermesValue getOrInsert(
+      Handle<JSWeakMapImplBase> self,
+      Runtime &runtime,
+      Handle<> key,
+      Handle<> value);
+
+  /// If \p key already exists, \return its current value (without invoking
+  /// \p callback). Otherwise call \p callback with the key to produce the
+  /// value, then store key -> value and \return that value.
+  /// \pre \p key must be an Object or non-registered Symbol.
+  static CallResult<HermesValue> getOrInsertComputed(
+      Handle<JSWeakMapImplBase> self,
+      Runtime &runtime,
+      Handle<> key,
+      Handle<Callable> callback);
+
   /// \return the size of the internal set, after freeing any freeable slots
   /// and erasing their owning keys. Used for testing purposes.
   static uint32_t debugFreeSlotsAndGetSize(
@@ -335,6 +354,9 @@ class JSWeakMapImpl final : public JSWeakMapImplBase {
   }
 
   /// Create a new WeakMap with prototype property \p parentHandle.
+  /// Create a JSWeakMapImpl using the appropriate prototype from runtime.
+  static CallResult<PseudoHandle<JSWeakMapImpl<C>>> create(Runtime &runtime);
+
   static CallResult<PseudoHandle<JSWeakMapImpl<C>>> create(
       Runtime &runtime,
       Handle<JSObject> parentHandle);

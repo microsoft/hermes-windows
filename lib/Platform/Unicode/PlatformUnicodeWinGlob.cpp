@@ -437,6 +437,29 @@ static bool convertToCaseICU(
   return true;
 }
 
+bool localeAffectsCasing() {
+  const hermes_icu_vtable *icu = hermes_icu_get_active_vtable();
+  if (icu && icu->uloc_getDefault) {
+    const char *locale = icu->uloc_getDefault();
+    if (locale && locale[0] && locale[1] &&
+        (!locale[2] || locale[2] == '_' || locale[2] == '-')) {
+      return (locale[0] == 't' && locale[1] == 'r') ||
+          (locale[0] == 'a' && locale[1] == 'z') ||
+          (locale[0] == 'l' && locale[1] == 't');
+    }
+    return false;
+  }
+  wchar_t language[LOCALE_NAME_MAX_LENGTH]{};
+  if (!GetLocaleInfoEx(
+          LOCALE_NAME_USER_DEFAULT,
+          LOCALE_SISO639LANGNAME,
+          language,
+          LOCALE_NAME_MAX_LENGTH))
+    return false;
+  return !wcscmp(language, L"tr") || !wcscmp(language, L"az") ||
+      !wcscmp(language, L"lt");
+}
+
 void convertToCase(
     llvh::SmallVectorImpl<char16_t> &buf,
     CaseConversion targetCase,

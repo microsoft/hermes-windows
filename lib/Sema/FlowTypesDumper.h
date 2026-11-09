@@ -11,6 +11,12 @@
 #include "hermes/Sema/FlowContext.h"
 
 namespace hermes {
+
+namespace ESTree {
+class Node;
+class IdentifierNode;
+} // namespace ESTree
+
 namespace flow {
 
 class FlowTypesDumper {
@@ -37,6 +43,14 @@ class FlowTypesDumper {
   /// Map a type instance to a number.
   llvh::DenseMap<const TypeInfo *, size_t, TypesDenseMapInfo> typeNumber_{};
 
+  /// Set of TypeInfo pointers that are array class types or their homeObjects.
+  /// When printing these, we suppress field details.
+  llvh::DenseSet<const TypeInfo *> arrayClassInfos_{};
+
+  /// Map from array ClassType info to its element type info,
+  /// for printing abbreviated output like class(Array<element>).
+  llvh::DenseMap<const TypeInfo *, const TypeInfo *> arrayElementTypes_{};
+
  public:
   /// \return the unique number associated with the type or 0 if it is a
   /// singleton.
@@ -54,8 +68,11 @@ class FlowTypesDumper {
   /// Print the descriptions of all recorded types.
   void printAllNumberedTypes(llvh::raw_ostream &os);
 
-  /// Print all existing types.
-  void printAllTypes(llvh::raw_ostream &os, const FlowContext &flowTypes);
+  /// Print all types referenced from the given AST.
+  void printAllTypes(
+      llvh::raw_ostream &os,
+      const FlowContext &flowTypes,
+      ESTree::Node *root);
 
   /// Print all native externs.
   void printNativeExterns(

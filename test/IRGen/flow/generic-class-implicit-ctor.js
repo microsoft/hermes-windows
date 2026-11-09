@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %shermes -O0 -typed -dump-ir -Xno-dump-functions=global %s | %FileCheckOrRegen %s --match-full-lines
+// RUN: %shermes -fno-std-globals -O0 -typed -dump-ir -Xno-dump-functions=global %s | %FileCheckOrRegen %s --match-full-lines
 
 class A<T> {
   foo(): void {
@@ -46,8 +46,7 @@ a.foo();
 // CHECK-NEXT:  %19 = CheckedTypeCastInst (:object) %18: any, type(object)
 // CHECK-NEXT:  %20 = TypedLoadParentInst (:object) %19: object
 // CHECK-NEXT:  %21 = PrLoadInst (:object) %20: object, 0: number, "foo": string
-// CHECK-NEXT:  %22 = CallInst [njsf] (:any) %21: object, %foo(): functionCode, true: boolean, empty: any, undefined: undefined, %19: object
-// CHECK-NEXT:  %23 = CheckedTypeCastInst (:undefined) %22: any, type(undefined)
+// CHECK-NEXT:  %22 = CallInst [njsf] (:undefined) %21: object, %foo(): functionCode, true: boolean, empty: any, undefined: undefined, %19: object
 // CHECK-NEXT:        ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

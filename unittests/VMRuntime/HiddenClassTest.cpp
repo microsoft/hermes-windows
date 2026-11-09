@@ -7,6 +7,7 @@
 
 #include "hermes/VM/HiddenClass.h"
 
+#include "hermes/VM/HiddenClass-inline.h"
 #include "hermes/VM/HostModel.h"
 #include "hermes/VM/JSCallableProxy.h"
 #include "hermes/VM/JSProxy.h"
@@ -49,14 +50,18 @@ TEST_F(HiddenClassTest, SmokeTest) {
 
   MutableHandle<HiddenClass> x{runtime};
   MutableHandle<HiddenClass> y{runtime};
+  MutableHandle<HiddenClass> y1{runtime};
+  MutableHandle<HiddenClass> y2{runtime};
+  MutableHandle<HiddenClass> y3{runtime};
   MutableHandle<HiddenClass> z{runtime};
 
-  auto rootHnd =
-      runtime.makeHandle<HiddenClass>(HiddenClass::createRoot(runtime));
+  auto rootHnd = runtime.makeHandle<HiddenClass>(HiddenClass::createRoot(
+      runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{}));
 
   ASSERT_EQ(0u, rootHnd->getNumProperties());
   ASSERT_FALSE(rootHnd->isDictionary());
   ASSERT_TRUE(rootHnd->isKnownLeaf());
+  ASSERT_FALSE(rootHnd->getObjectParentGCPtr());
 
   // x = {}
   x = *rootHnd;
@@ -205,10 +210,10 @@ TEST_F(HiddenClassTest, SmokeTest) {
     ASSERT_EQ(*x, *z);
   }
 
-  auto y1 = HiddenClass::makeAllReadOnly(y, runtime);
-  auto y2 = HiddenClass::makeAllReadOnly(y, runtime);
+  y1 = HiddenClass::freeze(y, runtime);
+  y2 = HiddenClass::freeze(y, runtime);
   ASSERT_EQ(*y1, *y2);
-  auto y3 = HiddenClass::makeAllReadOnly(y1, runtime);
+  y3 = HiddenClass::freeze(y1, runtime);
   ASSERT_EQ(*y1, *y3);
 
   // Turn x into a dictionary by erasing x.a
@@ -264,8 +269,8 @@ TEST_F(HiddenClassTest, AccessorsTest) {
   MutableHandle<HiddenClass> x{runtime};
   MutableHandle<HiddenClass> y{runtime};
 
-  auto rootCls =
-      runtime.makeHandle<HiddenClass>(HiddenClass::createRoot(runtime));
+  auto rootCls = runtime.makeHandle<HiddenClass>(HiddenClass::createRoot(
+      runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{}));
 
   ASSERT_FALSE(rootCls->getMayHaveAccessor());
 
@@ -347,7 +352,10 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
       runtime, createUTF16Ref(u"d"));
 
   // Add y.a, y.b, y.c
-  MutableHandle<HiddenClass> y{runtime, HiddenClass::createRoot(runtime)};
+  MutableHandle<HiddenClass> y{
+      runtime,
+      HiddenClass::createRoot(
+          runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{})};
   {
     // y.a
     auto addRes = HiddenClass::addProperty(
@@ -472,7 +480,10 @@ TEST_F(HiddenClassTest, UpdatePropertyFlagsWithoutTransitionsTest) {
 }
 
 TEST_F(HiddenClassTest, ForEachProperty) {
-  MutableHandle<HiddenClass> clazz{runtime, HiddenClass::createRoot(runtime)};
+  MutableHandle<HiddenClass> clazz{
+      runtime,
+      HiddenClass::createRoot(
+          runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{})};
 
   auto aHnd = *runtime.getIdentifierTable().getSymbolHandle(
       runtime, createUTF16Ref(u"a"));
@@ -521,37 +532,6 @@ TEST_F(HiddenClassTest, ForEachProperty) {
   EXPECT_EQ(expectedProperties, propertiesNoAlloc);
 }
 
-TEST_F(HiddenClassTest, ReservedSlots) {
-  auto aHnd = *runtime.getIdentifierTable().getSymbolHandle(
-      runtime, createUTF16Ref(u"a"));
-  for (unsigned i = 0; i <= InternalProperty::NumAnonymousInternalProperties;
-       ++i) {
-    Handle<HiddenClass> clazz =
-        runtime.getHiddenClassForPrototype(*runtime.getGlobal(), i);
-    EXPECT_FALSE(clazz->isDictionary());
-    auto addRes = HiddenClass::addProperty(
-        clazz, runtime, *aHnd, PropertyFlags::defaultNewNamedPropertyFlags());
-    ASSERT_RETURNED(addRes);
-    EXPECT_EQ(i, addRes->second);
-  }
-
-  // Verify that the saved HiddenClasses for Proxies and HostObjects are
-  // different from the equivalent "normal" HiddenClasses.
-  EXPECT_NE(
-      *runtime.proxyClass,
-      *runtime.getHiddenClassForPrototype(
-          nullptr, JSObject::numOverlapSlots<JSProxy>()));
-  EXPECT_NE(
-      *runtime.callableProxyClass,
-      *runtime.getHiddenClassForPrototype(
-          nullptr, JSObject::numOverlapSlots<JSCallableProxy>()));
-  EXPECT_NE(
-      *runtime.hostObjectClass,
-      *runtime.getHiddenClassForPrototype(
-          runtime.objectPrototypeRawPtr,
-          JSObject::numOverlapSlots<HostObject>()));
-}
-
 TEST_F(HiddenClassTest, TypedObjectTest) {
   struct : public Locals {
     PinnedValue<HiddenClass> hc;
@@ -561,7 +541,8 @@ TEST_F(HiddenClassTest, TypedObjectTest) {
   Handle<SymbolID> aHnd = *runtime.getIdentifierTable().getSymbolHandle(
       runtime, createASCIIRef("a"));
 
-  lv.hc = vmcast<HiddenClass>(HiddenClass::createForTypedObject(runtime, 2));
+  lv.hc = vmcast<HiddenClass>(HiddenClass::createForTypedObject(
+      runtime, Runtime::makeNullHandle<JSObject>(), 2));
   // Shouldn't do anything, the rest of the test should run.
   lv.hc->clearPropertyMap(runtime.getHeap());
 
@@ -607,6 +588,109 @@ TEST_F(HiddenClassTest, TypedObjectTest) {
         createPseudoHandle(*lv.hc), runtime, *aHnd, desc);
     EXPECT_TRUE(pos.hasValue());
   }
+}
+
+TEST_F(HiddenClassTest, ObjectParentTest) {
+  struct : public Locals {
+    PinnedValue<HiddenClass> clazz;
+    PinnedValue<JSObject> obj1;
+    PinnedValue<JSObject> tmp;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  lv.clazz = HiddenClass::createRoot(
+      runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{});
+  EXPECT_TRUE(lv.clazz->getObjectParent(runtime) == nullptr);
+
+  lv.obj1 = JSObject::create(runtime);
+  lv.clazz = HiddenClass::updateObjectParent(
+      lv.clazz, runtime, createPseudoHandle(*lv.obj1));
+  EXPECT_TRUE(lv.clazz->getObjectParent(runtime) == *lv.obj1);
+
+  lv.clazz = HiddenClass::updateObjectParent(
+      lv.clazz, runtime, createPseudoHandle<JSObject>(nullptr));
+  EXPECT_TRUE(lv.clazz->getObjectParent(runtime) == nullptr);
+
+  for (size_t i = 0; i < 10; ++i) {
+    lv.tmp = JSObject::create(runtime);
+    lv.clazz = HiddenClass::updateObjectParent(
+        lv.clazz, runtime, createPseudoHandle(*lv.tmp));
+  }
+
+  EXPECT_TRUE(lv.clazz->isDictionary());
+}
+
+TEST_F(HiddenClassTest, ObjectParentTransitionReuseTest) {
+  struct : public Locals {
+    PinnedValue<HiddenClass> root;
+    PinnedValue<HiddenClass> first;
+    PinnedValue<HiddenClass> firstNull;
+    PinnedValue<HiddenClass> second;
+    PinnedValue<JSObject> obj1;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  lv.root = HiddenClass::createRoot(
+      runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{});
+  lv.obj1 = JSObject::create(runtime);
+
+  // Repeating the same transition must hit parentTransitionMap_ and hand back
+  // the same class, otherwise every parent change would invalidate the
+  // property caches.
+  lv.first = HiddenClass::updateObjectParent(
+      lv.root, runtime, createPseudoHandle(*lv.obj1));
+  lv.second = HiddenClass::updateObjectParent(
+      lv.root, runtime, createPseudoHandle(*lv.obj1));
+  EXPECT_EQ(*lv.first, *lv.second);
+
+  // Same for the null parent.
+  lv.firstNull = HiddenClass::updateObjectParent(
+      lv.first, runtime, createPseudoHandle<JSObject>(nullptr));
+  lv.second = HiddenClass::updateObjectParent(
+      lv.first, runtime, createPseudoHandle<JSObject>(nullptr));
+  EXPECT_EQ(*lv.firstNull, *lv.second);
+  EXPECT_TRUE(lv.firstNull->getObjectParent(runtime) == nullptr);
+}
+
+TEST_F(HiddenClassTest, ObjectParentTransitionCycleIsCollectedTest) {
+  struct : public Locals {
+    PinnedValue<HiddenClass> root;
+    PinnedValue<HiddenClass> child;
+    PinnedValue<JSObject> proto;
+    PinnedValue<JSObject> instance;
+  } lv;
+  LocalsRAII lraii{runtime, &lv};
+
+  lv.root = HiddenClass::createRoot(
+      runtime, Runtime::makeNullHandle<JSObject>(), ClassFlags{});
+  lv.proto = JSObject::create(runtime);
+  lv.child = HiddenClass::updateObjectParent(
+      lv.root, runtime, createPseudoHandle(*lv.proto));
+  lv.instance = JSObject::create(runtime, lv.proto, lv.child);
+
+  {
+    GCScopeMarkerRAII marker{runtime};
+    ASSERT_NE(
+        JSObject::putNamed_RJS(
+            lv.proto,
+            runtime,
+            Predefined::getSymbolID(Predefined::length),
+            lv.instance),
+        ExecutionStatus::EXCEPTION);
+  }
+
+  WeakRef<HiddenClass> weakChild{runtime, lv.child};
+  WeakRef<JSObject> weakProto{runtime, lv.proto};
+  lv.child = nullptr;
+  lv.proto = nullptr;
+  lv.instance = JSObject::create(runtime);
+  lv.instance = nullptr;
+  runtime.collect("test");
+
+  EXPECT_FALSE(weakChild.isValid());
+  EXPECT_FALSE(weakProto.isValid());
+  weakChild.releaseSlot();
+  weakProto.releaseSlot();
 }
 
 } // namespace

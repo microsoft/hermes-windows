@@ -308,6 +308,7 @@ Optional<ESTree::Node *> JSParserImpl::parseComponentDeclarationFlow(
     return None;
   }
 
+  llvh::SaveAndRestore<bool> saveParamAwait(paramAwait_, isAsync);
   SaveFunctionState saveFunctionState{this};
 
   auto parsedBody = parseFunctionBody(
@@ -950,6 +951,18 @@ Optional<ESTree::Node *> JSParserImpl::tryParseMatchStatementFlow(Param param) {
             caseStartLoc))
       return None;
 
+    // A match *statement* case body must be a block; only a match
+    // *expression* case body may be an arbitrary expression. `parseBlock`
+    // asserts that the current token is '{', so without this check a
+    // non-block body such as `match (x) { _ => 1 };` fails that assertion
+    // in a debug build instead of reporting an error.
+    if (!need(
+            TokenKind::l_brace,
+            "in 'match' statement case body",
+            "location of pattern",
+            caseStartLoc))
+      return None;
+
     auto optBody = parseBlock(param.get(ParamReturn));
     if (!optBody)
       return None;
@@ -1409,6 +1422,7 @@ JSParserImpl::parseMatchBindingPatternFlow() {
         "in match binding pattern",
         "start of binding pattern",
         startLoc);
+    return None;
   }
   auto optIdent = parseMatchBindingIdentifierFlow();
   if (!optIdent)
@@ -1524,6 +1538,8 @@ bool JSParserImpl::parseMatchObjectPatternPropertiesFlow(
               propStartLoc))
         return false;
       auto optPattern = parseMatchPatternFlow();
+      if (!optPattern)
+        return false;
       prop = setLocation(
           propStartLoc,
           getPrevTokenEndLoc(),
@@ -3748,6 +3764,8 @@ Optional<ESTree::Node *> JSParserImpl::parseTupleElementFlow(
 
   /// +Identifier : Type
   /// -Identifier : Type
+  /// readonly Identifier : Type
+  /// writeonly Identifier : Type
   /// ^
   if (check(TokenKind::plus, TokenKind::minus)) {
     variance = setLocation(
@@ -3755,6 +3773,12 @@ Optional<ESTree::Node *> JSParserImpl::parseTupleElementFlow(
         tok_,
         new (context_) ESTree::VarianceNode(
             check(TokenKind::plus) ? plusIdent_ : minusIdent_));
+    advance(JSLexer::GrammarContext::Type);
+  } else if (
+      checkN(readonlyIdent_, writeonlyIdent_) &&
+      canFollowVarianceKeywordFlow(lexer_.lookahead1(llvh::None))) {
+    variance = setLocation(
+        tok_, tok_, new (context_) ESTree::VarianceNode(tok_->getIdentifier()));
     advance(JSLexer::GrammarContext::Type);
   }
 
@@ -4171,6 +4195,12 @@ bool JSParserImpl::parsePropertyTypeAnnotationFlow(
         tok_,
         new (context_) ESTree::VarianceNode(
             check(TokenKind::plus) ? plusIdent_ : minusIdent_));
+    advance(JSLexer::GrammarContext::Type);
+  } else if (
+      checkN(readonlyIdent_, writeonlyIdent_) &&
+      canFollowVarianceKeywordFlow(lexer_.lookahead1(llvh::None))) {
+    variance = setLocation(
+        tok_, tok_, new (context_) ESTree::VarianceNode(tok_->getIdentifier()));
     advance(JSLexer::GrammarContext::Type);
   }
 
@@ -4712,6 +4742,14 @@ Optional<ESTree::Node *> JSParserImpl::parseTypeParamFlow() {
     advance(JSLexer::GrammarContext::Type);
   }
 
+  // `in` and `out` are both ambiguous: variance modifier (`<in T>`,
+  // `<out T>`) vs name (`<in>`, `<out>`, `<in: T>`, `<in extends Foo>`).
+  // Defer the decision: consume the keyword here, and below — once we
+  // know the *actual* next token — either promote it to variance or
+  // treat it as the name itself.
+  SMRange varianceKeywordRange;
+  UniqueString *varianceKeywordKind = nullptr;
+
   if (check(TokenKind::plus, TokenKind::minus)) {
     variance = setLocation(
         tok_,
@@ -4719,12 +4757,38 @@ Optional<ESTree::Node *> JSParserImpl::parseTypeParamFlow() {
         new (context_) ESTree::VarianceNode(
             check(TokenKind::plus) ? plusIdent_ : minusIdent_));
     advance(JSLexer::GrammarContext::Type);
+  } else if (check(TokenKind::rw_in) || check(outIdent_)) {
+    varianceKeywordKind = tok_->getResWordOrIdentifier();
+    varianceKeywordRange = tok_->getSourceRange();
+    advance(JSLexer::GrammarContext::Type);
   }
 
-  if (!need(TokenKind::identifier, "in type parameter", nullptr, {}))
+  // Type-param name: identifier or `in` (rw_in). `in` is accepted because
+  // Flow reclassifies it to an identifier in TYPE lex mode (matching
+  // `<in>`, `<in: T>`, `<in extends T>`, `<X, in, Y>`). `out` is already a
+  // plain identifier in Hermes, so `<out>` etc. work without special
+  // handling.
+  UniqueString *name;
+  if (check(TokenKind::identifier) || check(TokenKind::rw_in)) {
+    if (varianceKeywordKind != nullptr) {
+      // The deferred `in` was variance, and the current token is the name.
+      variance = setLocation(
+          varianceKeywordRange,
+          varianceKeywordRange,
+          new (context_) ESTree::VarianceNode(varianceKeywordKind));
+    }
+    name = tok_->getResWordOrIdentifier();
+    advance(JSLexer::GrammarContext::Type);
+  } else if (varianceKeywordKind != nullptr) {
+    // The deferred `in`/`out` was the type-param name itself, not
+    // variance. Reached when the next token is `>`, `,`, `:`, `=`, or
+    // `rw_extends` (none of which are name tokens). E.g. `<in>`,
+    // `<out: T>`, `<in extends T>`, `<out = T>`, `<X, in, Y>`.
+    name = varianceKeywordKind;
+  } else {
+    errorExpected(TokenKind::identifier, "in type parameter", nullptr, {});
     return None;
-  UniqueString *name = tok_->getIdentifier();
-  advance(JSLexer::GrammarContext::Type);
+  }
 
   ESTree::Node *bound = nullptr;
   bool usesExtendsBound = false;

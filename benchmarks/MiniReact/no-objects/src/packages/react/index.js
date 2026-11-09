@@ -11,7 +11,6 @@
 import invariant from './invariant';
 import CHECKED_CAST from 'sh/CHECKED_CAST';
 import {queueMicrotask} from 'sh/microtask';
-import {join} from 'sh/fastarray';
 
 function padString(str: string, len: number): string {
   let result: string = '';
@@ -32,7 +31,7 @@ function padString(str: string, len: number): string {
 type React$ElementType =
   | string
   | Component /* TODO: React$AbstractComponent<empty, mixed> */
-  | number /* TODO: symbol */;
+  | symbol;
 
 /**
  * Type of a React element. React elements are commonly created using JSX
@@ -73,7 +72,7 @@ export type React$Node = React$NodeWithoutArray[] | React$NodeWithoutArray;
  */
 type React$Key = string | number;
 
-const REACT_FRAGMENT_TYPE: number = 1 /* Symbol.for('react.fragment') */;
+const REACT_FRAGMENT_TYPE: symbol = Symbol.for('react.fragment');
 
 /* eslint-disable lint/strictly-null, lint/react-state-props-mutation, lint/flow-react-element */
 
@@ -95,7 +94,7 @@ let workInProgressState: State<mixed> | null = null;
 /**
  * Queue of updates triggered *during* render.
  */
-const renderPhaseUpdateQueue: Update<mixed>[] = [];
+let renderPhaseUpdateQueue: Update<mixed>[] = [];
 
 /**
  * Public API to create a new "root", this is where React attaches rendering to a host element.
@@ -116,12 +115,12 @@ export function useState<T>(
    */
   initial: T,
 ): [T, SetState<T>] {
-  const root: Root = CHECKED_CAST<Root>(workInProgressRoot);
-  const fiber: Fiber = CHECKED_CAST<Fiber>(workInProgressFiber);
   invariant(
-    fiber !== null && root !== null,
+    workInProgressFiber !== null && workInProgressRoot !== null,
     'useState() called outside of render',
   );
+  const root: Root = workInProgressRoot;
+  const fiber: Fiber = workInProgressFiber;
 
   let state: State<T>;
   const _workInProgressState: State<mixed> | null = workInProgressState;
@@ -136,10 +135,10 @@ export function useState<T>(
     // can't statically prove this
     state = CHECKED_CAST<State<T>>(nextState);
   } else {
-    let nextState = CHECKED_CAST<State<mixed>>(_workInProgressState).next;
+    let nextState = _workInProgressState.next;
     if (nextState === null) {
       nextState = new State<mixed>(initial);
-      CHECKED_CAST<State<mixed>>(_workInProgressState).next = nextState;
+      _workInProgressState.next = nextState;
     }
     // NOTE: in case of a re-render we assume that the hook types match but
     // can't statically prove this
@@ -148,14 +147,12 @@ export function useState<T>(
   // NOTE: this should just work because of subtying, State<T> should be subtype of State<mixed>
   workInProgressState = CHECKED_CAST<State<mixed>>(state);
   return [
-    // Untyped check that the existing state value has the correct type,
-    // This is safe if components follow the rules of hooks
-    CHECKED_CAST<T>(state.value),
+    state.value,
     (updater: Updater<T>): void => {
       const update = new Update<mixed>(
         fiber,
         CHECKED_CAST<State<mixed>>(state),
-        CHECKED_CAST<Updater<mixed>>(updater),
+        updater,
       );
       if (workInProgressFiber !== null) {
         // called during render
@@ -167,9 +164,9 @@ export function useState<T>(
   ];
 }
 
-const callbacks = new Map();
+const callbacks = new Map<string, any>();
 export function callOnClickOrChange(id: string, event: any): void {
-  const callback = callbacks.get(id);
+  const callback: any = callbacks.get(id);
   if (callback == null) {
     throw new Error('No callback registered with id: ' + id);
   }
@@ -217,7 +214,7 @@ class Update<T> {
     } else {
       // NOTE: The type of Updater<T> is meant to expresss `T (not function) | T (function of T => T)`
       // thus the fact that updater is *not* a function here means it is a T
-      value = CHECKED_CAST<T>(updater);
+      value = updater;
     }
     const changed = !Object.is(state.value, value);
     state.value = value;
@@ -230,23 +227,17 @@ class Root {
    * The fiber representing the root node (`element`), null until
    * render is first called.
    */
-  root: Fiber | null;
+  root: Fiber | null = null;
 
   /**
    * The last rendered root element, initially null.
    */
-  element: React$MixedElement | null;
+  element: React$MixedElement | null = null;
 
   /**
    * Queue of updates (state changes) to apply on the next render
    */
-  updateQueue: Update<mixed>[];
-
-  constructor() {
-    this.root = null;
-    this.element = null;
-    this.updateQueue = ([]: Update<mixed>[]);
-  }
+  updateQueue: Update<mixed>[] = ([]: Update<mixed>[]);
 
   /**
    * Notify the root that an update is scheduled
@@ -260,7 +251,7 @@ class Root {
           element !== null,
           'Expected an element to be set after rendering',
         );
-        this.doWork(CHECKED_CAST<React$MixedElement>(element));
+        this.doWork(element);
       });
     }
   }
@@ -268,7 +259,8 @@ class Root {
   /**
    * Drive any remaining work to completion and return the rendered result
    */
-  render(element: React$MixedElement): string {
+  // Reconcile only: build/update the retained fiber tree. No serialization.
+  update(element: React$MixedElement): void {
     invariant(
       workInProgressFiber === null && workInProgressState === null,
       'Cannot render, an existing render is in progress',
@@ -278,12 +270,21 @@ class Root {
     if (hasChanges) {
       this.doWork(element);
     }
+  }
 
+  // Serialize the retained fiber tree to a string. Separate from update() so
+  // callers can reconcile without paying serialization cost every time.
+  toString(): string {
     invariant(this.root !== null, 'Expected root to be rendered');
-    const root: Fiber = CHECKED_CAST<Fiber>(this.root);
+    const root: Fiber = this.root;
     const output: string[] = [];
     this.printFiber(root, output, 0);
-    return join(output, '\n');
+    return output.join('\n');
+  }
+
+  render(element: React$MixedElement): string {
+    this.update(element);
+    return this.toString();
   }
 
   doWork(element: React$MixedElement): void {
@@ -307,20 +308,19 @@ class Root {
     }
     while (fiber !== null) {
       // Render the fiber, which creates child/sibling nodes
-      let fiber2: Fiber = CHECKED_CAST<Fiber>(fiber);
-      this.renderFiber(fiber2);
+      this.renderFiber(fiber);
       // advance to the next fiber
-      if (fiber2.child !== null) {
-        fiber = fiber2.child;
-      } else if (fiber2.sibling !== null) {
-        fiber = fiber2.sibling;
+      if (fiber.child !== null) {
+        fiber = fiber.child;
+      } else if (fiber.sibling !== null) {
+        fiber = fiber.sibling;
       } else {
-        fiber = fiber2.parent;
-        while (fiber !== null && CHECKED_CAST<Fiber>(fiber).sibling === null) {
-          fiber = CHECKED_CAST<Fiber>(fiber).parent;
+        fiber = fiber.parent;
+        while (fiber !== null && fiber.sibling === null) {
+          fiber = fiber.parent;
         }
         if (fiber !== null) {
-          fiber = CHECKED_CAST<Fiber>(fiber).sibling;
+          fiber = fiber.sibling;
         }
       }
     }
@@ -340,8 +340,19 @@ class Root {
           if (propValue == null || typeof propValue === 'function') {
             continue;
           }
-
-          str += ` ${propName}=${JSON.stringify(propValue) ?? 'undefined'}`;
+          // JSON.stringify only for object props; quote strings directly.
+          let valueStr: string;
+          if (typeof propValue === 'string') {
+            valueStr = '"' + CHECKED_CAST<string>(propValue) + '"';
+          } else if (
+            typeof propValue === 'number' ||
+            typeof propValue === 'boolean'
+          ) {
+            valueStr = String(propValue);
+          } else {
+            valueStr = JSON.stringify(propValue) ?? 'undefined';
+          }
+          str += ' ' + propName + '=' + valueStr;
         }
         if (fiber.child == null) {
           str += ' />';
@@ -372,8 +383,8 @@ class Root {
   printChildren(fiber: Fiber, out: string[], level: number): void {
     let current: Fiber | null = fiber.child;
     while (current !== null) {
-      this.printFiber(CHECKED_CAST<Fiber>(current), out, level);
-      current = CHECKED_CAST<Fiber>(current).sibling;
+      this.printFiber(current, out, level);
+      current = current.sibling;
     }
   }
 
@@ -410,7 +421,7 @@ class Root {
               );
               hasChanges = update.run() || hasChanges;
             }
-            renderPhaseUpdateQueue.length = 0;
+            renderPhaseUpdateQueue = [];
             if (!hasChanges) {
               break;
             }
@@ -424,11 +435,11 @@ class Root {
           if (id != null) {
             const onClick = fiber.props.onClick;
             if (onClick != null) {
-              callbacks.set(id, onClick);
+              callbacks.set(CHECKED_CAST<string>(id), onClick);
             }
             const onChange = fiber.props.onChange;
             if (onChange != null) {
-              callbacks.set(id, onChange);
+              callbacks.set(CHECKED_CAST<string>(id), onChange);
             }
           }
           break;
@@ -471,23 +482,23 @@ class Root {
           CHECKED_CAST<string>(element.type),
         );
         invariant(
-          element.props !== null && typeof element.props === 'object',
+          (element.props: any) !== null && typeof element.props === 'object',
           'Expected component props',
         );
 
-        // const {children, ...props} = element.props;
-        const children = element.props.children;
-        const props = {...element.props};
-        delete props.children;
+        const {children, ...props} = element.props;
 
         fiber = new Fiber(type, props, element.key);
-        this.mountChildren(children, fiber);
+        this.mountChildren(CHECKED_CAST<React$Node>(children), fiber);
       } else {
         switch (element.type) {
           case REACT_FRAGMENT_TYPE: {
             const type: FiberType = new FiberTypeFragment();
             fiber = new Fiber(type, (element.props: any), element.key);
-            this.mountChildren(element.props.children, fiber);
+            this.mountChildren(
+              CHECKED_CAST<React$Node>(element.props.children),
+              fiber,
+            );
             break;
           }
           default: {
@@ -506,18 +517,15 @@ class Root {
   }
 
   mountChildren(children: React$Node, parentFiber: Fiber): void {
-    if (Array.isArray(children)) {
+    if (globalThis.Array.isArray(children)) {
       let prev: Fiber | null = null;
       for (const childElement of CHECKED_CAST<any[]>(children)) {
         if (childElement == null) {
           continue;
         }
-        const child = this.mountFiber(
-          CHECKED_CAST<React$Node>(childElement),
-          parentFiber,
-        );
+        const child = this.mountFiber(childElement, parentFiber);
         if (prev !== null) {
-          CHECKED_CAST<Fiber>(prev).sibling = child;
+          prev.sibling = child;
         } else {
           // set parent to point to first child
           parentFiber.child = child;
@@ -540,25 +548,18 @@ class Root {
     prevChild: Fiber | null,
     element: React$MixedElement,
   ): Fiber {
-    if (
-      prevChild !== null &&
-      CHECKED_CAST<Fiber>(prevChild).type === element.type
-    ) {
-      let prevChild: Fiber = CHECKED_CAST<Fiber>(prevChild);
+    if (prevChild !== null && prevChild.type === (element.type: any)) {
       // Only host and fragment nodes have to be reconciled: otherwise this is a
       // function component and its children will be reconciled when they are later
       // emitted in a host position (ie as a direct result of render)
       switch (prevChild.type.kind) {
         case 'host': {
           invariant(
-            element.props !== null && typeof element.props === 'object',
+            (element.props: any) !== null && typeof element.props === 'object',
             'Expected component props',
           );
 
-          // const {children, ...props} = element.props;
-          const children = element.props.children;
-          const props = {...element.props};
-          delete props.children;
+          const {children, ...props} = element.props;
 
           prevChild.props = props;
           this.reconcileChildren(prevChild, (children: any));
@@ -566,7 +567,7 @@ class Root {
         }
         case 'fragment': {
           invariant(
-            element.props !== null && typeof element.props === 'object',
+            (element.props: any) !== null && typeof element.props === 'object',
             'Expected component props',
           );
 
@@ -576,7 +577,7 @@ class Root {
         }
         case 'component': {
           invariant(
-            element.props !== null && typeof element.props === 'object',
+            (element.props: any) !== null && typeof element.props === 'object',
             'Expected component props',
           );
           prevChild.props = element.props;
@@ -598,27 +599,24 @@ class Root {
    */
   reconcileChildren(parent: Fiber, children: React$Node): void {
     const prevChild: Fiber | null = parent.child;
-    if (Array.isArray(children)) {
+    if (globalThis.Array.isArray(children)) {
       let childrenArray = CHECKED_CAST<React$MixedElement[]>(children);
       // Fast-path for empty and single-element arrays
       if (childrenArray.length === 0) {
         parent.child = null;
       } else if (childrenArray.length === 1) {
         parent.child = this.reconcileFiber(parent, prevChild, childrenArray[0]);
-        CHECKED_CAST<Fiber>(parent.child).sibling = null;
+        parent.child.sibling = null;
       } else {
         this.reconcileMultipleChildren(parent, childrenArray);
       }
     } else if (typeof children === 'string') {
-      if (
-        prevChild === null ||
-        CHECKED_CAST<Fiber>(prevChild).type.kind !== 'text'
-      ) {
+      if (prevChild === null || prevChild.type.kind !== 'text') {
         const type = new FiberTypeText(CHECKED_CAST<string>(children));
         const child = new Fiber(type, {}, null);
         parent.child = child;
       } else {
-        CHECKED_CAST<FiberTypeText>(CHECKED_CAST<Fiber>(prevChild).type).text =
+        CHECKED_CAST<FiberTypeText>(prevChild.type).text =
           CHECKED_CAST<string>(children);
       }
     } else if (children != null) {
@@ -627,11 +625,11 @@ class Root {
         prevChild,
         CHECKED_CAST<React$MixedElement>(children),
       );
-      CHECKED_CAST<Fiber>(parent.child).sibling = null;
+      parent.child.sibling = null;
     } else {
       parent.child = null;
       if (prevChild !== null) {
-        CHECKED_CAST<Fiber>(prevChild).parent = null;
+        prevChild.parent = null;
       }
     }
   }
@@ -650,13 +648,13 @@ class Root {
       'Expected children to have multiple elements',
     );
     // map existing children by key to make subsequent lookup O(log n)
-    const keyedChildren: any = new Map();
+    const keyedChildren: any = new Map<Fiber, Fiber>();
     let current: Fiber | null = parent.child;
     while (current !== null) {
-      if (CHECKED_CAST<Fiber>(current).key !== null) {
-        keyedChildren.set(CHECKED_CAST<Fiber>(current).key, current);
+      if (current.key !== null) {
+        keyedChildren.set(current.key, current);
       }
-      current = CHECKED_CAST<Fiber>(current).sibling;
+      current = current.sibling;
     }
     let prev: Fiber | null = null; // previous fiber at this key/index
     let prevByIndex: Fiber | null = parent.child; // keep track of prev fiber at this index
@@ -672,14 +670,13 @@ class Root {
         child = this.mountFiber(childElement, parent);
       }
       if (prev !== null) {
-        CHECKED_CAST<Fiber>(prev).sibling = child;
+        prev.sibling = child;
       } else {
         // set parent to point to first child
         parent.child = child;
       }
       prev = child;
-      prevByIndex =
-        prevByIndex !== null ? CHECKED_CAST<Fiber>(prevByIndex).sibling : null;
+      prevByIndex = prevByIndex !== null ? prevByIndex.sibling : null;
     }
   }
 }
@@ -745,21 +742,18 @@ class FiberTypeText extends FiberType {
  * the framework only looks at the identity of prop values and does not otherwise make any
  * assumptions about which props may exist and what their types are.
  */
-export type Props = any;
+export type Props = {+[prop: string]: mixed};
 
 /**
  * Data storage for the useState() hook
  */
 class State<T> {
   value: T;
-  next: State<T> | null;
-  prev: State<T> | null;
+  next: State<T> | null = null;
+  prev: State<T> | null = null;
 
   constructor(value: T) {
     this.value = value;
-
-    this.next = null;
-    this.prev = null;
   }
 }
 
@@ -770,21 +764,16 @@ class State<T> {
 class Fiber {
   type: FiberType;
   props: Props;
-  parent: Fiber | null;
-  child: Fiber | null;
-  sibling: Fiber | null;
-  state: State<mixed> | null;
+  parent: Fiber | null = null;
+  child: Fiber | null = null;
+  sibling: Fiber | null = null;
+  state: State<mixed> | null = null;
   key: React$Key | null;
 
   constructor(type: FiberType, props: Props, key: React$Key | null) {
     this.type = type;
     this.props = props;
     this.key = key;
-
-    this.parent = null;
-    this.child = null;
-    this.sibling = null;
-    this.state = null;
   }
 }
 

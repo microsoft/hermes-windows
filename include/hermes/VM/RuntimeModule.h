@@ -13,6 +13,7 @@
 #include "hermes/Support/HashString.h"
 #include "hermes/VM/CodeBlock.h"
 #include "hermes/VM/IdentifierTable.h"
+#include "hermes/VM/RegExpBytecode.h"
 
 #include "hermes/VM/StringPrimitiveValueDenseMapInfo.h"
 #include "hermes/VM/StringRefUtils.h"
@@ -176,6 +177,11 @@ class RuntimeModule final : public llvh::ilist_node<RuntimeModule> {
   /// the module has not yet been initialized.
   ArrayStorageBase<HermesValue> *moduleExports_{nullptr};
 
+  /// The shared bytecode of each regexp literal, indexed by regexp ID and
+  /// created on first use. Grows with the regexp table under lazy
+  /// compilation. Mutator thread only.
+  std::vector<llvh::IntrusiveRefCntPtr<RegExpBytecode>> regExpCache_{};
+
   /// Registers the created RuntimeModule with \p domain, resulting in
   /// \p domain owning it. The RuntimeModule will be freed when the
   /// domain is collected..
@@ -274,6 +280,10 @@ class RuntimeModule final : public llvh::ilist_node<RuntimeModule> {
   /// \return the RegExp bytecode for a given regexp ID.
   llvh::ArrayRef<uint8_t> getRegExpBytecodeFromRegExpID(
       uint32_t regExpId) const;
+
+  /// \return the shared bytecode of regexp literal \p regExpID, creating
+  /// it from the module's bytecode on first use. Mutator thread only.
+  llvh::IntrusiveRefCntPtr<RegExpBytecode> getRegExpBytecode(uint32_t regExpID);
 
   /// \return the number of functions in the function map.
   uint32_t getNumCodeBlocks() const {
@@ -408,6 +418,12 @@ class RuntimeModule final : public llvh::ilist_node<RuntimeModule> {
   /// RuntimeModule.
   size_t additionalMemorySize() const;
 
+  /// \return the malloc'd bytes held by the regexp literal cache: its
+  /// vector and the entries in it. Reported by the Domain separately from
+  /// additionalMemorySize(), because the entries have their own snapshot
+  /// nodes.
+  size_t regExpCacheMemorySize() const;
+
 #ifdef HERMES_MEMORY_INSTRUMENTATION
   /// Add native nodes and edges to heap snapshots.
   void snapshotAddNodes(GC &gc, HeapSnapshot &snap) const;
@@ -415,13 +431,16 @@ class RuntimeModule final : public llvh::ilist_node<RuntimeModule> {
 #endif
 
   /// Find the cached hidden class for an object literal, if one exists.
+  /// \param parent is the parent object that we expect to find.
   /// \param shapeTableIndex is the ID of an object literal shape.
   /// \return the cached hidden class.
   HiddenClass *findCachedLiteralHiddenClass(
       Runtime &runtime,
+      JSObject *parent,
       uint32_t shapeTableIndex) const;
 
   /// Set the cached hidden class for a given shape.
+  /// If shapeTableIndex == SHAPE_TABLE_CACHING_DISABLED, do nothing.
   /// \param shapeTableIndex is the ID of an object literal shape.
   /// \param clazz the hidden class to cache.
   void setCachedLiteralHiddenClass(

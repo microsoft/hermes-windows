@@ -62,6 +62,18 @@ uint32_t instructionWidth<regex::U16BracketInsn>(
 }
 
 template <>
+uint32_t instructionWidth<regex::BracketICaseInsn>(
+    const regex::BracketICaseInsn *insn) {
+  return insn->totalWidth();
+}
+
+template <>
+uint32_t instructionWidth<regex::U16BracketICaseInsn>(
+    const regex::U16BracketICaseInsn *insn) {
+  return insn->totalWidth();
+}
+
+template <>
 uint32_t instructionWidth<regex::MatchNChar8Insn>(
     const regex::MatchNChar8Insn *insn) {
   return insn->totalWidth();
@@ -86,7 +98,7 @@ void dumpInstruction(
     const regex::MatchChar16Insn *insn,
     llvh::raw_ostream &OS) {
   OS << "MatchChar16: ";
-  char32_t c = insn->c;
+  char32_t c = static_cast<char32_t>(insn->c);
   OS << llvh::format_hex(c, 4);
 }
 
@@ -147,7 +159,7 @@ void dumpInstruction(
     const regex::MatchCharICase16Insn *insn,
     llvh::raw_ostream &OS) {
   OS << "MatchCharICase16: ";
-  char32_t c = insn->c;
+  char32_t c = static_cast<char32_t>(insn->c);
   OS << llvh::format_hex(c, 4);
 }
 
@@ -173,8 +185,21 @@ void dumpInstruction(
 
 void dumpInstruction(const regex::BracketInsn *insn, llvh::raw_ostream &OS) {
   using namespace regex;
-  OS << (insn->opcode == Opcode::U16Bracket ? "U16Bracket" : "Bracket")
-     << ": [";
+  switch (insn->opcode) {
+    case Opcode::U16Bracket:
+      OS << "U16Bracket";
+      break;
+    case Opcode::U16BracketICase:
+      OS << "U16BracketICase";
+      break;
+    case Opcode::BracketICase:
+      OS << "BracketICase";
+      break;
+    default:
+      OS << "Bracket";
+      break;
+  }
+  OS << ": [";
   if (insn->negate)
     OS << '^';
   if (insn->positiveCharClasses & CharacterClass::Digits)
@@ -211,9 +236,27 @@ void dumpInstruction(const regex::BracketInsn *insn, llvh::raw_ostream &OS) {
 }
 
 void dumpInstruction(
+    const regex::BracketICaseInsn *insn,
+    llvh::raw_ostream &OS) {
+  dumpInstruction(static_cast<const regex::BracketInsn *>(insn), OS);
+}
+
+void dumpInstruction(
+    const regex::U16BracketICaseInsn *insn,
+    llvh::raw_ostream &OS) {
+  dumpInstruction(static_cast<const regex::BracketInsn *>(insn), OS);
+}
+
+void dumpInstruction(
     const regex::WordBoundaryInsn *insn,
     llvh::raw_ostream &OS) {
   OS << "WordBoundary: " << (insn->invert ? "\\B" : "\\b");
+}
+
+void dumpInstruction(
+    const regex::WordBoundaryICaseInsn *insn,
+    llvh::raw_ostream &OS) {
+  OS << "WordBoundaryICase: " << (insn->invert ? "\\B" : "\\b");
 }
 
 void dumpInstruction(
@@ -230,6 +273,24 @@ void dumpInstruction(
 
 void dumpInstruction(const regex::BackRefInsn *insn, llvh::raw_ostream &OS) {
   OS << "BackRefInsn: " << insn->mexp;
+}
+
+void dumpInstruction(
+    const regex::BackRefICaseInsn *insn,
+    llvh::raw_ostream &OS) {
+  OS << "BackRefICaseInsn: " << insn->mexp;
+}
+
+void dumpInstruction(
+    const regex::LeftAnchorMultilineInsn *insn,
+    llvh::raw_ostream &OS) {
+  OS << "LeftAnchorMultiline";
+}
+
+void dumpInstruction(
+    const regex::RightAnchorMultilineInsn *insn,
+    llvh::raw_ostream &OS) {
+  OS << "RightAnchorMultiline";
 }
 
 void dumpInstruction(const regex::LookaroundInsn *insn, llvh::raw_ostream &OS) {
@@ -289,6 +350,26 @@ void dumpRegexBytecode(llvh::ArrayRef<uint8_t> bytes, llvh::raw_ostream &OS) {
       aligner(header->loopCount),
       aligner(header->syntaxFlags),
       header->constraints);
+  if (header->startFlags & regex::StartFilterPresent) {
+    // ASCII members as hex ranges in increasing order.
+    OS << "  StartSet:";
+    for (uint32_t u = 0; u < 128;) {
+      if (!regex::startSetHasASCII(*header, u)) {
+        ++u;
+        continue;
+      }
+      uint32_t last = u;
+      while (last + 1 < 128 && regex::startSetHasASCII(*header, last + 1))
+        ++last;
+      OS << llvh::format(" 0x%02x", u);
+      if (last != u)
+        OS << llvh::format("-0x%02x", last);
+      u = last + 1;
+    }
+    if (header->startFlags & regex::StartFilterNonASCII)
+      OS << " nonascii";
+    OS << '\n';
+  }
   bytes = bytes.slice(sizeof *header);
   uint32_t cursor = 0;
   while (cursor < bytes.size()) {

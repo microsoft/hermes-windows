@@ -24,8 +24,8 @@ JSTypedArrayBase::JSTypedArrayBase(
       buffer_(nullptr),
       length_(0),
       offset_(0) {
-  flags_.indexedStorage = true;
-  flags_.fastIndexProperties = true;
+  assert(hasIndexedStorage(runtime) && "must have indexed storage");
+  assert(hasFastIndexProperties(runtime) && "must have fast index properties");
 }
 
 void TypedArrayBaseBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
@@ -37,16 +37,23 @@ void TypedArrayBaseBuildMeta(const GCCell *cell, Metadata::Builder &mb) {
 
 std::pair<uint32_t, uint32_t> JSTypedArrayBase::_getOwnIndexedRangeImpl(
     JSObject *selfObj,
-    PointerBase &) {
+    PointerBase &base) {
   auto *self = vmcast<JSTypedArrayBase>(selfObj);
+  // ECMA-2026 10.4.5: A detached TypedArray has no indexed properties.
+  if (LLVM_UNLIKELY(!self->attached(base)))
+    return {0, 0};
   return {0, self->getLength()};
 }
 
 bool JSTypedArrayBase::_haveOwnIndexedImpl(
     JSObject *selfObj,
-    Runtime &,
+    Runtime &runtime,
     uint32_t index) {
   auto *self = vmcast<JSTypedArrayBase>(selfObj);
+  // ECMA-2026 10.4.5.2 [[HasProperty]]: If the buffer is detached, no indexed
+  // properties exist.
+  if (LLVM_UNLIKELY(!self->attached(runtime)))
+    return false;
   // Check whether the index is within the storage.
   return index < self->getLength();
 }
@@ -56,6 +63,10 @@ OptValue<PropertyFlags> JSTypedArrayBase::_getOwnIndexedPropertyFlagsImpl(
     Runtime &runtime,
     uint32_t index) {
   auto *self = vmcast<JSTypedArrayBase>(selfObj);
+  // ECMA-2026 10.4.5.4 [[GetOwnProperty]]: If the buffer is detached, no
+  // indexed properties exist.
+  if (LLVM_UNLIKELY(!self->attached(runtime)))
+    return llvh::None;
   // Check whether the index is within the storage.
   if (LLVM_UNLIKELY(index >= self->getLength())) {
     return llvh::None;
@@ -65,9 +76,9 @@ OptValue<PropertyFlags> JSTypedArrayBase::_getOwnIndexedPropertyFlagsImpl(
   indexedElementFlags.writable = 1;
   indexedElementFlags.configurable = 1;
 
-  if (LLVM_UNLIKELY(self->flags_.sealed)) {
+  if (LLVM_UNLIKELY(self->getClass(runtime)->isSealed())) {
     indexedElementFlags.configurable = 0;
-    if (LLVM_UNLIKELY(self->flags_.frozen))
+    if (LLVM_UNLIKELY(self->getClass(runtime)->isFrozen()))
       indexedElementFlags.writable = 0;
   }
 
@@ -88,9 +99,14 @@ bool JSTypedArrayBase::_deleteOwnIndexedImpl(
 
 bool JSTypedArrayBase::_checkAllOwnIndexedImpl(
     JSObject *selfObj,
-    Runtime &,
+    Runtime &runtime,
     ObjectVTable::CheckAllOwnIndexedMode /*mode*/) {
   auto *self = vmcast<JSTypedArrayBase>(selfObj);
+
+  // ECMA-2026 10.4.5: A detached TypedArray has no indexed properties, so all
+  // (zero) indexed properties trivially satisfy sealed/frozen requirements.
+  if (LLVM_UNLIKELY(!self->attached(runtime)))
+    return true;
 
   // If we have any indexed properties at all, they don't satisfy the
   // requirements.
@@ -339,7 +355,9 @@ CallResult<Handle<JSTypedArrayBase>> JSTypedArray<T, C>::allocate(
     size_type length) {
   Handle<JSTypedArrayBase> ta = runtime.makeHandle(
       JSTypedArray<T, C>::create(
-          runtime, JSTypedArray<T, C>::getPrototype(runtime)));
+          runtime,
+          JSTypedArray<T, C>::getPrototype(runtime),
+          JSTypedArray<T, C>::getRootHiddenClass(runtime)));
   if (JSTypedArrayBase::createBuffer(runtime, ta, length) ==
       ExecutionStatus::EXCEPTION) {
     return ExecutionStatus::EXCEPTION;
@@ -376,12 +394,10 @@ CallResult<Handle<JSTypedArrayBase>> JSTypedArray<T, C>::allocateSpecies(
 template <typename T, CellKind C>
 PseudoHandle<JSTypedArray<T, C>> JSTypedArray<T, C>::create(
     Runtime &runtime,
-    Handle<JSObject> parentHandle) {
-  auto *cell = runtime.makeAFixed<JSTypedArray<T, C>>(
-      runtime,
-      parentHandle,
-      runtime.getHiddenClassForPrototype(
-          *parentHandle, numOverlapSlots<JSTypedArray>()));
+    Handle<JSObject> parentHandle,
+    Handle<HiddenClass> clazz) {
+  auto *cell =
+      runtime.makeAFixed<JSTypedArray<T, C>>(runtime, parentHandle, clazz);
   return JSObjectInit::initToPseudoHandle(runtime, cell);
   // NOTE: If any fields are ever added beyond the base class, then the
   // *BuildMeta functions must be updated to call addJSObjectOverlapSlots.
@@ -407,6 +423,15 @@ PseudoHandle<JSTypedArray<T, C>> JSTypedArray<T, C>::create(
   JSTypedArray<type, CellKind::name##ArrayKind>::getPrototype(      \
       const Runtime &runtime) {                                     \
     return Handle<JSObject>::vmcast(&runtime.name##ArrayPrototype); \
+  }
+#include "hermes/VM/TypedArrays.def"
+
+#define TYPED_ARRAY(name, type)                                      \
+  template <>                                                        \
+  Handle<HiddenClass>                                                \
+  JSTypedArray<type, CellKind::name##ArrayKind>::getRootHiddenClass( \
+      const Runtime &runtime) {                                      \
+    return Handle<HiddenClass>::vmcast(&runtime.class##name##Array); \
   }
 #include "hermes/VM/TypedArrays.def"
 
@@ -444,6 +469,32 @@ uint64_t JSTypedArray<uint64_t, CellKind::BigUint64ArrayKind>::toDestType(
   return digits.size() == 0 ? 0ull : static_cast<uint64_t>(digits[0]);
 }
 
+void JSTypedArrayBase::polyWriteNoAlloc(
+    JSTypedArrayBase *self,
+    Runtime &runtime,
+    size_type index,
+    HermesValue value) {
+  NoAllocScope noAllocs{runtime};
+  assert(self->attached(runtime) && "at() requires a JSArrayBuffer");
+  assert(
+      index < self->getLength() &&
+      "That index is out of bounds of this TypedArray");
+
+  switch (self->getKind()) {
+#define TYPED_ARRAY(name, type)                                           \
+  case CellKind::name##ArrayKind: {                                       \
+    auto *typedArray =                                                    \
+        vmcast<JSTypedArray<type, CellKind::name##ArrayKind>>(self);      \
+    typedArray->monoAt(runtime, index) =                                  \
+        JSTypedArray<type, CellKind::name##ArrayKind>::toDestType(value); \
+    return;                                                               \
+  }
+#include "hermes/VM/TypedArrays.def"
+    default:
+      llvm_unreachable("Unknown TypedArray kind");
+  }
+}
+
 template <typename T>
 struct _getOwnRetEncoder {
   static HermesValue encodeMayAlloc(Runtime &, T element) {
@@ -476,6 +527,26 @@ struct _getOwnRetEncoder<uint64_t> {
     return *res;
   }
 };
+
+/// Specialization for Float16Array: read uint16_t bits and convert to double.
+template <>
+HermesValue
+JSTypedArray<uint16_t, CellKind::Float16ArrayKind>::_getOwnIndexedImpl(
+    PseudoHandle<JSObject> selfObj,
+    Runtime &runtime,
+    uint32_t index) {
+  NoAllocScope noAllocs{runtime};
+  auto *self = vmcast<JSTypedArray>(selfObj.get());
+
+  if (LLVM_UNLIKELY(!self->attached(runtime))) {
+    return HermesValue::encodeUndefinedValue();
+  }
+  if (LLVM_LIKELY(index < self->getLength())) {
+    uint16_t bits = self->monoAt(runtime, index);
+    return HermesValue::encodeUntrustedNumberValue(float16ToDouble(bits));
+  }
+  return HermesValue::encodeUndefinedValue();
+}
 
 template <typename T, CellKind C>
 HermesValue JSTypedArray<T, C>::_getOwnIndexedImpl(
@@ -554,14 +625,15 @@ CallResult<bool> JSTypedArray<T, C>::_setOwnIndexedImpl(
   if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
-  T destValue = JSTypedArray<T, C>::toDestType(*res);
+  NoAllocScope noAllocs{runtime};
   if (LLVM_UNLIKELY(!typedArrayHandle->attached(runtime))) {
     // ES15 10.4.5.5 [[Set]]
     // Return true if array buffer is detached.
     return true;
   }
   if (LLVM_LIKELY(index < typedArrayHandle->getLength())) {
-    typedArrayHandle->monoAt(runtime, index) = destValue;
+    JSTypedArrayBase::polyWriteNoAlloc(
+        typedArrayHandle.get(), runtime, index, *res);
   }
   return true;
 }

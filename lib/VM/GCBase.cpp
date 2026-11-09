@@ -262,10 +262,9 @@ struct PrimitiveNodeAcceptor : public SnapshotAcceptor {
         // Convert the number value to a string, according to the JS conversion
         // routines.
         char buf[hermes::NUMBER_TO_STRING_BUF_SIZE];
-        size_t len = hermes::numberToString(num, buf, sizeof(buf));
         snap_.endNode(
             HeapSnapshot::NodeType::Number,
-            llvh::StringRef{buf, len},
+            hermes::numberToString(num, buf, sizeof(buf)),
             tracker_.getNumberID(num),
             // Numbers are zero-sized in the heap because they're stored inline.
             0,
@@ -890,6 +889,7 @@ void GCBase::printStats(JSONEmitter &json) {
   json.emitKeyValue("Heap size", info.heapSize);
   json.emitKeyValue("Allocated bytes", info.allocatedBytes);
   json.emitKeyValue("Num collections", info.numCollections);
+  json.emitKeyValue("External bytes", info.externalBytes);
   json.emitKeyValue("Malloc size", info.mallocSizeEstimate);
   json.closeDict();
 

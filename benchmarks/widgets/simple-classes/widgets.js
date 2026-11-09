@@ -12,77 +12,6 @@
 
 (function() {
 
-const mapPrototypeGet: any = Map.prototype.get;
-const mapPrototypeSet: any = Map.prototype.set;
-
-function arrayPrototypeMap<T, U>(arr: T[], cb: T => U): U[] {
-  'inline';
-  var length: number = arr.length;
-  var result: U[] = [];
-  for (var i: number = 0; i < length; ++i) {
-    var elem: T = arr[i];
-    result.push(cb(elem));
-  }
-  return result;
-}
-
-function arrayPrototypeMapWithIndex<T, U>(arr: T[], cb: (T, number) => U): U[] {
-  'inline';
-  var length: number = arr.length;
-  var result: U[] = [];
-  for (var i: number = 0; i < length; ++i) {
-    var elem: T = arr[i];
-    result.push(cb(elem, i));
-  }
-  return result;
-}
-
-function arrayPrototypeFilter<T>(arr: T[], cb: T => any): T[] {
-  'inline';
-  var result: T[] = [];
-  var resultlength: number = 0;
-  var length: number = arr.length;
-  for (var i: number = 0; i < length; ++i) {
-    var elem: T = arr[i];
-    if (cb(elem)) {
-      result.push(elem);
-    }
-  }
-  return result;
-}
-
-function arrayPrototypeIncludes<T>(arr: T[], x: T): bool {
-  'inline';
-  var length: number = arr.length;
-  for (var i: number = 0; i < length; ++i) {
-    var elem: T = arr[i];
-    if (elem === x)
-      return true;
-  }
-  return false;
-}
-
-// forEach overloads take callbacks which return 'any' for now,
-// but eventually we'd probably want to make that return type generic in order
-// to avoid unnecessary conversions to 'any.
-// Note that Flow's type definitions have the callbacks return 'mixed'.
-
-function arrayPrototypeForEach<T>(arr: T[], cb: T => any): void {
-  'inline';
-  var length: number = arr.length;
-  for (var i: number = 0; i < length; ++i) {
-    var elem: T = arr[i];
-    cb(elem);
-  }
-}
-
-function arrayPrototypeConcat<T>(
-  arr1: T[],
-  arr2: T[],
-): T[] {
-  return [...arr1, ...arr2];
-}
-
 // ==> widget.js <==
 
 class Widget {
@@ -120,7 +49,7 @@ class Button extends Widget {
 
   reduce(ctx: Context): RenderNode {
     const component: Component = new NumberComponent(this.num);
-    return RenderNode_create(ctx, [component], null);
+    return RenderNode.create(ctx, [component], null);
   }
 }
 
@@ -134,7 +63,7 @@ class Floater extends Widget {
 
   reduce(ctx: Context): RenderNode {
     const component: Component = new NumberComponent(this.num);
-    return RenderNode_create(ctx, [component], null);
+    return RenderNode.create(ctx, [component], null);
   }
 }
 
@@ -148,7 +77,7 @@ class Gltf extends Widget {
 
   reduce(ctx: Context): RenderNode {
     const component: Component = new StringComponent(this.path);
-    return RenderNode_create(ctx, [component], null);
+    return RenderNode.create(ctx, [component], null);
   }
 }
 
@@ -162,11 +91,10 @@ class Container extends Widget {
 
   reduce(ctx: Context): RenderNode {
     const component: Component = new NumberComponent(13);
-    const children: RenderNode[] = arrayPrototypeMap(
-      this.children,
-      child => RenderNode_createForChild(ctx, child),
+    const children = this.children.map(child =>
+      RenderNode.createForChild(ctx, child),
     );
-    return RenderNode_create(ctx, [component], children);
+    return RenderNode.create(ctx, [component], children);
   }
 }
 
@@ -227,13 +155,13 @@ function reconcileChildren(
   oldChildren: RenderNode[],
 ): RenderNode[] {
   const outChildren: RenderNode[] = [];
-  const oldChildrenByKey: any = new Map();
-  arrayPrototypeForEach(oldChildren, child => $SHBuiltin.call(mapPrototypeSet, oldChildrenByKey, child.key, child));
+  const oldChildrenByKey = new Map<string, RenderNode>();
+  oldChildren.forEach(child => { oldChildrenByKey.set(child.key, child); });
 
-  arrayPrototypeForEach(newChildren, child => {
+  newChildren.forEach(child => {
     const newKey = child.key;
     const oldChild: RenderNode | void =
-      $SHBuiltin.call(mapPrototypeGet, oldChildrenByKey, newKey);
+      oldChildrenByKey.get(newKey);
     if (oldChild !== undefined) {
       outChildren.push(reconcileRenderNode(child, oldChild));
     } else {
@@ -246,16 +174,16 @@ function reconcileChildren(
 
 function mapEntitiesToComponents(
   entities: VirtualEntity[],
-): any {
-  const map: any = new Map();
-  arrayPrototypeForEach(entities, entity => {
+): Map<number, Component[]> {
+  const map = new Map<number, Component[]>();
+  entities.forEach(entity => {
     const key: number = entity.key;
     const value: Component[] = entity.value;
-    if ($SHBuiltin.call(mapPrototypeGet, map, key) == undefined) {
-      $SHBuiltin.call(mapPrototypeSet, map, key, ([]: Component[]));
+    if (map.get(key) == undefined) {
+      map.set(key, ([]: Component[]));
     }
 
-    const components: Component[] = $SHBuiltin.call(mapPrototypeGet, map, key);
+    const components: Component[] | void = map.get(key);
     if (components !== undefined) {
       components.push(...value);
     } else {
@@ -273,57 +201,48 @@ function diffTrees(
   const createdComponents: ComponentPair[] = [];
   const deletedComponents: ComponentPair[] = [];
 
-  const oldEntityIds: number[] = arrayPrototypeMap(
-    oldEntities,
-    entity => entity.key,
+  const oldEntityIds = oldEntities.map(entity => entity.key);
+  const newEntityIds = newEntities.map(entity => entity.key);
+
+  const createdEntities: number[] = newEntityIds.filter(
+    entityId => !oldEntityIds.includes(entityId),
   );
-  const newEntityIds: number[] = arrayPrototypeMap(
-    newEntities,
-    entity => entity.key
+  const deletedEntities: number[] = oldEntityIds.filter(
+    entityId => !newEntityIds.includes(entityId),
   );
 
-  const createdEntities: number[] = arrayPrototypeFilter(newEntityIds,
-    entityId => !arrayPrototypeIncludes(oldEntityIds, entityId),
-  );
-  const deletedEntities: number[] = arrayPrototypeFilter(oldEntityIds,
-    entityId => !arrayPrototypeIncludes(newEntityIds, entityId),
-  );
+  const oldComponents = mapEntitiesToComponents(oldEntities);
+  const newComponents = mapEntitiesToComponents(newEntities);
 
-  const oldComponents: any = mapEntitiesToComponents(oldEntities);
-  const newComponents: any = mapEntitiesToComponents(newEntities);
-
-  arrayPrototypeForEach(createdEntities, entityId => {
-    const components: ComponentPair[] = arrayPrototypeMap(
-      $SHBuiltin.call(mapPrototypeGet, newComponents, entityId) || ([]: Component[]),
-      (it: Component) => new ComponentPair(entityId, it),
+  createdEntities.forEach(entityId => {
+    const comps: Component[] =
+      newComponents.get(entityId) || ([]: Component[]);
+    const components = comps.map(
+      it => new ComponentPair(entityId, it),
     );
     createdComponents.push(...components);
   });
 
   newComponents.forEach((value: Component[], key: number) => {
-    if ($SHBuiltin.call(mapPrototypeGet, oldComponents, key) == undefined) {
+    if (oldComponents.get(key) == undefined) {
       return;
     }
 
-    const oldComponentsForKey: Component[] = $SHBuiltin.call(mapPrototypeGet, oldComponents, key) || ([]: Component[]);
+    const oldComponentsForKey: Component[] = oldComponents.get(key) || ([]: Component[]);
     const newComponentsForKey: Component[] = value;
 
-    const deleted: Component[] = arrayPrototypeFilter(
-      oldComponentsForKey,
-      it => !arrayPrototypeIncludes(newComponentsForKey, it),
+    const deleted: Component[] = oldComponentsForKey.filter(
+      it => !newComponentsForKey.includes(it),
     );
-    const created: Component[] = arrayPrototypeFilter(
-      newComponentsForKey,
-      it => !arrayPrototypeIncludes(oldComponentsForKey, it),
+    const created: Component[] = newComponentsForKey.filter(
+      it => !oldComponentsForKey.includes(it),
     );
 
-    arrayPrototypeForEach(
-      deleted,
-      it => deletedComponents.push(new ComponentPair(key, it)),
+    deleted.forEach(
+      it => { deletedComponents.push(new ComponentPair(key, it)); },
     );
-    arrayPrototypeForEach(
-      created,
-      it => createdComponents.push(new ComponentPair(key, it)),
+    created.forEach(
+      it => { createdComponents.push(new ComponentPair(key, it)); },
     );
   });
 
@@ -378,16 +297,6 @@ type Component = NumberComponent | StringComponent;
 
 // ==> context.js <==
 
-function Context_createForChild(parentCtx: Context, child: Widget): Context {
-  const widgetKey = child.key;
-  const childKey =
-    widgetKey !== null && widgetKey !== undefined
-      ? widgetKey
-      : `_${parentCtx.childCounter++}`;
-  const newKey = `${parentCtx.key}_${childKey}`;
-  return new Context(newKey);
-}
-
 class Context {
   key: string;
   childCounter: number;
@@ -396,6 +305,16 @@ class Context {
     'inline'
     this.key = key;
     this.childCounter = 0;
+  }
+
+  static createForChild(parentCtx: Context, child: Widget): Context {
+    const widgetKey = child.key;
+    const childKey =
+      widgetKey !== null && widgetKey !== undefined
+        ? widgetKey
+        : `_${parentCtx.childCounter++}`;
+    const newKey = `${parentCtx.key}_${childKey}`;
+    return new Context(newKey);
   }
 }
 
@@ -413,26 +332,12 @@ class VirtualEntity {
   }
 }
 
-let RenderNode_idCounter: number = 0;
-
-function RenderNode_create(
-  ctx: Context,
-  components: Component[],
-  children: ?(RenderNode[]),
-): RenderNode {
-  return new RenderNode(ctx.key, RenderNode_idCounter++, components, children);
-}
-
-function RenderNode_createForChild(ctx: Context, child: Widget): RenderNode {
-  const childCtx = Context_createForChild(ctx, child);
-  return child.reduce(childCtx);
-}
-
 class RenderNode {
   key: string;
   id: number;
   components: Component[];
   children: RenderNode[];
+  static idCounter: number = 0;
 
   constructor(
     key: string,
@@ -448,15 +353,23 @@ class RenderNode {
   }
 
   reduce(): VirtualEntity[] {
-    const childrenEntities: VirtualEntity[] = [];
-    arrayPrototypeForEach(
-      this.children,
-      child => childrenEntities.push(...child.reduce()),
+    const childrenEntities: VirtualEntity[] = this.children.flatMap(
+      (child: RenderNode): VirtualEntity[] => child.reduce(),
     );
-    return arrayPrototypeConcat(
-      [new VirtualEntity(this.id, this.components)],
-      childrenEntities,
-    );
+    return [new VirtualEntity(this.id, this.components)].concat(childrenEntities);
+  }
+
+  static create(
+    ctx: Context,
+    components: Component[],
+    children: ?(RenderNode[]),
+  ): RenderNode {
+    return new RenderNode(ctx.key, RenderNode.idCounter++, components, children);
+  }
+
+  static createForChild(ctx: Context, child: Widget): RenderNode {
+    const childCtx = Context.createForChild(ctx, child);
+    return child.reduce(childCtx);
   }
 }
 
@@ -505,21 +418,18 @@ class TestApp extends ComposedWidget {
   }
 
   getWidgets(sizes: number[], models: string[]): Widget[] {
-    if (sizes.length != models.length) {
+    if (sizes.length !== models.length) {
       throw new Error('sizes and models must have same length');
     }
-    return arrayPrototypeMapWithIndex(
-      models,
-      (modelPath: string, index: number): Widget => {
-        const buttonSize = sizes[index];
-        const widget = new ButtonAndModel(new RenderData(
-          modelPath,
-          buttonSize,
-        ));
-        widget.key = `${modelPath}_${buttonSize}`;
-        return widget;
-      }
-    );
+    return models.map((modelPath: string, index: number): Widget => {
+      const buttonSize = sizes[index];
+      const widget = new ButtonAndModel(new RenderData(
+        modelPath,
+        buttonSize,
+      ));
+      widget.key = `${modelPath}_${buttonSize}`;
+      return widget;
+    });
   }
 
   getChildren(): Widget[] {

@@ -51,7 +51,7 @@ android/intltest/java/com/facebook/hermes/test/assets/**
 cmake-build*/
 
 # clangd cache
-.cache/
+/.cache/
 
 # Compilation database
 compile_commands.json

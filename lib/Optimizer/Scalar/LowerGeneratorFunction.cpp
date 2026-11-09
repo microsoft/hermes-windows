@@ -87,8 +87,8 @@ emitReturnIterResultObject(IRBuilder &builder, Value *val, bool done) {
 class LowerToStateMachine {
   /// The module.
   Module *M_;
-  /// Outer generator function.
-  GeneratorFunction *outer_;
+  /// Outer function: a GeneratorFunction or an AsyncFunction.
+  Function *outer_;
   /// Inner generator function.
   NormalFunction *inner_;
   /// The instruction that creates the inner generator function.
@@ -113,7 +113,7 @@ class LowerToStateMachine {
  public:
   explicit LowerToStateMachine(
       Module *M,
-      GeneratorFunction *outer,
+      Function *outer,
       CreateGeneratorInst *CGI)
       : M_(M),
         outer_(outer),
@@ -200,6 +200,14 @@ void LowerToStateMachine::convert() {
   auto *valueParam =
       builder_.createJSDynamicParam(inner_, builder_.createIdentifier("value"));
   movePastFirstInBlock(builder_, &*inner_->begin());
+  // Reset the leaked user source location so the synthetic resume prologue is
+  // not mistaken for real user code (e.g. a breakpoint on that line resolving
+  // here). Use the inner function's own declaration location rather than "no
+  // location": it matches a normal function's prologue and the sibling
+  // scaffolding (getParentOuterScope_), and gives the executing-generator
+  // TypeError thrown from this entry dispatch a real line in stack traces
+  // rather than a raw-address fallback.
+  builder_.setLocation(inner_->getSourceRange().Start);
   auto *loadActionParam = builder_.createLoadParamInst(actionParam);
   auto *loadValueParam = builder_.createLoadParamInst(valueParam);
 
@@ -319,13 +327,14 @@ void LowerToStateMachine::moveLocalsToOuter() {
       }
 
       if (auto *CBI = llvh::dyn_cast<CallBuiltinInst>(&I)) {
-        // copyRestArgs references the local register stack of the inner
-        // function, to scan and copy the parameters. However, we have
-        // transferred the parameters of the inner function to the outer
-        // function. So we should also transfer copyRestArgs to the outer
-        // function.
-        if (CBI->getBuiltinIndex() ==
-            BuiltinMethod::HermesBuiltin_copyRestArgs) {
+        // copyRestArgs (and its FastArray-returning variant) references the
+        // local register stack of the inner function, to scan and copy the
+        // parameters. However, we have transferred the parameters of the
+        // inner function to the outer function. So we should also transfer
+        // the call to the outer function.
+        BuiltinMethod::Enum bi = CBI->getBuiltinIndex();
+        if (bi == BuiltinMethod::HermesBuiltin_copyRestArgs ||
+            bi == BuiltinMethod::HermesBuiltin_copyRestArgsFast) {
           Variable *outerRestArgs = builder_.createVariable(
               getParentOuterScope_->getVariableScope(),
               CBI->getName(),
@@ -336,7 +345,7 @@ void LowerToStateMachine::moveLocalsToOuter() {
               builder_.createLoadFrameInst(getParentOuterScope_, outerRestArgs);
           CBI->replaceAllUsesWith(replacement);
           auto *outerCBI = beforeCGI.createCallBuiltinInst(
-              BuiltinMethod::HermesBuiltin_copyRestArgs,
+              bi,
               beforeCGI.getLiteralNumber(
                   llvh::cast<LiteralNumber>(CBI->getArgument(1))->getValue()));
           beforeCGI.createStoreFrameInst(
@@ -614,6 +623,9 @@ void LowerToStateMachine::lowerToSwitch(
   auto *throwBecauseExecutingBB = builder_.createBasicBlock(inner_);
   auto *checkIfCompletedBB = builder_.createBasicBlock(inner_);
   builder_.setInsertionBlock(newBeginBB);
+  // Don't leak a user source line onto the synthetic entry dispatch; this
+  // location persists through the scaffolding created below.
+  builder_.setLocation(inner_->getSourceRange().Start);
 
   auto *loadState =
       builder_.createLoadFrameInst(getParentOuterScope_, genState);
@@ -851,6 +863,9 @@ void LowerToStateMachine::lowerToSwitch(
   }
 
   builder_.setInsertionBlock(userCodeSwitchBB);
+  // The user-block loop above left a user source line on the builder; reset it
+  // so the synthetic dispatch/catch scaffolding isn't taken for user code.
+  builder_.setLocation(inner_->getSourceRange().Start);
   builder_.createStoreFrameInst(
       getParentOuterScope_,
       builder_.getLiteralNumber((uint8_t)State::Executing),
@@ -1028,11 +1043,11 @@ void LowerToStateMachine::moveInnerPhisToOuter(DominanceInfo &D) {
 }
 } // namespace
 
-/// \return the corresponding NormalFunction for the given \p outer
-/// generator function, or nullptr if there is none. In the case of a generator
+/// \return the CreateGeneratorInst in the given \p outer generator or async
+/// function, or nullptr if there is none. In the case of a generator
 /// function which is unreachable, the inner function may have been deleted
 /// because it will never be created.
-static CreateGeneratorInst *findCreateGenerator(GeneratorFunction *outer) {
+static CreateGeneratorInst *findCreateGenerator(Function *outer) {
   for (BasicBlock &BB : *outer) {
     for (Instruction &I : BB) {
       if (auto *CGI = llvh::dyn_cast<CreateGeneratorInst>(&I)) {
@@ -1044,8 +1059,9 @@ static CreateGeneratorInst *findCreateGenerator(GeneratorFunction *outer) {
 }
 
 Pass *createLowerGeneratorFunction() {
-  /// Process all GeneratorFunction and GeneratorInnerFunctions. Turn them into
-  /// regular function IR, removing all generator-specific IR.
+  /// Process all GeneratorFunctions, AsyncFunctions and
+  /// GeneratorInnerFunctions. Turn them into regular function IR, removing all
+  /// generator-specific IR.
   class LowerGeneratorFunction : public ModulePass {
    public:
     explicit LowerGeneratorFunction() : ModulePass("LowerGeneratorFunction") {}
@@ -1057,11 +1073,11 @@ Pass *createLowerGeneratorFunction() {
         return false;
       bool changed = false;
       for (auto &F : *M) {
-        if (auto *GF = llvh::dyn_cast<GeneratorFunction>(&F)) {
-          if (auto *inner = findCreateGenerator(GF)) {
-            LowerToStateMachine(M, GF, inner).convert();
-            changed = true;
-          }
+        if (!llvh::isa<GeneratorFunction>(F) && !llvh::isa<AsyncFunction>(F))
+          continue;
+        if (auto *inner = findCreateGenerator(&F)) {
+          LowerToStateMachine(M, &F, inner).convert();
+          changed = true;
         }
       }
       M->setGeneratorsLowered(true);

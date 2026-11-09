@@ -23,12 +23,56 @@ exports.next = next
 
 // CHECK:function global(): undefined
 // CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = AllocObjectLiteralInst (:object) empty: any
-// CHECK-NEXT:  %1 = CreateFunctionInst (:object) empty: any, empty: any, %next(): functionCode
-// CHECK-NEXT:  %2 = CreateFunctionInst (:object) empty: any, empty: any, %Cls(): functionCode
-// CHECK-NEXT:  %3 = AllocTypedNonEnumObjectInst (:object) null: null
-// CHECK-NEXT:       StorePropertyStrictInst %3: object, %2: object, "prototype": string
-// CHECK-NEXT:       StorePropertyStrictInst %1: object, %0: object, "next": string
+// CHECK-NEXT:  %0 = CreateFunctionInst (:object) empty: any, empty: any, %Array(): functionCode
+// CHECK-NEXT:  %1 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:       StorePropertyStrictInst %1: object, %0: object, "prototype": string
+// CHECK-NEXT:  %3 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 1#"(): functionCode
+// CHECK-NEXT:  %4 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:       StorePropertyStrictInst %4: object, %3: object, "prototype": string
+// CHECK-NEXT:  %6 = CreateFunctionInst (:object) empty: any, empty: any, %"Array 2#"(): functionCode
+// CHECK-NEXT:  %7 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:       StorePropertyStrictInst %7: object, %6: object, "prototype": string
+// CHECK-NEXT:  %9 = CreateFunctionInst (:object) empty: any, empty: any, %Symbol(): functionCode
+// CHECK-NEXT:  %10 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:        StorePropertyStrictInst %10: object, %9: object, "prototype": string
+// CHECK-NEXT:  %12 = CreateFunctionInst (:object) empty: any, empty: any, %Object(): functionCode
+// CHECK-NEXT:  %13 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:        StorePropertyStrictInst %13: object, %12: object, "prototype": string
+// CHECK-NEXT:  %15 = AllocObjectLiteralInst (:object) empty: any
+// CHECK-NEXT:  %16 = CreateFunctionInst (:object) empty: any, empty: any, %next(): functionCode
+// CHECK-NEXT:  %17 = CreateFunctionInst (:object) empty: any, empty: any, %Cls(): functionCode
+// CHECK-NEXT:  %18 = AllocTypedNonEnumObjectInst (:object) null: null
+// CHECK-NEXT:        StorePropertyStrictInst %18: object, %17: object, "prototype": string
+// CHECK-NEXT:        StorePropertyStrictInst %16: object, %15: object, "next": string
+// CHECK-NEXT:        ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:function Array(): undefined
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:       ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:function "Array 1#"(): undefined
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:       ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:function "Array 2#"(): undefined
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:       ReturnInst undefined: undefined
+// CHECK-NEXT:function_end
+
+// CHECK:base constructor Symbol(): any [typed,noReturn]
+// CHECK-NEXT:%BB0:
+// CHECK-NEXT:  %0 = TryLoadGlobalPropertyInst (:any) globalObject: object, "TypeError": string
+// CHECK-NEXT:  %1 = CreateThisInst (:undefined|object) %0: any, %0: any, empty: any
+// CHECK-NEXT:  %2 = CallInst (:any) %0: any, empty: any, false: boolean, empty: any, %0: any, %1: undefined|object, "Symbol is not a constructor": string
+// CHECK-NEXT:  %3 = GetConstructedObjectInst (:object) %1: undefined|object, %2: any
+// CHECK-NEXT:       ThrowInst %3: object
+// CHECK-NEXT:function_end
+
+// CHECK:function Object(): undefined
+// CHECK-NEXT:%BB0:
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 

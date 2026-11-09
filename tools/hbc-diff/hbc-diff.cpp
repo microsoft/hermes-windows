@@ -12,6 +12,7 @@
 #include "hermes/BCGen/HBC/BytecodeFileFormat.h"
 #include "hermes/Support/MemoryBuffer.h"
 
+#include "llvh/Support/InitLLVM.h"
 #include "llvh/Support/MemoryBuffer.h"
 #include "llvh/Support/raw_ostream.h"
 
@@ -195,6 +196,8 @@ static ExecutionStatus diffFiles(
 }
 
 int main(int argc, char **argv) {
+  // Windows fork: suppress CRT/WER dialogs in this lit test host.
+  llvh::InitLLVM initLLVM(argc, argv);
   if (argc < 3 || argc > 4) {
     llvh::errs() << "usage: hbc-diff [-h] <filename1> <filename2>" << "\n";
     return ExecutionFailed;

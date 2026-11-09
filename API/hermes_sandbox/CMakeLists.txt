@@ -5,11 +5,20 @@
 
 if (EMSCRIPTEN)
   set(WASM_LINKER_ARGS "-sEXPORTED_FUNCTIONS=[_get_hermes_abi_vtable, _malloc, _realloc, _free, stackSave, stackRestore, stackAlloc, _get_global_base]" -sWARN_ON_UNDEFINED_SYMBOLS=0 -sSTANDALONE_WASM --no-entry -sALLOW_TABLE_GROWTH=1)
+  # The sandbox has no JS host. Fail the link if anything still needs
+  # Emscripten's JS-based setjmp/longjmp or C++ exception support, instead of
+  # silently turning it into wasm imports that the sandbox does not provide.
+  list(APPEND WASM_LINKER_ARGS -sSUPPORT_LONGJMP=0 -fno-exceptions)
 
   # Define a target that builds the Hermes library as a wasm executable.
   add_executable(hermesSandboxImpl hermes_sandbox_impl.cpp )
   target_link_libraries(hermesSandboxImpl PRIVATE hermesabi)
   target_link_options(hermesSandboxImpl PRIVATE ${WASM_LINKER_ARGS})
+  if (NOT HERMES_SANDBOX_WASM)
+    # hermes_sandbox_impl.cpp only builds with HERMES_SANDBOX_WASM, so keep it
+    # out of the default target of other Emscripten builds.
+    set_target_properties(hermesSandboxImpl PROPERTIES EXCLUDE_FROM_ALL ON)
+  endif()
 endif()
 
 file(GLOB IMPL_SRCS external/hermes_sandbox_impl_compiled_*.c)
@@ -28,4 +37,13 @@ target_compile_definitions(hermesSandboxRuntime PUBLIC WASM_RT_SKIP_SIGNAL_RECOV
 if("${CMAKE_C_COMPILER_ID}" MATCHES "Clang" OR
     "${CMAKE_C_COMPILER_ID}" MATCHES "GNU")
   set_property(SOURCE ${IMPL_SRCS} APPEND_STRING PROPERTY COMPILE_FLAGS "-w")
+endif()
+
+# The generated code calls functions through pointers that take the instance
+# as void *, while it defines them with a typed instance pointer. UBSan's
+# function type check, which Clang applies to C since version 17, flags each
+# of those calls.
+if("${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
+  set_property(SOURCE ${IMPL_SRCS} APPEND_STRING PROPERTY COMPILE_FLAGS
+    " -fno-sanitize=function")
 endif()

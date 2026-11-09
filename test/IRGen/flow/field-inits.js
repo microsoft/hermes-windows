@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// RUN: %shermes -typed -dump-ir %s -O0 | %FileCheckOrRegen --match-full-lines %s
+// RUN: %shermes -fno-std-globals -typed -dump-ir %s -O0 | %FileCheckOrRegen --match-full-lines %s
 
 class A {
     y = 7; // Field init for y.
@@ -248,12 +248,11 @@ function f(i: number): number {
 // CHECK-NEXT:  %2 = CreateScopeInst (:environment) %VS10: any, %1: environment
 // CHECK-NEXT:  %3 = LoadFrameInst (:object) %1: environment, [%VS1.?C0.prototype]: object
 // CHECK-NEXT:  %4 = PrLoadInst (:object) %3: object, 0: number, "m": string
-// CHECK-NEXT:  %5 = CallInst [njsf] (:any) %4: object, empty: any, false: boolean, empty: any, undefined: undefined, %0: object
-// CHECK-NEXT:  %6 = CheckedTypeCastInst (:number) %5: any, type(number)
-// CHECK-NEXT:  %7 = BinaryAddInst (:any) %6: number, 1: number
-// CHECK-NEXT:  %8 = CheckedTypeCastInst (:number) %7: any, type(number)
-// CHECK-NEXT:       PrStoreInst %8: number, %0: object, 1: number, "y": string, false: boolean
-// CHECK-NEXT:        ReturnInst undefined: undefined
+// CHECK-NEXT:  %5 = CallInst [njsf] (:number) %4: object, empty: any, false: boolean, empty: any, undefined: undefined, %0: object
+// CHECK-NEXT:  %6 = BinaryAddInst (:any) %5: number, 1: number
+// CHECK-NEXT:  %7 = CheckedTypeCastInst (:number) %6: any, type(number)
+// CHECK-NEXT:       PrStoreInst %7: number, %0: object, 1: number, "y": string, false: boolean
+// CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
 // CHECK:scope %VS11 []

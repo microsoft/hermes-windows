@@ -2,9 +2,13 @@
 // Licensed under the MIT license.
 #include "test_main.h"
 
+#include "../WindowsTestSupport.h"
+
 #include <gtest/gtest.h>
 #include <gtest/internal/gtest-internal.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string_view>
 #include "child_process.h"
@@ -14,6 +18,7 @@ namespace fs = std::filesystem;
 
 namespace node_api_tests {
 
+/*static*/ std::filesystem::path TestFixtureBase::test_exe_path_;
 /*static*/ std::filesystem::path TestFixtureBase::node_lite_path_;
 /*static*/ std::filesystem::path TestFixtureBase::js_root_dir_;
 
@@ -22,6 +27,7 @@ std::filesystem::path ResolveNodeLitePath(const std::filesystem::path& exePath);
 /*static*/ void TestFixtureBase::InitializeGlobals(
     const char* test_exe_path) noexcept {
   fs::path exePath = fs::canonical(test_exe_path);
+  TestFixtureBase::test_exe_path_ = exePath;
 
   fs::path nodeLitePath =
       ResolveNodeLitePath(fs::path(test_exe_path));
@@ -183,6 +189,53 @@ void NodeApiTestFixture::RegisterNodeApiTests() {
 }  // namespace node_api_tests
 
 int main(int argc, char** argv) {
+  hermes::testing::disableCrashDialogs();
+  if (argc == 2 && std::string_view(argv[1]) == "--abort-test-child") {
+    std::fputs("intentional test child abort\n", stderr);
+    std::abort();
+  }
+#ifdef _WIN32
+  if (argc == 2 && std::string_view(argv[1]) == "--job-test-grandchild") {
+    // The job must kill this process; bound its lifetime if cleanup fails.
+    HANDLE event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!event) return 2;
+    ::WaitForSingleObject(event, 60000);
+    ::CloseHandle(event);
+    return 0;
+  }
+  if (argc == 2 && (std::string_view(argv[1]) == "--job-test-timeout" ||
+                    std::string_view(argv[1]) == "--job-test-exit")) {
+    STARTUPINFOA startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = ::GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = ::GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION process{};
+    std::string command =
+        "\"" + std::string(argv[0]) + "\" --job-test-grandchild";
+    if (!::CreateProcessA(nullptr,
+                          command.data(),
+                          nullptr,
+                          nullptr,
+                          TRUE,
+                          CREATE_DEFAULT_ERROR_MODE,
+                          nullptr,
+                          nullptr,
+                          &startup,
+                          &process))
+      return 2;
+    // Preserve inherited pipe handles in a live grandchild on both paths.
+    std::printf("%lu\n", process.dwProcessId);
+    std::fflush(stdout);
+    if (std::string_view(argv[1]) == "--job-test-timeout") {
+      ::WaitForSingleObject(process.hProcess, INFINITE);
+    }
+    ::CloseHandle(process.hThread);
+    ::CloseHandle(process.hProcess);
+    return 0;
+  }
+#endif
   node_api_tests::TestFixtureBase::InitializeGlobals(argv[0]);
   ::testing::InitGoogleTest(&argc, argv);
   node_api_tests::NodeApiTestFixture::RegisterNodeApiTests();

@@ -32,20 +32,36 @@ namespace flow {
   _HERMES_SEMA_FLOW_DEFKIND(Generic)              \
   _HERMES_SEMA_FLOW_DEFKIND(InferencePlaceholder) \
   _HERMES_SEMA_FLOW_DEFKIND(Number)               \
+  _HERMES_SEMA_FLOW_DEFKIND(Symbol)               \
   _HERMES_SEMA_FLOW_DEFKIND(BigInt)               \
   _HERMES_SEMA_FLOW_DEFKIND(Any)                  \
+  _HERMES_SEMA_FLOW_DEFKIND(Empty)                \
   _HERMES_SEMA_FLOW_DEFKIND(Mixed)
 
-#define _HERMES_SEMA_FLOW_COMPLEX_TYPES      \
-  _HERMES_SEMA_FLOW_DEFKIND(Union)           \
-  _HERMES_SEMA_FLOW_DEFKIND(Array)           \
-  _HERMES_SEMA_FLOW_DEFKIND(Tuple)           \
-  _HERMES_SEMA_FLOW_DEFKIND(ExactObject)     \
-  _HERMES_SEMA_FLOW_DEFKIND(UntypedFunction) \
-  _HERMES_SEMA_FLOW_DEFKIND(TypedFunction)   \
-  _HERMES_SEMA_FLOW_DEFKIND(NativeFunction)  \
-  _HERMES_SEMA_FLOW_DEFKIND(Class)           \
-  _HERMES_SEMA_FLOW_DEFKIND(ClassConstructor)
+/// The literal kinds must be listed last here, see
+/// _HERMES_SEMA_FLOW_LITERAL_BASES.
+#define _HERMES_SEMA_FLOW_COMPLEX_TYPES                \
+  _HERMES_SEMA_FLOW_DEFKIND(Union)                     \
+  _HERMES_SEMA_FLOW_DEFKIND(Array)                     \
+  _HERMES_SEMA_FLOW_DEFKIND(Tuple)                     \
+  _HERMES_SEMA_FLOW_DEFKIND(ExactObject)               \
+  _HERMES_SEMA_FLOW_DEFKIND(UntypedFunction)           \
+  _HERMES_SEMA_FLOW_DEFKIND(TypedFunction)             \
+  _HERMES_SEMA_FLOW_DEFKIND(NativeFunction)            \
+  _HERMES_SEMA_FLOW_DEFKIND(Class)                     \
+  _HERMES_SEMA_FLOW_DEFKIND(ClassConstructor)          \
+  _HERMES_SEMA_FLOW_DEFKIND(InferencePlaceholderArray) \
+  _HERMES_SEMA_FLOW_DEFKIND(StringLiteral)             \
+  _HERMES_SEMA_FLOW_DEFKIND(NumberLiteral)             \
+  _HERMES_SEMA_FLOW_DEFKIND(BooleanLiteral)
+
+/// Each literal TypeKind and the primary TypeKind it widens into. Every kind
+/// in [_FirstLiteral, _LastLiteral] must appear here, and they must be the
+/// last kinds in \c TypeKind.
+#define _HERMES_SEMA_FLOW_LITERAL_BASES               \
+  _HERMES_SEMA_FLOW_DEFLITERAL(StringLiteral, String) \
+  _HERMES_SEMA_FLOW_DEFLITERAL(NumberLiteral, Number) \
+  _HERMES_SEMA_FLOW_DEFLITERAL(BooleanLiteral, Boolean)
 
 enum class TypeKind : uint8_t {
 #define _HERMES_SEMA_FLOW_DEFKIND(name) name,
@@ -60,7 +76,33 @@ enum class TypeKind : uint8_t {
   _LastId = ClassConstructor,
   _FirstFunction = UntypedFunction,
   _LastFunction = NativeFunction,
+  _FirstLiteral = StringLiteral,
+  _LastLiteral = BooleanLiteral,
 };
+
+/// The number of distinct TypeKind values.
+constexpr unsigned kNumTypeKinds = 0
+#define _HERMES_SEMA_FLOW_DEFKIND(name) +1
+    _HERMES_SEMA_FLOW_SINGLETONS _HERMES_SEMA_FLOW_COMPLEX_TYPES
+#undef _HERMES_SEMA_FLOW_DEFKIND
+    ;
+
+static_assert(
+    (unsigned)TypeKind::_LastLiteral + 1 == kNumTypeKinds,
+    "literal kinds must sort last; union literal absorption relies on it");
+
+static_assert(
+    0
+#define _HERMES_SEMA_FLOW_DEFLITERAL(name, base) +1
+        _HERMES_SEMA_FLOW_LITERAL_BASES
+#undef _HERMES_SEMA_FLOW_DEFLITERAL
+        == (int)TypeKind::_LastLiteral - (int)TypeKind::_FirstLiteral + 1,
+    "every literal TypeKind needs an entry in "
+    "_HERMES_SEMA_FLOW_LITERAL_BASES");
+
+/// \return \p kind widened to the primary kind it represents, if it is a
+/// literal kind. Otherwise \p kind unchanged.
+TypeKind widenLiteralKind(TypeKind kind);
 
 /// The backing storage for Types.
 /// Indicates the TypeKind and can be compared for equality, etc.
@@ -81,6 +123,11 @@ class TypeInfo {
 
   bool isSingleton() const {
     return kind_ <= TypeKind::_LastSingleton;
+  }
+
+  /// \return true if this is a literal type (e.g. a string literal type).
+  bool isLiteral() const {
+    return kind_ >= TypeKind::_FirstLiteral && kind_ <= TypeKind::_LastLiteral;
   }
 
   TypeKind getKind() const {
@@ -108,6 +155,8 @@ class TypeInfo {
     /// Pairs of (this, other) and the result of the comparison/equality.
     /// Note that for equals(), the value is a bool stored as int, so it can be
     /// cast directly to bool for returning.
+    /// equals() only caches false: a true result may depend on a pair still
+    /// in \c visited being assumed equal, and that assumption can later fail.
     /// Never gets elements popped during comparison, unlike the visited set.
     llvh::SmallDenseMap<std::pair<const TypeInfo *, const TypeInfo *>, int>
         cache{};
@@ -239,6 +288,7 @@ using CPtrType = SingleType<TypeKind::CPtr, PrimaryType>;
 /// Must not escape the FlowChecker, and will be replaced by a concrete type.
 using GenericType = SingleType<TypeKind::Generic, PrimaryType>;
 using NumberType = SingleType<TypeKind::Number, PrimaryType>;
+using SymbolType = SingleType<TypeKind::Symbol, PrimaryType>;
 using BigIntType = SingleType<TypeKind::BigInt, PrimaryType>;
 
 using InferencePlaceholderType =
@@ -246,6 +296,7 @@ using InferencePlaceholderType =
 
 using AnyType = SingleType<TypeKind::Any, SingletonType>;
 using MixedType = SingleType<TypeKind::Mixed, SingletonType>;
+using EmptyType = SingleType<TypeKind::Empty, SingletonType>;
 
 /// Unions are handled specially because their existence and layout is dependent
 /// on their arms.
@@ -365,15 +416,21 @@ class UnionType : public SingleType<TypeKind::Union, TypeInfo> {
   /// resolved in the FlowChecker's DeclareScopeTypes call.
   /// This function only works when every element of \p types has itself already
   /// been correctly resolved, with nested unions collapsed and no duplicates.
+  /// \param booleanType the boolean singleton, which replaces `true | false`.
   static void canonicalizeTypes(
       llvh::ArrayRef<Type *> types,
       llvh::SmallVectorImpl<Type *> &nonLoopingTypes,
-      llvh::SmallVectorImpl<Type *> &loopingTypes);
+      llvh::SmallVectorImpl<Type *> &loopingTypes,
+      Type *booleanType);
 
-  /// Unique types and sort them according to \c TypeInfo::compare.
+  /// Unique types and sort them according to \c TypeInfo::compare. Also
+  /// remove the literal types absorbed by another arm: a literal is absorbed
+  /// by its base type (`string | "abc"` is `string`), by `any` and by
+  /// `mixed`. `true | false` is replaced with \p booleanType.
   /// \param types the types that are known to be non-recursive.
   static void sortAndUniqueNonLoopingTypes(
-      llvh::SmallVectorImpl<Type *> &types);
+      llvh::SmallVectorImpl<Type *> &types,
+      Type *booleanType);
 
   /// Remove all the duplicates in the list of looping \p types.
   /// Runs in quadratic time on the length of the types because they can't be
@@ -410,6 +467,34 @@ class ArrayType : public SingleType<TypeKind::Array, TypeInfo> {
   }
 };
 
+/// Array type used as a constraint during type argument inference.
+/// Wraps an element type that is an InferencePlaceholderType, allowing
+/// matchConstraintToType to recurse into the element to resolve the
+/// placeholder against an actual Array class type.
+class InferencePlaceholderArrayType
+    : public SingleType<TypeKind::InferencePlaceholderArray, TypeInfo> {
+  Type *element_ = nullptr;
+
+ public:
+  /// Initialize a new instance.
+  explicit InferencePlaceholderArrayType(Type *element) : element_(element) {}
+
+  Type *getElement() const {
+    return element_;
+  }
+
+  /// Compare two instances of the same TypeKind.
+  int _compareImpl(
+      const InferencePlaceholderArrayType *other,
+      CompareState &state) const;
+  /// Compare two instances of the same TypeKind.
+  bool _equalsImpl(
+      const InferencePlaceholderArrayType *other,
+      CompareState &state) const;
+  /// Calculate the type-specific hash.
+  unsigned _hashImpl() const;
+};
+
 class TupleType : public TypeInfo {
   llvh::SmallVector<Type *, 4> types_{};
 
@@ -435,6 +520,95 @@ class TupleType : public TypeInfo {
   }
 };
 
+/// The type of a single string literal, e.g. the type "foo". Carries the
+/// interned literal value. A StringLiteralType flows into String, and into
+/// another StringLiteralType only when the value is identical.
+class StringLiteralType : public TypeInfo {
+  /// The interned literal value.
+  UniqueString *value_;
+
+ public:
+  explicit StringLiteralType(UniqueString *value)
+      : TypeInfo(TypeKind::StringLiteral), value_(value) {
+    assert(value && "value must be non-null");
+  }
+
+  /// \return the interned literal value.
+  UniqueString *getValue() const {
+    return value_;
+  }
+
+  int _compareImpl(const StringLiteralType *other, CompareState &state) const;
+  bool _equalsImpl(const StringLiteralType *other, CompareState &state) const;
+  unsigned _hashImpl() const;
+
+  static bool classof(const TypeInfo *t) {
+    return t->getKind() == TypeKind::StringLiteral;
+  }
+};
+
+/// The type of a single numeric literal, e.g. the type 1. Carries the literal
+/// value. A NumberLiteralType flows into Number, and into another
+/// NumberLiteralType only when the value is identical.
+class NumberLiteralType : public TypeInfo {
+  /// The literal value.
+  double value_;
+
+ public:
+  explicit NumberLiteralType(double value)
+      : TypeInfo(TypeKind::NumberLiteral), value_(value) {}
+
+  /// \return the literal value.
+  double getValue() const {
+    return value_;
+  }
+
+  int _compareImpl(const NumberLiteralType *other, CompareState &state) const;
+  bool _equalsImpl(const NumberLiteralType *other, CompareState &state) const;
+  unsigned _hashImpl() const;
+
+  static bool classof(const TypeInfo *t) {
+    return t->getKind() == TypeKind::NumberLiteral;
+  }
+};
+
+/// The type of a single boolean literal, i.e. the type true or the type false.
+/// Carries the literal value. A BooleanLiteralType flows into Boolean, and into
+/// another BooleanLiteralType only when the value is identical.
+class BooleanLiteralType : public TypeInfo {
+  /// The literal value.
+  bool value_;
+
+ public:
+  explicit BooleanLiteralType(bool value)
+      : TypeInfo(TypeKind::BooleanLiteral), value_(value) {}
+
+  /// \return the literal value.
+  bool getValue() const {
+    return value_;
+  }
+
+  int _compareImpl(const BooleanLiteralType *other, CompareState &state) const;
+  bool _equalsImpl(const BooleanLiteralType *other, CompareState &state) const;
+  unsigned _hashImpl() const;
+
+  static bool classof(const TypeInfo *t) {
+    return t->getKind() == TypeKind::BooleanLiteral;
+  }
+};
+
+/// Variance of a field in a structural type. Controls read/write permissions
+/// and how the field participates in subtyping.
+enum class FieldVariance : uint8_t {
+  /// Invariant: both read and write allowed; subtyping requires type equality.
+  None,
+  /// Covariant (Flow's `+`): read-only; subtyping is covariant in field type.
+  ReadOnly,
+  /// Contravariant (Flow's `-`): write-only; subtyping is contravariant in
+  /// field type.
+  WriteOnly,
+};
+
 /// A type representing an ordered, named list of fields in an object.
 /// ExactObject types with different field orders can't flow into each other.
 class ExactObjectType : public TypeInfo {
@@ -445,8 +619,25 @@ class ExactObjectType : public TypeInfo {
     Identifier name;
     /// The type of the field.
     Type *type;
+    /// Variance of this field (None == invariant).
+    FieldVariance variance;
 
-    Field(Identifier name, Type *type) : name(name), type(type) {}
+    Field(
+        Identifier name,
+        Type *type,
+        FieldVariance variance = FieldVariance::None)
+        : name(name), type(type), variance(variance) {}
+  };
+
+  /// An index signature, e.g. `[k: string]: number`. An exact object has at
+  /// most one indexer, and an object with an indexer has no named fields.
+  struct Indexer {
+    /// The type of the key (e.g. string or number).
+    Type *keyType;
+    /// The type of the value.
+    Type *valueType;
+    /// Variance of the indexer (None == invariant).
+    FieldVariance variance;
   };
 
  private:
@@ -457,10 +648,15 @@ class ExactObjectType : public TypeInfo {
   /// Contains all fields in this exact object.
   llvh::SmallDenseMap<Identifier, size_t, 4> fieldNameMap_{};
 
+  /// The optional index signature. When set, fields_ is empty.
+  OptValue<Indexer> indexer_;
+
  public:
   /// Initialize a new instance.
-  explicit ExactObjectType(llvh::ArrayRef<Field> fields)
-      : TypeInfo(TypeKind::ExactObject) {
+  explicit ExactObjectType(
+      llvh::ArrayRef<Field> fields,
+      OptValue<Indexer> indexer = llvh::None)
+      : TypeInfo(TypeKind::ExactObject), indexer_(indexer) {
     // Populate the fields_.
     fields_.append(fields.begin(), fields.end());
 
@@ -475,6 +671,16 @@ class ExactObjectType : public TypeInfo {
   /// \return the fields in order.
   llvh::ArrayRef<Field> getFields() const {
     return fields_;
+  }
+
+  /// \return the index signature, None if there isn't one.
+  const OptValue<Indexer> &getIndexer() const {
+    return indexer_;
+  }
+
+  /// \return true if this object has an index signature.
+  bool hasIndexer() const {
+    return indexer_.hasValue();
   }
 
   /// \return the field index for the given identifier, None if not found.
@@ -524,6 +730,10 @@ class TypedFunctionType : public BaseFunctionType {
     Type *type;
     /// Whether the parameter was declared as optional.
     bool optional;
+    /// Whether this is a rest parameter (...args).
+    /// Rest parameter MUST be the last parameter in params_.
+    /// There is at most one rest parameter.
+    bool rest = false;
   };
 
  private:
@@ -682,38 +892,122 @@ class TypeWithId : public TypeInfo {
 class ClassType : public TypeWithId {
  public:
   /// Represents either a class field or a method.
+  /// Non-const members are mutated after construction as the class and its
+  /// subclasses are processed: the getter/setter merge, the overload merge and
+  /// the subclass override marking all update an existing Field in place.
   struct Field {
     const Identifier name;
-    Type *const type;
+    /// The type of the field. For accessor fields, this is the getter's
+    /// return type (or Void for setter-only).
+    /// For overloaded methods this is null; per-overload types are stored in
+    /// \c overloads. See \c isOverloaded().
+    Type *type;
     /// The slot for PrLoad and PrStore, used during IRGen.
     /// This ideally should be computed during conversion to IR Type,
     /// but we don't have that yet.
-    const size_t layoutSlotIR;
-    /// If the field is a method, AST for the method.
-    ESTree::MethodDefinitionNode *const method;
+    /// None for fields that don't have a layout slot (e.g. final methods,
+    /// private methods).
+    const OptValue<size_t> layoutSlotIR;
+    /// If the field is a method, AST for the method (getter for accessors).
+    /// For overloaded methods this is null; per-overload method nodes are
+    /// stored in \c overloads. See \c isOverloaded().
+    ESTree::MethodDefinitionNode *method;
+    /// The key AST node for static fields/methods that use variables instead
+    /// of layout slots. Used to propagate the Decl to member access sites.
+    /// For methods this is redundant with method->_key but is set for static
+    /// properties (which have no MethodDefinitionNode) and works uniformly
+    /// for both public and private statics.
+    ESTree::IdentifierNode *const staticKeyNode;
+    /// Whether the field is a final method (non-virtual, cannot be overridden).
+    /// Required for generic methods on either generic or non-generic classes.
+    /// Final methods will not be stored in the home object, they will only be
+    /// stored in variables.
+    const bool finalMethod;
+
+    /// Function type of the getter accessor, or nullptr.
+    Type *getterType = nullptr;
+    /// Function type of the setter accessor, or nullptr.
+    Type *setterType = nullptr;
+    /// AST for the setter method. The getter uses the existing \c method field.
+    ESTree::MethodDefinitionNode *setterMethod = nullptr;
 
     /// Whether this field is a method that has been overridden by a subclass.
-    /// This is the only field that can be modified after initialization, as
-    /// subclasses are processed.
+    /// Set as subclasses are processed, after the field is constructed.
     bool overridden{false};
 
     /// Whether this is a private field for this class.
     bool isPrivate;
 
+    /// Variance of this field (None == invariant), mirroring
+    /// ExactObjectType::Field. Methods and getter-only accessors are ReadOnly,
+    /// setter-only accessors are WriteOnly. Reset to None when a getter and a
+    /// setter are merged into a single field.
+    FieldVariance variance = FieldVariance::None;
+
+    /// All overloads for overloaded methods, mapping method AST node to its
+    /// type. For non-overloaded methods, this is empty and the existing
+    /// \c type and \c method fields are used. For overloaded methods, ALL
+    /// overload entries are stored here and \c type and \c method are null.
+    llvh::MapVector<ESTree::MethodDefinitionNode *, Type *> overloads;
+
+    /// Whether this field is an overloaded method.
+    bool isOverloaded() const {
+      return !overloads.empty();
+    }
+
     Field(
         Identifier name,
         Type *type,
-        size_t layoutSlotIR,
+        OptValue<size_t> layoutSlotIR,
         bool isPrivate,
-        ESTree::MethodDefinitionNode *method = nullptr)
+        ESTree::MethodDefinitionNode *method = nullptr,
+        bool finalMethod = false,
+        ESTree::IdentifierNode *staticKeyNode = nullptr,
+        Type *getterType = nullptr,
+        Type *setterType = nullptr,
+        ESTree::MethodDefinitionNode *setterMethod = nullptr)
         : name(name),
           type(type),
           layoutSlotIR(layoutSlotIR),
           method(method),
-          isPrivate(isPrivate) {}
+          staticKeyNode(staticKeyNode),
+          finalMethod(finalMethod),
+          getterType(getterType),
+          setterType(setterType),
+          setterMethod(setterMethod),
+          isPrivate(isPrivate) {
+      if (isMethod() && !isAccessor())
+        variance = FieldVariance::ReadOnly;
+      else if (isAccessor() && !hasSetter())
+        variance = FieldVariance::ReadOnly;
+      else if (isAccessor() && !hasGetter())
+        variance = FieldVariance::WriteOnly;
+    }
 
     bool isMethod() const {
-      return method != nullptr;
+      return method != nullptr || setterMethod != nullptr || isOverloaded();
+    }
+
+    /// Whether the field's value lives in a slot on the object itself, i.e. it
+    /// can be read by loading the field from the object. False for final and
+    /// private methods and for accessors, which live in Variables.
+    bool isStoredOnObject() const {
+      // TODO: This is a temporary implementation: once layoutSlotIR goes
+      // away this must be implemented without it.
+      return layoutSlotIR.hasValue();
+    }
+
+    /// Whether this field is an accessor (getter and/or setter).
+    bool isAccessor() const {
+      return getterType || setterType;
+    }
+    /// Whether this accessor has a getter.
+    bool hasGetter() const {
+      return getterType != nullptr;
+    }
+    /// Whether this accessor has a setter.
+    bool hasSetter() const {
+      return setterType != nullptr;
     }
   };
 
@@ -749,8 +1043,13 @@ class ClassType : public TypeWithId {
   Type *constructorType_ = nullptr;
   /// The .prototype property ([[HomeObject]] in the spec) contains methods.
   /// This class encodes those methods.
-  /// ClassTypes which represent home objects have null homeObjectType_.
+  /// Null for the ClassTypes that represent home objects and static objects.
+  /// Home objects are reachable as expression types (via `C.prototype`), so
+  /// you must check this before assuming it exists.
   Type *homeObjectType_ = nullptr;
+  /// The type encoding static properties and methods of the class.
+  /// Null if the class has no static elements.
+  Type *staticObjectType_ = nullptr;
   /// Map from field name to field lookup entry.
   /// Contains all fields in this class and all superClasses.
   /// This allows us to quickly check how many fields to allocate for the class,
@@ -765,27 +1064,51 @@ class ClassType : public TypeWithId {
   /// superclasses and counting all private fields).
   /// Use a MapVector to make sure it's deterministic to iterate.
   llvh::SmallMapVector<Identifier, size_t, 4> privateFieldNameMap_{};
+  /// Map from specialized MethodDefinitionNode to its Decl.
+  /// Used by IRGen to emit specialized methods and store Function* in the Decl.
+  llvh::SmallMapVector<ESTree::MethodDefinitionNode *, sema::Decl *, 4>
+      specializedMethodDecls_{};
+
+  /// Type arguments for this specialization of a generic class.
+  /// Empty if the class is not a generic specialization.
+  /// Used mostly for error reporting.
+  llvh::SmallVector<Type *, 2> typeArgs_{};
 
   /// Super class, nullptr if this class doesn't extend anything.
   Type *superClass_ = nullptr;
 
+  /// The ClassConstructorType wrapping this class, i.e. the type of the class
+  /// object itself; distinct from \c constructorType_, which is the function
+  /// type of the constructor's signature. Null for the synthetic home object
+  /// and static object classes, which have no constructor of their own.
+  Type *classConsType_ = nullptr;
+
+  /// Number of fields that have IR layout slots.
+  /// Final methods don't get layout slots, so this may be less than
+  /// fieldNameMap_.size().
+  size_t numLayoutSlots_ = 0;
+
  public:
-  explicit ClassType(size_t id, Identifier className);
   explicit ClassType(
       size_t id,
       Identifier className,
-      llvh::ArrayRef<Field> fields,
-      Type *constructorType,
-      Type *homeObjectType,
-      Type *superClass);
+      llvh::ArrayRef<Type *> typeArgs);
 
   /// Initialize an empty (freshly created) instance. Note that fields are
   /// immutable after this.
+  /// \p numLayoutSlots is the number of fields that have layout slots in IR,
+  /// which may be less than the number of fields in the field name map
+  /// (e.g. final methods don't get layout slots).
+  /// \p classConsType is the ClassConstructorType wrapping this class, null
+  /// for the synthetic home object and static object classes.
   void init(
       llvh::ArrayRef<Field> fields,
       Type *constructorType,
       Type *homeObjectType,
-      Type *superClass);
+      Type *staticObjectType,
+      Type *superClass,
+      size_t numLayoutSlots,
+      Type *classConsType);
 
   static bool classof(const TypeInfo *t) {
     return t->getKind() == TypeKind::Class;
@@ -819,6 +1142,20 @@ class ClassType : public TypeWithId {
     return llvh::cast_or_null<ClassType>(
         homeObjectType_ ? homeObjectType_->info : nullptr);
   }
+  /// A ClassType which has no home object of its own is itself a home object.
+  bool isHomeObject() const {
+    assert(isInitialized());
+    return !homeObjectType_;
+  }
+  Type *getStaticObjectType() const {
+    assert(isInitialized());
+    return staticObjectType_;
+  }
+  ClassType *getStaticObjectTypeInfo() const {
+    assert(isInitialized());
+    return llvh::cast_or_null<ClassType>(
+        staticObjectType_ ? staticObjectType_->info : nullptr);
+  }
   /// \return the public field name lookup table.
   const llvh::SmallMapVector<Identifier, FieldLookupEntry, 4> &getFieldNameMap()
       const {
@@ -839,6 +1176,17 @@ class ClassType : public TypeWithId {
   /// \return the lookup entry of a field, None if it doesn't exist.
   hermes::OptValue<FieldLookupEntry> findPrivateField(Identifier id);
 
+  /// Return the number of fields that have IR layout slots.
+  size_t getNumLayoutSlots() const {
+    assert(isInitialized());
+    return numLayoutSlots_;
+  }
+
+  /// \return the type arguments, empty if not a generic specialization.
+  llvh::ArrayRef<Type *> getTypeArgs() const {
+    return typeArgs_;
+  }
+
   Type *getSuperClass() const {
     assert(isInitialized());
     return superClass_;
@@ -847,6 +1195,41 @@ class ClassType : public TypeWithId {
     assert(isInitialized());
     return llvh::cast_or_null<ClassType>(
         superClass_ ? superClass_->info : nullptr);
+  }
+
+  /// \return \c classConsType_, the type of the class object itself. Not to be
+  ///   confused with \c getConstructorType(), which returns the function type
+  ///   of the constructor's signature.
+  Type *getClassConsType() const {
+    assert(isInitialized());
+    return classConsType_;
+  }
+
+  /// Add a specialized method with its Decl.
+  /// \param specializedMethod the specialized MethodDefinitionNode.
+  /// \param decl the Decl created for this specialization.
+  void addSpecializedMethodDecl(
+      ESTree::MethodDefinitionNode *specializedMethod,
+      sema::Decl *decl) {
+    [[maybe_unused]] auto [it, inserted] =
+        specializedMethodDecls_.insert({specializedMethod, decl});
+    assert(inserted && "specialized method already exists");
+  }
+
+  /// Find the Decl for a specialized method.
+  /// \return the Decl, or nullptr if not found.
+  sema::Decl *findSpecializedMethodDecl(
+      ESTree::MethodDefinitionNode *specializedMethod) const {
+    auto it = specializedMethodDecls_.find(specializedMethod);
+    if (it == specializedMethodDecls_.end())
+      return nullptr;
+    return it->second;
+  }
+
+  /// \return the map of specialized method decls for iteration.
+  const llvh::SmallMapVector<ESTree::MethodDefinitionNode *, sema::Decl *, 4> &
+  getSpecializedMethodDecls() const {
+    return specializedMethodDecls_;
   }
 };
 
@@ -872,6 +1255,58 @@ class ClassConstructorType : public TypeWithId {
   }
   ClassType *getClassTypeInfo() const {
     return llvh::cast<ClassType>(classType_->info);
+  }
+};
+
+/// Key for looking up builtin methods.
+///
+/// Methods with "builtin" directive are stored here, so they can be looked up
+/// when typechecking builtin method calls.
+struct BuiltinMethodKey {
+  /// The TypeKind of the 'this' parameter (e.g., TypeKind::Array for Array
+  /// methods).
+  /// Note that we don't store a real Type here because it's easier to match
+  /// against builtin types with just the TypeKind, and we're only using this
+  /// key to lookup a small number of registered "builtin" methods.
+  TypeKind thisTypeKind;
+  /// The method name.
+  UniqueString *name;
+  /// Whether this is a static method (vs prototype/instance method).
+  bool isStatic;
+
+  /// \return a hash value for the key.
+  unsigned getHashValue() const {
+    return llvh::hash_combine(
+        (uint8_t)thisTypeKind,
+        llvh::hash_value(name),
+        llvh::hash_value(isStatic));
+  }
+
+  bool operator==(const BuiltinMethodKey &other) const {
+    return thisTypeKind == other.thisTypeKind && name == other.name &&
+        isStatic == other.isStatic;
+  }
+};
+
+/// DenseMapInfo specialization for BuiltinMethodKey.
+struct BuiltinMethodKeyInfo {
+  static inline BuiltinMethodKey getEmptyKey() {
+    return {
+        (TypeKind)0, llvh::DenseMapInfo<UniqueString *>::getEmptyKey(), false};
+  }
+  static inline BuiltinMethodKey getTombstoneKey() {
+    return {
+        (TypeKind)0,
+        llvh::DenseMapInfo<UniqueString *>::getTombstoneKey(),
+        false};
+  }
+  static unsigned getHashValue(const BuiltinMethodKey &key) {
+    return key.getHashValue();
+  }
+  static bool isEqual(
+      const BuiltinMethodKey &lhs,
+      const BuiltinMethodKey &rhs) {
+    return lhs == rhs;
   }
 };
 
@@ -962,12 +1397,30 @@ class FlowContext {
     assert(element);
     return &allocArray_.emplace_back(element);
   }
+  InferencePlaceholderArrayType *createInferencePlaceholderArray(
+      Type *element) {
+    assert(element);
+    return &allocInferencePlaceholderArray_.emplace_back(element);
+  }
   TupleType *createTuple(llvh::ArrayRef<Type *> types) {
     return &allocTuple_.emplace_back(types);
   }
+  StringLiteralType *createStringLiteral(UniqueString *value) {
+    assert(value);
+    return &allocStringLiteral_.emplace_back(value);
+  }
+  NumberLiteralType *createNumberLiteral(double value) {
+    // -0 and 0 are the same literal type, so store +0 for both: the value is
+    // emitted as the default of literal-typed fields.
+    return &allocNumberLiteral_.emplace_back(value == 0 ? 0.0 : value);
+  }
+  BooleanLiteralType *createBooleanLiteral(bool value) {
+    return &allocBooleanLiteral_.emplace_back(value);
+  }
   ExactObjectType *createExactObject(
-      llvh::ArrayRef<ExactObjectType::Field> fields) {
-    return &allocExactObject_.emplace_back(fields);
+      llvh::ArrayRef<ExactObjectType::Field> fields,
+      OptValue<ExactObjectType::Indexer> indexer = llvh::None) {
+    return &allocExactObject_.emplace_back(fields, indexer);
   }
   TypedFunctionType *createFunction(
       Type *returnType,
@@ -987,8 +1440,10 @@ class FlowContext {
   UntypedFunctionType *createUntypedFunction(bool isAsync, bool isGenerator) {
     return &allocUntypedFunction_.emplace_back(isAsync, isGenerator);
   }
-  ClassType *createClass(Identifier name) {
-    return &allocClass_.emplace_back(allocClass_.size(), name);
+  ClassType *createClass(
+      Identifier name,
+      llvh::ArrayRef<Type *> typeArgs = {}) {
+    return &allocClass_.emplace_back(allocClass_.size(), name, typeArgs);
   }
   ClassConstructorType *createClassConstructor(Type *classType) {
     return &allocClassConstructor_.emplace_back(
@@ -999,6 +1454,55 @@ class FlowContext {
   }
   Type *createType(TypeInfo *type, ESTree::Node *node = nullptr) {
     return &allocTypes_.emplace_back(type, node);
+  }
+
+  /// Register a builtin method in the table.
+  void registerBuiltinMethod(
+      const BuiltinMethodKey &key,
+      ESTree::FunctionDeclarationNode *funcDecl) {
+    builtinMethods_[key] = funcDecl;
+  }
+
+  /// Look up a builtin method. Returns nullptr if not found.
+  ESTree::FunctionDeclarationNode *findBuiltinMethod(
+      const BuiltinMethodKey &key) const {
+    auto it = builtinMethods_.find(key);
+    return it != builtinMethods_.end() ? it->second : nullptr;
+  }
+
+  /// Register a builtin call target for IRGen.
+  void setBuiltinCallTarget(
+      ESTree::CallExpressionNode *call,
+      ESTree::FunctionDeclarationNode *funcDecl) {
+    builtinCallTargets_[call] = funcDecl;
+  }
+
+  /// Get the builtin function for a call, or nullptr if not a builtin call.
+  ESTree::FunctionDeclarationNode *getBuiltinCallTarget(
+      ESTree::CallExpressionNode *call) const {
+    auto it = builtinCallTargets_.find(call);
+    return it != builtinCallTargets_.end() ? it->second : nullptr;
+  }
+
+  /// Register an Array<T> ClassType specialization with its element type.
+  /// This is idempotent — re-registering the same classType is a no-op.
+  void registerArrayClassType(Type *classType, Type *elementType) {
+    arrayClassTypes_.try_emplace(
+        llvh::cast<ClassType>(classType->info), elementType);
+  }
+
+  /// Check if a Type has ClassType info that is an Array<T> specialization.
+  bool isArrayClassType(const Type *t) const {
+    auto *classType = t ? llvh::dyn_cast_or_null<ClassType>(t->info) : nullptr;
+    return classType && arrayClassTypes_.count(classType);
+  }
+
+  /// Return the element type for an Array<T> ClassType specialization.
+  /// \pre isArrayClassType(t) must be true.
+  Type *getArrayElementType(const Type *t) const {
+    auto it = arrayClassTypes_.find(llvh::cast<ClassType>(t->info));
+    assert(it != arrayClassTypes_.end() && "not an Array ClassType");
+    return it->second;
   }
 
  private:
@@ -1016,6 +1520,29 @@ class FlowContext {
 
   /// Types associated with expression nodes.
   llvh::DenseMap<const ESTree::Node *, Type *> nodeTypes_{};
+
+  /// Map from a callee node (typically MemberExpressionNode) to the
+  /// specialized method's Decl for generic method calls.
+  /// This allows IRGen to look up the specialized function for a call.
+  llvh::DenseMap<const ESTree::Node *, sema::Decl *> specializedMethodCalls_{};
+
+  /// Table mapping builtin method keys to their function declarations.
+  /// Populated by FlowChecker for functions with "builtin" directive.
+  llvh::DenseMap<
+      BuiltinMethodKey,
+      ESTree::FunctionDeclarationNode *,
+      BuiltinMethodKeyInfo>
+      builtinMethods_{};
+
+  /// Maps CallExpressionNode to the builtin FunctionDeclarationNode.
+  /// Needed for IRGen to generate direct calls to the builtins.
+  llvh::
+      DenseMap<ESTree::CallExpressionNode *, ESTree::FunctionDeclarationNode *>
+          builtinCallTargets_{};
+
+  /// Maps Array<T> ClassType specializations to their element Type.
+  /// Populated by FlowChecker during specialization, used by IRGen.
+  llvh::DenseMap<const ClassType *, Type *> arrayClassTypes_{};
 
   std::deque<Type> allocTypes_{};
 

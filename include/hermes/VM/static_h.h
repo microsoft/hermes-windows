@@ -27,7 +27,6 @@ extern "C" {
 #endif
 
 typedef struct SHUnitExt SHUnitExt;
-typedef uint32_t SHSymbolID;
 typedef struct SHUnit SHUnit;
 
 /// Encodes the set of keys to be used to construct an object literal.
@@ -37,6 +36,14 @@ typedef struct SHShapeTableEntry {
   /// The number of properties in this shape.
   uint32_t num_props;
 } SHShapeTableEntry;
+
+/// Locates the bytecode of one regexp literal in SHUnit::regexp_storage.
+typedef struct SHRegExpTableEntry {
+  /// Offset of the bytecode in regexp_storage, in bytes.
+  uint32_t offset;
+  /// Length of the bytecode, in bytes.
+  uint32_t length;
+} SHRegExpTableEntry;
 
 /// This represents a source JS location. This is only valid in a particular
 /// SHUnit, since the filename is stored as an index into the SHUnit's global
@@ -141,6 +148,15 @@ typedef struct SHUnit {
   /// NOTE: These should always be treated as WeakRoots, which means a read
   /// barrier is needed to safely read out the value.
   SHCompressedPointer *object_literal_class_cache;
+
+  /// Concatenated bytecode of the unit's regexp literals, compiled ahead of
+  /// time.
+  const unsigned char *regexp_storage;
+  /// One entry per regexp literal, indexed by the id passed to
+  /// _sh_ljs_create_regexp.
+  const SHRegExpTableEntry *regexp_table;
+  /// Number of entries in regexp_table.
+  uint32_t num_regexps;
 
   /// The module exports cache: a map from non-negative integer module indexes
   /// to the export of the module.  An empty value indicates that the module has
@@ -392,13 +408,27 @@ SHERMES_EXPORT void _sh_ljs_reify_arguments_strict(
     SHLegacyValue *lazyReg);
 
 /// Allocate an empty, uninitialized object (immediately before a constructor).
+/// \param classCacheEntry caches the HiddenClass of the new object, may be
+///   null.
 SHERMES_EXPORT SHLegacyValue _sh_ljs_create_this(
     SHRuntime *shr,
     SHLegacyValue *callee,
     SHLegacyValue *newTarget,
-    SHReadPropertyCacheEntry *propCacheEntry);
+    SHReadPropertyCacheEntry *propCacheEntry,
+    SHCompressedPointer *classCacheEntry);
 
-#ifndef _WINDOWS
+#if defined(HERMES_SANDBOX_WASM)
+// The sandbox (API/hermes_sandbox) builds the VM as a standalone wasm module
+// that is translated to C and runs without a JS host. By default (which uses
+// -sSUPPORT_LONGJMP=emscripten), Emscripten implements setjmp/longjmp with JS
+// imports, which the sandbox cannot provide. Only code compiled by shermes and
+// the JIT use _sh_try and _sh_throw, and neither can run in the sandbox, so
+// setjmp always returns 0 and longjmp traps.
+// Note: -sSUPPORT_LONGJMP=wasm turns on WASM exception handling. We may use
+// this if we want to support native backend or JIT in sandbox in the future.
+#define _sh_setjmp(buf) ((void)(buf), 0)
+#define _sh_longjmp(buf, val) ((void)(buf), (void)(val), __builtin_trap())
+#elif !defined(_WINDOWS)
 // Use _setjmp and _longjmp outside Windows, to avoid saving and restoring the
 // signal mask, which is costly and may interfere with signal mask manipulation
 // by non-Hermes code.
@@ -645,6 +675,54 @@ SHERMES_EXPORT void _sh_ljs_put_by_val_with_receiver_rjs(
     SHLegacyValue *receiver,
     bool isStrict);
 
+/// Put a property given a valid array index \p key.
+SHERMES_EXPORT void _sh_ljs_put_by_index_loose_rjs(
+    SHRuntime *shr,
+    SHLegacyValue *target,
+    uint32_t key,
+    SHLegacyValue *value);
+SHERMES_EXPORT void _sh_ljs_put_by_index_strict_rjs(
+    SHRuntime *shr,
+    SHLegacyValue *target,
+    uint32_t key,
+    SHLegacyValue *value);
+
+/// Optimized put-by-val when the key is known to be a number at compile time.
+/// The key is passed by value (not pointer) because numbers are immediate
+/// values that do not require GC rooting. Tries sh_tryfast_f64_to_u32 inline,
+/// then calls _sh_ljs_put_by_index on success, or falls back to the generic
+/// put-by-val path.
+static inline void _sh_ljs_put_by_val_numeric_loose_rjs(
+    SHRuntime *shr,
+    SHLegacyValue *target,
+    SHLegacyValue key,
+    SHLegacyValue *value) {
+  assert(_sh_ljs_is_double(key) && "key must be a number");
+  uint32_t index;
+  // Reject 0xFFFFFFFF: valid uint32 but not a valid array index.
+  if (SH_LIKELY(
+          sh_tryfast_f64_to_u32(key.f64, index) && index != 0xFFFFFFFFu)) {
+    _sh_ljs_put_by_index_loose_rjs(shr, target, index, value);
+    return;
+  }
+  _sh_ljs_put_by_val_loose_rjs(shr, target, &key, value);
+}
+static inline void _sh_ljs_put_by_val_numeric_strict_rjs(
+    SHRuntime *shr,
+    SHLegacyValue *target,
+    SHLegacyValue key,
+    SHLegacyValue *value) {
+  assert(_sh_ljs_is_double(key) && "key must be a number");
+  uint32_t index;
+  // Reject 0xFFFFFFFF: valid uint32 but not a valid array index.
+  if (SH_LIKELY(
+          sh_tryfast_f64_to_u32(key.f64, index) && index != 0xFFFFFFFFu)) {
+    _sh_ljs_put_by_index_strict_rjs(shr, target, index, value);
+    return;
+  }
+  _sh_ljs_put_by_val_strict_rjs(shr, target, &key, value);
+}
+
 /// Load a property from direct storage.
 SHERMES_EXPORT SHLegacyValue
 _sh_prload_direct(SHRuntime *shr, SHLegacyValue source, uint32_t propIndex);
@@ -827,8 +905,15 @@ SHERMES_EXPORT SHLegacyValue _sh_ljs_del_by_val_loose(
 SHERMES_EXPORT SHLegacyValue
 _sh_ljs_get_string(SHRuntime *shr, SHSymbolID symID);
 
-SHERMES_EXPORT SHLegacyValue
-_sh_ljs_create_regexp(SHRuntime *shr, SHSymbolID pattern, SHSymbolID flags);
+/// Create a regexp from literal \p regexp_id of \p unit, whose pattern and
+/// flags are the symbols \p pattern and \p flags. The bytecode was compiled
+/// ahead of time and is shared by every evaluation of the literal.
+SHERMES_EXPORT SHLegacyValue _sh_ljs_create_regexp(
+    SHRuntime *shr,
+    SHUnit *unit,
+    SHSymbolID pattern,
+    SHSymbolID flags,
+    uint32_t regexp_id);
 
 /// \param value the string of the BigInt.
 /// \param size  the size of the string \c value.
@@ -944,7 +1029,49 @@ SHERMES_EXPORT bool _sh_ljs_equal_rjs(
     SHRuntime *shr,
     const SHLegacyValue *a,
     const SHLegacyValue *b);
+
+static inline bool _sh_ljs_equal_rjs_inline(
+    SHRuntime *shr,
+    const SHLegacyValue *a,
+    const SHLegacyValue *b) {
+  // Fast path: both are non-NaN numbers, compare as doubles.
+  if (SH_LIKELY(_sh_ljs_are_both_non_nan_numbers(*a, *b))) {
+    return _sh_ljs_get_double(*a) == _sh_ljs_get_double(*b);
+  }
+  // Fast path: identical raw bits for non-numbers are always equal
+  // (same object, same string pointer, null==null, undefined==undefined,
+  // same bool). For NaN, raw equality is possible but NaN != NaN.
+  if (a->raw == b->raw) {
+    return !_sh_ljs_is_double(*a);
+  }
+
+  // Otherwise: go to out-of-line slow path.
+  return _sh_ljs_equal_rjs(shr, a, b);
+}
+
 SHERMES_EXPORT bool _sh_ljs_strict_equal(SHLegacyValue a, SHLegacyValue b);
+
+/// Inline fast path for strict equality (===).
+/// Handles the common cases inline: same raw bits (identity check for objects,
+/// bools, null, undefined, symbols) and both-number comparison. Falls back to
+/// out-of-line for string/bigint deep compare, different types, and mixed NaN
+/// patterns.
+static inline bool _sh_ljs_strict_equal_inline(
+    SHLegacyValue a,
+    SHLegacyValue b) {
+  // Fast path: raw bits match → equal iff not a NaN.
+  // Covers: same object pointer, same bool, null===null, undefined===undefined,
+  // same symbol, same non-NaN number (same bit pattern).
+  // For NaN, a.f64 == a.f64 is false per IEEE 754.
+  if (a.raw == b.raw)
+    return !_sh_ljs_is_double(a) || a.f64 == a.f64;
+  // Fast path: both are non-NaN numbers → compare as doubles.
+  // Handles +0 === -0 (true) and different numeric values.
+  if (_sh_ljs_are_both_non_nan_numbers(a, b))
+    return a.f64 == b.f64;
+  // Out-of-line: string/bigint deep compare, different types, mixed NaN.
+  return _sh_ljs_strict_equal(a, b);
+}
 
 SHERMES_EXPORT SHLegacyValue
 _sh_ljs_add_rjs(SHRuntime *shr, const SHLegacyValue *a, const SHLegacyValue *b);
@@ -1229,8 +1356,11 @@ SHERMES_EXPORT SHLegacyValue _sh_ljs_typeof(SHRuntime *shr, SHLegacyValue *v);
 SHERMES_EXPORT bool _sh_ljs_typeof_is(SHLegacyValue val, uint16_t types);
 
 SHERMES_EXPORT SHLegacyValue _sh_ljs_new_object(SHRuntime *shr);
-SHERMES_EXPORT SHLegacyValue
-_sh_ljs_new_object_with_parent(SHRuntime *shr, const SHLegacyValue *parent);
+SHERMES_EXPORT SHLegacyValue _sh_ljs_new_object_with_parent(
+    SHRuntime *shr,
+    SHUnit *unit,
+    const SHLegacyValue *parent,
+    uint32_t shapeTableIndex);
 
 /// \p shapeTableIndex the entry index in the literal shape table.
 /// \p valBufferOffset the beginning offset in the literal value buffer.
@@ -1288,6 +1418,25 @@ SHERMES_EXPORT void _sh_ljs_define_own_in_dense_array(
 SHERMES_EXPORT SHLegacyValue
 _sh_new_fastarray(SHRuntime *shr, uint32_t capacity);
 
+/// \return a newly created fast array with the given \p prototype and
+/// \p capacity.
+SHERMES_EXPORT SHLegacyValue _sh_new_fastarray_with_proto(
+    SHRuntime *shr,
+    SHLegacyValue *prototype,
+    uint32_t capacity);
+
+/// Typed Object.keys/values/entries. \return a new fast array with the given
+/// \p prototype containing the enumerable own string-keyed property names of
+/// \p obj, their values, or [key, value] tuple objects.
+/// @{
+SHERMES_EXPORT SHLegacyValue
+_sh_object_keys(SHRuntime *shr, SHLegacyValue obj, SHLegacyValue prototype);
+SHERMES_EXPORT SHLegacyValue
+_sh_object_values(SHRuntime *shr, SHLegacyValue obj, SHLegacyValue prototype);
+SHERMES_EXPORT SHLegacyValue
+_sh_object_entries(SHRuntime *shr, SHLegacyValue obj, SHLegacyValue prototype);
+/// @}
+
 /// \p base[in/out] is the object to be iterated.
 /// \p index[out] is the next index in the list.
 /// \p size[out] is the size of the list.
@@ -1319,7 +1468,8 @@ _sh_ljs_iterator_begin_rjs(SHRuntime *shr, SHLegacyValue *src);
 
 /// Move \p iteratorOrIdx forward, and return the value at the new iterator. \p
 /// srcOrNext is the source if we are iterating over an array, or the .next()
-/// method otherwise.
+/// method otherwise. An exhausted iterator is represented by undefined;
+/// advancing it returns undefined without accessing \p srcOrNext.
 SHERMES_EXPORT SHLegacyValue _sh_ljs_iterator_next_rjs(
     SHRuntime *shr,
     SHLegacyValue *iteratorOrIdx,
@@ -1587,16 +1737,23 @@ static inline SHLegacyValue _sh_fastarray_length(
 #endif
 }
 
+/// \return true if the given JSObject is a proxy.
+SHERMES_EXPORT bool _sh_ljs_is_proxy(SHRuntime *shr, SHLegacyValue object);
+
 /// \return the parent of the legacy, ordinary object \p object. It must not be
 /// a proxy.
 static inline SHLegacyValue _sh_ljs_load_parent_no_traps(
     SHRuntime *shr,
     SHLegacyValue object) {
   SHJSObject *objectPtr = (SHJSObject *)_sh_ljs_get_pointer(object);
-  assert(!objectPtr->flags.proxyObject && "proxy is not supported");
-  if (objectPtr->parent) {
-    SHCompressedPointer parent = {.raw = objectPtr->parent};
-    return _sh_ljs_object(_sh_cp_decode_non_null(shr, parent));
+  SHCompressedPointer clazzCompressed = {.raw = objectPtr->clazz};
+  SHHiddenClass *clazz =
+      (SHHiddenClass *)_sh_cp_decode_non_null(shr, clazzCompressed);
+  assert(!_sh_ljs_is_proxy(shr, object) && "proxy is not supported");
+  if (clazz->objectParent) {
+    SHCompressedPointer parent = {.raw = clazz->objectParent};
+    SHJSObject *parentPtr = (SHJSObject *)_sh_cp_decode_non_null(shr, parent);
+    return _sh_ljs_object(parentPtr);
   }
   return _sh_ljs_null();
 }
@@ -1604,9 +1761,12 @@ static inline SHLegacyValue _sh_ljs_load_parent_no_traps(
 static inline SHLegacyValue _sh_typed_load_parent(
     SHRuntime *shr,
     const SHLegacyValue *object) {
-  SHCompressedPointer parent = {
-      .raw = ((SHJSObject *)_sh_ljs_get_pointer(*object))->parent};
-  return _sh_ljs_object(_sh_cp_decode_non_null(shr, parent));
+  SHCompressedPointer clazzCompressed = {
+      .raw = ((SHJSObject *)_sh_ljs_get_pointer(*object))->clazz};
+  SHHiddenClass *clazz =
+      (SHHiddenClass *)_sh_cp_decode_non_null(shr, clazzCompressed);
+  SHCompressedPointer parentCompressed = {.raw = clazz->objectParent};
+  return _sh_ljs_object(_sh_cp_decode_non_null(shr, parentCompressed));
 }
 
 /// If the double value is within representable integer range, convert it,

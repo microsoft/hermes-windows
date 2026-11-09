@@ -7,9 +7,16 @@
 
 #include "hermes/Sema/FlowContext.h"
 
+#include "hermes/Support/Conversions.h"
+
 #include "llvh/ADT/Hashing.h"
 #include "llvh/ADT/STLExtras.h"
 #include "llvh/ADT/ScopeExit.h"
+#include "llvh/ADT/SmallPtrSet.h"
+#include "llvh/Support/MathExtras.h"
+
+#include <cmath>
+#include <limits>
 
 namespace hermes {
 namespace flow {
@@ -49,8 +56,20 @@ inline int cmpHelperBool(bool a, bool b) {
 }
 
 /// A helper for comparing nullable Type pointers, returning -1, 0, +1.
-int cmpHelper(Type *a, Type *b) {
-  return a ? b ? a->info->compare(b->info) : 1 : b ? -1 : 0;
+/// \p state must be threaded through, otherwise recursive types (e.g. a
+/// function whose 'this' or return type refers back to itself) recurse forever.
+int cmpHelper(Type *a, Type *b, TypeInfo::CompareState &state) {
+  return a ? b ? a->info->compare(b->info, state) : 1 : b ? -1 : 0;
+}
+
+/// A helper for testing nullable Type pointers for equality.
+/// Uses equals() rather than compare(), because \c CompareState::cache is
+/// shared between the two and stores a bool for equals() but -1/0/1 for
+/// compare().
+bool eqHelper(Type *a, Type *b, TypeInfo::CompareState &state) {
+  if (!a || !b)
+    return a == b;
+  return a->info->equals(b->info, state);
 }
 
 /// Compare recursive lists of types on the left and right.
@@ -86,7 +105,19 @@ static bool listsMatchSlow(
   return matched.all();
 }
 
-static void messageStringImpl(const Type *type, llvh::raw_ostream &os) {
+/// \param active the Types currently being printed, to stop at recursive
+///   types that have no alias name.
+static void messageStringImpl(
+    const Type *type,
+    llvh::raw_ostream &os,
+    llvh::SmallPtrSetImpl<const Type *> &active) {
+  if (!active.insert(type).second) {
+    os << "...";
+    return;
+  }
+  auto popActive =
+      llvh::make_scope_exit([type, &active]() { active.erase(type); });
+
 #if HERMES_PARSE_FLOW
   if (type->node && llvh::isa<ESTree::TypeAliasNode>(type->node)) {
     // Return the name along with the kind of the type.
@@ -104,15 +135,29 @@ static void messageStringImpl(const Type *type, llvh::raw_ostream &os) {
     return;
   }
 
-  if (llvh::isa<ClassType>(type->info)) {
+  if (auto *classType = llvh::dyn_cast<ClassType>(type->info)) {
     // If the class node has a name use that instead.
     if (type->node && llvh::isa<ESTree::ClassDeclarationNode>(type->node)) {
       os << "class "
          << llvh::cast<ESTree::IdentifierNode>(
                 llvh::cast<ESTree::ClassDeclarationNode>(type->node)->_id)
                 ->_name->str();
+    } else if (classType->getClassName().isValid()) {
+      // Types with no declaration node, e.g. the home object of `C.prototype`.
+      os << "class " << classType->getClassName().str();
     } else {
       os << "class";
+    }
+    if (!classType->getTypeArgs().empty()) {
+      os << '<';
+      bool first = true;
+      for (const Type *arg : classType->getTypeArgs()) {
+        if (!first)
+          os << ", ";
+        messageStringImpl(arg, os, active);
+        first = false;
+      }
+      os << '>';
     }
     return;
   }
@@ -124,7 +169,7 @@ static void messageStringImpl(const Type *type, llvh::raw_ostream &os) {
       if (!first) {
         os << " | ";
       }
-      messageStringImpl(t, os);
+      messageStringImpl(t, os, active);
       first = false;
     }
     os << ')';
@@ -132,7 +177,7 @@ static void messageStringImpl(const Type *type, llvh::raw_ostream &os) {
   }
 
   if (auto *arrayType = llvh::dyn_cast<ArrayType>(type->info)) {
-    messageStringImpl(arrayType->getElement(), os);
+    messageStringImpl(arrayType->getElement(), os, active);
     os << "[]";
     return;
   }
@@ -144,10 +189,26 @@ static void messageStringImpl(const Type *type, llvh::raw_ostream &os) {
       if (!first) {
         os << ", ";
       }
-      messageStringImpl(t, os);
+      messageStringImpl(t, os, active);
       first = false;
     }
     os << ']';
+    return;
+  }
+
+  if (auto *strLitType = llvh::dyn_cast<StringLiteralType>(type->info)) {
+    os << '"' << strLitType->getValue()->str() << '"';
+    return;
+  }
+
+  if (auto *numLitType = llvh::dyn_cast<NumberLiteralType>(type->info)) {
+    char buf[NUMBER_TO_STRING_BUF_SIZE];
+    os << numberToString(numLitType->getValue(), buf, sizeof(buf));
+    return;
+  }
+
+  if (auto *boolLitType = llvh::dyn_cast<BooleanLiteralType>(type->info)) {
+    os << (boolLitType->getValue() ? "true" : "false");
     return;
   }
 
@@ -159,8 +220,21 @@ static void messageStringImpl(const Type *type, llvh::raw_ostream &os) {
 std::string Type::messageString() const {
   std::string result;
   llvh::raw_string_ostream os(result);
-  messageStringImpl(this, os);
+  llvh::SmallPtrSet<const Type *, 8> active{};
+  messageStringImpl(this, os, active);
   return os.str();
+}
+
+TypeKind widenLiteralKind(TypeKind kind) {
+  switch (kind) {
+#define _HERMES_SEMA_FLOW_DEFLITERAL(name, base) \
+  case TypeKind::name:                           \
+    return TypeKind::base;
+    _HERMES_SEMA_FLOW_LITERAL_BASES
+#undef _HERMES_SEMA_FLOW_DEFLITERAL
+    default:
+      return kind;
+  }
 }
 
 llvh::StringRef TypeInfo::getKindName() const {
@@ -173,14 +247,24 @@ llvh::StringRef TypeInfo::getKindName() const {
       return "boolean";
     case TypeKind::String:
       return "string";
+    case TypeKind::StringLiteral:
+      return "string literal";
+    case TypeKind::NumberLiteral:
+      return "number literal";
+    case TypeKind::BooleanLiteral:
+      return "boolean literal";
     case TypeKind::CPtr:
       return "c_ptr";
     case TypeKind::Number:
       return "number";
+    case TypeKind::Symbol:
+      return "symbol";
     case TypeKind::BigInt:
       return "bigint";
     case TypeKind::Any:
       return "any";
+    case TypeKind::Empty:
+      return "empty";
     case TypeKind::Mixed:
       return "mixed";
     case TypeKind::Union:
@@ -205,6 +289,8 @@ llvh::StringRef TypeInfo::getKindName() const {
       return "generic";
     case TypeKind::InferencePlaceholder:
       return "inference placeholder";
+    case TypeKind::InferencePlaceholderArray:
+      return "inference placeholder array";
   }
   llvm_unreachable("invalid TypeKind");
 }
@@ -305,7 +391,8 @@ bool TypeInfo::equals(const TypeInfo *other, CompareState &state) const {
         llvh::cast<UnionType>(this)->getTypes(),
         llvh::cast<UnionType>(other)->getTypes(),
         state);
-    state.cache[{this, other}] = result;
+    if (!result)
+      state.cache[{this, other}] = false;
     return result;
   }
   // Handle the cases of one incomplete union and a non-union.
@@ -313,14 +400,16 @@ bool TypeInfo::equals(const TypeInfo *other, CompareState &state) const {
     bool result = llvh::all_of(
         llvh::cast<UnionType>(this)->getTypes(),
         [&state, other](Type *t) { return t->info->equals(other, state); });
-    state.cache[{this, other}] = result;
+    if (!result)
+      state.cache[{this, other}] = false;
     return result;
   }
   if (otherIncomplete) {
     bool result = llvh::all_of(
         llvh::cast<UnionType>(other)->getTypes(),
         [&state, this](Type *t) { return t->info->equals(this, state); });
-    state.cache[{this, other}] = result;
+    if (!result)
+      state.cache[{this, other}] = false;
     return result;
   }
 
@@ -337,7 +426,8 @@ bool TypeInfo::equals(const TypeInfo *other, CompareState &state) const {
     default:
       hermes_fatal("invalid TypeKind");
   }
-  state.cache[{this, other}] = result;
+  if (!result)
+    state.cache[{this, other}] = false;
   return result;
 }
 
@@ -382,7 +472,8 @@ void UnionType::setCanonicalTypes(
 void UnionType::canonicalizeTypes(
     llvh::ArrayRef<Type *> types,
     llvh::SmallVectorImpl<Type *> &canonicalTypes,
-    llvh::SmallVectorImpl<Type *> &loopingTypes) {
+    llvh::SmallVectorImpl<Type *> &loopingTypes,
+    Type *booleanType) {
   // Copy the union types to canonicalized, but flatten nested unions. Note that
   // there can't be more than one level.
   // The types won't cycle back to the parent because that's checked in
@@ -408,24 +499,52 @@ void UnionType::canonicalizeTypes(
     }
   }
 
-  sortAndUniqueNonLoopingTypes(canonicalTypes);
+  sortAndUniqueNonLoopingTypes(canonicalTypes, booleanType);
   uniqueLoopingTypesSlow(loopingTypes);
 }
 
 void UnionType::sortAndUniqueNonLoopingTypes(
-    llvh::SmallVectorImpl<Type *> &types) {
-  // Sort for predictable order.
-  std::sort(types.begin(), types.end(), [](Type *a, Type *b) {
-    return a->info->compare(b->info) < 0;
-  });
+    llvh::SmallVectorImpl<Type *> &types,
+    Type *booleanType) {
+  auto less = [](Type *a, Type *b) { return a->info->compare(b->info) < 0; };
+  // Sort for predictable order. Literal kinds are the last TypeKinds, so a
+  // literal arm is always visited after everything that can absorb it.
+  std::sort(types.begin(), types.end(), less);
 
-  // Remove identical union arms.
-  types.erase(
-      std::unique(
-          types.begin(),
-          types.end(),
-          [](Type *a, Type *b) { return a->info->equals(b->info); }),
-      types.end());
+  // Mark for removal the identical arms (which are adjacent after sorting)
+  // and the literal arms absorbed by an earlier arm.
+  bool seenKind[kNumTypeKinds] = {};
+  Type *prev = nullptr;
+  for (size_t i = 0, e = types.size(); i < e; ++i) {
+    Type *t = types[i];
+    TypeKind kind = t->info->getKind();
+    if (prev && prev->info->equals(t->info)) {
+      types[i] = nullptr;
+      continue;
+    }
+    // A literal is absorbed by its base type, by "any" and by "mixed".
+    if (t->info->isLiteral() &&
+        (seenKind[(size_t)widenLiteralKind(kind)] ||
+         seenKind[(size_t)TypeKind::Any] ||
+         seenKind[(size_t)TypeKind::Mixed])) {
+      types[i] = nullptr;
+      continue;
+    }
+    seenKind[(size_t)kind] = true;
+    prev = t;
+  }
+
+  // Remove the marked arms.
+  llvh::erase_if(types, [](Type *type) { return type == nullptr; });
+
+  // `true | false` is `boolean`. Both remain only if nothing absorbed them.
+  auto isBoolLiteral = [](Type *t) {
+    return llvh::isa<BooleanLiteralType>(t->info);
+  };
+  if (llvh::count_if(types, isBoolLiteral) == 2) {
+    llvh::erase_if(types, isBoolLiteral);
+    types.insert(llvh::lower_bound(types, booleanType, less), booleanType);
+  }
 }
 
 void UnionType::uniqueLoopingTypesSlow(llvh::SmallVectorImpl<Type *> &types) {
@@ -508,6 +627,23 @@ unsigned ArrayType::_hashImpl() const {
   return (unsigned)llvh::hash_combine((unsigned)TypeKind::Array);
 }
 
+int InferencePlaceholderArrayType::_compareImpl(
+    const InferencePlaceholderArrayType *other,
+    CompareState &state) const {
+  return element_->info->compare(other->element_->info, state);
+}
+
+bool InferencePlaceholderArrayType::_equalsImpl(
+    const InferencePlaceholderArrayType *other,
+    CompareState &state) const {
+  return element_->info->equals(other->element_->info, state);
+}
+
+unsigned InferencePlaceholderArrayType::_hashImpl() const {
+  return (unsigned)llvh::hash_combine(
+      (unsigned)TypeKind::InferencePlaceholderArray);
+}
+
 int TupleType::_compareImpl(const TupleType *other, CompareState &state) const {
   return lexicographicalComparison(
       types_.begin(),
@@ -533,6 +669,73 @@ unsigned TupleType::_hashImpl() const {
   return (unsigned)llvh::hash_combine((unsigned)TypeKind::Tuple, types_.size());
 }
 
+int StringLiteralType::_compareImpl(
+    const StringLiteralType *other,
+    CompareState &state) const {
+  return value_->str().compare(other->value_->str());
+}
+
+bool StringLiteralType::_equalsImpl(
+    const StringLiteralType *other,
+    CompareState &state) const {
+  return value_ == other->value_;
+}
+
+unsigned StringLiteralType::_hashImpl() const {
+  return (unsigned)llvh::hash_combine(
+      (unsigned)TypeKind::StringLiteral, (uintptr_t)value_);
+}
+
+int NumberLiteralType::_compareImpl(
+    const NumberLiteralType *other,
+    CompareState &state) const {
+  // Must be a total order. Folding (e.g. 0/0) can produce a NaN literal, and
+  // the naive comparison returns 0 when either side is NaN (both '<' and '>'
+  // are false), so handle NaN explicitly to keep the order total.
+  double a = value_, b = other->value_;
+  bool aNaN = std::isnan(a), bNaN = std::isnan(b);
+  if (aNaN || bNaN)
+    return (int)bNaN - (int)aNaN; // NaN sorts first; NaN vs NaN -> 0.
+  return a < b ? -1 : a > b ? 1 : 0; // +0/-0 -> 0, matching equals.
+}
+
+bool NumberLiteralType::_equalsImpl(
+    const NumberLiteralType *other,
+    CompareState &state) const {
+  if (std::isnan(value_) && std::isnan(other->value_))
+    return true;
+  return value_ == other->value_;
+}
+
+unsigned NumberLiteralType::_hashImpl() const {
+  uint64_t bits;
+  if (std::isnan(value_)) {
+    bits = llvh::DoubleToBits(std::numeric_limits<double>::quiet_NaN());
+  } else if (value_ == 0) {
+    bits = 0;
+  } else {
+    bits = llvh::DoubleToBits(value_);
+  }
+  return (unsigned)llvh::hash_combine((uint64_t)TypeKind::NumberLiteral, bits);
+}
+
+int BooleanLiteralType::_compareImpl(
+    const BooleanLiteralType *other,
+    CompareState &state) const {
+  return (int)value_ - (int)other->value_;
+}
+
+bool BooleanLiteralType::_equalsImpl(
+    const BooleanLiteralType *other,
+    CompareState &state) const {
+  return value_ == other->value_;
+}
+
+unsigned BooleanLiteralType::_hashImpl() const {
+  return (unsigned)llvh::hash_combine(
+      (unsigned)TypeKind::BooleanLiteral, (unsigned)value_);
+}
+
 hermes::OptValue<size_t> ExactObjectType::findField(Identifier id) const {
   auto it = fieldNameMap_.find(id);
   if (it == fieldNameMap_.end())
@@ -543,18 +746,35 @@ hermes::OptValue<size_t> ExactObjectType::findField(Identifier id) const {
 int ExactObjectType::_compareImpl(
     const ExactObjectType *other,
     CompareState &state) const {
-  return lexicographicalComparison(
-      fields_.begin(),
-      fields_.end(),
-      other->fields_.begin(),
-      other->fields_.end(),
-      [&state](const Field &ta, const Field &tb) {
-        if (int tmp = ta.name.str().compare(tb.name.str()))
-          return tmp;
-        if (int tmp = ta.type->info->compare(tb.type->info, state))
-          return tmp;
-        return 0;
-      });
+  if (int tmp = lexicographicalComparison(
+          fields_.begin(),
+          fields_.end(),
+          other->fields_.begin(),
+          other->fields_.end(),
+          [&state](const Field &ta, const Field &tb) {
+            if (int tmp = ta.name.str().compare(tb.name.str()))
+              return tmp;
+            if (ta.variance != tb.variance)
+              return ta.variance < tb.variance ? -1 : 1;
+            if (int tmp = ta.type->info->compare(tb.type->info, state))
+              return tmp;
+            return 0;
+          }))
+    return tmp;
+  // Compare the optional indexers. Absence sorts before presence.
+  if (indexer_.hasValue() != other->indexer_.hasValue())
+    return indexer_.hasValue() ? 1 : -1;
+  if (indexer_.hasValue()) {
+    const Indexer &a = *indexer_;
+    const Indexer &b = *other->indexer_;
+    if (int tmp = a.keyType->info->compare(b.keyType->info, state))
+      return tmp;
+    if (a.variance != b.variance)
+      return a.variance < b.variance ? -1 : 1;
+    if (int tmp = a.valueType->info->compare(b.valueType->info, state))
+      return tmp;
+  }
+  return 0;
 }
 
 bool ExactObjectType::_equalsImpl(
@@ -565,7 +785,21 @@ bool ExactObjectType::_equalsImpl(
   for (size_t i = 0, e = fields_.size(); i < e; ++i) {
     if (fields_[i].name != other->fields_[i].name)
       return {};
+    if (fields_[i].variance != other->fields_[i].variance)
+      return false;
     if (!fields_[i].type->info->equals(other->fields_[i].type->info, state))
+      return false;
+  }
+  if (indexer_.hasValue() != other->indexer_.hasValue())
+    return false;
+  if (indexer_.hasValue()) {
+    const Indexer &a = *indexer_;
+    const Indexer &b = *other->indexer_;
+    if (a.variance != b.variance)
+      return false;
+    if (!a.keyType->info->equals(b.keyType->info, state))
+      return false;
+    if (!a.valueType->info->equals(b.valueType->info, state))
       return false;
   }
   return true;
@@ -573,7 +807,10 @@ bool ExactObjectType::_equalsImpl(
 
 unsigned ExactObjectType::_hashImpl() const {
   return (unsigned)llvh::hash_combine(
-      (unsigned)TypeKind::ExactObject, fields_.size());
+      (unsigned)TypeKind::ExactObject,
+      fields_.size(),
+      indexer_.hasValue(),
+      indexer_.hasValue() ? (unsigned)indexer_->variance : 0u);
 }
 
 /// Compare two instances of the same TypeKind.
@@ -584,7 +821,7 @@ int TypedFunctionType::_compareImpl(
     return tmp;
   if (auto tmp = cmpHelperBool(isGenerator(), other->isGenerator()))
     return tmp;
-  if (auto tmp = cmpHelper(thisParam_, other->thisParam_))
+  if (auto tmp = cmpHelper(thisParam_, other->thisParam_, state))
     return tmp;
   if (auto tmp = lexicographicalComparison(
           params_.begin(),
@@ -592,11 +829,15 @@ int TypedFunctionType::_compareImpl(
           other->params_.begin(),
           other->params_.end(),
           [&state](const Param &pa, const Param &pb) {
+            if (auto t = cmpHelperBool(pa.optional, pb.optional))
+              return t;
+            if (auto t = cmpHelperBool(pa.rest, pb.rest))
+              return t;
             return pa.type->info->compare(pb.type->info, state);
           })) {
     return tmp;
   }
-  return cmpHelper(return_, other->return_);
+  return cmpHelper(return_, other->return_, state);
 }
 
 /// Compare two instances of the same TypeKind.
@@ -607,27 +848,35 @@ bool TypedFunctionType::_equalsImpl(
     return false;
   if (cmpHelperBool(isGenerator(), other->isGenerator()))
     return false;
-  if (cmpHelper(thisParam_, other->thisParam_))
+  if (!eqHelper(thisParam_, other->thisParam_, state))
     return false;
   if (params_.size() != other->params_.size())
     return false;
   for (size_t i = 0, e = params_.size(); i < e; ++i) {
+    if (params_[i].optional != other->params_[i].optional)
+      return false;
+    if (params_[i].rest != other->params_[i].rest)
+      return false;
     if (!params_[i].type->info->equals(other->params_[i].type->info, state))
       return false;
   }
-  if (!return_->info->equals(other->return_->info))
+  if (!return_->info->equals(other->return_->info, state))
     return false;
   return true;
 }
 
 /// Calculate the type-specific hash.
 unsigned TypedFunctionType::_hashImpl() const {
-  return (unsigned)llvh::hash_combine(
+  unsigned h = (unsigned)llvh::hash_combine(
       (unsigned)TypeKind::TypedFunction,
       isAsync(),
       isGenerator(),
       thisParam_ != nullptr,
       params_.size());
+  for (const auto &p : params_) {
+    h = llvh::hash_combine(h, p.optional, p.rest);
+  }
+  return h;
 }
 
 int NativeFunctionType::_compareImpl(
@@ -685,20 +934,31 @@ unsigned TypeWithId::_hashImpl() const {
   return (unsigned)llvh::hash_combine((unsigned)getKind(), getId());
 }
 
-ClassType::ClassType(size_t id, Identifier className)
-    : TypeWithId(TypeKind::Class, id), className_(className) {}
+ClassType::ClassType(
+    size_t id,
+    Identifier className,
+    llvh::ArrayRef<Type *> typeArgs)
+    : TypeWithId(TypeKind::Class, id), className_(className) {
+  typeArgs_.append(typeArgs.begin(), typeArgs.end());
+}
 
 void ClassType::init(
     llvh::ArrayRef<Field> fields,
     Type *constructorType,
     Type *homeObjectType,
-    Type *superClass) {
+    Type *staticObjectType,
+    Type *superClass,
+    size_t numLayoutSlots,
+    Type *classConsType) {
   fields_.reserve(fields.size());
   fields_.append(fields.begin(), fields.end());
 
   constructorType_ = constructorType;
   homeObjectType_ = homeObjectType;
+  staticObjectType_ = staticObjectType;
   superClass_ = superClass;
+  numLayoutSlots_ = numLayoutSlots;
+  classConsType_ = classConsType;
 
   if (superClass) {
     auto *superClassInfo = llvh::cast_or_null<ClassType>(superClass_->info);
@@ -781,7 +1041,6 @@ Type *FlowContext::getSingletonType(TypeKind kind) const {
 #undef _HERMES_SEMA_FLOW_DEFKIND
     default:
       llvm_unreachable("invalid singleton TypeKind");
-      return nullptr;
   }
 }
 
@@ -792,7 +1051,8 @@ TypeInfo *FlowContext::maybeCreateUnion(
   llvh::SmallVector<Type *, 4> canonicalTypes{};
   llvh::SmallVector<Type *, 4> recursiveTypes{};
 
-  UnionType::canonicalizeTypes(types, canonicalTypes, recursiveTypes);
+  UnionType::canonicalizeTypes(
+      types, canonicalTypes, recursiveTypes, getBoolean());
 
   if (excludes.excludeVoid || excludes.excludeNull) {
     // Only look at the first two elements and get the new ending.
@@ -820,7 +1080,10 @@ UnionType *FlowContext::createPopulatedNullable(Type *type) {
   llvh::SmallVector<Type *, 4> canonicalTypes{};
   llvh::SmallVector<Type *, 4> recursiveTypes{};
   UnionType::canonicalizeTypes(
-      {getVoid(), getNull(), type}, canonicalTypes, recursiveTypes);
+      {getVoid(), getNull(), type},
+      canonicalTypes,
+      recursiveTypes,
+      getBoolean());
 
   // We know that there are at least 2 types, so it will be a union.
   return createCanonicalizedUnion(

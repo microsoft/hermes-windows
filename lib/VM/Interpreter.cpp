@@ -134,6 +134,16 @@ CallResult<PseudoHandle<JSGeneratorObject>> Interpreter::createGenerator_RJS(
   auto generatorFunction = Handle<JSFunction>::vmcast(
       runtime.getCurrentFrame().getCalleeClosureHandleUnsafe());
 
+  // The generator created by an async function is internal to it, and the
+  // async function's "prototype" property, if any, belongs to user code.
+  if (generatorFunction->getCodeBlock()->getHeaderFlags().getKind() ==
+      FuncKind::Async) {
+    return JSGeneratorObject::create(
+        runtime,
+        innerFunc,
+        Handle<JSObject>::vmcast(&runtime.generatorPrototype));
+  }
+
   auto prototypeProp = JSObject::getNamed_RJS(
       generatorFunction,
       runtime,
@@ -1853,7 +1863,8 @@ tailCall:
 
       CASE(LoadParentNoTraps) {
         assert(
-            !vmcast<JSObject>(O2REG(LoadParentNoTraps))->isProxyObject() &&
+            !vmcast<JSObject>(O2REG(LoadParentNoTraps))
+                 ->isProxyObject(runtime) &&
             "proxy is not supported");
         auto *parent =
             vmcast<JSObject>(O2REG(LoadParentNoTraps))->getParent(runtime);
@@ -1903,10 +1914,10 @@ tailCall:
     if (LLVM_LIKELY(cacheEntry->negMatchClazz == clazzPtr)) {                 \
       /* Proxy, HostObject and lazy objects have special hidden classes, so   \
        * they should never match the cached class. */                         \
-      assert(!obj->getFlags().proxyObject);                                   \
-      assert(!obj->getFlags().hostObject);                                    \
-      assert(!obj->getFlags().lazyObject);                                    \
-      const GCPointer<JSObject> &parentGCPtr = obj->getParentGCPtr();         \
+      assert(!obj->isProxyObject(runtime));                                   \
+      assert(!obj->isHostObject(runtime));                                    \
+      assert(!obj->isLazy(runtime));                                          \
+      const GCPointer<JSObject> &parentGCPtr = obj->getParentGCPtr(runtime);  \
       if (LLVM_LIKELY(parentGCPtr)) {                                         \
         JSObject *parent = parentGCPtr.getNonNull(runtime);                   \
         if (LLVM_LIKELY(cacheEntry->clazz == parent->getClassGCPtr())) {      \
@@ -2076,7 +2087,7 @@ tailCall:
             LLVM_LIKELY(
                 addCacheEntry.getParentEpoch() ==
                 runtime.getParentCacheEpoch()) &&
-            LLVM_LIKELY(addCacheEntry.parent == obj->getParentGCPtr())) {
+            LLVM_LIKELY(addCacheEntry.parent == obj->getParentGCPtr(runtime))) {
           HiddenClass *resultClazz =
               addCacheEntry.resultClazz.getNonNull(runtime, runtime.getHeap());
           ++NumPutByIdTransitionHits;
@@ -2206,7 +2217,7 @@ tailCall:
             SmallHermesValue shv,
             SmallHermesValue::encodeHermesValue(
                 O2REG(DefineOwnByIdLong), runtime));
-        auto *obj = vmcast<JSObject>(O1REG(DefineOwnById));
+        auto *obj = vmcast<JSObject>(O1REG(DefineOwnByIdLong));
         auto cacheIdx = ip->iDefineOwnByIdLong.op3;
         auto *cacheEntry = curCodeBlock->getWriteCacheEntry(cacheIdx);
         CompressedPointer clazzPtr{obj->getClassGCPtr()};
@@ -2655,16 +2666,17 @@ tailCall:
         DISPATCH;
       }
       CASE(NewObjectWithParent) {
-        CAPTURE_IP(
-            O1REG(NewObjectWithParent) =
-                JSObject::create(
-                    runtime,
-                    O2REG(NewObjectWithParent).isObject()
-                        ? Handle<JSObject>::vmcast(&O2REG(NewObjectWithParent))
-                        : O2REG(NewObjectWithParent).isNull()
-                        ? Runtime::makeNullHandle<JSObject>()
-                        : Handle<JSObject>::vmcast(&runtime.objectPrototype))
-                    .getHermesValue());
+        CAPTURE_IP_ASSIGN(
+            O1REG(NewObjectWithParent),
+            createObjectWithParent(
+                runtime,
+                curCodeBlock,
+                O2REG(NewObjectWithParent).isObject()
+                    ? Handle<JSObject>::vmcast(&O2REG(NewObjectWithParent))
+                    : O2REG(NewObjectWithParent).isNull()
+                    ? Runtime::makeNullHandle<JSObject>()
+                    : Handle<JSObject>::vmcast(&runtime.objectPrototype),
+                ip->iNewObjectWithParent.op3));
         assert(
             gcScope.getHandleCountDbg() == KEEP_HANDLES &&
             "Should not create handles.");
@@ -2755,11 +2767,17 @@ tailCall:
       }
 
       CASE(NewFastArray) {
-        CAPTURE_IP_ASSIGN(
-            auto createRes, FastArray::create(runtime, ip->iNewFastArray.op2));
-        if (createRes == ExecutionStatus::EXCEPTION)
-          goto exception;
-        O1REG(NewFastArray) = *createRes;
+        {
+          GCScopeMarkerRAII marker{runtime};
+          auto protoHandle =
+              Handle<JSObject>::vmcast(runtime.makeHandle(O2REG(NewFastArray)));
+          CAPTURE_IP_ASSIGN(
+              auto createRes,
+              FastArray::create(runtime, protoHandle, ip->iNewFastArray.op3));
+          if (createRes == ExecutionStatus::EXCEPTION)
+            goto exception;
+          O1REG(NewFastArray) = *createRes;
+        }
         ip = NEXTINST(NewFastArray);
         DISPATCH;
       }
@@ -2771,9 +2789,9 @@ tailCall:
         DISPATCH;
       }
       CASE(FastArrayLoad) {
-        double idx = O3REG(FastArrayStore).getNumber();
+        double idx = O3REG(FastArrayLoad).getNumber();
         uint32_t intIndex = _sh_tryfast_f64_to_u32_cvt(idx);
-        auto *storage = vmcast<FastArray>(O2REG(FastArrayStore))
+        auto *storage = vmcast<FastArray>(O2REG(FastArrayLoad))
                             ->unsafeGetIndexedStorage(runtime);
 
         if (LLVM_UNLIKELY(intIndex >= storage->size() || intIndex != idx)) {
@@ -2870,6 +2888,7 @@ tailCall:
                 &O2REG(CreateThisForSuper),
                 &O3REG(CreateThisForSuper),
                 ip->iCreateThisForSuper.op4,
+                ip->iCreateThisForSuper.op5,
                 curCodeBlock));
         if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
           goto exception;
@@ -2887,6 +2906,7 @@ tailCall:
                 &O2REG(CreateThisForNew),
                 &O2REG(CreateThisForNew),
                 ip->iCreateThisForNew.op3,
+                ip->iCreateThisForNew.op4,
                 curCodeBlock));
         if (LLVM_UNLIKELY(res == ExecutionStatus::EXCEPTION)) {
           goto exception;
@@ -3351,7 +3371,7 @@ tailCall:
             goto exception;
           }
           gcScope.flushToSmallCount(KEEP_HANDLES);
-          ip = NEXTINST(GetOwnPrivateBySym);
+          ip = NEXTINST(PutOwnPrivateBySym);
           DISPATCH;
         } else {
           CAPTURE_IP(runtime.raiseTypeError(

@@ -14,6 +14,7 @@ class TestFixtureBase : public ::testing::Test {
   static void InitializeGlobals(const char* test_exe_path) noexcept;
 
  protected:
+  static std::filesystem::path test_exe_path_;
   static std::filesystem::path node_lite_path_;
   static std::filesystem::path js_root_dir_;
 };

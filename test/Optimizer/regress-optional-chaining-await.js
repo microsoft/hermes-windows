@@ -21,31 +21,22 @@ async function thisFn() {
 // CHECK-NEXT:       ReturnInst undefined: undefined
 // CHECK-NEXT:function_end
 
-// CHECK:function thisFn(): any
-// CHECK-NEXT:%BB0:
-// CHECK-NEXT:  %0 = CreateArgumentsLooseInst (:object)
-// CHECK-NEXT:  %1 = LoadParamInst (:any) %<this>: any
-// CHECK-NEXT:  %2 = CoerceThisNSInst (:object) %1: any
-// CHECK-NEXT:  %3 = CreateFunctionInst (:object) empty: any, empty: any, %?anon_0_thisFn(): functionCode
-// CHECK-NEXT:  %4 = GetBuiltinClosureInst (:object) [HermesBuiltin.spawnAsync]: number
-// CHECK-NEXT:  %5 = CallInst (:any) %4: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %3: object, %2: object, %0: object
-// CHECK-NEXT:       ReturnInst %5: any
-// CHECK-NEXT:function_end
-
 // CHECK:scope %VS0 [<this>: any, generator_state: number, idx: number]
 
-// CHECK:function ?anon_0_thisFn(): object
+// CHECK:function thisFn(): any
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = CreateScopeInst (:environment) %VS0: any, empty: any
 // CHECK-NEXT:  %1 = LoadParamInst (:any) %<this>: any
 // CHECK-NEXT:       StoreFrameInst %0: environment, %1: any, [%VS0.<this>]: any
 // CHECK-NEXT:       StoreFrameInst %0: environment, 0: number, [%VS0.idx]: number
 // CHECK-NEXT:       StoreFrameInst %0: environment, 0: number, [%VS0.generator_state]: number
-// CHECK-NEXT:  %5 = CreateGeneratorInst (:object) %0: environment, %VS0: any, %"?anon_0_thisFn 1#"(): functionCode
-// CHECK-NEXT:       ReturnInst %5: object
+// CHECK-NEXT:  %5 = CreateGeneratorInst (:object) %0: environment, %VS0: any, %?anon_0_thisFn(): functionCode
+// CHECK-NEXT:  %6 = GetBuiltinClosureInst (:object) [HermesBuiltin.spawnAsync]: number
+// CHECK-NEXT:  %7 = CallInst (:any) %6: object, empty: any, false: boolean, empty: any, undefined: undefined, undefined: undefined, %5: object
+// CHECK-NEXT:       ReturnInst %7: any
 // CHECK-NEXT:function_end
 
-// CHECK:generator inner "?anon_0_thisFn 1#"(action: number, value: any): any
+// CHECK:generator inner ?anon_0_thisFn(action: number, value: any): any
 // CHECK-NEXT:%BB0:
 // CHECK-NEXT:  %0 = LoadParamInst (:any) %value: any
 // CHECK-NEXT:  %1 = LoadParamInst (:number) %action: number

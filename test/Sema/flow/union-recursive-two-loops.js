@@ -7,10 +7,10 @@
 
 // RUN: %shermes -Werror --typed --dump-sema -fno-std-globals %s | %FileCheckOrRegen %s --match-full-lines
 
-type A = B[] | B[];
+type A = [B] | [B];
 type B = A;
 
-type X = Y[];
+type X = [Y];
 type Y = X | X;
 
 type U = A | X;
@@ -24,62 +24,54 @@ let u: U;
 // Auto-generated content below. Please do not modify manually.
 
 // CHECK:%untyped_function.1 = untyped_function()
-// CHECK-NEXT:%array.2 = array(%array.2)
-// CHECK-NEXT:%object.3 = object({
-// CHECK-NEXT:})
+// CHECK-NEXT:%tuple.2 = tuple(%tuple.2)
 
 // CHECK:SemContext
-// CHECK-NEXT:Func strict
+// CHECK-NEXT:Func strict mayReachImplicitReturn
 // CHECK-NEXT:    Scope %s.1
-// CHECK-NEXT:    Func strict
-// CHECK-NEXT:        Scope %s.2
-// CHECK-NEXT:            Decl %d.1 'exports' Parameter : any
-// CHECK-NEXT:            Decl %d.2 'a' Let : %array.2
-// CHECK-NEXT:            Decl %d.3 'u' Let : %array.2
-// CHECK-NEXT:            Decl %d.4 'arguments' Var Arguments
+// CHECK-NEXT:        Decl %d.1 'exports' Parameter : any
+// CHECK-NEXT:        Decl %d.2 'a' Let : %tuple.2
+// CHECK-NEXT:        Decl %d.3 'u' Let : %tuple.2
+// CHECK-NEXT:        Decl %d.4 'arguments' Var Arguments
 
-// CHECK:Program Scope %s.1
-// CHECK-NEXT:    ExpressionStatement
-// CHECK-NEXT:        CallExpression : any
-// CHECK-NEXT:            FunctionExpression : %untyped_function.1
-// CHECK-NEXT:                Id 'exports' [D:E:%d.1 'exports']
-// CHECK-NEXT:                BlockStatement
-// CHECK-NEXT:                    TypeAlias
-// CHECK-NEXT:                        Id 'A'
-// CHECK-NEXT:                        UnionTypeAnnotation
-// CHECK-NEXT:                            ArrayTypeAnnotation
-// CHECK-NEXT:                                GenericTypeAnnotation
-// CHECK-NEXT:                                    Id 'B'
-// CHECK-NEXT:                            ArrayTypeAnnotation
-// CHECK-NEXT:                                GenericTypeAnnotation
-// CHECK-NEXT:                                    Id 'B'
-// CHECK-NEXT:                    TypeAlias
+// CHECK:FunctionExpression : %untyped_function.1
+// CHECK-NEXT:    Id 'exports' [D:E:%d.1 'exports']
+// CHECK-NEXT:    BlockStatement
+// CHECK-NEXT:        TypeAlias
+// CHECK-NEXT:            Id 'A'
+// CHECK-NEXT:            UnionTypeAnnotation
+// CHECK-NEXT:                TupleTypeAnnotation
+// CHECK-NEXT:                    GenericTypeAnnotation
 // CHECK-NEXT:                        Id 'B'
-// CHECK-NEXT:                        GenericTypeAnnotation
-// CHECK-NEXT:                            Id 'A'
-// CHECK-NEXT:                    TypeAlias
-// CHECK-NEXT:                        Id 'X'
-// CHECK-NEXT:                        ArrayTypeAnnotation
-// CHECK-NEXT:                            GenericTypeAnnotation
-// CHECK-NEXT:                                Id 'Y'
-// CHECK-NEXT:                    TypeAlias
-// CHECK-NEXT:                        Id 'Y'
-// CHECK-NEXT:                        UnionTypeAnnotation
-// CHECK-NEXT:                            GenericTypeAnnotation
-// CHECK-NEXT:                                Id 'X'
-// CHECK-NEXT:                            GenericTypeAnnotation
-// CHECK-NEXT:                                Id 'X'
-// CHECK-NEXT:                    TypeAlias
-// CHECK-NEXT:                        Id 'U'
-// CHECK-NEXT:                        UnionTypeAnnotation
-// CHECK-NEXT:                            GenericTypeAnnotation
-// CHECK-NEXT:                                Id 'A'
-// CHECK-NEXT:                            GenericTypeAnnotation
-// CHECK-NEXT:                                Id 'X'
-// CHECK-NEXT:                    VariableDeclaration
-// CHECK-NEXT:                        VariableDeclarator
-// CHECK-NEXT:                            Id 'a' [D:E:%d.2 'a']
-// CHECK-NEXT:                    VariableDeclaration
-// CHECK-NEXT:                        VariableDeclarator
-// CHECK-NEXT:                            Id 'u' [D:E:%d.3 'u']
-// CHECK-NEXT:            ObjectExpression : %object.3
+// CHECK-NEXT:                TupleTypeAnnotation
+// CHECK-NEXT:                    GenericTypeAnnotation
+// CHECK-NEXT:                        Id 'B'
+// CHECK-NEXT:        TypeAlias
+// CHECK-NEXT:            Id 'B'
+// CHECK-NEXT:            GenericTypeAnnotation
+// CHECK-NEXT:                Id 'A'
+// CHECK-NEXT:        TypeAlias
+// CHECK-NEXT:            Id 'X'
+// CHECK-NEXT:            TupleTypeAnnotation
+// CHECK-NEXT:                GenericTypeAnnotation
+// CHECK-NEXT:                    Id 'Y'
+// CHECK-NEXT:        TypeAlias
+// CHECK-NEXT:            Id 'Y'
+// CHECK-NEXT:            UnionTypeAnnotation
+// CHECK-NEXT:                GenericTypeAnnotation
+// CHECK-NEXT:                    Id 'X'
+// CHECK-NEXT:                GenericTypeAnnotation
+// CHECK-NEXT:                    Id 'X'
+// CHECK-NEXT:        TypeAlias
+// CHECK-NEXT:            Id 'U'
+// CHECK-NEXT:            UnionTypeAnnotation
+// CHECK-NEXT:                GenericTypeAnnotation
+// CHECK-NEXT:                    Id 'A'
+// CHECK-NEXT:                GenericTypeAnnotation
+// CHECK-NEXT:                    Id 'X'
+// CHECK-NEXT:        VariableDeclaration
+// CHECK-NEXT:            VariableDeclarator
+// CHECK-NEXT:                Id 'a' [D:E:%d.2 'a']
+// CHECK-NEXT:        VariableDeclaration
+// CHECK-NEXT:            VariableDeclarator
+// CHECK-NEXT:                Id 'u' [D:E:%d.3 'u']

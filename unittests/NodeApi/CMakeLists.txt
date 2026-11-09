@@ -82,6 +82,9 @@ add_executable(node_lite
   string_utils.h
 )
 target_link_libraries(node_lite PRIVATE libshared)
+# Use the same hybrid CRT as hermes.dll and the other test executables so CRT
+# report settings apply to failures inside the DLL as well as the test host.
+target_link_options(node_lite PRIVATE ${HERMES_EXTRA_LINKER_FLAGS})
 if(UNIX AND NOT APPLE)
   target_link_libraries(node_lite PRIVATE dl)
 endif()
@@ -100,13 +103,16 @@ target_include_directories(node_lite
     ${CMAKE_CURRENT_SOURCE_DIR}/test
 )
 
-# copy hermes.dll next to the node_lite.exe
-add_custom_command(TARGET node_lite POST_BUILD
-  VERBATIM
+# Refresh even when only hermes.dll changes and node_lite does not relink.
+add_custom_target(node_lite_copy_dll ALL
+  COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:node_lite>
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     $<TARGET_FILE:libshared>
     $<TARGET_FILE_DIR:node_lite>
+  DEPENDS libshared
+  VERBATIM
 )
+add_dependencies(node_lite node_lite_copy_dll)
 
 add_hermes_unittest(NodeApiTests
   ${CHILD_PROCESS_SRC}

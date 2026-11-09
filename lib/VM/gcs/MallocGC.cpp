@@ -176,7 +176,8 @@ struct MallocGC::MarkingAcceptor final : public RootAcceptor,
       // Reset weak root if target GCCell is dead.
       if (header->isMarked()) {
 #if HERMESVM_SANITIZE_HANDLES != 0
-        wshv.setObject(pointerBase_, header->getForwardingPointer()->data());
+        wshv.set(wshv.updatePointer(
+            header->getForwardingPointer()->data(), pointerBase_));
 #endif
       } else {
         wshv.invalidate();
@@ -298,8 +299,8 @@ void MallocGC::checkWellFormed() {
   weakMapEntrySlots_.forEach([](WeakMapEntrySlot &slot) {
     if (slot.mappedValue.isEmpty()) {
       assert(
-          !slot.key ||
-          !slot.owner && "Reachable entry should not have Empty value.");
+          (!slot.key || !slot.owner) &&
+          "Reachable entry should not have Empty value.");
     }
   });
 }
@@ -450,6 +451,15 @@ void MallocGC::collect(std::string cause, bool /*canEffectiveOOM*/) {
 
   recordGCStats(event, /* onMutator */ true, /* fromNewCollection */ true);
   checkTripwire(allocatedBytes_ + externalBytes_);
+}
+
+void MallocGC::collectWithOptions(
+    std::string &&cause,
+    const GCOptions & /*options*/) {
+  // MallocGC does not have generations, so both Minor and Major GC types
+  // perform a full collection. The execution policy is also ignored since
+  // MallocGC is always synchronous.
+  collect(std::move(cause));
 }
 
 void MallocGC::drainMarkStack(MarkingAcceptor &acceptor) {
