@@ -12,14 +12,15 @@ add_subdirectory(hermes_node_api_jsi)
 # sandbox only when those sources are present (or when generating them).
 set(sandboxGenerated
   "${CMAKE_CURRENT_SOURCE_DIR}/hermes_sandbox/external/hermes_sandbox_impl")
+# Re-run CMake when the sources are added or removed, so that existing build
+# trees follow.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/hermes_sandbox/external")
 if(EMSCRIPTEN OR (EXISTS "${sandboxGenerated}_dbg_compiled_0.c" AND
                   EXISTS "${sandboxGenerated}_opt_compiled_0.c"))
   add_subdirectory(hermes_sandbox)
 else()
   message(STATUS "Generated sandbox sources are missing; skipping the sandbox.")
-  # Re-run CMake when they are added, so existing build trees pick them up.
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/hermes_sandbox/external")
 endif()
 add_subdirectory(hermes_shared)
 if(HERMES_ENABLE_NAPI)
