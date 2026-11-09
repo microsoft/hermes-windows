@@ -2506,11 +2506,11 @@ __metadata:
   linkType: hard
 
 "@types/node@npm:*":
-  version: 24.1.0
-  resolution: "@types/node@npm:24.1.0"
+  version: 26.6.6
+  resolution: "@types/node@npm:26.6.6"
   dependencies:
-    undici-types: "npm:~7.8.0"
-  checksum: 10c0/6c4686bc144f6ce7bffd4cadc3e1196e2217c1da4c639c637213719c8a3ee58b6c596b994befcbffeacd9d9eb0c3bff6529d2bc27da5d1cb9d58b1da0056f9f4
+    undici-types: "npm:~8.9.0"
+  checksum: 10c0/5cb63f644f6e85a257a9cd2403cbcbe196760e2a35fd3ec9fb8b5cff663e14cc832b198cc17b53f870a2e30900ed45a1fb3f53e6589aba26b8e8c484aa672053
   languageName: node
   linkType: hard
 
@@ -4221,35 +4221,35 @@ __metadata:
   languageName: node
   linkType: hard
 
-"flow-estree@npm:0.337.0":
-  version: 0.337.0
-  resolution: "flow-estree@npm:0.337.0"
-  checksum: 10c0/f245c24808e38d9455bac576ea18884f7d0c90aa2678676907b6e4fa58e6b30d99c89e47a998508e9670221dde09cae3f932bebf90d88039d866cc9eaa445f60
+"flow-estree@npm:0.338.0":
+  version: 0.338.0
+  resolution: "flow-estree@npm:0.338.0"
+  checksum: 10c0/3c048c8438da10b736c58398dfc08a79490a70b7805a535d535e11154b1acebc1acfa8316aa11cf7b99303c4fc6859793057c48207fc7e2fbbd60984450d6627
   languageName: node
   linkType: hard
 
-"flow-parser@npm:^0.337.0":
-  version: 0.337.0
-  resolution: "flow-parser@npm:0.337.0"
+"flow-parser@npm:^0.338.0":
+  version: 0.338.0
+  resolution: "flow-parser@npm:0.338.0"
   dependencies:
-    flow-estree: "npm:0.337.0"
-  checksum: 10c0/0b3831e401807fcf2ebdaeae231b2dbf7331e1cbd9f7f1ad8ec1a2370b66dbaf64b09325aaea2fee0b6ec78ec9f9db99d4029a1a990824677b557875c8fef14a
+    flow-estree: "npm:0.338.0"
+  checksum: 10c0/754d5aaeacef9c6dfa3b6dab52d6a99e32fc33729fa3ad0f79e4ff399780f9460302c9de59171ca1116a59120fd3d268a71ec404147dde366fd98778b2073d56
   languageName: node
   linkType: hard
 
 "flow-remove-types@npm:^2.322.0":
-  version: 2.337.0
-  resolution: "flow-remove-types@npm:2.337.0"
+  version: 2.338.0
+  resolution: "flow-remove-types@npm:2.338.0"
   dependencies:
     flow-enums-runtime: "npm:^0.0.6"
-    flow-parser: "npm:^0.337.0"
+    flow-parser: "npm:^0.338.0"
     pirates: "npm:^3.0.2"
     source-map-support: "npm:^0.5.21"
     vlq: "npm:^0.2.1"
   bin:
     flow-node: flow-node
     flow-remove-types: flow-remove-types
-  checksum: 10c0/65ecd2777cd3de5b51c066d95b0924fa38c2de1d0e314872e512d8fcd1401af387c61da2d72406491b5a987dffc13c2ecf847946f607f674567c77b3deef2f79
+  checksum: 10c0/1ec51e6bf1e55df854da03fa202c8b4534e524b2c7af4570579c6d2076a0815abd5d3c06951192eadfe6b51607c657a69477b2c91dac9ceec82bba465e5b25c7
   languageName: node
   linkType: hard
 
@@ -4466,9 +4466,9 @@ __metadata:
   linkType: hard
 
 "globals@npm:^17.4.0":
-  version: 17.13.0
-  resolution: "globals@npm:17.13.0"
-  checksum: 10c0/8371d9e4e5581640141b5cce70a098edd765d2e3ab063b14998e590698071e0afb4a4a6739ccfbdcbdeb2565c5553697ba07d95703c51039912cf341a7dba7a7
+  version: 17.14.0
+  resolution: "globals@npm:17.14.0"
+  checksum: 10c0/422d17c24e87170d4aa566b97a53339ae451c2f4d78512594a7ca951cdb939bc4a85c10071e6dcf77ca63de48713a77f2e71eb9214e44880233dff2090e92731
   languageName: node
   linkType: hard
 
@@ -7339,10 +7339,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"undici-types@npm:~7.8.0":
-  version: 7.8.0
-  resolution: "undici-types@npm:7.8.0"
-  checksum: 10c0/9d9d246d1dc32f318d46116efe3cfca5a72d4f16828febc1918d94e58f6ffcf39c158aa28bf5b4fc52f410446bc7858f35151367bd7a49f21746cab6497b709b
+"undici-types@npm:~8.9.0":
+  version: 8.9.0
+  resolution: "undici-types@npm:8.9.0"
+  checksum: 10c0/51c712c20c087368f62c6fc0f2bc49fa76bfe5dec28ff01584bb677ff29b0622569783c02d43e151143808c48c0503f804093bd2c491b10f2a830138034cb451
   languageName: node
   linkType: hard
 
