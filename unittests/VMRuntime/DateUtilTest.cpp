@@ -206,6 +206,43 @@ TEST(DateUtilTest, TotalOffsetTest) {
   hermes::oscompat::unset_env("TZ");
 }
 
+#ifdef _WINDOWS
+namespace {
+/// Set the UCRT DST bias, which has no setter besides the deprecated global.
+void setDSTBias(long bias) {
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#else
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+  *__dstbias() = bias;
+#ifdef __clang__
+#pragma clang diagnostic pop
+#else
+#pragma warning(pop)
+#endif
+}
+} // namespace
+
+TEST(DateUtilTest, TotalOffsetWithoutHostDSTBiasTest) {
+  // When TZ is set, the UCRT keeps the DST bias of the host's timezone, which
+  // is 0 on hosts without DST, such as UTC build agents. Emulate such a host.
+  long savedBias = 0;
+  _get_dstbias(&savedBias);
+  setTimeZone("PST8PDT");
+  setDSTBias(0);
+
+  LocalTimeOffsetCache cache;
+  EXPECT_EQ(-8 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(2019, 1, 15)));
+  EXPECT_EQ(-7 * MS_PER_HOUR, cache.totalOffsetInMs(timeValue(2019, 7, 15)));
+
+  setDSTBias(savedBias);
+  hermes::oscompat::unset_env("TZ");
+}
+#endif
+
 TEST(DateUtilTest, EquivalentTimeTest) {
   // 2008-01-01, 2018-12-31
   EXPECT_EQ(1199145600, detail::equivalentTime(1199145600));

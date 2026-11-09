@@ -81,6 +81,13 @@ int LocalTimeOffsetCache::computeTotalOffset(int64_t utcTimeMs, bool *isDST) {
   double localMs = makeDate(
       makeDay(tm.tm_year + 1900, tm.tm_mon, tm.tm_mday),
       makeTime(tm.tm_hour, tm.tm_min, tm.tm_sec, 0));
+  // When TZ is set, the UCRT's tzset() updates _timezone and _daylight but
+  // keeps the DST bias of the host's timezone, which is 0 on hosts without
+  // DST. localtime_s() then flags DST without shifting the fields, so apply
+  // the one-hour shift that TZ's US DST rules imply.
+  long dstBias = 0;
+  if (tm.tm_isdst > 0 && _get_dstbias(&dstBias) == 0 && dstBias == 0)
+    localMs += MS_PER_HOUR;
   return localMs - t * MS_PER_SECOND;
 #else
   if (!::localtime_r(&t, &tm))
