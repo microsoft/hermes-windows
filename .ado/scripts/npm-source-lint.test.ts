@@ -87,6 +87,24 @@ function validYarnFixture(): Record<string, string> {
   };
 }
 
+function validPatchedYarnFixture(): Record<string, string> {
+  const files = validYarnFixture();
+  const source = "patch:example@npm%3A1.0.0#../.yarn/patches/example.patch";
+  const manifest = JSON.parse(files["project/package.json"]);
+  manifest.resolutions = { example: source };
+  files["project/package.json"] = JSON.stringify(manifest);
+  files[".yarn/patches/example.patch"] = "";
+  files["project/yarn.lock"] += `
+"example@${source}":
+  version: 1.0.0
+  resolution: "example@${source}::version=1.0.0&hash=abc123&locator=yarn-fixture%40workspace%3A."
+  checksum: 10c0/patched-example
+  languageName: node
+  linkType: hard
+`;
+  return files;
+}
+
 function createFixture(files: Record<string, string>): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "npm-source-lint-"));
   for (const [file, content] of Object.entries(files)) {
@@ -402,6 +420,43 @@ test("rejects a Yarn archive URL recorded only in a descriptor", () => {
     `"example@npm:^1.0.0::__archiveUrl=${encodeURIComponent(`${PACKAGE_FEED_PROXY}example/-/example-1.0.0.tgz`)}":`,
   );
   assertViolation(files, /__archiveUrl\) are forbidden/);
+});
+
+test("accepts a shared Yarn patch with resolution parameters", () => {
+  assertValid(validPatchedYarnFixture());
+});
+
+test("rejects a missing shared Yarn patch", () => {
+  const files = validPatchedYarnFixture();
+  delete files[".yarn/patches/example.patch"];
+  assertViolation(
+    files,
+    /an existing local path contained within the repository/,
+  );
+});
+
+test("rejects a shared Yarn patch outside the repository", () => {
+  const files = validPatchedYarnFixture();
+  files["project/yarn.lock"] = files["project/yarn.lock"].replaceAll(
+    "../.yarn/patches/example.patch",
+    "../../outside.patch",
+  );
+  assertViolation(files, /local path contained within the repository/);
+});
+
+test("rejects encoded download URLs in Yarn patch resolution parameters", () => {
+  for (const source of [
+    "https://packages.example.com/example.tgz",
+    "git+ssh://git@example.test/repository.git",
+  ]) {
+    const files = validPatchedYarnFixture();
+    const url = encodeURIComponent(encodeURIComponent(source));
+    files["project/yarn.lock"] = files["project/yarn.lock"].replace(
+      "&hash=abc123",
+      `&hash=abc123&download=${url}`,
+    );
+    assertViolation(files, /a semver, npm alias, workspace:/);
+  }
 });
 
 test("rejects a Yarn archive URL encoded inside a patch locator", () => {

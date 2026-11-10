@@ -365,7 +365,11 @@ function getDependencySourceError(
   if (scheme === "file" || scheme === "link" || scheme === "portal") {
     return getLocalPathError(root, file, reference);
   }
-  if (scheme === "patch" && !hasRemoteReference(reference)) {
+  if (
+    scheme === "patch" &&
+    !hasRemoteReference(reference) &&
+    !/[a-z][a-z0-9+.-]*:\/\//i.test(reference)
+  ) {
     const [locator, patchPath] = reference.split("#", 2);
     const locatorError = getDependencySourceError(root, file, locator);
     if (locatorError) {
@@ -375,7 +379,7 @@ function getDependencySourceError(
       ? getDependencySourceError(
           root,
           file,
-          patchPath.replace(/^optional!/, ""),
+          patchPath.split("::", 1)[0].replace(/^optional!/, ""),
         )
       : undefined;
   }

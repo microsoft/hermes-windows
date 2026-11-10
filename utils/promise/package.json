@@ -6,9 +6,13 @@
     "promise": "8.3.0"
   },
   "scripts": {
-    "start": "rollup --config rollup.config.js index.js"
+    "start": "rollup --config rollup.config.js index.js",
+    "test": "node --test ../../.ado/scripts/deepmerge.test.js"
   },
   "devDependencies": {
     "rollup": "~2.80.0"
+  },
+  "resolutions": {
+    "deepmerge@npm:^4.2.2": "patch:deepmerge@npm%3A4.3.1#../../.yarn/patches/deepmerge-npm-4.3.1-prototype-poisoning.patch"
   }
 }
