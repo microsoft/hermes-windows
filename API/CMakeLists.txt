@@ -7,9 +7,10 @@ add_subdirectory(hermes)
 add_subdirectory(hermes_abi)
 add_subdirectory(hermes_node_api)
 add_subdirectory(hermes_node_api_jsi)
-# Upstream syncs land the regenerated wasm2c sources of the sandbox in a
-# separate pull request, because GitHub cannot diff them in place. Build the
-# sandbox only when those sources are present (or when generating them).
+# hermes-windows does not ship the sandbox, and .syncignore keeps its
+# generated wasm2c sources (~200 MB, which GitHub cannot diff) out of upstream
+# syncs. Build the sandbox only when those sources are present (or when
+# generating them); to enable it, remove the .syncignore entry and add them.
 set(sandboxGenerated
   "${CMAKE_CURRENT_SOURCE_DIR}/hermes_sandbox/external/hermes_sandbox_impl")
 # Re-run CMake when the sources are added or removed, so that existing build

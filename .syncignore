@@ -46,6 +46,11 @@
 /npm/
 /unsupported/
 
+# Upstream generated code excluded: the wasm2c sources of API/hermes_sandbox
+# (~200 MB per regeneration, which GitHub cannot diff). The sandbox is not
+# shipped and is skipped while they are absent (see API/CMakeLists.txt).
+/API/hermes_sandbox/external/hermes_sandbox_impl_*_compiled*
+
 # Local-only: tools not in upstream
 /tools/fork-sync/
 /tools/hermes_rt/
