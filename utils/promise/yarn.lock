@@ -151,10 +151,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"deepmerge@npm:^4.2.2":
+"deepmerge@npm:4.3.1":
   version: 4.3.1
   resolution: "deepmerge@npm:4.3.1"
   checksum: 10c0/e53481aaf1aa2c4082b5342be6b6d8ad9dfe387bc92ce197a66dea08bd4265904a087e75e464f14d1347cf2ac8afe1e4c16b266e0561cc5df29382d3c5f80044
+  languageName: node
+  linkType: hard
+
+"deepmerge@patch:deepmerge@npm%3A4.3.1#../../.yarn/patches/deepmerge-npm-4.3.1-prototype-poisoning.patch::locator=root-workspace-0b6124%40workspace%3A.":
+  version: 4.3.1
+  resolution: "deepmerge@patch:deepmerge@npm%3A4.3.1#../../.yarn/patches/deepmerge-npm-4.3.1-prototype-poisoning.patch::version=4.3.1&hash=6ed3c9&locator=root-workspace-0b6124%40workspace%3A."
+  checksum: 10c0/14b984011323bdb40620dffe74062403d56e34818b5c3dc73a7cb184ccfd479d779e258f331ffb07a7b4e5b39ad3d247c85e0bc396021522381ec824d85e0329
   languageName: node
   linkType: hard
 

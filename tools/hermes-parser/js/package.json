@@ -37,7 +37,7 @@
     "flow": "flow",
     "format": "./node_modules/prettier/bin/prettier.cjs --config ./.prettierrc.json --write \"**/*.js\"",
     "postinstall": "patch-package",
-    "test": "NODE_OPTIONS=\"--experimental-vm-modules\" jest"
+    "test": "node --test ../../../.ado/scripts/deepmerge.test.js && NODE_OPTIONS=\"--experimental-vm-modules\" jest"
   },
   "workspaces": [
     "hermes-eslint",
@@ -47,6 +47,7 @@
     "babel-plugin-syntax-hermes-parser"
   ],
   "resolutions": {
+    "deepmerge@npm:^4.3.1": "patch:deepmerge@npm%3A4.3.1#../../../.yarn/patches/deepmerge-npm-4.3.1-prototype-poisoning.patch",
     "glob@npm:^10.4.1": "^14.0.3",
     "glob@npm:^13.0.6": "^14.0.3",
     "lodash": "^4.18.1",

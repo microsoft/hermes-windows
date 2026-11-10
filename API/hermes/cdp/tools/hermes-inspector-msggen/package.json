@@ -20,7 +20,7 @@
     "flow": "flow",
     "build": "babel src --out-dir bin --source-maps",
     "watch": "babel src --out-dir bin --source-maps --watch",
-    "test": "jest"
+    "test": "node --test ../../../../../.ado/scripts/deepmerge.test.js && jest --passWithNoTests"
   },
   "dependencies": {
     "devtools-protocol": "0.0.1383960",
@@ -37,5 +37,8 @@
     "transform": {
       ".*": "<rootDir>/node_modules/babel-jest"
     }
+  },
+  "resolutions": {
+    "deepmerge@npm:^4.2.2": "patch:deepmerge@npm%3A4.3.1#../../../../../.yarn/patches/deepmerge-npm-4.3.1-prototype-poisoning.patch"
   }
 }
