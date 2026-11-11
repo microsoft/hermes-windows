@@ -94,6 +94,7 @@ extends:
       componentgovernance:
         ignoreDirectories: $(Build.SourcesDirectory)\website
       eslint:
+        parserOptions: 'ecmaVersion:2021'
         enableExclusions: true
         exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
       bandit:

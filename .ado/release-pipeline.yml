@@ -42,6 +42,7 @@ extends:
       incrementalSDLSourceAnalysis: false
     sdl:
       eslint:
+        parserOptions: 'ecmaVersion:2021'
         enableExclusions: true
         exclusionsFilePath: $(Build.SourcesDirectory)\.eslintignore
       bandit:

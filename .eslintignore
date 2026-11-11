@@ -1,8 +1,6 @@
-# This repo does not ship any JavaScript code. All JS/TS files here are
-# test cases, benchmarks, third-party tools, or internal polyfills for the
-# Hermes JS engine. Exclude them from ESLint security scanning to avoid
-# false positives on patterns like eval() and new Function() that are
-# intentionally used in engine test cases.
+# These directories hold engine tests, benchmarks, tools, third-party code,
+# and internal polyfills that intentionally use eval() and new Function().
+# Exclude them to avoid false positives; runtime extensions stay scanned.
 benchmarks/
 examples/
 external/
@@ -11,3 +9,7 @@ test/
 tools/
 unittests/
 utils/
+
+# Non-standalone IIFE fragments concatenated around the scanned extensions.
+**/API/hermes/extensions/00-header.js
+**/API/hermes/extensions/99-footer.js
