@@ -1473,8 +1473,8 @@ __metadata:
   linkType: hard
 
 "@babel/register@npm:^7.29.7":
-  version: 7.29.7
-  resolution: "@babel/register@npm:7.29.7"
+  version: 7.29.13
+  resolution: "@babel/register@npm:7.29.13"
   dependencies:
     clone-deep: "npm:^4.0.1"
     find-cache-dir: "npm:^2.0.0"
@@ -1483,7 +1483,7 @@ __metadata:
     source-map-support: "npm:^0.5.16"
   peerDependencies:
     "@babel/core": ^7.0.0-0
-  checksum: 10c0/154dc72cc354a3d2b7b69d10738f02278774bbf53d3b365f7897035c9f26ad6433b24e81ad277c0fbf33139e08230e0cab3913e91d9325308af532da854765f2
+  checksum: 10c0/b0840cd10df6586addc794a5e25ecc5a65f1f9ccfe86d8efd15db5e71ead95ed47bdf2913011c56c755bcff118e831e8b8ed8232f75d7da210f39f9c637df9a9
   languageName: node
   linkType: hard
 
@@ -4228,35 +4228,35 @@ __metadata:
   languageName: node
   linkType: hard
 
-"flow-estree@npm:0.338.0":
-  version: 0.338.0
-  resolution: "flow-estree@npm:0.338.0"
-  checksum: 10c0/3c048c8438da10b736c58398dfc08a79490a70b7805a535d535e11154b1acebc1acfa8316aa11cf7b99303c4fc6859793057c48207fc7e2fbbd60984450d6627
+"flow-estree@npm:0.339.0":
+  version: 0.339.0
+  resolution: "flow-estree@npm:0.339.0"
+  checksum: 10c0/ca6981f35313a79ec3578c35c8d4a3e7b54d218d6d387ed755869b6836f73f88db0103f5ac09b8043c8f36229f56e8129a16234b71a831ef60cb53a9b952e643
   languageName: node
   linkType: hard
 
-"flow-parser@npm:^0.338.0":
-  version: 0.338.0
-  resolution: "flow-parser@npm:0.338.0"
+"flow-parser@npm:^0.339.0":
+  version: 0.339.0
+  resolution: "flow-parser@npm:0.339.0"
   dependencies:
-    flow-estree: "npm:0.338.0"
-  checksum: 10c0/754d5aaeacef9c6dfa3b6dab52d6a99e32fc33729fa3ad0f79e4ff399780f9460302c9de59171ca1116a59120fd3d268a71ec404147dde366fd98778b2073d56
+    flow-estree: "npm:0.339.0"
+  checksum: 10c0/baa94e0df5ee3caa750491e0debcf4da5743d500a19250735905ede0262e0c540bafcdebbbb2bd7b22ce085d574174188dfc69e9580d096f7a6d23534d3ca83f
   languageName: node
   linkType: hard
 
 "flow-remove-types@npm:^2.322.0":
-  version: 2.338.0
-  resolution: "flow-remove-types@npm:2.338.0"
+  version: 2.339.0
+  resolution: "flow-remove-types@npm:2.339.0"
   dependencies:
     flow-enums-runtime: "npm:^0.0.6"
-    flow-parser: "npm:^0.338.0"
+    flow-parser: "npm:^0.339.0"
     pirates: "npm:^3.0.2"
     source-map-support: "npm:^0.5.21"
     vlq: "npm:^0.2.1"
   bin:
     flow-node: flow-node
     flow-remove-types: flow-remove-types
-  checksum: 10c0/1ec51e6bf1e55df854da03fa202c8b4534e524b2c7af4570579c6d2076a0815abd5d3c06951192eadfe6b51607c657a69477b2c91dac9ceec82bba465e5b25c7
+  checksum: 10c0/b20a4e71ca2877a0c7edef6046edebf14b6195b04d74945d46c2a442448205dea91893d467a76eff9dfada7205d6a140d6762da15ff1309101c5b84c0018beaa
   languageName: node
   linkType: hard
 
