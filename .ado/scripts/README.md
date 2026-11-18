@@ -101,9 +101,12 @@ binding before committing, without changing versions or checksums, and rerun
 `yarn install --immutable` and `.\dev npm-source-lint`. The lint rejects these
 bindings, committed registries, and committed credentials.
 
-Keep Yarn's `npmMinimalAgeGate: "8d"` and Dependabot's
-`cooldown.default-days: 8` aligned: the proxy has a roughly seven-day security
-cooldown, plus a one-day margin in this repository. Dependabot applies the
+Keep Yarn's `npmMinimalAgeGate: "8d"`, npm's `min-release-age=8` in each npm
+project's `.npmrc`, and Dependabot's `cooldown.default-days: 8` aligned: the
+proxy has a roughly seven-day security cooldown, plus a one-day margin in this
+repository. Dependabot picks versions for transitive npm dependencies with the
+`.npmrc` setting, not its cooldown. npm releases before 11.10 ignore that
+setting with an "Unknown project config" warning. Dependabot applies the
 cooldown only to version updates, so a security update can propose a version
 that the proxy does not serve yet.
 
