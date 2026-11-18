@@ -36,7 +36,8 @@ updates:
   commit-message:
     prefix: 📦
   open-pull-requests-limit: 5
-  # Matches npmMinimalAgeGate: PackageFeedProxy has a roughly 7-day cooldown.
+  # Matches npmMinimalAgeGate in .yarnrc.yml and min-release-age in each npm
+  # .npmrc: PackageFeedProxy has a roughly 7-day cooldown.
   cooldown:
     default-days: 8
 - package-ecosystem: "github-actions"
